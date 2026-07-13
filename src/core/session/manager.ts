@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
@@ -78,7 +78,10 @@ import {
   resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
 import { parseSessionIcpCorrelation } from './icp-correlation-metadata.js';
-import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -1183,7 +1186,10 @@ export class SessionManager {
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): { status: 'delivered' | 'failed' | 'suppressed' } | null {
+  ): {
+    status: 'delivered' | 'failed' | 'suppressed';
+    recoveryResponse?: AgentResponse;
+  } | null {
     const entries = this.getRecentSessionEntries(channelId, 5_000);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
@@ -1203,7 +1209,33 @@ export class SessionManager {
         throw new Error('Recorded ICP delivery observation is malformed');
       }
       if (parsed.sourceMessageId === sourceMessageId) {
-        return { status: parsed.status };
+        let recoveryResponse: AgentResponse | undefined;
+        if (parsed.recoveryResponse !== undefined) {
+          if (!isRecord(parsed.recoveryResponse)
+            || typeof parsed.recoveryResponse.content !== 'string'
+            || typeof parsed.recoveryResponse.channelId !== 'string'
+            || !isRecord(parsed.recoveryResponse.metadata)
+            || typeof parsed.recoveryResponse.metadata.model !== 'string'
+            || typeof parsed.recoveryResponse.metadata.inputTokens !== 'number'
+            || typeof parsed.recoveryResponse.metadata.outputTokens !== 'number'
+            || typeof parsed.recoveryResponse.metadata.durationMs !== 'number') {
+            throw new Error('Recorded ICP delivery recovery response is malformed');
+          }
+          const correlation = parseIcpConversationCorrelation(
+            parsed.recoveryResponse.metadata.icpCorrelation,
+          );
+          recoveryResponse = structuredClone({
+            ...parsed.recoveryResponse,
+            metadata: {
+              ...parsed.recoveryResponse.metadata,
+              icpCorrelation: correlation,
+            },
+          }) as AgentResponse;
+        }
+        return {
+          status: parsed.status,
+          ...(recoveryResponse ? { recoveryResponse } : {}),
+        };
       }
     }
     return null;
@@ -1225,6 +1257,7 @@ export class SessionManager {
     deliveredTo?: readonly string[];
     permitOutcome?: 'consumed' | 'replayed';
     error?: string;
+    recoveryResponse?: AgentResponse;
   }): void {
     this.appendSystemNote(
       observation.channelId,

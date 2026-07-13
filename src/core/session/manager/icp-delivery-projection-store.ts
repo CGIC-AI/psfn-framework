@@ -3,7 +3,11 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type { SessionEntry } from '../types.js';
 
 type IcpDeliveryStatus = 'delivered' | 'failed' | 'suppressed';
-const DELIVERY_OBSERVATION_LOOKBACK = 5_000;
+
+interface DeliveryStatusIndex {
+  lastEntryId: number;
+  statuses: Map<string, IcpDeliveryStatus>;
+}
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
@@ -59,13 +63,39 @@ function parseDeliveryObservation(entry: SessionEntry): {
   };
 }
 
-function collectDeliveryStatuses(entries: readonly SessionEntry[]): Map<string, IcpDeliveryStatus> {
-  const statuses = new Map<string, IcpDeliveryStatus>();
-  for (const entry of entries) {
-    const observation = parseDeliveryObservation(entry);
-    if (observation) statuses.set(observation.sourceMessageId, observation.status);
+function refreshDeliveryStatusIndex(
+  store: SessionStore,
+  channelId: string,
+  indexes: Map<string, DeliveryStatusIndex>,
+): ReadonlyMap<string, IcpDeliveryStatus> {
+  const latestEntry = store.getRecent(channelId, 1).at(-1);
+  const latestEntryId = latestEntry?.id ?? 0;
+  let index = indexes.get(channelId);
+
+  if (!index || latestEntryId < index.lastEntryId) {
+    index = {
+      lastEntryId: 0,
+      statuses: new Map<string, IcpDeliveryStatus>(),
+    };
+    indexes.set(channelId, index);
   }
-  return statuses;
+
+  if (latestEntryId > index.lastEntryId) {
+    const appendedEntries = store.getEntriesInRange(
+      channelId,
+      index.lastEntryId + 1,
+      latestEntryId,
+    );
+    for (const entry of appendedEntries) {
+      const observation = parseDeliveryObservation(entry);
+      if (observation) {
+        index.statuses.set(observation.sourceMessageId, observation.status);
+      }
+    }
+    index.lastEntryId = latestEntryId;
+  }
+
+  return index.statuses;
 }
 
 function filterUndeliveredIcpAssistantEntries(
@@ -84,14 +114,14 @@ function filterUndeliveredIcpAssistantEntries(
  * reads remain available for restart-safe delivery recovery.
  */
 export function createIcpDeliveryProjectionStore(store: SessionStore): SessionStore {
+  const deliveryIndexes = new Map<string, DeliveryStatusIndex>();
   return new Proxy(store, {
     get(target, property, receiver) {
       if (property === 'getRecent') {
         return (channelId: string, limit: number): SessionEntry[] => {
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          const statusEntries = target.getRecent(channelId, DELIVERY_OBSERVATION_LOOKBACK);
-          const statuses = collectDeliveryStatuses(statusEntries);
+          const statuses = refreshDeliveryStatusIndex(target, channelId, deliveryIndexes);
           let fetchLimit = normalizedLimit;
           for (;;) {
             const raw = target.getRecent(channelId, fetchLimit);
@@ -106,9 +136,7 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
 
       if (property === 'getEntriesInRange') {
         return (channelId: string, startId: number, endId: number): SessionEntry[] => {
-          const statuses = collectDeliveryStatuses(
-            target.getRecent(channelId, DELIVERY_OBSERVATION_LOOKBACK),
-          );
+          const statuses = refreshDeliveryStatusIndex(target, channelId, deliveryIndexes);
           return filterUndeliveredIcpAssistantEntries(
             target.getEntriesInRange(channelId, startId, endId),
             statuses,

@@ -194,6 +194,7 @@ export async function prepareTurnIdentityState(input: {
   turnCorrelationBase: CorrelationMetadata;
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage'>;
   deferSessionEntryPersistence?: boolean;
+  skipSessionEntryPersistence?: boolean;
 }): Promise<PreparedTurnIdentityState> {
   const {
     runtime,
@@ -203,6 +204,7 @@ export async function prepareTurnIdentityState(input: {
     turnCorrelationBase,
     observability,
     deferSessionEntryPersistence = false,
+    skipSessionEntryPersistence = false,
   } = input;
 
   const trustStageStart = Date.now();
@@ -317,7 +319,7 @@ export async function prepareTurnIdentityState(input: {
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
   const privateTurnTrigger = message.routing?.privateTurnTrigger === true;
-  const userSessionEntryId = privateTurnTrigger
+  const userSessionEntryId = privateTurnTrigger || skipSessionEntryPersistence
     ? null
     : deferSessionEntryPersistence
     ? null

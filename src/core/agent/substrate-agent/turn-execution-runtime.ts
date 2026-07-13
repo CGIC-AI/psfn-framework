@@ -16,6 +16,7 @@ import {
 } from '../../self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
+  cloneInternalState,
   type InternalState,
 } from '../../self-model/state.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
@@ -75,7 +76,11 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
-import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
+import {
+  invokeAgentForTurn,
+  type AgentInvocationMutableState,
+  type AgentInvocationResult,
+} from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -439,6 +444,8 @@ export interface TurnExecutionRuntime {
  * resolves successfully.
  */
 export interface TurnDeliveryLifecycle {
+  /** Durable response from an earlier attempt whose transport failed after generation. */
+  recoveredResponse?: AgentResponse;
   finalizeDelivery(response: AgentResponse): Promise<void>;
 }
 
@@ -612,14 +619,18 @@ export async function handleMessageForTurn(
   deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
   const requestId = message.id;
+  const recoveredResponse = deliveryLifecycle?.recoveredResponse;
   const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
   if (privateIcpCorrelation && !deliveryLifecycle) {
     throw new Error('Private ICP target turn requires a delivery finalizer');
   }
-  if (!privateIcpCorrelation && deliveryLifecycle) {
-    throw new Error('Delivery finalization is restricted to private ICP target turns');
+  if (!privateIcpCorrelation && deliveryLifecycle && !message.routing?.icpCorrelation) {
+    throw new Error('Delivery finalization is restricted to ICP channel turns');
+  }
+  if (recoveredResponse && !message.routing?.icpCorrelation) {
+    throw new Error('Recovered delivery requires durable ICP correlation');
   }
   if (privateIcpCorrelation) {
     if (message.channelType !== 'companion'
@@ -631,8 +642,14 @@ export async function handleMessageForTurn(
       throw new Error('Private ICP target turn is not bound to this runtime message');
     }
   }
-  const turnId = privateIcpCorrelation
-    ? parseTurnId(privateIcpCorrelation.turnId, 'ICP target turn correlation.turnId')
+  const recoveredCorrelation = recoveredResponse
+    ? parseIcpConversationCorrelation(recoveredResponse.metadata.icpCorrelation)
+    : null;
+  const turnId = privateIcpCorrelation || recoveredCorrelation
+    ? parseTurnId(
+        (privateIcpCorrelation ?? recoveredCorrelation)!.turnId,
+        'ICP delivery turn correlation.turnId',
+      )
     : createTurnId();
   if (!turnId) throw new Error('Private ICP target turn requires a UUIDv7 turnId');
   const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
@@ -682,6 +699,7 @@ export async function handleMessageForTurn(
     turnCorrelationBase,
     observability,
     deferSessionEntryPersistence,
+    skipSessionEntryPersistence: recoveredResponse !== undefined,
   });
   const {
     authorContext,
@@ -700,7 +718,21 @@ export async function handleMessageForTurn(
     conversationScope,
   } = identityState;
   const inboundIcpOrigin = message.routing?.icpCorrelation;
-  if (inboundIcpOrigin && !privateIcpCorrelation) {
+  if (recoveredCorrelation) {
+    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
+    if (recoveredCorrelation.localCompanionId !== localCompanionId
+      || (!privateIcpCorrelation && recoveredCorrelation.peerCompanionId !== message.authorId)
+      || recoveredCorrelation.channelId !== message.channelId
+      || recoveredCorrelation.messageId !== message.id
+      || recoveredResponse?.channelId !== message.channelId) {
+      throw new Error('Recovered ICP delivery is not bound to the recorded local turn');
+    }
+    message.routing = {
+      ...message.routing,
+      icpCorrelation: recoveredCorrelation,
+    };
+    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  } else if (inboundIcpOrigin && !privateIcpCorrelation) {
     const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
     if (inboundIcpOrigin.localCompanionId !== message.authorId
       || inboundIcpOrigin.peerCompanionId !== localCompanionId
@@ -767,16 +799,18 @@ export async function handleMessageForTurn(
 
   try {
     const channelType = runtime.resolveChannelType(message);
-    fatigueDecision = evaluateRuntimeFatigue({
-      runtime,
-      message,
-      authorContext,
-      channelType,
-      channelMeta,
-      taskKind,
-      turnCorrelationBase,
-      timestampMs: startTime,
-    });
+    fatigueDecision = recoveredResponse
+      ? null
+      : evaluateRuntimeFatigue({
+          runtime,
+          message,
+          authorContext,
+          channelType,
+          channelMeta,
+          taskKind,
+          turnCorrelationBase,
+          timestampMs: startTime,
+        });
     if (fatigueDecision) {
       if (message.routing?.icpCorrelation) {
         const finalFatigueDecision = fatigueDecision.metadata.decision === 'suppressed_hard_exhausted'
@@ -971,9 +1005,30 @@ export async function handleMessageForTurn(
     });
     // Shadow/enforce carry the marker for observation. Off bypasses the async
     // canary context entirely so gateway client calls remain byte-identical.
-    const invocationResult = canaryToken
+    const recoveredInvocationResult: AgentInvocationResult | null = recoveredResponse
+      ? {
+          firstTokenAt: startTime,
+          turnMessages: [],
+          turnUsage: {
+            inputTokens: recoveredResponse.metadata.inputTokens,
+            outputTokens: recoveredResponse.metadata.outputTokens,
+            cacheReadTokens: 0,
+            llmCalls: 1,
+            toolCalls: 0,
+            contextUtilization: 0,
+          },
+          responseModel: recoveredResponse.metadata.model,
+          responseText: recoveredResponse.content,
+          fallbackDiagnostics: recoveredResponse.metadata.diagnostics,
+          runtimeContradictionDiagnostics: recoveredResponse.metadata.diagnostics?.runtimeContradiction
+            ? { runtimeContradiction: recoveredResponse.metadata.diagnostics.runtimeContradiction }
+            : undefined,
+          turnIntent: null,
+        }
+      : null;
+    const invocationResult = recoveredInvocationResult ?? (canaryToken
       ? await runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
-      : await invokeWithPaidDeliverableTracking();
+      : await invokeWithPaidDeliverableTracking());
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
@@ -989,7 +1044,8 @@ export async function handleMessageForTurn(
       runtimeContradictionDiagnostics,
       turnIntent,
     } = invocationResult;
-    const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
+    const noReplyDecision = recoveredResponse?.metadata.noReply
+      ?? runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
     // authored. A no_reply issued during internal follow-up continuation
     // (whisper/system-note steps drained into this run) must not suppress the
@@ -1014,7 +1070,8 @@ export async function handleMessageForTurn(
       });
     }
     let safeResponseText = honorNoReply ? '' : responseText;
-    let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
+    let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined =
+      recoveredResponse?.metadata.broadcastSafety;
 
     if (contextEnvelope.broadcast) {
       const visibilityScope = broadcastVisibilityScope ?? 'public_only';
@@ -1071,24 +1128,29 @@ export async function handleMessageForTurn(
     }
 
     const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
-    const internalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
-      message,
-      responseText,
-      trustLevel,
-      canonicalContactKey,
-      emotionSnapshot: preTurnState.emotionSnapshot,
-      toolCallCount: turnUsage.toolCalls,
-      sessionChannelId: emotionSessionId,
-      conversationScope,
-    });
-    internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
-    const metacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
-      internalState,
-      responseText,
-      toolCallCount: turnUsage.toolCalls,
-      sessionChannelId: emotionSessionId,
-      retrievalProvenanceRefs,
-    });
+    const internalState = recoveredResponse?.metadata.internalState
+      ? cloneInternalState(recoveredResponse.metadata.internalState)
+      : await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+          message,
+          responseText,
+          trustLevel,
+          canonicalContactKey,
+          emotionSnapshot: preTurnState.emotionSnapshot,
+          toolCallCount: turnUsage.toolCalls,
+          sessionChannelId: emotionSessionId,
+          conversationScope,
+        });
+    internalStateSnapshotRef = recoveredResponse?.metadata.internalStateSnapshotRef
+      ?? buildInternalStateSnapshotRef(internalState);
+    const metacognitiveFlags = recoveredResponse?.metadata.metacognitiveFlags
+      ? cloneMetacognitiveFlags(recoveredResponse.metadata.metacognitiveFlags)
+      : runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
+          internalState,
+          responseText,
+          toolCallCount: turnUsage.toolCalls,
+          sessionChannelId: emotionSessionId,
+          retrievalProvenanceRefs,
+        });
     runtime.setCurrentSelfModelState(
       internalState,
       internalStateSnapshotRef,
@@ -1104,7 +1166,9 @@ export async function handleMessageForTurn(
     );
     const responseAttachments = honorNoReply
       ? []
-      : await collectTurnResponseAttachments({
+      : recoveredResponse?.attachments
+        ? [...recoveredResponse.attachments]
+        : await collectTurnResponseAttachments({
           runtime,
           turnMessages,
           paidDeliverables: pendingPaidDeliverables,
@@ -1145,7 +1209,7 @@ export async function handleMessageForTurn(
       }
     }
 
-    if (!broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
+    if (!recoveredResponse && !broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
       assistantSessionEntryId = runtime.recordAssistantMessage(
         message,
         turnId,
@@ -1165,7 +1229,7 @@ export async function handleMessageForTurn(
     if (runtimeContradictionDiagnostics?.runtimeContradiction) {
       responseDiagnostics.runtimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
     }
-    let responseFatigueMetadata = fatigueDecision?.metadata;
+    let responseFatigueMetadata = recoveredResponse?.metadata.fatigue ?? fatigueDecision?.metadata;
     if (fatigueDecision?.shouldRecordSpend) {
       if (!runtime.fatigueBudget) {
         throw new Error('Fatigue spend recording requires fatigueBudget');
@@ -1200,7 +1264,7 @@ export async function handleMessageForTurn(
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.recorded'),
       });
     }
-    const agentResponse: AgentResponse = {
+    const agentResponse: AgentResponse = recoveredResponse ?? {
       content: safeResponseText,
       channelId: message.channelId,
       ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),

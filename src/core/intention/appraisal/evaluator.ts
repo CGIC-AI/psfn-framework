@@ -4,6 +4,7 @@ import type {
   CorrelationMetadata,
 } from '../../../shared/contracts/runtime.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { derivePostTurnIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import {
   classifyAppraisalTrigger,
   hasDueSoonConcern,
@@ -170,6 +171,14 @@ export class IntentionAppraisal {
       purpose: 'intention.appraisal',
       originType: 'background',
       originStage: `intention.appraisal.${trigger}`,
+      ...(normalized.icpCorrelation
+        ? {
+            icpCorrelation: derivePostTurnIcpConversationCorrelation(
+              normalized.icpCorrelation,
+              'sidecar',
+            ),
+          }
+        : {}),
     };
 
     try {

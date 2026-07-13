@@ -683,6 +683,8 @@ export interface CompanionMessageSendParams {
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   };
+  /** Episode-bound lineage for a non-initial autonomous conversation reply. */
+  correlation?: IcpConversationCorrelation;
 }
 
 export interface CompanionMessageSendResult {

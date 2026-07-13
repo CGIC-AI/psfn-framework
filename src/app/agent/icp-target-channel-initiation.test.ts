@@ -172,6 +172,9 @@ describe('ICP target-channel initiation', () => {
       content: 'Hey Nova, I was thinking about our garden plans.',
       correlation: firstMessage.routing.icpCorrelation,
     });
+    const failedObservation = firstHarness.recordDeliveryObservation.mock.calls.at(-1)?.[0];
+    if (!failedObservation) throw new Error('test expected a failed delivery observation');
+    restartedHarness.findIcpDeliveryObservation.mockResolvedValueOnce(failedObservation);
     restartedHarness.sendInitiation.mockResolvedValueOnce({
       channelId: CHANNEL,
       messageId: `companion-initiation-${CANDIDATE}`,
@@ -186,7 +189,12 @@ describe('ICP target-channel initiation', () => {
       peerContactId: CONTACT_ID,
     });
 
-    expect(restartedHarness.handleMessage).not.toHaveBeenCalled();
+    expect(restartedHarness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restartedHarness.handleMessage.mock.calls[0]?.[1]).toMatchObject({
+      recoveredResponse: expect.objectContaining({
+        content: 'Hey Nova, I was thinking about our garden plans.',
+      }),
+    });
     expect(restartedHarness.sendInitiation).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
   });
@@ -244,6 +252,28 @@ describe('ICP target-channel initiation', () => {
     })).rejects.toThrow('already durably suppressed');
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.consumeInitiationPermit).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles a consumed suppression after the local observation write was interrupted', async () => {
+    const harness = createHarness();
+
+    await expect(harness.initiator.initiate({
+      permit: {
+        ...permit(),
+        status: 'consumed',
+        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
+        revision: 2,
+      },
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).resolves.toMatchObject({ disposition: 'suppressed', recoveredTurn: true });
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'suppressed',
+    }));
   });
 
   it('fails closed when a permit is not bound to the local companion', async () => {

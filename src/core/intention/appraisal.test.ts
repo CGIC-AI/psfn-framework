@@ -210,6 +210,52 @@ describe('IntentionAppraisal', () => {
     expect(complete.mock.calls[0]?.[1]).toBe('background');
   });
 
+  it('carries typed ICP lineage into post-turn appraisal model spend', async () => {
+    const localCompanionId = '11111111-1111-4111-8111-111111111111';
+    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const icpCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-peer',
+      channelId,
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'companion-message-1',
+      requestId: 'companion-message-1',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'allow' as const,
+    };
+    const { provider, complete } = makeProvider([
+      '{"decisions":[{"type":"noop","priority":"low","reason":"nothing due","timing":"none"}]}',
+    ]);
+    const appraisal = new IntentionAppraisal({ llmProvider: provider });
+
+    await appraisal.evaluate({
+      sessionId: channelId,
+      icpCorrelation,
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'A peer message.' }],
+      triggerOverride: 'motivation',
+      motivationSignals: ['social_need'],
+    });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+      purpose: 'intention.appraisal',
+      icpCorrelation: {
+        ...icpCorrelation,
+        costPurpose: 'sidecar',
+        costOriginStage: 'post_turn',
+      },
+    });
+  });
+
   it('triggers immediately on emotional shift', async () => {
     const { provider, complete } = makeProvider([
       JSON.stringify({

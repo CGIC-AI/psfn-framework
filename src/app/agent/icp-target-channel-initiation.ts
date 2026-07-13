@@ -25,6 +25,8 @@ export interface IcpDeliveryObservation {
   deliveredTo?: readonly string[];
   permitOutcome?: 'consumed' | 'replayed';
   error?: string;
+  /** Durable generated response needed to resume post-turn work without another model call. */
+  recoveryResponse?: AgentResponse;
 }
 
 export interface IcpTargetChannelAgentPort {
@@ -32,6 +34,7 @@ export interface IcpTargetChannelAgentPort {
   handleMessage(
     message: SubstrateMessage,
     deliveryLifecycle: {
+      recoveredResponse?: AgentResponse;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
   ): Promise<AgentResponse>;
@@ -43,8 +46,8 @@ export interface IcpTargetChannelAgentPort {
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): Promise<Pick<IcpDeliveryObservation, 'status'> | null>
-    | Pick<IcpDeliveryObservation, 'status'>
+  ): Promise<Pick<IcpDeliveryObservation, 'status' | 'recoveryResponse'> | null>
+    | Pick<IcpDeliveryObservation, 'status' | 'recoveryResponse'>
     | null;
   /** Durable local delivery fact; never asserted as peer-shared transcript speech. */
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
@@ -187,11 +190,23 @@ export function createIcpTargetChannelInitiator(input: {
     }
     const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
     if (!recorded && permit.status === 'consumed') {
-      throw new Error('Consumed ICP permit has no recoverable delivered assistant turn');
+      const correlation = buildCorrelation({
+        permit,
+        localCompanionId,
+        peerContactId,
+        rootInitiationId: request.rootInitiationId,
+      });
+      await input.agent.recordIcpDeliveryObservation({
+        channelId: permit.channelId,
+        sourceMessageId,
+        status: 'suppressed',
+      });
+      return { disposition: 'suppressed', recoveredTurn: true, correlation };
     }
     let recoveredTurn = recorded !== null;
     let content: string;
     let correlation: IcpConversationCorrelation;
+    let turnResponse: AgentResponse | undefined;
 
     const finalizeDelivery = async (): Promise<IcpTargetChannelInitiationResult> => {
       if (!content.trim()) {
@@ -202,7 +217,7 @@ export function createIcpTargetChannelInitiator(input: {
           channelId: permit.channelId,
           rootInitiationId: request.rootInitiationId,
         });
-        if (consumption.outcome !== 'consumed') {
+        if (consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed') {
           throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);
         }
         await input.agent.recordIcpDeliveryObservation({
@@ -244,6 +259,7 @@ export function createIcpTargetChannelInitiator(input: {
           sourceMessageId,
           status: 'failed',
           error: toErrorMessage(error),
+          ...(turnResponse ? { recoveryResponse: turnResponse } : {}),
         });
         throw error;
       }
@@ -261,6 +277,36 @@ export function createIcpTargetChannelInitiator(input: {
         throw new Error('Recorded ICP initiation turn does not match the permit binding');
       }
       content = recorded.content;
+      const recoveryResponse = previousObservation?.recoveryResponse;
+      if (previousObservation?.status === 'failed') {
+        if (!recoveryResponse) {
+          throw new Error('Failed ICP delivery is missing its durable recovery response');
+        }
+        turnResponse = {
+          ...recoveryResponse,
+          content,
+          channelId: permit.channelId,
+          metadata: {
+            ...recoveryResponse.metadata,
+            turnId: correlation.turnId,
+            requestId: correlation.requestId,
+            icpCorrelation: correlation,
+          },
+        };
+        const finalization: { result?: IcpTargetChannelInitiationResult } = {};
+        await input.agent.handleMessage(buildPrivateTurnMessage(correlation), {
+          recoveredResponse: turnResponse,
+          finalizeDelivery: async (response) => {
+            turnResponse = response;
+            content = response.content;
+            finalization.result = await finalizeDelivery();
+          },
+        });
+        if (!finalization.result) {
+          throw new Error('Recovered ICP target turn completed without delivery finalization');
+        }
+        return finalization.result;
+      }
     } else {
       recoveredTurn = false;
       correlation = buildCorrelation({
@@ -273,6 +319,7 @@ export function createIcpTargetChannelInitiator(input: {
       const finalization: { result?: IcpTargetChannelInitiationResult } = {};
       await input.agent.handleMessage(buildPrivateTurnMessage(correlation), {
         finalizeDelivery: async (response) => {
+          turnResponse = response;
           content = response.content;
           if (response.metadata.icpCorrelation) {
             correlation = parseIcpConversationCorrelation(response.metadata.icpCorrelation);

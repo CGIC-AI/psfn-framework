@@ -11,6 +11,7 @@ import type {
   CompanionMessageDeliveryFailureNotification,
   CompanionMessageFailureReportParams,
 } from '../../boundary/gateway/protocol.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -64,16 +65,46 @@ function createHarness(overrides?: {
     outputTokens: number;
     durationMs: number;
   }>;
-  handleMessage?: (message: SubstrateMessage) => Promise<AgentResponse>;
+  handleMessage?: (
+    message: SubstrateMessage,
+    deliveryLifecycle?: {
+      recoveredResponse?: AgentResponse;
+      finalizeDelivery(response: AgentResponse): Promise<void>;
+    },
+  ) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   discordSend?: (channelId: string, content: string) => Promise<void>;
   discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
-  companionSend?: (channelId: string, content: string, authorName?: string) => Promise<unknown>;
+  companionSend?: (
+    channelId: string,
+    content: string,
+    authorName?: string,
+    correlation?: IcpConversationCorrelation,
+  ) => Promise<{
+    channelId: string;
+    messageId: string;
+    deliveredTo: string[];
+    skippedOffline: string[];
+  }>;
   companionSendInitiation?: (input: Record<string, unknown>) => Promise<any>;
   companionReportFailure?: (params: CompanionMessageFailureReportParams) => Promise<unknown>;
   hasRecordedSourceMessage?: (channelId: string, sourceMessageId: string) => Promise<boolean> | boolean;
+  findRecordedIcpInitiation?: (
+    channelId: string,
+    sourceMessageId: string,
+  ) => Promise<{
+    content: string;
+    correlation: IcpConversationCorrelation;
+  } | null> | {
+    content: string;
+    correlation: IcpConversationCorrelation;
+  } | null;
+  findIcpDeliveryObservation?: (
+    channelId: string,
+    sourceMessageId: string,
+  ) => Promise<any> | any;
   outboundReplyGuard?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
@@ -109,7 +140,12 @@ function createHarness(overrides?: {
     }),
     discordSend: vi.fn(overrides?.discordSend ?? (async () => {})),
     discordSendMedia: vi.fn(overrides?.discordSendMedia ?? (async () => {})),
-    companionSend: vi.fn(overrides?.companionSend ?? (async () => ({}))),
+    companionSend: vi.fn(overrides?.companionSend ?? (async channelId => ({
+      channelId,
+      messageId: 'companion-reply-test',
+      deliveredTo: [],
+      skippedOffline: [],
+    }))),
     companionSendInitiation: vi.fn(overrides?.companionSendInitiation ?? (async () => ({
       channelId: 'companion-dm:test',
       messageId: 'companion-initiation-test',
@@ -124,8 +160,8 @@ function createHarness(overrides?: {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
     observeMessage: vi.fn(overrides?.observeMessage ?? (async () => {})),
     waitForIdle: vi.fn(overrides?.waitForIdle ?? (async () => {})),
-    findRecordedIcpInitiation: vi.fn(async () => null),
-    findIcpDeliveryObservation: vi.fn(async () => null),
+    findRecordedIcpInitiation: vi.fn(overrides?.findRecordedIcpInitiation ?? (async () => null)),
+    findIcpDeliveryObservation: vi.fn(overrides?.findIcpDeliveryObservation ?? (async () => null)),
     hasRecordedSourceMessage: vi.fn(overrides?.hasRecordedSourceMessage ?? (async () => false)),
     recordIcpDeliveryObservation: vi.fn(async () => {}),
   };
@@ -804,6 +840,168 @@ describe('registerGatewayMessageHandlers', () => {
       ...overrides,
     });
   }
+
+  const ICP_A = '11111111-1111-4111-8111-111111111111';
+  const ICP_B = '22222222-2222-4222-8222-222222222222';
+  const ICP_CHANNEL = `companion-dm:${ICP_A}:${ICP_B}`;
+  const inboundIcpCorrelation: IcpConversationCorrelation = {
+    conversationId: '44444444-4444-4444-8444-444444444444',
+    rootInitiationId: '99999999-9999-4999-8999-999999999999',
+    initiatedByCompanionId: ICP_A,
+    localCompanionId: ICP_A,
+    peerCompanionId: ICP_B,
+    peerContactId: 'contact-b',
+    channelId: ICP_CHANNEL,
+    turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+    messageId: 'companion-initiation-reply-test',
+    requestId: 'companion-initiation-reply-test',
+    chargeLane: 'companion_social',
+    surface: 'companion_dm',
+    costPurpose: 'conversation_turn',
+    costOriginStage: 'initiation',
+    fatigueDecision: 'allow',
+  };
+  const replyIcpCorrelation: IcpConversationCorrelation = {
+    ...inboundIcpCorrelation,
+    localCompanionId: ICP_B,
+    peerCompanionId: ICP_A,
+    peerContactId: 'contact-a',
+    turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+    costOriginStage: 'reply',
+  };
+
+  function makeCorrelatedCompanionMessage(): SubstrateMessage {
+    return makeCompanionMessage({
+      id: inboundIcpCorrelation.messageId,
+      channelId: ICP_CHANNEL,
+      authorId: ICP_A,
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: inboundIcpCorrelation,
+      },
+    });
+  }
+
+  it('delivery-gates a correlated companion reply and carries episode lineage', async () => {
+    let postTurnStarted = 0;
+    const reply = {
+      ...makeResponse('correlated reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        postTurnStarted += 1;
+        return reply;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-reply-delivered',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => expect(postTurnStarted).toBe(1));
+    expect(harness.gateway.companionSend).toHaveBeenCalledWith(
+      ICP_CHANNEL,
+      'correlated reply',
+      'Selene',
+      replyIcpCorrelation,
+    );
+    expect(harness.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith({
+      channelId: ICP_CHANNEL,
+      sourceMessageId: inboundIcpCorrelation.messageId,
+      status: 'delivered',
+      gatewayMessageId: 'companion-reply-delivered',
+      deliveredTo: [ICP_A],
+    });
+  });
+
+  it('recovers a failed correlated reply after restart without another generated turn', async () => {
+    const reply = {
+      ...makeResponse('durable reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    let firstPostTurnStarted = 0;
+    const first = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        firstPostTurnStarted += 1;
+        return reply;
+      },
+      companionSend: async () => {
+        throw new Error('peer route unavailable');
+      },
+    });
+
+    await first.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await vi.waitFor(() => {
+      expect(first.gateway.companionReportFailure).toHaveBeenCalledWith({
+        channelId: ICP_CHANNEL,
+        messageId: inboundIcpCorrelation.messageId,
+        reason: 'reply_delivery_failed',
+      });
+    });
+    expect(firstPostTurnStarted).toBe(0);
+    const failedObservation = first.agentLoop.recordIcpDeliveryObservation.mock.calls.at(-1)?.[0];
+    expect(failedObservation).toMatchObject({
+      status: 'failed',
+      recoveryResponse: reply,
+    });
+
+    let recoveredPostTurnStarted = 0;
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      hasRecordedSourceMessage: async () => true,
+      findRecordedIcpInitiation: async () => ({
+        content: reply.content,
+        correlation: replyIcpCorrelation,
+      }),
+      findIcpDeliveryObservation: async () => failedObservation,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle?.recoveredResponse) throw new Error('test expected recovered response');
+        await lifecycle.finalizeDelivery(lifecycle.recoveredResponse);
+        recoveredPostTurnStarted += 1;
+        return lifecycle.recoveredResponse;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-reply-recovered',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(recoveredPostTurnStarted).toBe(1);
+    expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
+    expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'delivered' }),
+    );
+  });
 
   it('runs companion messages through the normal turn pipeline and replies via the companion lane', async () => {
     const harness = createHarness({

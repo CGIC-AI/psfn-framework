@@ -2349,7 +2349,7 @@ describe('SubstrateAgent.handleMessage', () => {
       fatigueDecision: 'not_evaluated' as const,
     };
 
-    await expect(agent.handleMessage(makeMessage({
+    const targetMessage = makeMessage({
       id: correlation.requestId,
       channelId: correlation.channelId,
       channelType: 'companion',
@@ -2364,14 +2364,37 @@ describe('SubstrateAgent.handleMessage', () => {
         privateTurnTrigger: true,
         icpCorrelation: correlation,
       },
-    }), {
-      finalizeDelivery: async () => {
+    });
+    let recoveryResponse: Awaited<ReturnType<SubstrateAgent['handleMessage']>> | undefined;
+    const promptCallsBefore = promptSpy.mock.calls.length;
+
+    await expect(agent.handleMessage(targetMessage, {
+      finalizeDelivery: async (response) => {
+        recoveryResponse = response;
         throw new Error('peer route unavailable');
       },
     })).rejects.toThrow('peer route unavailable');
 
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
     expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
+
+    if (!recoveryResponse) throw new Error('test expected a recoverable response');
+    await expect(agent.handleMessage(targetMessage, {
+      recoveredResponse: recoveryResponse,
+      finalizeDelivery: async () => undefined,
+    })).resolves.toMatchObject({ content: TEST_ASSISTANT_RESPONSE });
+
+    expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(1);
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
+    expect(sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: correlation.turnId,
+      status: 'failed',
+    }));
+    expect(sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: correlation.turnId,
+      status: 'completed',
+    }));
   });
 
   it('records assistant message in session after LLM call', async () => {

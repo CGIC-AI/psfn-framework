@@ -700,11 +700,11 @@ export class GatewayServer {
       throw new Error('companion.message.send requires an identified agent companion connection');
     }
 
-    const { channelId, content, authorName, initiation } = parseCompanionMessageSendParams(params);
+    const { channelId, content, authorName, initiation, correlation } = parseCompanionMessageSendParams(params);
     let initiationPermitOutcome: 'consumed' | 'replayed' | undefined;
     let initiationCandidateId: string | undefined;
     let initiationPermitExpiresAtMs: number | undefined;
-    let initiationCorrelation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation | undefined;
+    let messageCorrelation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation | undefined;
     if (initiation) {
       if (!this.icpAutonomyBroker) {
         throw new JSONRPCErrorException(
@@ -751,10 +751,21 @@ export class GatewayServer {
       initiationPermitOutcome = consumption.outcome;
       initiationCandidateId = consumption.permit.candidateId;
       initiationPermitExpiresAtMs = consumption.permit.expiresAtMs;
-      initiationCorrelation = {
+      messageCorrelation = {
         ...correlation,
         rootInitiationId: consumption.episode.rootInitiationId,
       };
+    } else if (correlation) {
+      if (!this.icpAutonomyBroker) {
+        throw new JSONRPCErrorException(
+          'ICP autonomy broker is not configured',
+          GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+        );
+      }
+      messageCorrelation = await this.icpAutonomyBroker.bindConversationReplyCorrelation(
+        senderCompanionId,
+        correlation,
+      );
     }
 
     const stableInitiationMessageId = initiationCandidateId
@@ -826,7 +837,7 @@ export class GatewayServer {
       routing: {
         source: 'companion',
         authorIsMachineIntelligence: true,
-        ...(initiationCorrelation ? { icpCorrelation: initiationCorrelation } : {}),
+        ...(messageCorrelation ? { icpCorrelation: messageCorrelation } : {}),
       },
     };
 
@@ -2005,6 +2016,7 @@ function parseCompanionMessageSendParams(params: unknown): {
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   };
+  correlation?: IcpConversationCorrelation;
 } {
   if (!isRecord(params)) {
     throw new Error('companion.message.send requires an object params payload');
@@ -2070,11 +2082,18 @@ function parseCompanionMessageSendParams(params: unknown): {
       correlation: parseIcpConversationCorrelation(params.initiation.correlation),
     };
   }
+  if (params.correlation !== undefined && initiation) {
+    throw new Error('companion.message.send cannot combine initiation and reply correlation');
+  }
+  const correlation = params.correlation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(params.correlation);
   return {
     channelId,
     content,
     ...(authorName ? { authorName } : {}),
     ...(initiation ? { initiation } : {}),
+    ...(correlation ? { correlation } : {}),
   };
 }
 

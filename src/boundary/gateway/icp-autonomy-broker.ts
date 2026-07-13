@@ -6,11 +6,13 @@ import {
   type IcpSharedAutonomyStorePort,
 } from '../../core/icp/autonomy-store-ports.js';
 import {
+  parseIcpConversationCorrelation,
   parseIcpAvailabilityLease,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
   type IcpAvailabilityState,
   type IcpInitiationPermit,
+  type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -317,6 +319,43 @@ export class GatewayIcpAutonomyBroker {
       });
     }
     return { ...result, episode };
+  }
+
+  /** Rebind an ordinary reply to gateway-owned episode identity and participants. */
+  async bindConversationReplyCorrelation(
+    senderCompanionId: string,
+    value: IcpConversationCorrelation,
+  ): Promise<IcpConversationCorrelation> {
+    const correlation = parseIcpConversationCorrelation(value);
+    this.requireDistinctFleetPair(senderCompanionId, correlation.peerCompanionId);
+    const episode = await this.options.store.getEpisode(correlation.conversationId);
+    const matches = episode !== null
+      && episode.channelId === correlation.channelId
+      && episode.rootInitiationId === correlation.rootInitiationId
+      && episode.initiatedByCompanionId === correlation.initiatedByCompanionId
+      && episode.participantCompanionIds.length === 2
+      && episode.participantCompanionIds.includes(senderCompanionId)
+      && episode.participantCompanionIds.includes(correlation.peerCompanionId)
+      && correlation.localCompanionId === senderCompanionId
+      && correlation.costOriginStage === 'reply';
+    if (!matches) {
+      this.options.alarm(
+        'icp_reply_binding_mismatch',
+        'ICP reply correlation does not match the gateway-owned conversation episode',
+        {
+          senderCompanionId,
+          peerCompanionId: correlation.peerCompanionId,
+          channelId: correlation.channelId,
+          conversationId: correlation.conversationId,
+        },
+      );
+      throw new Error('ICP reply correlation episode binding mismatch');
+    }
+    return parseIcpConversationCorrelation({
+      ...correlation,
+      rootInitiationId: episode.rootInitiationId,
+      initiatedByCompanionId: episode.initiatedByCompanionId,
+    });
   }
 
   async revokePermit(

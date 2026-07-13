@@ -569,11 +569,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     channelId: string,
     content: string,
     authorName?: string,
+    correlation?: IcpConversationCorrelation,
   ): Promise<CompanionMessageSendResult> {
     return await this.rpcInstance.request('companion.message.send', {
       channelId,
       content,
       ...(authorName ? { authorName } : {}),
+      ...(correlation ? { correlation } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
   }

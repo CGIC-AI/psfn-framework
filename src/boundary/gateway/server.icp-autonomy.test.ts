@@ -601,8 +601,28 @@ describe('GatewayServer ICP autonomy RPC', () => {
     const candidateId = '25252525-2525-4525-8525-252525252525';
     let postTurnStarted = 0;
     let receivedMessage: SubstrateMessage | null = null;
+    let receivedReply: SubstrateMessage | null = null;
 
     try {
+      clientA.onCompanionMessage(async (message) => {
+        receivedReply = message;
+        const correlation = message.routing?.icpCorrelation;
+        if (!correlation) throw new Error('initiator expected reply ICP correlation');
+        senderManager.recordUserMessage(
+          message.channelId,
+          message.content,
+          message.authorId,
+          message.authorName,
+          message.isDirectMessage,
+          'sender-contact-b',
+          {
+            turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7083' as TurnID,
+            requestId: message.id,
+            sourceMessageId: message.id,
+            metadata: buildSessionMetadataWithIcpCorrelation(undefined, correlation),
+          },
+        );
+      });
       clientB.onCompanionMessage(async (message) => {
         receivedMessage = message;
         const correlation = message.routing?.icpCorrelation;
@@ -703,13 +723,39 @@ describe('GatewayServer ICP autonomy RPC', () => {
           content: 'A production-shape hello from A to B.',
         });
       });
+      const deliveredInitiation = receivedMessage as SubstrateMessage | null;
+      const inboundCorrelation = deliveredInitiation?.routing?.icpCorrelation;
+      if (!inboundCorrelation) throw new Error('test expected delivered initiation correlation');
+      const replyCorrelation = {
+        ...inboundCorrelation,
+        localCompanionId: B,
+        peerCompanionId: A,
+        peerContactId: 'recipient-contact-a',
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+        messageId: deliveredInitiation.id,
+        requestId: deliveredInitiation.id,
+        costOriginStage: 'reply' as const,
+      };
+      await clientB.companionSend(
+        CHANNEL,
+        'A production-shape reply from B to A.',
+        'Beta',
+        replyCorrelation,
+      );
+      await vi.waitFor(() => {
+        expect(receivedReply).toMatchObject({
+          authorId: B,
+          content: 'A production-shape reply from B to A.',
+          routing: { icpCorrelation: replyCorrelation },
+        });
+      });
       expect(postTurnStarted).toBe(1);
-      expect(senderManager.getRecentMessages(CHANNEL, 10)).toEqual([
+      expect(senderManager.getRecentMessages(CHANNEL, 10)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           role: 'assistant',
           content: 'A production-shape hello from A to B.',
         }),
-      ]);
+      ]));
       expect(recipientManager.hasRecordedSourceMessage(
         CHANNEL,
         `companion-initiation-${candidateId}`,
@@ -727,6 +773,13 @@ describe('GatewayServer ICP autonomy RPC', () => {
         CHANNEL,
         `icp-initiation:${candidateId}`,
       )).toEqual({ status: 'delivered' });
+      expect(restartedSender.getRecentSessionEntries(CHANNEL, 10)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          authorId: B,
+          content: 'A production-shape reply from B to A.',
+        }),
+      ]));
     } finally {
       clientA.destroy();
       clientB.destroy();

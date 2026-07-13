@@ -575,6 +575,9 @@ export function wireHeartbeatPostTurnRuntime(
           : undefined;
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
+          ...(context.message.routing?.icpCorrelation
+            ? { icpCorrelation: context.message.routing.icpCorrelation }
+            : {}),
           internalState,
           currentEmotion,
           recentMessages,

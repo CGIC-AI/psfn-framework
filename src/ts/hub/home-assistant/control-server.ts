@@ -49,6 +49,9 @@ export class HomeAssistantControlServer {
     private readonly client: HomeAssistantClient,
     private readonly deviceRegistry: HubDeviceRegistry,
   ) {
+    if (authenticateHubDevice(deviceRegistry, config.token)) {
+      throw new Error("HUB_CONTROL_TOKEN must not match a registered device credential");
+    }
     this.server = http.createServer((request, response) => {
       void this.handle(request, response).catch((error) => {
         this.writeError(response, error);

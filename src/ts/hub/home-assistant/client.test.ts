@@ -63,6 +63,10 @@ test("private control server authenticates, validates, and deduplicates service 
     token: CONTROL_TOKEN,
     maxBodyBytes: 4096,
   };
+  assert.throws(
+    () => new HomeAssistantControlServer({ ...controlConfig, token: DEVICE_TOKEN }, client, DEVICE_REGISTRY),
+    /must not match a registered device credential/,
+  );
   const control = new HomeAssistantControlServer(controlConfig, client, DEVICE_REGISTRY);
   client.start();
   await control.start();
@@ -247,7 +251,10 @@ class MockHomeAssistant {
           id,
           type: "result",
           success: true,
-          result: [stateRecord("light.office", "off", { friendly_name: "Office Light" })],
+          result: [
+            stateRecord("light.office", "off", { friendly_name: "Office Light" }),
+            stateRecord("fan.main_bedroom", "off", { friendly_name: "Bedroom Fan", percentage: 0 }),
+          ],
         }));
         return;
       }

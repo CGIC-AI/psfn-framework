@@ -32,9 +32,11 @@ The exact live Home Assistant affordances are recorded in
 `home-assistant.rooms.json`. The bedroom satellite is anchored to the physical
 `bedroom` place and presents bedroom/upstairs controls first, followed by the
 office/downstairs group. Indicator lights, timers, configuration entities,
-cameras, and sirens are deliberately excluded. The two PIRs are local room
-state only: they are mutually exclusive hints with a hold and transition quiet
-period, and do not create chat turns or raw PSFN event traffic.
+cameras, and sirens are deliberately excluded. The two PIRs provide one
+latched, coarse location hint: only motion rising edges count, repeated motion
+in the current room is ignored, and motion in the other room moves the hint
+there. Inactive edges do nothing and the hint never expires. Raw PIR changes do
+not create chat turns or PSFN event traffic.
 
 Presence sensing is not part of this sealed-unit build. The LD2410C requires a
 5 V supply capable of more than 200 mA, which the exposed 3.3 V breakout cannot

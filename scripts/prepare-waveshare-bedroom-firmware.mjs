@@ -91,18 +91,52 @@ if (!idleAnimation.test(profile)) throw new Error("Prepared profile is missing t
 profile = profile.replace(idleAnimation, "$1              - purrsephone_idle\n$2");
 replaceRequired("src: assistant_gui_listening", "src: purrsephone_idle", "listening sprite");
 replaceRequired("src: assistant_gui_thinking", "src: purrsephone_thinking", "thinking sprite");
+replaceRequired("src: assistant_gui_initializing", "src: purrsephone_sleeping", "initializing sprite");
+replaceRequired("src: assistant_gui_error", "src: purrsephone_sleeping", "error sprite");
+replaceRequired("src: assistant_gui_timer_finished", "src: purrsephone_idle", "timer sprite");
 replaceRequired("src: error_no_ha", "src: purrsephone_idle", "disconnected sprite");
 replaceRequired("src: error_no_wifi", "src: purrsephone_sleeping", "offline sprite");
 replaceRequired("src: mood_neutral", "src: purrsephone_talking", "replying sprite");
 profile = profile.replaceAll("id(mood_neutral)", "id(purrsephone_talking)");
 profile = profile.replaceAll("id(mood_happy)", "id(purrsephone_talking)");
 profile = profile.replaceAll("id(mood_angry)", "id(purrsephone_talking)");
+
+// Once every reference has been redirected, drop the borrowed character
+// files entirely. Keeping unused upstream frames in the image list both wastes
+// flash and makes it possible for a future page to show the wrong character.
+profile = profile.replace(
+  /  - file: \$\{assets_base\}assets\/images\/assistant\/[^\n]+\n    id: [^\n]+\n    resize: 360x360\n    type: RGB565\n    transparency: (?:alpha_channel|opaque)\n/g,
+  "",
+);
+profile = profile.replace(
+  /^\s*# AI avatar folder.*\n\s*ai_avatar:.*\n/m,
+  "",
+);
+
+// The borrowed muted page was empty. Every face-state page must render one of
+// the repo-owned Purrsephone sprites, even while audio input is muted.
+replaceRequired(
+  "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
+  "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n      widgets:\n        - image:\n            align: CENTER\n            src: purrsephone_sleeping\n",
+  "muted sprite",
+);
 // The optional artwork package depends on a mutable ESPHome pull-request head.
 // The base profile already supplies a deterministic neutral-art fallback, so
 // omit remote album artwork until the component exists in a pinned release.
 profile = profile.replace(/^\s+sendspin_artwork:.*\n/m, "");
 
-const forbidden = ["@main", "/raw/main/", "/raw/master/", "type: gfonts", "github://pr#"];
+const forbidden = [
+  "@main",
+  "/raw/main/",
+  "/raw/master/",
+  "type: gfonts",
+  "github://pr#",
+  "assets/images/assistant/",
+  "assistant_gui_",
+  "id: mood_happy",
+  "id: mood_neutral",
+  "id: mood_angry",
+];
 for (const token of forbidden) {
   if (profile.includes(token)) throw new Error(`Prepared profile still contains floating reference: ${token}`);
 }

@@ -1,11 +1,13 @@
 {
   "schemaVersion": 1,
   "presencePolicy": {
-    "mode": "local_state_only",
+    "mode": "last_motion_rising_edge_wins",
     "emitToPurrsephone": false,
     "exclusiveGroup": "primary-occupant",
-    "occupiedHoldSeconds": 120,
-    "minimumTransitionIntervalSeconds": 30
+    "ignoreInactiveEdges": true,
+    "deduplicateCurrentArea": true,
+    "expires": false,
+    "confidence": "coarse"
   },
   "areas": [
     {

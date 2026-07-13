@@ -41,4 +41,35 @@ describe('normalizeLLMUsageDetails accounting evidence', () => {
       'usage.totalTokens must equal input + output + cacheRead + cacheWrite (125)',
     );
   });
+
+  it('preserves an explicit zero input bucket for a fully cached provider attempt', () => {
+    expect(normalizeLLMUsageDetails({
+      input: 0,
+      output: 5,
+      cacheRead: 100,
+      cacheWrite: 0,
+      totalTokens: 105,
+    }, 20, 5)).toMatchObject({
+      input: 0,
+      output: 5,
+      cacheRead: 100,
+      cacheWrite: 0,
+      totalTokens: 105,
+    });
+  });
+
+  it('preserves a computed zero input bucket for a fully cached raw provider attempt', () => {
+    expect(normalizeLLMUsageDetails({
+      prompt_tokens: 100,
+      completion_tokens: 5,
+      prompt_cache_hit_tokens: 100,
+      total_tokens: 105,
+    }, 20, 5)).toMatchObject({
+      input: 0,
+      output: 5,
+      cacheRead: 100,
+      cacheWrite: 0,
+      totalTokens: 105,
+    });
+  });
 });

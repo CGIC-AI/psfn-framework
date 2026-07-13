@@ -1315,10 +1315,18 @@ export class LLMClient {
           }
           let usageDetails: LLMUsageDetails;
           try {
+            const responseWithLegacyTokenCounts = response as typeof response & {
+              inputTokens?: unknown;
+              outputTokens?: unknown;
+            };
             usageDetails = normalizeLLMUsageDetails(
               response.usage,
-              response.inputTokens ?? 0,
-              response.outputTokens ?? 0,
+              typeof responseWithLegacyTokenCounts.inputTokens === 'number'
+                ? responseWithLegacyTokenCounts.inputTokens
+                : 0,
+              typeof responseWithLegacyTokenCounts.outputTokens === 'number'
+                ? responseWithLegacyTokenCounts.outputTokens
+                : 0,
             );
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));

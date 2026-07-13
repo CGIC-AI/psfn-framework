@@ -70,7 +70,7 @@ const requiredWiring = [
     file: 'src/system/config/provider-runtime-factory.ts',
     patterns: [
       /usageRecorder:\s*options\.llmOptions\?\.usageRecorder\s*\?\?\s*modelUsageStore/,
-      /withEmbeddingUsageAccounting\(embeddingProvider,\s*modelUsageStore\)/,
+      /withEmbeddingUsageAccounting\(embeddingProvider,\s*modelUsageStore,\s*\{\s*estimatedRates:\s*embeddingRates,?\s*\}\)/,
     ],
   },
   {

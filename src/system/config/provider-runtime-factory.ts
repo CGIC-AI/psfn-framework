@@ -5,6 +5,7 @@ import {
   type EmbeddingRuntimeProvider,
 } from '../../faculties/memory/embedding.js';
 import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-accounting.js';
+import { resolveModelUsageCostRatesForIdentity } from '../../primitives/llm/model-budget.js';
 import {
   createPostgresModelUsageStoreFromConfig,
   type PostgresModelUsageStore,
@@ -28,6 +29,10 @@ export function createProviderRuntimeServices(
   const providerEnv = options.providerEnv ?? process.env;
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const embeddingProvider = createEmbeddingProviderFromConfig(options.config, providerEnv);
+  const embeddingRates = resolveModelUsageCostRatesForIdentity(options.config, {
+    provider: embeddingProvider.kind,
+    model: embeddingProvider.model,
+  });
   const llmOptions = modelUsageStore
     ? {
         ...(options.llmOptions ?? {}),
@@ -37,7 +42,9 @@ export function createProviderRuntimeServices(
   return {
     llmClient: new LLMClient(options.config, llmOptions),
     embeddingProvider: modelUsageStore
-      ? withEmbeddingUsageAccounting(embeddingProvider, modelUsageStore)
+      ? withEmbeddingUsageAccounting(embeddingProvider, modelUsageStore, {
+          estimatedRates: embeddingRates,
+        })
       : embeddingProvider,
     ...(modelUsageStore ? { modelUsageStore } : {}),
   };

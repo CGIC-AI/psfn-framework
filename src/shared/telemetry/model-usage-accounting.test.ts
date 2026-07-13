@@ -137,6 +137,41 @@ describe('reconcileModelUsageAccounting', () => {
     })).toThrow('providerCost.total must equal the fully allocated component total (0.95)');
   });
 
+  it('rejects a partial component allocation that already exceeds its total', () => {
+    expect(() => reconcileModelUsageAccounting({
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+      },
+      providerCost: {
+        input: 2,
+        total: 1,
+        currency: 'USD',
+      },
+    })).toThrow('providerCost known component total (2) must not exceed providerCost.total (1)');
+  });
+
+  it('rejects an effective allocation that differs from the selected provider source', () => {
+    expect(() => reconcileModelUsageAccounting({
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+      },
+      providerCost: {
+        input: 0.4,
+        output: 0.6,
+        total: 1,
+        currency: 'USD',
+      },
+      effectiveCost: {
+        input: 1,
+        output: 0,
+        total: 1,
+        currency: 'USD',
+      },
+    })).toThrow('effectiveCost must exactly match the selected provider cost');
+  });
+
   it('rejects non-USD provider costs instead of labeling them as USD', () => {
     expect(() => reconcileModelUsageAccounting({
       usage: { inputTokens: 10, outputTokens: 5 },

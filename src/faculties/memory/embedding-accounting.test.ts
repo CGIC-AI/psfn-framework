@@ -76,4 +76,92 @@ describe('withEmbeddingUsageAccounting', () => {
       errorMessage: 'provider unavailable',
     }]);
   });
+
+  it('records an estimate from canonical rates when provider cost is absent', async () => {
+    const events: ModelUsageEventInput[] = [];
+    const provider = {
+      kind: 'api' as const,
+      model: 'text-embedding-3-small',
+      dims: 2,
+      embed: vi.fn(),
+      embedBatch: vi.fn(),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2])],
+        usageDetails: {
+          input: 1_000,
+          output: 0,
+          cacheRead: 500,
+          cacheWrite: 0,
+          totalTokens: 1_500,
+        },
+      })),
+    };
+    const accounted = withEmbeddingUsageAccounting(provider, {
+      async recordUsageEvent(event) {
+        events.push(event);
+      },
+    }, {
+      estimatedRates: {
+        inputPer1MUsd: 2,
+        cacheReadPer1MUsd: 0.2,
+        currency: 'USD',
+      },
+    });
+
+    await accounted.embedBatch(['hello']);
+
+    expect(events).toMatchObject([{
+      inputTokens: 1_000,
+      cacheReadTokens: 500,
+      totalTokens: 1_500,
+      estimatedCost: {
+        input: 0.002,
+        output: 0,
+        cacheRead: 0.0001,
+        cacheWrite: 0,
+        total: 0.0021,
+        currency: 'USD',
+      },
+      effectiveCost: {
+        total: 0.0021,
+      },
+      estimatedCostUsd: 0.0021,
+      effectiveCostUsd: 0.0021,
+      costSource: 'estimate',
+      currency: 'USD',
+    }]);
+  });
+
+  it('does not fabricate an embedding total without an exact canonical rate match', async () => {
+    const events: ModelUsageEventInput[] = [];
+    const provider = {
+      kind: 'api' as const,
+      model: 'unpriced-embedding',
+      dims: 2,
+      embed: vi.fn(),
+      embedBatch: vi.fn(),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2])],
+        usageDetails: {
+          input: 10,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 10,
+        },
+      })),
+    };
+    const accounted = withEmbeddingUsageAccounting(provider, {
+      async recordUsageEvent(event) {
+        events.push(event);
+      },
+    });
+
+    await accounted.embedBatch(['hello']);
+
+    expect(events[0]?.estimatedCostUsd).toBeUndefined();
+    expect(events[0]?.effectiveCostUsd).toBeUndefined();
+    expect(events[0]?.effectiveCost).toEqual({});
+    expect(events[0]?.costSource).toBe('none');
+  });
 });

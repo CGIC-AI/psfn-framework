@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { ModelBudgetController } from './model-budget.js';
+import {
+  ModelBudgetController,
+  resolveModelUsageCostRatesForIdentity,
+} from './model-budget.js';
 
 function makeConfig(dataDir: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const config: SubstrateConfig = {
@@ -249,5 +252,48 @@ describe('ModelBudgetController', () => {
       estimatedRequestCostUsd: 0,
       snapshot: null,
     });
+  });
+});
+
+describe('resolveModelUsageCostRatesForIdentity', () => {
+  it('uses only an exact canonical provider and model identity match', () => {
+    const dataDir = '/tmp/psfn-model-budget-rate-resolution';
+    const base = makeConfig(dataDir);
+    const config = makeConfig(dataDir, {
+      modelRegistry: {
+        ...base.modelRegistry!,
+        models: [
+          ...base.modelRegistry!.models,
+          {
+            id: 'embedding',
+            rank: 30,
+            identity: {
+              provider: 'api',
+              model: 'text-embedding-3-small',
+              source: { type: 'api' },
+            },
+            purposes: [{ purpose: 'memory', primary: true }],
+            cost: {
+              inputPer1MUsd: 2,
+              cacheReadPer1MUsd: 0.2,
+              currency: 'USD',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(resolveModelUsageCostRatesForIdentity(config, {
+      provider: 'api',
+      model: 'text-embedding-3-small',
+    })).toEqual({
+      inputPer1MUsd: 2,
+      cacheReadPer1MUsd: 0.2,
+      currency: 'USD',
+    });
+    expect(resolveModelUsageCostRatesForIdentity(config, {
+      provider: 'openai',
+      model: 'text-embedding-3-small',
+    })).toBeUndefined();
   });
 });

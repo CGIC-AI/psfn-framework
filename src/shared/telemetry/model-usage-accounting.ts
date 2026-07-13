@@ -174,21 +174,40 @@ function reconcileCompleteCostTotal(
   if (!hasComponents) return cost;
   const completed = { ...cost };
   let total = 0;
+  let allBillableBucketsKnown = true;
   for (const bucket of COST_BUCKETS) {
     const component = cost[bucket.cost];
     if (component !== undefined) {
       total += component;
       continue;
     }
-    if (usage[bucket.tokens] > 0) return cost;
+    if (usage[bucket.tokens] > 0) {
+      allBillableBucketsKnown = false;
+      continue;
+    }
     completed[bucket.cost] = 0;
   }
   const componentTotal = roundUsd(total);
+  if (!allBillableBucketsKnown && cost.total !== undefined && componentTotal > roundUsd(cost.total)) {
+    throw new Error(
+      `${field} known component total (${componentTotal}) must not exceed ${field}.total (${roundUsd(cost.total)})`,
+    );
+  }
+  if (!allBillableBucketsKnown) return completed;
   if (cost.total !== undefined && roundUsd(cost.total) !== componentTotal) {
     throw new Error(`${field}.total must equal the fully allocated component total (${componentTotal})`);
   }
   completed.total = cost.total ?? componentTotal;
   return completed;
+}
+
+function costBreakdownsEqual(
+  left: ModelUsageCostBreakdown,
+  right: ModelUsageCostBreakdown,
+): boolean {
+  return COST_BUCKETS.every(bucket => left[bucket.cost] === right[bucket.cost])
+    && left.total === right.total
+    && left.currency === right.currency;
 }
 
 export function reconcileModelUsageAccounting(
@@ -216,8 +235,9 @@ export function reconcileModelUsageAccounting(
   const effectiveCost = input.effectiveCost
     ? reconcileCompleteCostTotal(normalizeCost(input.effectiveCost, 'effectiveCost'), usage, 'effectiveCost')
     : resolvedEffectiveCost;
-  if (effectiveCost.total !== resolvedEffectiveCost.total) {
-    throw new Error('effectiveCost.total must follow provider-total then estimated-total precedence');
+  if (!costBreakdownsEqual(effectiveCost, resolvedEffectiveCost)) {
+    const selectedSource = resolvedCostSource === 'none' ? 'resolved' : resolvedCostSource;
+    throw new Error(`effectiveCost must exactly match the selected ${selectedSource} cost`);
   }
   if (input.costSource !== undefined && input.costSource !== resolvedCostSource) {
     throw new Error(`costSource must be ${resolvedCostSource} for the reconciled totals`);

@@ -43,6 +43,8 @@ export interface RecordModelUsageParams {
   process: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   correlation?: Partial<CorrelationMetadata>;
   nowMs?: number;
 }
@@ -227,19 +229,25 @@ function sanitizeProcess(value: string): string {
   return trimmed.length > 0 ? trimmed : 'unknown';
 }
 
-function resolveRegistryEntryForCandidate(
+export interface ModelUsagePricingIdentity {
+  provider: string;
+  model: string;
+  slotKey?: string;
+}
+
+function resolveRegistryEntryForIdentity(
   config: SubstrateConfig,
-  candidate: RoutingCandidate,
+  identity: ModelUsagePricingIdentity,
 ): ModelRegistryEntry | undefined {
   const registry = config.modelRegistry;
   if (!registry) return undefined;
 
-  if (candidate.slotKey) {
-    const byId = registry.models.find(entry => entry.id === candidate.slotKey);
+  if (identity.slotKey) {
+    const byId = registry.models.find(entry => entry.id === identity.slotKey);
     if (byId) return byId;
   }
 
-  const candidateKey = toModelKey(candidate.provider, candidate.model);
+  const candidateKey = toModelKey(identity.provider, identity.model);
   return registry.models.find((entry) => toModelKey(entry.identity.provider, entry.identity.model) === candidateKey);
 }
 
@@ -269,7 +277,14 @@ export function resolveModelUsageCostRates(
   config: SubstrateConfig,
   candidate: RoutingCandidate,
 ): ModelUsageCostRates | undefined {
-  const entry = resolveRegistryEntryForCandidate(config, candidate);
+  return resolveModelUsageCostRatesForIdentity(config, candidate);
+}
+
+export function resolveModelUsageCostRatesForIdentity(
+  config: SubstrateConfig,
+  identity: ModelUsagePricingIdentity,
+): ModelUsageCostRates | undefined {
+  const entry = resolveRegistryEntryForIdentity(config, identity);
   if (!entry?.cost) return undefined;
   const currency = typeof entry.cost.currency === 'string'
     ? entry.cost.currency.trim().toUpperCase()
@@ -450,7 +465,7 @@ export class ModelBudgetController {
 
     const usage = this.getUsageSnapshot(nowMs);
     const snapshot = toWindowSnapshot(nowMs, usage, policy.dailyUsdLimit, policy.monthlyUsdLimit);
-    const entry = resolveRegistryEntryForCandidate(this.config, params.candidate);
+    const entry = resolveRegistryEntryForIdentity(this.config, params.candidate);
     const rates = resolveUsdCostRates(entry);
     const estimatedInputTokens = Math.max(0, Math.floor(params.estimatedInputTokens));
     const estimatedOutputTokens = Math.max(

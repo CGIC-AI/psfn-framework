@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import {
+  reconcileModelUsageAccounting,
+  type ModelUsageCostRates,
+} from '../../shared/telemetry/model-usage-accounting.js';
 import type {
   EmbeddingBatchWithUsageResult,
   EmbeddingRuntimeProvider,
@@ -15,9 +19,14 @@ export interface AccountedEmbeddingRuntimeProvider extends EmbeddingRuntimeProvi
   embedBatchWithUsage(texts: string[]): Promise<EmbeddingBatchWithUsageResult>;
 }
 
+export interface EmbeddingUsageAccountingOptions {
+  estimatedRates?: ModelUsageCostRates;
+}
+
 export function withEmbeddingUsageAccounting(
   provider: EmbeddingProviderWithUsage,
   recorder: ModelUsageRecorder,
+  options: EmbeddingUsageAccountingOptions = {},
 ): AccountedEmbeddingRuntimeProvider {
   const record = async (
     logicalCallId: string,
@@ -28,6 +37,19 @@ export function withEmbeddingUsageAccounting(
     error?: unknown,
   ): Promise<void> => {
     const completedAtMs = Date.now();
+    const accounting = usageDetails
+      ? reconcileModelUsageAccounting({
+          usage: {
+            inputTokens: usageDetails.input,
+            outputTokens: usageDetails.output,
+            cacheReadTokens: usageDetails.cacheRead,
+            cacheWriteTokens: usageDetails.cacheWrite,
+            totalTokens: usageDetails.totalTokens,
+          },
+          ...(usageDetails.cost ? { providerCost: usageDetails.cost } : {}),
+          ...(options.estimatedRates ? { estimatedRates: options.estimatedRates } : {}),
+        })
+      : undefined;
     await recorder.recordUsageEvent({
       logicalCallId,
       attempt: 1,
@@ -48,12 +70,29 @@ export function withEmbeddingUsageAccounting(
       model: provider.model,
       requestedProvider: provider.kind,
       requestedModel: provider.model,
-      inputTokens: usageDetails?.input ?? 0,
-      outputTokens: usageDetails?.output ?? 0,
-      cacheReadTokens: usageDetails?.cacheRead ?? 0,
-      cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
-      totalTokens: usageDetails?.totalTokens ?? 0,
-      ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
+      inputTokens: accounting?.usage.inputTokens ?? 0,
+      outputTokens: accounting?.usage.outputTokens ?? 0,
+      cacheReadTokens: accounting?.usage.cacheReadTokens ?? 0,
+      cacheWriteTokens: accounting?.usage.cacheWriteTokens ?? 0,
+      totalTokens: accounting?.usage.totalTokens ?? 0,
+      ...(accounting ? {
+        providerCost: accounting.providerCost,
+        estimatedCost: accounting.estimatedCost,
+        effectiveCost: accounting.effectiveCost,
+        costSource: accounting.costSource,
+        ...(accounting.providerCost.total !== undefined
+          ? { providerCostUsd: accounting.providerCost.total }
+          : {}),
+        ...(accounting.estimatedCost.total !== undefined
+          ? { estimatedCostUsd: accounting.estimatedCost.total }
+          : {}),
+        ...(accounting.effectiveCost.total !== undefined
+          ? { effectiveCostUsd: accounting.effectiveCost.total }
+          : {}),
+        ...(accounting.effectiveCost.currency
+          ? { currency: accounting.effectiveCost.currency }
+          : {}),
+      } : {}),
       ...(error ? {
         errorCode: error instanceof Error ? error.name : 'EmbeddingError',
         errorMessage: error instanceof Error ? error.message : String(error),

@@ -40,6 +40,18 @@ export function normalizeUsageCountFromRecord(record: Record<string, unknown>, .
   return 0;
 }
 
+function optionalUsageCountFromRecord(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    if (Object.hasOwn(record, key)) {
+      return normalizeUsageCount(record[key]);
+    }
+  }
+  return undefined;
+}
+
 export function optionalRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
@@ -139,50 +151,57 @@ export function normalizeLLMUsageDetails(
       }
     }
   }
-  const promptTokens = normalizeUsageCount(record.prompt_tokens)
-    || normalizeUsageCount(record.promptTokenCount);
-  const responseInputTokens = normalizeUsageCount(record.input_tokens);
-  const cacheWriteFromRaw = normalizeUsageCount(promptTokenDetails.cache_write_tokens)
-    || normalizeUsageCount(record.cache_creation_input_tokens);
-  const reportedCachedTokens = normalizeUsageCount(promptTokenDetails.cached_tokens)
-    || normalizeUsageCount(inputTokenDetails.cached_tokens)
-    || normalizeUsageCount(record.prompt_cache_hit_tokens)
-    || normalizeUsageCount(record.cachedContentTokenCount)
-    || normalizeUsageCount(record.cache_read_input_tokens);
-  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite') || cacheWriteFromRaw;
+  const reportedPromptTokens = optionalUsageCountFromRecord(record, 'prompt_tokens', 'promptTokenCount');
+  const responseInputTokens = optionalUsageCountFromRecord(record, 'input_tokens');
+  const cacheWriteFromRaw = optionalUsageCountFromRecord(
+    promptTokenDetails,
+    'cache_write_tokens',
+  ) ?? optionalUsageCountFromRecord(record, 'cache_creation_input_tokens') ?? 0;
+  const reportedCachedTokens = optionalUsageCountFromRecord(
+    promptTokenDetails,
+    'cached_tokens',
+  ) ?? optionalUsageCountFromRecord(
+    inputTokenDetails,
+    'cached_tokens',
+  ) ?? optionalUsageCountFromRecord(
+    record,
+    'prompt_cache_hit_tokens',
+    'cachedContentTokenCount',
+    'cache_read_input_tokens',
+  ) ?? 0;
+  const cacheWrite = optionalUsageCountFromRecord(record, 'cacheWrite') ?? cacheWriteFromRaw;
   const cacheReadFromRaw = cacheWriteFromRaw > 0
     ? Math.max(0, reportedCachedTokens - cacheWriteFromRaw)
     : reportedCachedTokens;
-  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
-    || cacheReadFromRaw;
-  const inputFromRaw = promptTokens > 0
-    ? Math.max(0, promptTokens - cacheReadFromRaw - cacheWriteFromRaw)
-    : responseInputTokens > 0
+  const cacheRead = optionalUsageCountFromRecord(record, 'cacheRead') ?? cacheReadFromRaw;
+  const inputFromRaw = reportedPromptTokens !== undefined
+    ? Math.max(0, reportedPromptTokens - cacheReadFromRaw - cacheWriteFromRaw)
+    : responseInputTokens !== undefined
       ? (Object.hasOwn(record, 'cache_read_input_tokens') || Object.hasOwn(record, 'cache_creation_input_tokens')
           ? responseInputTokens
           : Math.max(0, responseInputTokens - cacheReadFromRaw - cacheWriteFromRaw))
-      : 0;
-  const input = normalizeUsageCountFromRecord(record, 'input')
-    || inputFromRaw
-    || normalizeUsageCount(fallbackInputTokens);
+      : undefined;
+  const input = optionalUsageCountFromRecord(record, 'input')
+    ?? inputFromRaw
+    ?? normalizeUsageCount(fallbackInputTokens);
   // pi-ai 0.73.1 follows OpenAI semantics: completion_tokens already includes
   // completion_tokens_details.reasoning_tokens, so do not add reasoning again.
-  const output = normalizeUsageCountFromRecord(
+  const output = optionalUsageCountFromRecord(
     record,
     'output',
     'completion_tokens',
     'output_tokens',
     'candidatesTokenCount',
   )
-    || normalizeUsageCount(fallbackOutputTokens);
+    ?? normalizeUsageCount(fallbackOutputTokens);
   const reconciledTotalTokens = input + output + cacheRead + cacheWrite;
-  const reportedTotalTokens = normalizeUsageCountFromRecord(
+  const reportedTotalTokens = optionalUsageCountFromRecord(
     record,
     'totalTokens',
     'total_tokens',
     'totalTokenCount',
   );
-  if (reportedTotalTokens > 0 && reportedTotalTokens !== reconciledTotalTokens) {
+  if (reportedTotalTokens !== undefined && reportedTotalTokens !== reconciledTotalTokens) {
     const totalKey = Object.hasOwn(record, 'totalTokens')
       ? 'totalTokens'
       : Object.hasOwn(record, 'total_tokens')
@@ -192,7 +211,7 @@ export function normalizeLLMUsageDetails(
       `usage.${totalKey} must equal input + output + cacheRead + cacheWrite (${reconciledTotalTokens})`,
     );
   }
-  const totalTokens = reportedTotalTokens || reconciledTotalTokens;
+  const totalTokens = reportedTotalTokens ?? reconciledTotalTokens;
   const cost = normalizeLLMUsageCostDetails(record.cost);
   return {
     input,

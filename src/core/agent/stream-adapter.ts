@@ -929,7 +929,15 @@ function resolveStreamCandidates(
     return adjustedRoutingCandidates;
   }
 
-  const matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
+  let matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
+  if (matchedIndex < 0 && currentCandidate.slotKey === undefined) {
+    matchedIndex = findUniquePurposeMatchIndex(
+      config,
+      purpose,
+      currentCandidate,
+      adjustedRoutingCandidates,
+    );
+  }
   if (matchedIndex < 0) {
     return [currentCandidate];
   }
@@ -976,6 +984,40 @@ function candidatesEquivalent(left: RoutingCandidate, right: RoutingCandidate): 
   return left.provider === right.provider
     && left.model === right.model
     && (left.slotKey ?? '') === (right.slotKey ?? '');
+}
+
+function candidatesShareIdentity(left: RoutingCandidate, right: RoutingCandidate): boolean {
+  const leftProvider = left.provider.trim().toLowerCase();
+  const rightProvider = right.provider.trim().toLowerCase();
+  return leftProvider === rightProvider
+    && normalizeModelIdForProvider(leftProvider, left.model)
+      === normalizeModelIdForProvider(rightProvider, right.model);
+}
+
+function findUniquePurposeMatchIndex(
+  config: CoreSubstrateConfig,
+  purpose: RoutingPurpose,
+  currentCandidate: RoutingCandidate,
+  routingCandidates: RoutingCandidate[],
+): number {
+  const matchingEntries = config.modelRegistry?.models.filter((entry) => {
+    if (entry.enabled === false) return false;
+    if (!entry.purposes.some((tag) => tag.purpose === purpose)) return false;
+    return candidatesShareIdentity(
+      {
+        provider: entry.identity.provider,
+        model: entry.identity.model,
+        maxTokens: currentCandidate.maxTokens,
+      },
+      currentCandidate,
+    );
+  }) ?? [];
+  if (matchingEntries.length !== 1) return -1;
+
+  const slotKey = matchingEntries[0]!.id;
+  return routingCandidates.findIndex(
+    candidate => candidate.slotKey === slotKey && candidatesShareIdentity(candidate, currentCandidate),
+  );
 }
 
 function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {

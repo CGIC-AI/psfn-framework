@@ -161,6 +161,48 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
   };
 }
 
+function buildAmbiguousChatRegistry(
+  baseRegistry: CanonicalModelRegistry,
+  order: 'priced-first' | 'unpriced-first',
+  budgetEnabled: boolean,
+): CanonicalModelRegistry {
+  const chat = baseRegistry.models.find((entry) => entry.id === 'chat');
+  if (!chat) throw new Error('Expected chat registry entry');
+
+  const pricedChat: ModelRegistryEntry = {
+    ...chat,
+    cost: {
+      inputPer1MUsd: 10,
+      outputPer1MUsd: 20,
+      currency: 'USD',
+    },
+  };
+  const { cost: _unusedCost, ...unpricedChatBase } = pricedChat;
+  const unpricedChat: ModelRegistryEntry = {
+    ...unpricedChatBase,
+    id: 'chat-unpriced',
+    rank: chat.rank + 1,
+    purposes: [{ purpose: 'chat', primary: false }],
+  };
+  const ambiguousEntries = order === 'priced-first'
+    ? [pricedChat, unpricedChat]
+    : [unpricedChat, pricedChat];
+
+  return {
+    ...baseRegistry,
+    budgetPolicy: {
+      enabled: budgetEnabled,
+      dailyUsdLimit: 100,
+      monthlyUsdLimit: 1_000,
+      currency: 'USD',
+    },
+    models: [
+      ...ambiguousEntries,
+      ...baseRegistry.models.filter((entry) => entry.id !== 'chat'),
+    ],
+  };
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -566,6 +608,83 @@ describe('createSubstrateStreamFn', () => {
       estimatedRequestCostUsd: expect.any(Number),
     });
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('fails closed for ambiguous stream pricing regardless of registry order', async () => {
+    for (const order of ['priced-first', 'unpriced-first'] as const) {
+      const baseConfig = makeConfig();
+      const config = makeConfig({
+        modelRegistry: buildAmbiguousChatRegistry(baseConfig.modelRegistry!, order, true),
+      });
+      const blockedEvents: Array<Record<string, unknown>> = [];
+      const streamFn = makeStreamFn(config, {
+        onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
+      });
+
+      streamAdapterMocks.transportStream.mockResolvedValueOnce({
+        content: 'must not run',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      });
+
+      const stream = await streamFn(resolveModel(config, 'chat'), {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello' }],
+      } as any, {});
+
+      await expect(collectStreamEvents(stream as AsyncIterable<unknown>))
+        .rejects.toThrow('Model budget blocked');
+      expect(blockedEvents).toHaveLength(1);
+      expect(blockedEvents[0]).toMatchObject({
+        reason: 'missing_cost_metadata',
+        provider: 'openrouter',
+        model: 'deepseek/deepseek-v3.2',
+      });
+    }
+
+    expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
+  });
+
+  it('records ambiguous stream usage without an arbitrary slot or estimated cost', async () => {
+    for (const order of ['priced-first', 'unpriced-first'] as const) {
+      const baseConfig = makeConfig();
+      const config = makeConfig({
+        modelRegistry: buildAmbiguousChatRegistry(baseConfig.modelRegistry!, order, false),
+      });
+      const streamFn = makeStreamFn(config);
+
+      streamAdapterMocks.transportStream.mockResolvedValueOnce({
+        content: 'accounted response',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 100,
+        outputTokens: 5,
+        stopReason: 'stop',
+      });
+
+      const stream = await streamFn(resolveModel(config, 'chat'), {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello' }],
+      } as any, {});
+      await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+      const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+      const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
+      expect(parsed.records).toHaveLength(1);
+      expect(parsed.records[0]).toMatchObject({
+        provider: 'openrouter',
+        model: 'deepseek/deepseek-v3.2',
+        inputTokens: 100,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+      });
+      expect(parsed.records[0]).not.toHaveProperty('slotKey');
+    }
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
   });
 
   it('skips preflight token estimation when model budget policy is disabled', async () => {

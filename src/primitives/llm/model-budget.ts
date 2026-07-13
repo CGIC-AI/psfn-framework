@@ -244,7 +244,11 @@ function resolveRegistryEntryForIdentity(
 
   if (identity.slotKey) {
     const byId = registry.models.find(entry => entry.id === identity.slotKey);
-    if (byId) return byId;
+    if (!byId) return undefined;
+    return toModelKey(byId.identity.provider, byId.identity.model)
+      === toModelKey(identity.provider, identity.model)
+      ? byId
+      : undefined;
   }
 
   const candidateKey = toModelKey(identity.provider, identity.model);
@@ -392,7 +396,10 @@ export function findRegistryEntryByProviderModel(
   const registry = config.modelRegistry;
   if (!registry) return undefined;
   const targetKey = toModelKey(provider, model);
-  return registry.models.find(entry => toModelKey(entry.identity.provider, entry.identity.model) === targetKey);
+  const matches = registry.models.filter(
+    entry => toModelKey(entry.identity.provider, entry.identity.model) === targetKey,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function findRegistryEntryByModelId(
@@ -402,7 +409,10 @@ export function findRegistryEntryByModelId(
   const registry = config.modelRegistry;
   if (!registry) return undefined;
   const targetModel = normalizeModelIdLoose(model);
-  return registry.models.find((entry) => normalizeModelIdLoose(entry.identity.model) === targetModel);
+  const matches = registry.models.filter(
+    entry => normalizeModelIdLoose(entry.identity.model) === targetModel,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export class ModelBudgetController {

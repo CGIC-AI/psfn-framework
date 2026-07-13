@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
+  findRegistryEntryByModelId,
+  findRegistryEntryByProviderModel,
   ModelBudgetController,
   resolveModelUsageCostRatesForIdentity,
 } from './model-budget.js';
@@ -295,6 +297,11 @@ describe('resolveModelUsageCostRatesForIdentity', () => {
       provider: 'openai',
       model: 'text-embedding-3-small',
     })).toBeUndefined();
+    expect(resolveModelUsageCostRatesForIdentity(config, {
+      provider: 'api',
+      model: 'text-embedding-3-small',
+      slotKey: 'chat',
+    })).toBeUndefined();
   });
 
   it('fails closed for ambiguous exact identities regardless of registry order', () => {
@@ -343,6 +350,58 @@ describe('resolveModelUsageCostRatesForIdentity', () => {
         provider: 'api',
         model: 'text-embedding-3-small',
       })).toBeUndefined();
+      expect(findRegistryEntryByProviderModel(
+        config,
+        'api',
+        'text-embedding-3-small',
+      )).toBeUndefined();
+    }
+  });
+
+  it('fails closed for model-only ambiguity across providers regardless of registry order', () => {
+    const dataDir = '/tmp/psfn-model-budget-model-only-ambiguity';
+    const base = makeConfig(dataDir);
+    const apiEntry = {
+      id: 'embedding-api',
+      rank: 30,
+      identity: {
+        provider: 'api',
+        model: 'text-embedding-3-small',
+        source: { type: 'api' as const },
+      },
+      purposes: [{ purpose: 'memory' as const, primary: true }],
+    };
+    const openAiEntry = {
+      id: 'embedding-openai',
+      rank: 40,
+      identity: {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+        source: { type: 'openai' as const },
+      },
+      purposes: [{ purpose: 'memory' as const, primary: false }],
+    };
+
+    for (const ambiguousEntries of [
+      [apiEntry, openAiEntry],
+      [openAiEntry, apiEntry],
+    ]) {
+      const config = makeConfig(dataDir, {
+        modelRegistry: {
+          ...base.modelRegistry!,
+          models: [
+            ...base.modelRegistry!.models,
+            ...ambiguousEntries,
+          ],
+        },
+      });
+
+      expect(findRegistryEntryByModelId(config, 'text-embedding-3-small'))
+        .toBeUndefined();
+      expect(findRegistryEntryByProviderModel(config, 'api', 'text-embedding-3-small')?.id)
+        .toBe('embedding-api');
+      expect(findRegistryEntryByProviderModel(config, 'openai', 'text-embedding-3-small')?.id)
+        .toBe('embedding-openai');
     }
   });
 });

@@ -648,6 +648,16 @@ export async function handleMessageForTurn(
   const recoveredCorrelation = recoveredResponse
     ? parseIcpConversationCorrelation(recoveredResponse.metadata.icpCorrelation)
     : null;
+  if (recoveredCorrelation) {
+    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
+    if (recoveredCorrelation.localCompanionId !== localCompanionId
+      || (!privateIcpCorrelation && recoveredCorrelation.peerCompanionId !== message.authorId)
+      || recoveredCorrelation.channelId !== message.channelId
+      || recoveredCorrelation.messageId !== message.id
+      || recoveredResponse?.channelId !== message.channelId) {
+      throw new Error('Recovered ICP delivery is not bound to the recorded local turn');
+    }
+  }
   const inboundIcpCorrelation = !privateIcpCorrelation && !recoveredCorrelation
     && message.routing?.icpCorrelation
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
@@ -735,13 +745,8 @@ export async function handleMessageForTurn(
   } = identityState;
   const inboundIcpOrigin = message.routing?.icpCorrelation;
   if (recoveredCorrelation) {
-    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
-    if (recoveredCorrelation.localCompanionId !== localCompanionId
-      || (!privateIcpCorrelation && recoveredCorrelation.peerCompanionId !== message.authorId)
-      || recoveredCorrelation.channelId !== message.channelId
-      || recoveredCorrelation.messageId !== message.id
-      || recoveredResponse?.channelId !== message.channelId) {
-      throw new Error('Recovered ICP delivery is not bound to the recorded local turn');
+    if (!canonicalContactKey || recoveredCorrelation.peerContactId !== canonicalContactKey) {
+      throw new Error('Recovered ICP delivery peer does not match the resolved canonical contact');
     }
     message.routing = {
       ...message.routing,

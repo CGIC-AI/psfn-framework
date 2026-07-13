@@ -126,6 +126,20 @@ const fatiguePendingSpend = {
     icpCorrelation: correlation,
   },
 };
+const fatigueRecordedEvent = {
+  timestampMs: FATIGUE_TIMESTAMP_MS,
+  amount: 1,
+  decision: 'charged',
+  reason: 'machine_intelligence_response',
+  spentAfter: 1,
+  remainingAllowance: 7,
+  normalSpentAfter: 1,
+  overchargeSpentAfter: 0,
+  overchargeAllowance: 2,
+  remainingOvercharge: 2,
+  softState: 'clear',
+  hardState: 'available',
+};
 
 function recoveryWithFatigue(overrides: Record<string, unknown> = {}) {
   return {
@@ -136,6 +150,24 @@ function recoveryWithFatigue(overrides: Record<string, unknown> = {}) {
       fatiguePendingSpend,
       ...overrides,
     },
+  };
+}
+
+function suppressedRecovery(overrides: Record<string, unknown> = {}) {
+  return {
+    ...recoveryResponse,
+    content: '',
+    metadata: {
+      ...recoveryResponse.metadata,
+      icpCorrelation: { ...correlation, fatigueDecision: 'suppress' },
+      fatigue: {
+        ...fatigueMetadata,
+        decision: 'suppressed_hard_exhausted',
+        modelDisposition: 'suppressed',
+        shouldRecordSpend: false,
+      },
+    },
+    ...overrides,
   };
 }
 
@@ -319,6 +351,83 @@ describe('ICP delivery recovery codec', () => {
     expect(() => parseIcpRecoveryResponse(malformed, {
       label: 'test recovery response',
     })).toThrow(/fatigue.*binding/i);
+  });
+
+  it('accepts one recorded fatigue event bound to its executable pending spend', () => {
+    const durable = recoveryWithFatigue({
+      fatigue: { ...fatigueMetadata, recordedEvent: fatigueRecordedEvent },
+    });
+
+    expect(parseIcpRecoveryResponse(durable, {
+      label: 'test recovery response',
+    })).toEqual(durable);
+  });
+
+  it.each([
+    ['timestamp', { timestampMs: FATIGUE_TIMESTAMP_MS + 1 }],
+    ['amount', { amount: 2 }],
+    ['decision', { decision: 'overcharge' }],
+    ['reason', { reason: 'overcharge_work_intent_wrapup' }],
+  ])('rejects a recorded fatigue event with forged %s', (_label, eventOverrides) => {
+    const malformed = recoveryWithFatigue({
+      fatigue: {
+        ...fatigueMetadata,
+        recordedEvent: { ...fatigueRecordedEvent, ...eventOverrides },
+      },
+    });
+
+    expect(() => parseIcpRecoveryResponse(malformed, {
+      label: 'test recovery response',
+    })).toThrow(/recorded.*event.*binding/i);
+  });
+
+  it('rejects a recorded fatigue event without its executable pending spend', () => {
+    const malformed = recoveryWithFatigue({
+      fatigue: {
+        ...fatigueMetadata,
+        shouldRecordSpend: false,
+        recordedEvent: fatigueRecordedEvent,
+      },
+      fatiguePendingSpend: undefined,
+    });
+
+    expect(() => parseIcpRecoveryResponse(malformed, {
+      label: 'test recovery response',
+    })).toThrow(/recorded.*event.*binding/i);
+  });
+
+  it.each([
+    ['visible content', { content: 'forged deliverable text' }],
+    ['an attachment', {
+      attachments: [{
+        url: 'https://example.invalid/forged.png',
+        contentType: 'image/png',
+        name: 'forged.png',
+      }],
+    }],
+  ])('rejects a fatigue-suppressed recovery response with %s', (_label, overrides) => {
+    expect(() => parseIcpRecoveryResponse(suppressedRecovery(overrides), {
+      label: 'test suppressed recovery response',
+    })).toThrow(/suppressed.*deliverable/i);
+  });
+
+  it.each([
+    ['suppressed status with an allowed response', 'suppressed', recoveryWithFatigue()],
+    ['prepared status with a suppressed response', 'prepared', suppressedRecovery()],
+  ])('rejects %s', (_label, status, response) => {
+    const observation = JSON.stringify({
+      schemaVersion: 1,
+      kind: 'icp_delivery',
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE,
+      status,
+      recoveryResponse: response,
+    });
+
+    expect(() => parseIcpDeliveryObservation(observation, {
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE,
+    })).toThrow(/suppressed.*deliverable|status.*fatigue decision/i);
   });
 
   it('requires internal state and snapshot reference as a verified pair', () => {

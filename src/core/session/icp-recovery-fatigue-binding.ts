@@ -39,7 +39,12 @@ export function assertFatigueRecoveryBinding(input: {
   if (fatigue.shouldRecordSpend !== (pendingSpend !== undefined)) {
     throw new Error(`${label}.fatigue binding does not match pending spend ownership`);
   }
-  if (!pendingSpend) return;
+  if (!pendingSpend) {
+    if (fatigue.recordedEvent) {
+      throw new Error(`${label}.fatigue recorded event binding requires pending spend`);
+    }
+    return;
+  }
 
   const pendingCorrelation = pendingSpend.correlation;
   if (pendingSpend.scope.localCompanionId !== correlation.localCompanionId
@@ -61,5 +66,16 @@ export function assertFatigueRecoveryBinding(input: {
     || pendingSpend.limits.hardLimit !== fatigue.budget.hardLimit
     || pendingSpend.limits.overchargeLimit !== fatigue.budget.overchargeAllowance) {
     throw new Error(`${label}.fatigue binding does not match its executable pending spend`);
+  }
+  const recordedEvent = fatigue.recordedEvent;
+  if (recordedEvent
+    && (recordedEvent.timestampMs !== pendingSpend.timestampMs
+      || recordedEvent.amount !== pendingSpend.amount
+      || recordedEvent.amount !== fatigue.budget.amount
+      || recordedEvent.decision !== pendingSpend.decision
+      || recordedEvent.decision !== fatigue.spendDecision
+      || recordedEvent.reason !== pendingSpend.reason
+      || recordedEvent.reason !== fatigue.spendReason)) {
+    throw new Error(`${label}.fatigue recorded event binding is inconsistent`);
   }
 }

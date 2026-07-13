@@ -1102,6 +1102,92 @@ describe('registerGatewayMessageHandlers', () => {
     expect(handled.timestamp).toEqual(new Date('2026-03-02T00:00:00.000Z'));
   });
 
+  it.each([
+    ['conversation', {
+      conversationId: '55555555-5555-4555-8555-555555555555',
+    }],
+    ['root initiation', {
+      rootInitiationId: '88888888-8888-4888-8888-888888888888',
+    }],
+    ['initiator', { initiatedByCompanionId: ICP_B }],
+    ['participant inversion', {
+      localCompanionId: ICP_A,
+      peerCompanionId: ICP_B,
+    }],
+    ['episode origin', { costOriginStage: 'maintenance' }],
+  ])('rejects a restart recovery transplanted onto another %s lineage', async (_label, changes) => {
+    const transplantedCorrelation = { ...replyIcpCorrelation, ...changes };
+    const transplantedResponse = {
+      ...makeResponse('transplanted reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: transplantedCorrelation.turnId,
+        requestId: transplantedCorrelation.requestId,
+        icpCorrelation: transplantedCorrelation,
+      },
+    };
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
+      findRecordedIcpInitiation: async () => ({
+        content: transplantedResponse.content,
+        correlation: transplantedCorrelation,
+        recoveryResponse: transplantedResponse,
+      }),
+    });
+
+    await expect(restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }))).rejects.toThrow(/durable inbound episode lineage/i);
+    expect(restarted.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['status', {
+      status: 'suppressed',
+      correlation: replyIcpCorrelation,
+      content: 'forged suppressed reply',
+    }],
+    ['content', {
+      status: 'suppressed',
+      correlation: { ...replyIcpCorrelation, fatigueDecision: 'suppress' },
+      content: 'forged suppressed reply',
+    }],
+  ])('rejects contradictory suppressed recovery %s before execution', async (_label, fixture) => {
+    const response = {
+      ...makeResponse(fixture.content),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: fixture.correlation.turnId,
+        requestId: fixture.correlation.requestId,
+        icpCorrelation: fixture.correlation,
+      },
+    };
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
+      findIcpDeliveryObservation: async () => ({
+        channelId: ICP_CHANNEL,
+        sourceMessageId: INBOUND_ICP_MESSAGE_ID,
+        status: fixture.status,
+        recoveryResponse: response,
+      }),
+    });
+
+    await expect(restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }))).rejects.toThrow(/suppressed|status.*fatigue/i);
+    expect(restarted.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
+  });
+
   it('completes a delivered restart replay from its durable response without resending', async () => {
     const reply = {
       ...makeResponse('already delivered reply'),
@@ -1231,6 +1317,11 @@ describe('registerGatewayMessageHandlers', () => {
 
     await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
       timestamp: '2026-03-02T05:00:00.000Z',
+      attachments: [{
+        url: 'https://example.invalid/replay-only.png',
+        contentType: 'image/png',
+        name: 'replay-only.png',
+      }],
     }));
 
     expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
@@ -1254,6 +1345,7 @@ describe('registerGatewayMessageHandlers', () => {
       'icpCorrelation',
       'source',
     ]);
+    expect(handled.attachments).toBeUndefined();
   });
 
   it('rejects a restart replay whose stable source id carries a changed durable envelope', async () => {

@@ -53,6 +53,23 @@ export interface RecordedCompanionSourceMessage {
   correlation?: IcpConversationCorrelation;
 }
 
+export function assertIcpRecoveryStatusBinding(
+  status: IcpDeliveryObservation['status'] | undefined,
+  response: AgentResponse,
+  label: string,
+): void {
+  const correlation = parseIcpConversationCorrelation(response.metadata.icpCorrelation);
+  if (status === 'suppressed'
+    && (response.content.trim().length > 0 || (response.attachments?.length ?? 0) > 0)) {
+    throw new Error(`${label} suppressed recovery contains a deliverable response`);
+  }
+  if (status !== undefined
+    && correlation.fatigueDecision === 'suppress'
+    && status !== 'suppressed') {
+    throw new Error(`${label} status does not match its fatigue decision`);
+  }
+}
+
 function sameCorrelation(
   left: IcpConversationCorrelation,
   right: IcpConversationCorrelation,
@@ -123,6 +140,10 @@ export function parseIcpRecoveryResponse(
     throw new Error(`${options.label} does not match its durable ICP lineage`);
   }
   const attachments = parseRecoveryAttachments(value.attachments, `${options.label}.attachments`);
+  if (correlation.fatigueDecision === 'suppress'
+    && (value.content.trim().length > 0 || (attachments?.length ?? 0) > 0)) {
+    throw new Error(`${options.label} suppressed turn contains a deliverable response`);
+  }
   const response: AgentResponse = {
     content: value.content,
     channelId: value.channelId,
@@ -200,6 +221,9 @@ export function parseIcpDeliveryObservation(
   if ((status === 'prepared' || status === 'suppressed' || parsed.turnCompleted === true)
     && !recoveryResponse) {
     throw new Error(`Recorded ${status} ICP observation is missing recoveryResponse`);
+  }
+  if (recoveryResponse) {
+    assertIcpRecoveryStatusBinding(status, recoveryResponse, 'Recorded ICP delivery');
   }
   return {
     channelId: expected.channelId,

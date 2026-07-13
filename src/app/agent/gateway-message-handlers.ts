@@ -35,7 +35,12 @@ import {
   CompanionReplyDeliveryError,
   createCompanionReplyDeliveryLifecycle,
 } from './companion-reply-delivery-recovery.js';
-import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
+import {
+  assertIcpRecoveryStatusBinding,
+  parseIcpRecoveryResponse,
+  type RecordedCompanionSourceMessage,
+} from '../../core/session/icp-delivery-recovery.js';
+import { assertCompanionRecoveryLineage } from './icp-recovery-lineage.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -101,6 +106,7 @@ function bindRecordedCompanionSourceEnvelope(
   message.authorId = recorded.authorId;
   message.authorName = recorded.authorName;
   message.timestamp = timestamp;
+  delete message.attachments;
   message.channelType = 'companion';
   message.isDirectMessage = expectedIsDirectMessage;
   message.routing = {
@@ -938,18 +944,41 @@ export function registerGatewayMessageHandlers(
             if (!recoveryResponse?.metadata.icpCorrelation) {
               throw new Error('Durable ICP recovery response is missing correlation');
             }
-            if (recordedReply
-              && JSON.stringify(recordedReply.correlation)
-                !== JSON.stringify(recoveryResponse.metadata.icpCorrelation)) {
+            const parsedRecoveryResponse = parseIcpRecoveryResponse(recoveryResponse, {
+              label: 'Durable companion recovery response',
+              expectedChannelId: message.channelId,
+              expectedSourceMessageId: message.id,
+            });
+            const recoveryCorrelation = parseIcpConversationCorrelation(
+              parsedRecoveryResponse.metadata.icpCorrelation,
+            );
+            const recordedReplyCorrelation = recordedReply
+              ? parseIcpConversationCorrelation(recordedReply.correlation)
+              : null;
+            if (recordedReplyCorrelation
+              && JSON.stringify(recordedReplyCorrelation) !== JSON.stringify(recoveryCorrelation)) {
               throw new Error('Durable ICP recovery sources disagree on reply lineage');
             }
+            if (!recordedSource.correlation) {
+              throw new Error('Durable companion source is missing ICP correlation');
+            }
+            assertCompanionRecoveryLineage(
+              recordedSource.correlation,
+              recoveryCorrelation,
+              message.id,
+            );
+            assertIcpRecoveryStatusBinding(
+              deliveryObservation?.status,
+              parsedRecoveryResponse,
+              'Durable ICP recovery',
+            );
             bindCompanionRecoveryCorrelation(
               message,
-              recoveryResponse.metadata.icpCorrelation,
+              recoveryCorrelation,
             );
             const lifecycle = buildCompanionReplyDeliveryLifecycle(
               message,
-              recoveryResponse,
+              parsedRecoveryResponse,
               deliveryObservation,
             );
             await promptWhenIdle(message, lifecycle);

@@ -1220,14 +1220,51 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         fatiguePendingSpend: durableResponse.metadata.fatiguePendingSpend,
       },
     });
+    const forgedContactRecovery = structuredClone(durableResponse);
+    forgedContactRecovery.metadata.icpCorrelation = {
+      ...correlation,
+      peerContactId: 'forged-contact',
+    };
+    const promptCallsBeforeForgedRecovery = runtime.agent.prompt.mock.calls.length;
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse: forgedContactRecovery,
+      finalizeDelivery: async () => undefined,
+    })).rejects.toThrow(/canonical contact/i);
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(promptCallsBeforeForgedRecovery);
+    expect(history.events).toHaveLength(0);
 
     const recovered = await handleMessageForTurn(runtime, message, {
       recoveredResponse: durableResponse,
       finalizeDelivery: async () => undefined,
     });
+    const replayedRecovery = await handleMessageForTurn(runtime, message, {
+      recoveredResponse: durableResponse,
+      finalizeDelivery: async () => undefined,
+    });
+    const parsedRecovered = parseIcpRecoveryResponse(recovered, {
+      label: 'runtime completed recovery response',
+      expectedChannelId: channelId,
+      expectedSourceMessageId: correlation.messageId,
+    });
 
-    expect(recovered.metadata.fatigue?.recordedEvent).toMatchObject({ amount: 1, spentAfter: 1 });
+    const pendingSpend = durableResponse.metadata.fatiguePendingSpend;
+    expect(pendingSpend).toBeDefined();
+    expect(parsedRecovered.metadata.fatigue?.recordedEvent).toMatchObject({
+      timestampMs: pendingSpend?.timestampMs,
+      amount: pendingSpend?.amount,
+      decision: pendingSpend?.decision,
+      reason: pendingSpend?.reason,
+      spentAfter: 1,
+    });
+    expect(replayedRecovery.metadata.fatigue?.recordedEvent)
+      .toEqual(parsedRecovered.metadata.fatigue?.recordedEvent);
     expect(history.events).toHaveLength(1);
+    expect(history.events[0]).toMatchObject({
+      timestampMs: pendingSpend?.timestampMs,
+      amount: pendingSpend?.amount,
+      decision: pendingSpend?.decision,
+      reason: pendingSpend?.reason,
+    });
   });
 
   it('uses the durable completed-turn marker to avoid scheduling post-turn work twice', async () => {

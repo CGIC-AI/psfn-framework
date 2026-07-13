@@ -3,6 +3,7 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type { IntrospectionConsentStore } from './consent-store.js';
 import type { IntrospectionDivergenceType } from './contracts.js';
 
 export const VALUES_CONSISTENCY_STATUSES = [
@@ -15,16 +16,24 @@ export type ValuesConsistencyStatus = typeof VALUES_CONSISTENCY_STATUSES[number]
 
 export interface ValuesConsistencyLandmarkEvidence {
   id: string;
+  channelId: string;
   divergenceType: IntrospectionDivergenceType;
   observation: string;
   confidence: number;
   companionReflection: string;
+  consentRevision: number;
+  consentHash: string;
   createdAt: string;
 }
 
 export interface ValuesConsistencyFinding {
   schemaVersion: 1;
   landmarkId: string;
+  channelId: string;
+  landmarkConsentRevision: number;
+  landmarkConsentHash: string;
+  evaluationConsentRevision: number;
+  evaluationConsentHash: string;
   status: ValuesConsistencyStatus;
   finding: string;
   confidence: number;
@@ -59,13 +68,26 @@ function boundedString(value: unknown, field: string, maximum: number): string {
 function normalizeFinding(value: unknown): ValuesConsistencyFinding {
   if (!isRecord(value)) throw new Error('Values-consistency finding must be an object');
   const keys = [
-    'schemaVersion', 'landmarkId', 'status', 'finding', 'confidence',
+    'schemaVersion', 'landmarkId', 'channelId',
+    'landmarkConsentRevision', 'landmarkConsentHash',
+    'evaluationConsentRevision', 'evaluationConsentHash',
+    'status', 'finding', 'confidence',
     'claimedValueRefs', 'model', 'createdAt',
   ];
   if (Object.keys(value).length !== keys.length || Object.keys(value).some(key => !keys.includes(key))) {
     throw new Error('Values-consistency finding has an invalid shape');
   }
   if (value.schemaVersion !== 1) throw new Error('Values-consistency schemaVersion must be 1');
+  for (const field of ['landmarkConsentRevision', 'evaluationConsentRevision'] as const) {
+    if (!Number.isSafeInteger(value[field]) || (value[field] as number) < 1) {
+      throw new Error(`Values-consistency ${field} must be a positive integer`);
+    }
+  }
+  for (const field of ['landmarkConsentHash', 'evaluationConsentHash'] as const) {
+    if (typeof value[field] !== 'string' || !/^[a-f0-9]{64}$/.test(value[field])) {
+      throw new Error(`Values-consistency ${field} must be a SHA-256 digest`);
+    }
+  }
   if (!(VALUES_CONSISTENCY_STATUSES as readonly unknown[]).includes(value.status)) {
     throw new Error('Values-consistency status is invalid');
   }
@@ -89,6 +111,11 @@ function normalizeFinding(value: unknown): ValuesConsistencyFinding {
   return {
     schemaVersion: 1,
     landmarkId: boundedString(value.landmarkId, 'landmarkId', 256),
+    channelId: boundedString(value.channelId, 'channelId', 240),
+    landmarkConsentRevision: value.landmarkConsentRevision as number,
+    landmarkConsentHash: value.landmarkConsentHash as string,
+    evaluationConsentRevision: value.evaluationConsentRevision as number,
+    evaluationConsentHash: value.evaluationConsentHash as string,
     status: value.status as ValuesConsistencyStatus,
     finding: boundedString(value.finding, 'finding', 2_000),
     confidence: value.confidence,
@@ -201,12 +228,29 @@ export class IntrospectionValuesConsistencyRuntime {
       listLandmarks(limit?: number, offset?: number): Promise<ValuesConsistencyLandmarkEvidence[]>;
     };
     claimedValues: { list(options?: { limit?: number }): Array<{ id: string; reflection: string }> };
+    consentStore: Pick<IntrospectionConsentStore, 'load'>;
     findings: ValuesConsistencyFindingStore;
     evaluator: ValuesConsistencyEvaluatorPort;
     now?: () => Date;
   }) {}
 
   async runOnce(): Promise<{ evaluated: number }> {
+    const baselineConsent = this.options.consentStore.load();
+    if (baselineConsent.status === 'unconfigured' || !baselineConsent.enabled) {
+      return { evaluated: 0 };
+    }
+    const allowedChannels = new Set(baselineConsent.allowedPublicChannelIds);
+    const assertConsentStillActive = (): void => {
+      const current = this.options.consentStore.load();
+      if (
+        current.status === 'unconfigured'
+        || !current.enabled
+        || current.revision !== baselineConsent.revision
+        || current.hash !== baselineConsent.hash
+      ) {
+        throw new Error('Introspection values-consistency consent changed during evaluation');
+      }
+    };
     const claimedValues = this.options.claimedValues.list({ limit: 20 }).map(entry => ({
       id: entry.id,
       reflection: entry.reflection,
@@ -219,11 +263,19 @@ export class IntrospectionValuesConsistencyRuntime {
       if (page.length === 0) break;
       for (const landmark of page) {
         if (evaluated >= pageSize) break;
+        if (!allowedChannels.has(landmark.channelId)) continue;
         if (this.options.findings.hasLandmark(landmark.id)) continue;
+        assertConsentStillActive();
         const result = await this.options.evaluator.evaluate({ landmark, claimedValues });
+        assertConsentStillActive();
         this.options.findings.append({
           schemaVersion: 1,
           landmarkId: landmark.id,
+          channelId: landmark.channelId,
+          landmarkConsentRevision: landmark.consentRevision,
+          landmarkConsentHash: landmark.consentHash,
+          evaluationConsentRevision: baselineConsent.revision,
+          evaluationConsentHash: baselineConsent.hash,
           status: result.status,
           finding: result.finding,
           confidence: result.confidence,

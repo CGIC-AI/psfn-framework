@@ -496,6 +496,7 @@ async function main(): Promise<void> {
   });
   const introspectionValuesConsistencyRuntime = new IntrospectionValuesConsistencyRuntime({
     landmarks: persistenceRuntime.introspectionLandmarkStore,
+    consentStore: introspectionConsentStore,
     claimedValues: new ValuesJournalStore(
       resolveValuesJournalPath(pathSnapshot.companionDataDir),
       { legacyFilePaths: [resolveLegacyValuesJournalPath(pathSnapshot.companionDataDir)] },

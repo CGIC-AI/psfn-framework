@@ -142,7 +142,7 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
         api_base_url="http://psfn.test/v1",
         api_key=None,
         provider_name="openrouter",
-        model_name="z-ai/glm-5.2:nitro",
+        model_name="z-ai-glm-5.2-nitro",
         claim_config=normalize_claim_config(
             capability_profile="voice-only",
             satellite_id="bedroom",
@@ -158,7 +158,7 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
     assert len(requests) == 1
     payload = requests[0]
     assert payload["provider"] == "openrouter"
-    assert payload["model"] == "z-ai/glm-5.2:nitro"
+    assert payload["model"] == "z-ai-glm-5.2-nitro"
     assert payload["stream"] is True
     assert payload["max_tokens"] == 80
     assert payload["system_prompt_mode"] == "default"

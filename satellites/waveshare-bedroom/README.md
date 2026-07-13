@@ -100,13 +100,15 @@ PSFN_SATELLITE_ID=bedroom
 PSFN_ENDPOINT_ID=waveshare-bedroom
 VOICE_CONVERSATION_ID=bedroom
 PSFN_PROVIDER=openrouter
-PSFN_MODEL=z-ai/glm-5.2:nitro
+PSFN_MODEL=z-ai-glm-5.2-nitro
 ```
 
 The bedroom model override retains PSFN's full companion prompt pipeline but
 uses OpenRouter's throughput-prioritized Nitro provider route without model
-reasoning. Exacto remains available to non-voice and tool-heavy channels. The
-Waveshare firmware is independent of this server-side routing choice.
+reasoning. The colon-free model name is a LiteLLM alias for OpenRouter's
+`z-ai/glm-5.2:nitro` variant. Exacto remains available to non-voice and
+tool-heavy channels. The Waveshare firmware is independent of this server-side
+routing choice.
 
 This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update

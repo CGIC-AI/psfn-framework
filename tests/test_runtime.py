@@ -48,7 +48,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ELEVENLABS_API_KEY=project-eleven\n"
         "PSFN_API_BASE_URL=http://psfn.example:3100/v1\n"
         "PSFN_PROVIDER=openrouter\n"
-        "PSFN_MODEL=z-ai/glm-5.2:nitro\n",
+        "PSFN_MODEL=z-ai-glm-5.2-nitro\n",
         encoding="utf-8",
     )
 
@@ -63,7 +63,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.psfn_api_base_url == "http://psfn.example:3100/v1"
     assert config.psfn_api_key is None
     assert config.psfn_provider == "openrouter"
-    assert config.psfn_model == "z-ai/glm-5.2:nitro"
+    assert config.psfn_model == "z-ai-glm-5.2-nitro"
     assert config.psfn_satellite_claim.namespace == "satellite.endpoint"
     assert config.psfn_satellite_claim.channel_type == "satellite.endpoint"
     assert config.psfn_satellite_claim.capability_profile == "voice-only"

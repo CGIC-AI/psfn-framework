@@ -435,6 +435,29 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     expect(methodFrames(connB, 'discord.message')).toHaveLength(1);
   });
 
+  it('disconnects a frame that explicitly carries a malformed companion identity claim', async () => {
+    const auditAppend = vi.fn(async () => 7);
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const conn = await connect();
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'llm.complete',
+      params: { companionId: null },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(conn.conn.destroyed).toBe(true);
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.identity_claim_invalid',
+      decision: 'DENY',
+    }));
+  });
+
   it('broadcasts llm.chunk stream deltas to every agent (characterizes existing behavior)', async () => {
     const options = createMinimalOptions();
     options.llmProvider.stream = vi.fn(async (_context: any, callbacks: any) => {
@@ -709,6 +732,37 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
       }),
     }));
     await expect(server.requestAgent('test', {})).rejects.toThrow();
+  });
+
+  it.each([
+    ['blank', '   '],
+    ['null', null],
+    ['number', 42],
+    ['invalid format', 'comp:a'],
+  ])('disconnects and audits a present-but-%s per-frame companionId', async (_label, claim) => {
+    const auditAppend = vi.fn(async () => 10);
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+      multiCompanion: multiCompanion({}),
+    });
+    const conn = await connect();
+    await identifyAgent(conn, 'comp-a', 1);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'llm.complete',
+      params: { companionId: claim },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(conn.conn.destroyed).toBe(true);
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.identity_claim_invalid',
+      decision: 'DENY',
+      params: expect.objectContaining({ boundCompanionId: 'comp-a' }),
+    }));
   });
 });
 

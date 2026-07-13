@@ -1000,10 +1000,8 @@ export class GatewayServer {
     }
     const boundCompanionId = status.companionId;
     const params = isRecord(frame.params) ? frame.params : undefined;
+    const hasClaimedCompanionId = params !== undefined && Object.hasOwn(params, 'companionId');
     const claimedRaw = params?.companionId;
-    const claimedCompanionId = typeof claimedRaw === 'string' && claimedRaw.trim()
-      ? createCompanionId(claimedRaw, 'RPC frame companionId')
-      : undefined;
 
     if (status.role === 'unidentified') {
       this.alarmCompanionViolation(
@@ -1047,8 +1045,29 @@ export class GatewayServer {
       return 'rejected';
     }
 
+    let claimedCompanionId: CompanionId | undefined;
+    if (hasClaimedCompanionId) {
+      try {
+        claimedCompanionId = createCompanionId(claimedRaw, 'RPC frame companionId');
+      } catch (error) {
+        this.alarmCompanionViolation(
+          'identity_claim_invalid',
+          'RPC frame carried an invalid companionId claim; disconnecting connection',
+          { method, boundCompanionId, reason: toErrorMessage(error) },
+        );
+        this.transitionConnectionState(conn, 'degraded', 'companion_identity_claim_invalid');
+        this.transitionConnectionState(conn, 'offline', 'companion_identity_claim_invalid');
+        this.removeConnection(conn);
+        if (!conn.destroyed) {
+          conn.destroy();
+        }
+        return 'disconnected';
+      }
+    }
+
     // Single-companion mode retains its existing socket-trust contract for
-    // normal agent methods, but never grants that socket the signing oracle.
+    // normal agent methods, but a frame that explicitly carries a malformed
+    // identity claim is still invalid and never reaches method dispatch.
     if (!this.multiCompanion.enabled && status.role === 'agent') {
       return 'pass';
     }

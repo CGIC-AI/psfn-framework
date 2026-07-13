@@ -1,7 +1,12 @@
 import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import { normalizePresenceMetadata } from '../../core/agent/presence-metadata.js';
-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createCompanionId,
+  createShardCompanionId,
+  type CompanionId,
+  type ShardCompanionId,
+} from '../../shared/routing/companion-id.js';
 import type {
   ShardResultLineageEnvelope,
   ShardResultLineageSatelliteRouting,
@@ -28,8 +33,8 @@ function normalizeNonEmptyString(value: string, fieldName: string): string {
 export function deriveShardCompanionId(
   coreCompanionId: CompanionId,
   shardId: string,
-): CompanionId {
-  return createCompanionId(
+): ShardCompanionId {
+  return createShardCompanionId(
     `${coreCompanionId}::${normalizeNonEmptyString(shardId, 'shard id')}`,
     'Shard lineage shard companion id',
   );
@@ -102,7 +107,7 @@ function normalizeSatelliteRouting(routing: SatelliteRoutingMetadata | undefined
 
 export function buildShardLineageEnvelope(input: {
   kind: ShardResultLineageEnvelope['kind'];
-  coreCompanionId: string;
+  coreCompanionId: CompanionId;
   shardId: string;
   shardChannelId: string;
   sourceMessage: Pick<

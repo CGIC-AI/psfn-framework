@@ -1,5 +1,10 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createCompanionId,
+  createRuntimeCompanionId,
+  type CompanionId,
+  type RuntimeCompanionId,
+} from '../../shared/routing/companion-id.js';
 import { loadCharacterCard } from './loader.js';
 import type { CharacterCardV2 } from './types.js';
 
@@ -30,9 +35,18 @@ export function resolveCompanionNameFromConfig(
 
 export function resolveCompanionIdFromConfig(
   config: { companionId?: string } | null | undefined,
+): RuntimeCompanionId {
+  if (config?.companionId !== undefined) {
+    return createRuntimeCompanionId(config.companionId, 'Configured companionId');
+  }
+  throw new Error('Missing COMPANION_ID: explicit deployment identity is required before startup');
+}
+
+export function resolveCoreCompanionIdFromConfig(
+  config: { companionId?: string } | null | undefined,
 ): CompanionId {
   if (config?.companionId !== undefined) {
-    return createCompanionId(config.companionId, 'Configured companionId');
+    return createCompanionId(config.companionId, 'Configured core companionId');
   }
   throw new Error('Missing COMPANION_ID: explicit deployment identity is required before startup');
 }
@@ -40,7 +54,7 @@ export function resolveCompanionIdFromConfig(
 export function resolveCompanionIdentityFromConfig(
   config: Pick<SubstrateConfig, 'companionId' | 'characterCardPath' | 'characterName'> | null | undefined,
 ): {
-  companionId: CompanionId;
+  companionId: RuntimeCompanionId;
   companionName: string;
 } {
   return {

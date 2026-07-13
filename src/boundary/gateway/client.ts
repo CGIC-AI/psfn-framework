@@ -5,6 +5,7 @@
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import {
@@ -142,12 +143,42 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import { parseGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
 const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
+
+function assertRpcSubstrateMessage(value: unknown): asserts value is RpcSubstrateMessage {
+  if (!isRecord(value)) {
+    throw new Error('voice.handleMessage params.message must be an object');
+  }
+  for (const field of ['id', 'channelId', 'authorId', 'authorName', 'content'] as const) {
+    if (typeof value[field] !== 'string' || !value[field].trim()) {
+      throw new Error(`voice.handleMessage params.message.${field} must be a non-empty string`);
+    }
+  }
+  if (typeof value.channelType !== 'string'
+    || !CHANNEL_TYPES.some(channelType => channelType === value.channelType)) {
+    throw new Error('voice.handleMessage params.message.channelType is not supported');
+  }
+  const timestamp = value.timestamp;
+  if (!(timestamp instanceof Date) && typeof timestamp !== 'string') {
+    throw new Error('voice.handleMessage params.message.timestamp must be a Date or ISO string');
+  }
+  const timestampMs = timestamp instanceof Date
+    ? timestamp.getTime()
+    : Date.parse(timestamp);
+  if (!Number.isFinite(timestampMs)) {
+    throw new Error('voice.handleMessage params.message.timestamp must be valid');
+  }
+  if (!isRecord(value.routing)) {
+    throw new Error('voice.handleMessage params.message.routing must be an object');
+  }
+}
 
 export interface GatewayClientOptions {
   voiceStreamQueueSize?: number;
@@ -1114,7 +1145,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
-  private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<VoiceHandleMessageResult> {
+  private async dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult> {
     if (!this.handleMessageHandler) {
       throw new Error('No voice.handleMessage handler registered');
     }
@@ -1307,9 +1338,24 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
   }
 
-  private deserializeMessage(message: RpcSubstrateMessage): SubstrateMessage {
+  private deserializeMessage(message: unknown): SubstrateMessage {
+    assertRpcSubstrateMessage(message);
+    const gatewayRouting = parseGatewayRoutingEnvelope(
+      message.routing?.gateway,
+      'voice.handleMessage params.message.routing.gateway',
+    );
+    if (this.companionId && gatewayRouting.companionId !== this.companionId) {
+      throw new Error(
+        'voice.handleMessage routing companionId does not match this gateway client binding: '
+        + `expected ${JSON.stringify(this.companionId)}, got ${JSON.stringify(gatewayRouting.companionId)}`,
+      );
+    }
     return {
       ...message,
+      routing: {
+        ...message.routing,
+        gateway: gatewayRouting,
+      },
       timestamp: typeof message.timestamp === 'string'
         ? new Date(message.timestamp)
         : message.timestamp,

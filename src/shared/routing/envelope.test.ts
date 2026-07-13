@@ -4,6 +4,7 @@ import {
   createGatewayRoutingEnvelope,
   createShardLineage,
   deriveShardRoutingEnvelope,
+  parseGatewayRoutingEnvelope,
 } from './envelope.js';
 
 const COMPANION_ALPHA = createCompanionId('companion-alpha');
@@ -98,5 +99,49 @@ describe('routing envelope', () => {
       workerId: 'worker-12',
       lane: 'subagent',
     });
+  });
+
+  it('rebrands a valid envelope decoded from an untyped transport payload', () => {
+    const parsed = parseGatewayRoutingEnvelope({
+      schemaVersion: 1,
+      companionId: 'companion-alpha',
+      shard: {
+        coreCompanionId: 'companion-alpha',
+        shardCompanionId: 'companion-alpha/shards/shard-42',
+        shardId: 'shard-42',
+        creationMode: 'fresh',
+      },
+    }, 'message.routing.gateway');
+
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      companionId: 'companion-alpha',
+      shard: {
+        coreCompanionId: 'companion-alpha',
+        shardCompanionId: 'companion-alpha/shards/shard-42',
+        shardId: 'shard-42',
+        creationMode: 'fresh',
+      },
+    });
+  });
+
+  it('rejects malformed companion and shard claims decoded from transport payloads', () => {
+    expect(() => parseGatewayRoutingEnvelope({
+      schemaVersion: 1,
+      companionId: 'companion:alpha',
+    }, 'message.routing.gateway')).toThrow('message.routing.gateway.companionId');
+
+    expect(() => parseGatewayRoutingEnvelope({
+      schemaVersion: 1,
+      companionId: 'companion-alpha',
+      shard: {
+        coreCompanionId: 'companion-alpha',
+        shardCompanionId: 'companion-beta/shards/shard-42',
+        shardId: 'shard-42',
+        creationMode: 'fresh',
+      },
+    }, 'message.routing.gateway')).toThrow(
+      'message.routing.gateway.shard.shardCompanionId must match coreCompanionId and shardId',
+    );
   });
 });

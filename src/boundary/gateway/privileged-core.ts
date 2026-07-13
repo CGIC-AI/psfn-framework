@@ -22,6 +22,7 @@ import { GatewayServer } from './server.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -129,6 +130,7 @@ export async function buildGatewayPrivilegedCore(
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       socketPath: input.bootstrap.socketPath,
+      companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,
       embeddingService: privilegedServices.embeddingProvider,

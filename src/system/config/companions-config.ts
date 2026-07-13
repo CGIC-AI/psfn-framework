@@ -6,7 +6,11 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { isStrictSubpath } from '../../persistence/layout.js';
-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createCompanionId,
+  LOWERCASE_RFC4122_COMPANION_ID_PATTERN,
+  type CompanionId,
+} from '../../shared/routing/companion-id.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
@@ -27,8 +31,6 @@ const COMPANIONS_ERROR_PREFIX = 'Invalid companions config';
  * the codebase (`src/core/cogsec/forensic-archive.ts` artifact ids), i.e. a
  * lowercase RFC-4122 UUID (versions 1-5, which covers `randomUUID()` v4 ids).
  */
-const COMPANION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-
 /**
  * Postgres schema identifier: strict lowercase identifier so it can be dropped
  * into `search_path = companion_<schema>` without quoting or injection risk.
@@ -118,7 +120,7 @@ function requireNonEmptyString(value: unknown, field: string): string {
 
 function requireCompanionId(value: unknown, field: string): CompanionId {
   const id = requireNonEmptyString(value, field);
-  if (!COMPANION_ID_PATTERN.test(id)) {
+  if (!LOWERCASE_RFC4122_COMPANION_ID_PATTERN.test(id)) {
     throw new Error(
       `${COMPANIONS_ERROR_PREFIX}: ${field} must be a lowercase RFC-4122 UUID, got ${JSON.stringify(value)}`,
     );

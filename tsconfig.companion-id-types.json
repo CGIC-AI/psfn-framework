@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "include": ["type-tests/companion-id.type-test.ts"],
+  "exclude": []
+}

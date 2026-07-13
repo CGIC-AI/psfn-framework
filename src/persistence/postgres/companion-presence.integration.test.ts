@@ -43,7 +43,7 @@ async function freshDatabaseUrl(): Promise<string> {
 
 describe('companion_presence shared-schema integration', () => {
   it(
-    'provisions the presence table, place index, and ledger version 2 in the shared schema only',
+    'provisions the presence and content-free ICP control-plane tables in the shared schema only',
     async () => {
       const databaseUrl = await freshDatabaseUrl();
       const store = await PostgresCompanionPresenceStore.connect(databaseUrl);
@@ -72,6 +72,7 @@ describe('companion_presence shared-schema integration', () => {
         expect(ledger.rows).toEqual([
           { version: 1, name: 'shared-schema-baseline' },
           { version: 2, name: 'companion-presence' },
+          { version: 4, name: 'icp-autonomy-control-plane' },
         ]);
       } finally {
         await pool.end();
@@ -102,7 +103,7 @@ describe('companion_presence shared-schema integration', () => {
         const ledger = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledger.rows[0]?.count).toBe('2');
+        expect(ledger.rows[0]?.count).toBe('3');
         // Nothing leaked into public.
         const publicTables = await pool.query<{ table_name: string }>(
           `SELECT table_name FROM information_schema.tables

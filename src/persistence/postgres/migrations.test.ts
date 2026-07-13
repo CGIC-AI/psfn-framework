@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_ENROLLMENT_MIGRATIONS,
+  POSTGRES_INTENTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
@@ -107,6 +108,27 @@ describe('Postgres live schema migrations', () => {
       sql.indexOf('CREATE TABLE IF NOT EXISTS companion_presence'),
     );
     expect(sql).toContain("VALUES (2, 'companion-presence')");
+  });
+
+  it('adds restart-durable ICP autonomy state without sharing private candidate text', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+    const localSql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
+
+    for (const table of [
+      'icp_availability_leases',
+      'icp_conversation_episodes',
+      'icp_initiation_permits',
+    ]) {
+      expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+    expect(sharedSql).toContain("VALUES (4, 'icp-autonomy-control-plane')");
+    expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
+    expect(sharedSql).toContain('UNIQUE (candidate_id)');
+    expect(sharedSql).not.toContain('reason_summary');
+
+    expect(localSql).toContain('CREATE TABLE IF NOT EXISTS icp_initiation_candidates');
+    expect(localSql).toContain('reason_summary TEXT NOT NULL');
+    expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
   });
 
   it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {

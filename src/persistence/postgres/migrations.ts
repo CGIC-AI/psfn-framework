@@ -841,6 +841,35 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_active ON weighted_thoughts(nudge_state, accumulated_weight DESC, last_reinforced_at DESC, id);`,
   `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_contact ON weighted_thoughts(contact_id, nudge_state, accumulated_weight DESC, id);`,
+  // Companion-local ICP candidate state. The reason summary and peer contact
+  // binding are private motivation, so this table belongs in each companion's
+  // own schema and must never be copied into the shared control-plane tables.
+  `
+  CREATE TABLE IF NOT EXISTS icp_initiation_candidates (
+    candidate_id UUID PRIMARY KEY,
+    root_initiation_id UUID NOT NULL,
+    local_companion_id UUID NOT NULL,
+    peer_contact_id TEXT NOT NULL,
+    peer_companion_id UUID NOT NULL,
+    preferred_channel TEXT NOT NULL CHECK (preferred_channel IN ('dm', 'current_room')),
+    source TEXT NOT NULL CHECK (source IN ('free_time', 'weighted_thought', 'intention', 'foreground')),
+    provenance_ref TEXT NOT NULL,
+    reason_summary TEXT NOT NULL,
+    created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > created_at_ms),
+    status TEXT NOT NULL CHECK (status IN (
+      'pending', 'deferred', 'declined', 'rejected', 'permitted',
+      'consumed', 'expired', 'cancelled'
+    )),
+    reason_code TEXT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    CHECK (local_companion_id <> peer_companion_id)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_status
+    ON icp_initiation_candidates (status, expires_at_ms, created_at_ms, candidate_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_peer
+    ON icp_initiation_candidates (peer_companion_id, status, created_at_ms, candidate_id);`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [
@@ -1226,6 +1255,7 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //   2 — companion_presence (W5a cross-companion presence)
 //   3 — shared_wiki_chunks (s10f9 shared-world wiki projection; SEPARATE
 //       statement list, see POSTGRES_SHARED_WIKI_MIGRATIONS below)
+//   4 — ICP autonomy content-free availability/episode/permit control plane
 export const SHARED_SCHEMA_NAME = 'shared';
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -1273,6 +1303,81 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (2, 'companion-presence')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 4 (s10mc.6.1): content-free ICP autonomy control plane. Candidate
+  // motivation remains private in each companion schema; shared state carries
+  // only coarse availability, episode correlation, and replay-safe permits.
+  `
+  CREATE TABLE IF NOT EXISTS icp_availability_leases (
+    companion_id UUID PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN (
+      'available', 'open_to_chat', 'busy', 'resting', 'do_not_disturb'
+    )),
+    issued_at_ms BIGINT NOT NULL CHECK (issued_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > issued_at_ms),
+    source TEXT NOT NULL CHECK (source IN ('companion', 'operator', 'runtime')),
+    revision BIGINT NOT NULL CHECK (revision >= 1)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_availability_leases_expiry
+    ON icp_availability_leases (expires_at_ms, companion_id);`,
+  `
+  CREATE TABLE IF NOT EXISTS icp_conversation_episodes (
+    conversation_id UUID PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    participant_companion_ids UUID[] NOT NULL,
+    root_initiation_id UUID NOT NULL,
+    initiated_by_companion_id UUID NOT NULL,
+    initiation_source TEXT NOT NULL CHECK (initiation_source IN (
+      'free_time', 'weighted_thought', 'intention', 'foreground'
+    )),
+    provenance_ref TEXT NOT NULL,
+    opened_at_ms BIGINT NOT NULL CHECK (opened_at_ms >= 0),
+    last_activity_at_ms BIGINT NOT NULL CHECK (last_activity_at_ms >= opened_at_ms),
+    status TEXT NOT NULL CHECK (status IN (
+      'invited', 'active', 'declined', 'deferred', 'ended', 'suppressed'
+    )),
+    close_reason_code TEXT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    CHECK (cardinality(participant_companion_ids) >= 2),
+    CHECK (array_position(participant_companion_ids, NULL) IS NULL),
+    CHECK (initiated_by_companion_id = ANY(participant_companion_ids))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_conversation_episodes_status
+    ON icp_conversation_episodes (status, last_activity_at_ms, conversation_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_conversation_episodes_channel
+    ON icp_conversation_episodes (channel_id, last_activity_at_ms, conversation_id);`,
+  `
+  CREATE TABLE IF NOT EXISTS icp_initiation_permits (
+    permit_id UUID PRIMARY KEY,
+    candidate_id UUID NOT NULL,
+    conversation_id UUID NOT NULL REFERENCES icp_conversation_episodes(conversation_id) ON DELETE RESTRICT,
+    sender_companion_id UUID NOT NULL,
+    recipient_companion_id UUID NOT NULL,
+    channel_id TEXT NOT NULL,
+    provenance_ref TEXT NOT NULL,
+    issued_at_ms BIGINT NOT NULL CHECK (issued_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > issued_at_ms),
+    status TEXT NOT NULL CHECK (status IN ('issued', 'consumed', 'revoked', 'expired')),
+    consumed_at_ms BIGINT,
+    revoked_at_ms BIGINT,
+    reason_code TEXT,
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    UNIQUE (candidate_id),
+    CHECK (sender_companion_id <> recipient_companion_id),
+    CHECK ((status = 'consumed') = (consumed_at_ms IS NOT NULL)),
+    CHECK ((status = 'revoked') = (revoked_at_ms IS NOT NULL))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_initiation_permits_conversation
+    ON icp_initiation_permits (conversation_id, status, expires_at_ms, permit_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_initiation_permits_expiry
+    ON icp_initiation_permits (status, expires_at_ms, permit_id);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (4, 'icp-autonomy-control-plane')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

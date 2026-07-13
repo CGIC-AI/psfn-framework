@@ -64,12 +64,32 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   beforeInvalidate?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
+    return this.publishAvailabilityNow(lease);
+  }
+
+  private publishAvailabilityNow(lease: IcpAvailabilityLease): IcpAvailabilityLease {
     const current = this.availability.get(lease.companionId);
     if ((current && current.revision + 1 !== lease.revision) || (!current && lease.revision !== 1)) {
       throw new Error('revision conflict');
     }
     this.availability.set(lease.companionId, lease);
     return lease;
+  }
+
+  async publishAvailabilityAndInvalidate(
+    lease: IcpAvailabilityLease,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<{ lease: IcpAvailabilityLease; revokedPermits: IcpInitiationPermit[] }> {
+    await this.beforeInvalidate?.();
+    const published = this.publishAvailabilityNow(lease);
+    return {
+      lease: published,
+      revokedPermits: this.revokeOutstandingPermitsForCompanionNow(
+        lease.companionId,
+        lease.issuedAtMs,
+        reasonCode,
+      ),
+    };
   }
 
   async getAvailability(companionId: string): Promise<IcpAvailabilityLease | null> {
@@ -81,12 +101,36 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     expectedRevision: number,
     request: { source: IcpAvailabilityLease['source']; nowMs: number },
   ): Promise<boolean> {
+    return this.clearAvailabilityNow(companionId, expectedRevision, request);
+  }
+
+  private clearAvailabilityNow(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+  ): boolean {
     const current = this.availability.get(companionId);
     if (current?.revision !== expectedRevision) return false;
     if (current.source === 'operator'
       && current.expiresAtMs > request.nowMs
       && request.source !== 'operator') return false;
     return this.availability.delete(companionId);
+  }
+
+  async clearAvailabilityAndInvalidate(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<{ cleared: boolean; revokedPermits: IcpInitiationPermit[] }> {
+    await this.beforeInvalidate?.();
+    const cleared = this.clearAvailabilityNow(companionId, expectedRevision, request);
+    return {
+      cleared,
+      revokedPermits: cleared
+        ? this.revokeOutstandingPermitsForCompanionNow(companionId, request.nowMs, reasonCode)
+        : [],
+    };
   }
 
   async createEpisode(episode: IcpConversationEpisode): Promise<IcpConversationEpisode> {
@@ -236,6 +280,14 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpInitiationPermit[]> {
     await this.beforeInvalidate?.();
+    return this.revokeOutstandingPermitsForCompanionNow(companionId, revokedAtMs, reasonCode);
+  }
+
+  private revokeOutstandingPermitsForCompanionNow(
+    companionId: string,
+    revokedAtMs: number,
+    reasonCode: IcpAutonomyReasonCode,
+  ): IcpInitiationPermit[] {
     this.invalidationGenerations.set(
       companionId,
       (this.invalidationGenerations.get(companionId) ?? 0) + 1,
@@ -600,6 +652,98 @@ describe('GatewayServer ICP autonomy RPC', () => {
 
     gate.release();
     await identifying;
+    expect(store.permits.get(permitId)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'peer_offline',
+    });
+  });
+
+  it('retries a rejected disconnect invalidation before admitting a reconnect', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 35);
+    await identify(b, B, 36);
+    await invoke(b, 37, 'companion.availability.publish', {
+      companionId: B,
+      state: 'open_to_chat',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 1,
+    });
+    const issue = await invoke(a, 38, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate('99999999-9999-4999-8999-999999999999'),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    const permitId = issue.result.permit.permitId as string;
+
+    const retryGate = deferred();
+    let invalidationAttempts = 0;
+    store.beforeInvalidate = async () => {
+      invalidationAttempts += 1;
+      if (invalidationAttempts === 1) throw new Error('database temporarily unavailable');
+      await retryGate.wait();
+    };
+    b.emitClose();
+    await vi.waitFor(() => expect(invalidationAttempts).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const replacement = connect();
+    let identified = false;
+    const identifying = identify(replacement, B, 39).then(() => { identified = true; });
+    await vi.waitFor(() => expect(invalidationAttempts).toBe(2));
+    expect(identified).toBe(false);
+
+    retryGate.release();
+    await identifying;
+    expect(store.permits.get(permitId)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'peer_offline',
+    });
+  });
+
+  it('rejects reconnect readiness while invalidation retries fail and recovers later', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 40);
+    await identify(b, B, 41);
+    await invoke(b, 42, 'companion.availability.publish', {
+      companionId: B,
+      state: 'open_to_chat',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 1,
+    });
+    const issue = await invoke(a, 43, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate('aaaaaaaa-9999-4999-8999-999999999999'),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    const permitId = issue.result.permit.permitId as string;
+
+    let invalidationAttempts = 0;
+    store.beforeInvalidate = async () => {
+      invalidationAttempts += 1;
+      if (invalidationAttempts <= 2) throw new Error('database temporarily unavailable');
+    };
+    b.emitClose();
+    await vi.waitFor(() => expect(invalidationAttempts).toBe(1));
+
+    const rejectedReplacement = connect();
+    const rejected = await invoke(rejectedReplacement, 44, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: B,
+      authToken: deriveCompanionAuthToken(B, 'agent', KEYRING),
+    });
+    expect(rejected.error).toBeDefined();
+    expect(invalidationAttempts).toBe(2);
+    expect(store.permits.get(permitId)?.status).toBe('issued');
+
+    const recoveredReplacement = connect();
+    await identify(recoveredReplacement, B, 45);
+    expect(invalidationAttempts).toBe(3);
     expect(store.permits.get(permitId)).toMatchObject({
       status: 'revoked',
       reasonCode: 'peer_offline',

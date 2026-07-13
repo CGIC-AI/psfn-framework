@@ -17,6 +17,7 @@ import { IcpAutonomyInvalidationConflictError } from '../../core/icp/autonomy-st
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
+import { SHARED_SCHEMA_NAME } from './migrations.js';
 
 const TIMEOUT_MS = 120_000;
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -118,6 +119,195 @@ describe('ICP autonomy Postgres persistence', () => {
         permit: { status: 'revoked', reasonCode: 'peer_blocked' },
       });
     } finally {
+      await storeA.close();
+      await storeB.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('commits restrictive publish and clear with fence advancement and revocation atomically', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const knownCompanionIds = [A, B];
+    const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const blockerPool = createPostgresPool(databaseUrl, {
+      schema: SHARED_SCHEMA_NAME,
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const blocker = await blockerPool.connect();
+    const runWhileFenceLocked = async <T>(
+      operation: () => Promise<T>,
+      observeBeforeCommit: () => Promise<void>,
+    ): Promise<T> => {
+      await blocker.query('BEGIN');
+      await blocker.query(`
+        SELECT companion_id
+        FROM icp_autonomy_invalidation_fences
+        WHERE companion_id = $1
+        FOR UPDATE
+      `, [B]);
+      const result = operation();
+      let settled = false;
+      void result.then(
+        () => { settled = true; },
+        () => { settled = true; },
+      );
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        await observeBeforeCommit();
+      } finally {
+        await blocker.query('COMMIT');
+      }
+      return await result;
+    };
+    try {
+      await storeA.publishAvailability({
+        companionId: B,
+        state: 'open_to_chat',
+        issuedAtMs: 1_000,
+        expiresAtMs: 61_000,
+        source: 'companion',
+        revision: 1,
+      });
+      await storeA.createEpisode({
+        conversationId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: PROVENANCE_HANDLE,
+        openedAtMs: 10_000,
+        lastActivityAtMs: 10_000,
+        status: 'invited',
+        revision: 1,
+      });
+      await storeA.issuePermit({
+        permit: {
+          permitId: PERMIT_ID,
+          candidateId: CANDIDATE_ID,
+          conversationId: CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: PROVENANCE_HANDLE,
+          issuedAtMs: 10_000,
+          expiresAtMs: 70_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await storeA.captureInvalidationFence(A, B),
+      });
+
+      const published = await runWhileFenceLocked(
+        async () => await storeB.publishAvailabilityAndInvalidate({
+          companionId: B,
+          state: 'do_not_disturb',
+          issuedAtMs: 11_000,
+          expiresAtMs: 71_000,
+          source: 'companion',
+          revision: 2,
+        }, 'peer_do_not_disturb'),
+        async () => {
+          await expect(storeA.getAvailability(B)).resolves.toMatchObject({
+            state: 'open_to_chat',
+            revision: 1,
+          });
+          await expect(storeA.getPermit(PERMIT_ID)).resolves.toMatchObject({ status: 'issued' });
+        },
+      );
+      expect(published).toMatchObject({
+        lease: { state: 'do_not_disturb', revision: 2 },
+        revokedPermits: [{ permitId: PERMIT_ID, status: 'revoked' }],
+      });
+      await expect(storeA.getPermit(PERMIT_ID)).resolves.toMatchObject({
+        status: 'revoked',
+        reasonCode: 'peer_do_not_disturb',
+      });
+
+      await storeA.publishAvailability({
+        companionId: B,
+        state: 'open_to_chat',
+        issuedAtMs: 12_000,
+        expiresAtMs: 72_000,
+        source: 'companion',
+        revision: 3,
+      });
+      await storeA.createEpisode({
+        conversationId: SECOND_CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: SECOND_PROVENANCE_HANDLE,
+        openedAtMs: 20_000,
+        lastActivityAtMs: 20_000,
+        status: 'invited',
+        revision: 1,
+      });
+      await storeA.issuePermit({
+        permit: {
+          permitId: SECOND_PERMIT_ID,
+          candidateId: SECOND_CANDIDATE_ID,
+          conversationId: SECOND_CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: SECOND_PROVENANCE_HANDLE,
+          issuedAtMs: 20_000,
+          expiresAtMs: 80_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await storeA.captureInvalidationFence(A, B),
+      });
+
+      const fenceBeforeRejectedPublish = await storeA.captureInvalidationFence(A, B);
+      await expect(storeB.publishAvailabilityAndInvalidate({
+        companionId: B,
+        state: 'do_not_disturb',
+        issuedAtMs: 20_500,
+        expiresAtMs: 80_500,
+        source: 'companion',
+        revision: 3,
+      }, 'peer_do_not_disturb')).rejects.toThrow('revision conflict');
+      await expect(storeA.captureInvalidationFence(A, B))
+        .resolves.toEqual(fenceBeforeRejectedPublish);
+      await expect(storeA.getAvailability(B)).resolves.toMatchObject({
+        state: 'open_to_chat',
+        revision: 3,
+      });
+      await expect(storeA.getPermit(SECOND_PERMIT_ID)).resolves.toMatchObject({ status: 'issued' });
+
+      const cleared = await runWhileFenceLocked(
+        async () => await storeB.clearAvailabilityAndInvalidate(
+          B,
+          3,
+          { source: 'companion', nowMs: 21_000 },
+          'availability_missing',
+        ),
+        async () => {
+          await expect(storeA.getAvailability(B)).resolves.toMatchObject({
+            state: 'open_to_chat',
+            revision: 3,
+          });
+          await expect(storeA.getPermit(SECOND_PERMIT_ID)).resolves.toMatchObject({ status: 'issued' });
+        },
+      );
+      expect(cleared).toMatchObject({
+        cleared: true,
+        revokedPermits: [{ permitId: SECOND_PERMIT_ID, status: 'revoked' }],
+      });
+      await expect(storeA.getAvailability(B)).resolves.toBeNull();
+      await expect(storeA.getPermit(SECOND_PERMIT_ID)).resolves.toMatchObject({
+        status: 'revoked',
+        reasonCode: 'availability_missing',
+      });
+    } finally {
+      blocker.release();
+      await blockerPool.end();
       await storeA.close();
       await storeB.close();
     }

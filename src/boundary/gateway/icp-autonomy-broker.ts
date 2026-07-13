@@ -68,30 +68,40 @@ export class GatewayIcpAutonomyBroker {
       source: 'companion',
       revision: input.revision,
     }, { nowMs, requireCurrent: true });
-    const published = await this.options.store.publishAvailability(lease);
-    const reasonCode = availabilityReason(published.state);
-    if (reasonCode) await this.invalidateForCompanion(companionId, reasonCode);
+    const reasonCode = availabilityReason(lease.state);
+    const published = reasonCode
+      ? await this.options.store.publishAvailabilityAndInvalidate(lease, reasonCode)
+      : { lease: await this.options.store.publishAvailability(lease), revokedPermits: [] };
+    if (reasonCode) {
+      for (const permit of published.revokedPermits) {
+        await this.emitPermitRevoked(permit, reasonCode);
+      }
+    }
     await this.options.eventBus.emit('icp.availability.changed', {
       companionId,
       action: 'published',
-      state: published.state,
-      source: published.source,
-      revision: published.revision,
-      expiresAtMs: published.expiresAtMs,
+      state: published.lease.state,
+      source: published.lease.source,
+      revision: published.lease.revision,
+      expiresAtMs: published.lease.expiresAtMs,
       timestamp: nowMs,
     });
-    return published;
+    return published.lease;
   }
 
   async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
     this.requireFleetCompanion(companionId, 'availability publisher');
     const nowMs = this.now();
-    const cleared = await this.options.store.clearAvailability(companionId, expectedRevision, {
-      source: 'companion',
-      nowMs,
-    });
-    if (cleared) {
-      await this.invalidateForCompanion(companionId, 'availability_missing');
+    const result = await this.options.store.clearAvailabilityAndInvalidate(
+      companionId,
+      expectedRevision,
+      { source: 'companion', nowMs },
+      'availability_missing',
+    );
+    if (result.cleared) {
+      for (const permit of result.revokedPermits) {
+        await this.emitPermitRevoked(permit, 'availability_missing');
+      }
       await this.options.eventBus.emit('icp.availability.changed', {
         companionId,
         action: 'cleared',
@@ -99,7 +109,7 @@ export class GatewayIcpAutonomyBroker {
         timestamp: nowMs,
       });
     }
-    return cleared;
+    return result.cleared;
   }
 
   async readPeerAvailability(

@@ -165,6 +165,104 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(values).toEqual([A, 2, 'companion', 2_000]);
   });
 
+  it('publishes restrictive availability and invalidates permits in one transaction', async () => {
+    const store = await connect();
+    const restrictiveLease = {
+      ...AVAILABILITY_ROW,
+      companion_id: B,
+      state: 'do_not_disturb',
+      issued_at_ms: '11000',
+      expires_at_ms: '71000',
+      revision: '2',
+    };
+    const revokedRow = {
+      ...PERMIT_ROW,
+      status: 'revoked',
+      revoked_at_ms: '11000',
+      reason_code: 'peer_do_not_disturb',
+      revision: '2',
+    };
+    mocks.withPostgresClient.mockClear();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({
+        rows: [{
+          companion_id: B,
+          generation: '1',
+          invalidated_at_ms: '11000',
+          last_reason_code: 'peer_do_not_disturb',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [revokedRow], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [restrictiveLease], rowCount: 1 });
+
+    await expect(store.publishAvailabilityAndInvalidate({
+      companionId: B,
+      state: 'do_not_disturb',
+      issuedAtMs: 11_000,
+      expiresAtMs: 71_000,
+      source: 'companion',
+      revision: 2,
+    }, 'peer_do_not_disturb')).resolves.toMatchObject({
+      lease: { companionId: B, state: 'do_not_disturb' },
+      revokedPermits: [{ status: 'revoked', reasonCode: 'peer_do_not_disturb' }],
+    });
+
+    expect(mocks.withPostgresClient).toHaveBeenCalledTimes(1);
+    expect((mocks.clientQuery.mock.calls[0] as [string])[0])
+      .toContain('UPDATE icp_autonomy_invalidation_fences');
+    expect((mocks.clientQuery.mock.calls[1] as [string])[0])
+      .toContain('UPDATE icp_initiation_permits');
+    expect((mocks.clientQuery.mock.calls[2] as [string])[0])
+      .toContain('INSERT INTO icp_availability_leases');
+  });
+
+  it('clears availability and invalidates permits in one fence-first transaction', async () => {
+    const store = await connect();
+    const revokedRow = {
+      ...PERMIT_ROW,
+      status: 'revoked',
+      revoked_at_ms: '11000',
+      reason_code: 'availability_missing',
+      revision: '2',
+    };
+    mocks.withPostgresClient.mockClear();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: [FENCE_ROWS[1]], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          companion_id: B,
+          generation: '1',
+          invalidated_at_ms: '11000',
+          last_reason_code: 'availability_missing',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [revokedRow], rowCount: 1 });
+
+    await expect(store.clearAvailabilityAndInvalidate(
+      B,
+      1,
+      { source: 'companion', nowMs: 11_000 },
+      'availability_missing',
+    )).resolves.toMatchObject({
+      cleared: true,
+      revokedPermits: [{ status: 'revoked', reasonCode: 'availability_missing' }],
+    });
+
+    expect(mocks.withPostgresClient).toHaveBeenCalledTimes(1);
+    expect((mocks.clientQuery.mock.calls[0] as [string])[0]).toContain('FOR UPDATE');
+    expect((mocks.clientQuery.mock.calls[1] as [string])[0])
+      .toContain('DELETE FROM icp_availability_leases');
+    expect((mocks.clientQuery.mock.calls[2] as [string])[0])
+      .toContain('UPDATE icp_autonomy_invalidation_fences');
+    expect((mocks.clientQuery.mock.calls[3] as [string])[0])
+      .toContain('UPDATE icp_initiation_permits');
+  });
+
   it('creates a channel-bound episode with optimistic transitions', async () => {
     mocks.queryOne.mockResolvedValue(EPISODE_ROW);
     const store = await connect();

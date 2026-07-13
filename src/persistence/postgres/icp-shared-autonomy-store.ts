@@ -97,6 +97,64 @@ const PERMIT_COLUMNS = `
 const INVALIDATION_FENCE_COLUMNS = `
   companion_id, generation, invalidated_at_ms, last_reason_code
 `;
+const PUBLISH_AVAILABILITY_SQL = `
+  INSERT INTO icp_availability_leases (
+    companion_id, state, issued_at_ms, expires_at_ms, source, revision
+  )
+  SELECT $1::uuid, $2::text, $3::bigint, $4::bigint, $5::text, $6::bigint
+  WHERE $6::bigint = 1 OR EXISTS (
+    SELECT 1 FROM icp_availability_leases
+    WHERE companion_id = $1
+      AND (
+        (
+          revision + 1 = $6
+          AND (
+            $5::text = 'operator'
+            OR source <> 'operator'
+            OR expires_at_ms <= $3
+          )
+        )
+        OR (
+          $5::text = 'operator'
+          AND source <> 'operator'
+          AND revision = $6
+        )
+      )
+  )
+  ON CONFLICT (companion_id) DO UPDATE SET
+    state = EXCLUDED.state,
+    issued_at_ms = EXCLUDED.issued_at_ms,
+    expires_at_ms = EXCLUDED.expires_at_ms,
+    source = EXCLUDED.source,
+    revision = CASE
+      WHEN icp_availability_leases.revision = EXCLUDED.revision
+        THEN icp_availability_leases.revision + 1
+      ELSE EXCLUDED.revision
+    END
+  WHERE (
+      icp_availability_leases.revision + 1 = EXCLUDED.revision
+      AND (
+        EXCLUDED.source = 'operator'
+        OR icp_availability_leases.source <> 'operator'
+        OR icp_availability_leases.expires_at_ms <= EXCLUDED.issued_at_ms
+      )
+    )
+    OR (
+      EXCLUDED.source = 'operator'
+      AND icp_availability_leases.source <> 'operator'
+      AND icp_availability_leases.revision = EXCLUDED.revision
+    )
+  RETURNING ${AVAILABILITY_COLUMNS}
+`;
+const CLEAR_AVAILABILITY_SQL = `
+  DELETE FROM icp_availability_leases
+  WHERE companion_id = $1 AND revision = $2
+    AND (
+      $3::text = 'operator'
+      OR source <> 'operator'
+      OR expires_at_ms <= $4
+    )
+`;
 
 function safeInteger(value: string | number, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -302,6 +360,34 @@ async function lockInvalidationFence(
   return fenceConflictReason(expected, result.rows);
 }
 
+async function invalidateCompanionWithClient(
+  client: PoolClient,
+  companionId: string,
+  revokedAtMs: number,
+  reasonCode: IcpAutonomyReasonCode,
+): Promise<IcpInitiationPermit[]> {
+  const fenceResult = await client.query<InvalidationFenceRow>(`
+    UPDATE icp_autonomy_invalidation_fences
+    SET generation = generation + 1,
+        invalidated_at_ms = $2,
+        last_reason_code = $3
+    WHERE companion_id = $1
+    RETURNING ${INVALIDATION_FENCE_COLUMNS}
+  `, [companionId, revokedAtMs, reasonCode]);
+  if (!fenceResult.rows.at(0)) {
+    throw new Error(`ICP invalidation fence missing companion ${companionId}`);
+  }
+  const permitResult = await client.query<PermitRow>(`
+    UPDATE icp_initiation_permits
+    SET status = 'revoked', revoked_at_ms = GREATEST($2, issued_at_ms),
+        reason_code = $3, revision = revision + 1
+    WHERE status = 'issued'
+      AND (sender_companion_id = $1 OR recipient_companion_id = $1)
+    RETURNING ${PERMIT_COLUMNS}
+  `, [companionId, revokedAtMs, reasonCode]);
+  return permitResult.rows.map(mapPermit);
+}
+
 export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePort {
   private constructor(
     private readonly pool: Pool,
@@ -340,55 +426,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
 
   async publishAvailability(leaseInput: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
     const lease = parseIcpAvailabilityLease(leaseInput);
-    const row = await queryOne<AvailabilityRow>(this.pool, `
-      INSERT INTO icp_availability_leases (
-        companion_id, state, issued_at_ms, expires_at_ms, source, revision
-      )
-      SELECT $1::uuid, $2::text, $3::bigint, $4::bigint, $5::text, $6::bigint
-      WHERE $6::bigint = 1 OR EXISTS (
-        SELECT 1 FROM icp_availability_leases
-        WHERE companion_id = $1
-          AND (
-            (
-              revision + 1 = $6
-              AND (
-                $5::text = 'operator'
-                OR source <> 'operator'
-                OR expires_at_ms <= $3
-              )
-            )
-            OR (
-              $5::text = 'operator'
-              AND source <> 'operator'
-              AND revision = $6
-            )
-          )
-      )
-      ON CONFLICT (companion_id) DO UPDATE SET
-        state = EXCLUDED.state,
-        issued_at_ms = EXCLUDED.issued_at_ms,
-        expires_at_ms = EXCLUDED.expires_at_ms,
-        source = EXCLUDED.source,
-        revision = CASE
-          WHEN icp_availability_leases.revision = EXCLUDED.revision
-            THEN icp_availability_leases.revision + 1
-          ELSE EXCLUDED.revision
-        END
-      WHERE (
-          icp_availability_leases.revision + 1 = EXCLUDED.revision
-          AND (
-            EXCLUDED.source = 'operator'
-            OR icp_availability_leases.source <> 'operator'
-            OR icp_availability_leases.expires_at_ms <= EXCLUDED.issued_at_ms
-          )
-        )
-        OR (
-          EXCLUDED.source = 'operator'
-          AND icp_availability_leases.source <> 'operator'
-          AND icp_availability_leases.revision = EXCLUDED.revision
-        )
-      RETURNING ${AVAILABILITY_COLUMNS}
-    `, [
+    const row = await queryOne<AvailabilityRow>(this.pool, PUBLISH_AVAILABILITY_SQL, [
       lease.companionId,
       lease.state,
       lease.issuedAtMs,
@@ -398,6 +436,33 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     ]);
     if (!row) throw new Error(`ICP availability revision conflict for ${lease.companionId}`);
     return mapAvailability(row);
+  }
+
+  async publishAvailabilityAndInvalidate(
+    leaseInput: IcpAvailabilityLease,
+    reasonCodeInput: IcpAutonomyReasonCode,
+  ): Promise<{ lease: IcpAvailabilityLease; revokedPermits: IcpInitiationPermit[] }> {
+    const lease = parseIcpAvailabilityLease(leaseInput);
+    const reasonCode = requireReasonCode(reasonCodeInput, 'reasonCode');
+    return await withPostgresClient(this.pool, async client => {
+      const revokedPermits = await invalidateCompanionWithClient(
+        client,
+        lease.companionId,
+        lease.issuedAtMs,
+        reasonCode,
+      );
+      const result = await client.query<AvailabilityRow>(PUBLISH_AVAILABILITY_SQL, [
+        lease.companionId,
+        lease.state,
+        lease.issuedAtMs,
+        lease.expiresAtMs,
+        lease.source,
+        lease.revision,
+      ]);
+      const row = result.rows.at(0);
+      if (!row) throw new Error(`ICP availability revision conflict for ${lease.companionId}`);
+      return { lease: mapAvailability(row), revokedPermits };
+    });
   }
 
   async getAvailability(companionId: string): Promise<IcpAvailabilityLease | null> {
@@ -415,21 +480,50 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     expectedRevision: number,
     request: { source: IcpAvailabilitySource; nowMs: number },
   ): Promise<boolean> {
-    const result = await executeQuery(this.pool, `
-      DELETE FROM icp_availability_leases
-      WHERE companion_id = $1 AND revision = $2
-        AND (
-          $3::text = 'operator'
-          OR source <> 'operator'
-          OR expires_at_ms <= $4
-        )
-    `, [
+    const result = await executeQuery(this.pool, CLEAR_AVAILABILITY_SQL, [
       requireUuid(companionId, 'companionId'),
       requirePositiveInteger(expectedRevision, 'expectedRevision'),
       request.source,
       requireTimestamp(request.nowMs, 'nowMs'),
     ]);
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async clearAvailabilityAndInvalidate(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilitySource; nowMs: number },
+    reasonCodeInput: IcpAutonomyReasonCode,
+  ): Promise<{ cleared: boolean; revokedPermits: IcpInitiationPermit[] }> {
+    const normalizedCompanionId = requireUuid(companionId, 'companionId');
+    const normalizedExpectedRevision = requirePositiveInteger(expectedRevision, 'expectedRevision');
+    const normalizedNowMs = requireTimestamp(request.nowMs, 'nowMs');
+    const reasonCode = requireReasonCode(reasonCodeInput, 'reasonCode');
+    return await withPostgresClient(this.pool, async client => {
+      const fenceResult = await client.query<InvalidationFenceRow>(`
+        SELECT ${INVALIDATION_FENCE_COLUMNS}
+        FROM icp_autonomy_invalidation_fences
+        WHERE companion_id = $1
+        FOR UPDATE
+      `, [normalizedCompanionId]);
+      if (!fenceResult.rows.at(0)) {
+        throw new Error(`ICP invalidation fence missing companion ${normalizedCompanionId}`);
+      }
+      const clearResult = await client.query(CLEAR_AVAILABILITY_SQL, [
+        normalizedCompanionId,
+        normalizedExpectedRevision,
+        request.source,
+        normalizedNowMs,
+      ]);
+      if ((clearResult.rowCount ?? 0) === 0) return { cleared: false, revokedPermits: [] };
+      const revokedPermits = await invalidateCompanionWithClient(
+        client,
+        normalizedCompanionId,
+        normalizedNowMs,
+        reasonCode,
+      );
+      return { cleared: true, revokedPermits };
+    });
   }
 
   async createEpisode(episodeInput: IcpConversationEpisode): Promise<IcpConversationEpisode> {
@@ -847,28 +941,13 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     const reasonCode = requireReasonCode(reasonCodeInput, 'reasonCode');
     const normalizedCompanionId = requireUuid(companionId, 'companionId');
     const normalizedRevokedAtMs = requireTimestamp(revokedAtMs, 'revokedAtMs');
-    return await withPostgresClient(this.pool, async client => {
-      const fenceResult = await client.query<InvalidationFenceRow>(`
-        UPDATE icp_autonomy_invalidation_fences
-        SET generation = generation + 1,
-            invalidated_at_ms = $2,
-            last_reason_code = $3
-        WHERE companion_id = $1
-        RETURNING ${INVALIDATION_FENCE_COLUMNS}
-      `, [normalizedCompanionId, normalizedRevokedAtMs, reasonCode]);
-      if (!fenceResult.rows.at(0)) {
-        throw new Error(`ICP invalidation fence missing companion ${normalizedCompanionId}`);
-      }
-      const permitResult = await client.query<PermitRow>(`
-        UPDATE icp_initiation_permits
-        SET status = 'revoked', revoked_at_ms = GREATEST($2, issued_at_ms),
-            reason_code = $3, revision = revision + 1
-        WHERE status = 'issued'
-          AND (sender_companion_id = $1 OR recipient_companion_id = $1)
-        RETURNING ${PERMIT_COLUMNS}
-      `, [normalizedCompanionId, normalizedRevokedAtMs, reasonCode]);
-      return permitResult.rows.map(mapPermit);
-    });
+    return await withPostgresClient(this.pool, async client =>
+      await invalidateCompanionWithClient(
+        client,
+        normalizedCompanionId,
+        normalizedRevokedAtMs,
+        reasonCode,
+      ));
   }
 
   async revokeOutstandingPermitsOutsideFleet(

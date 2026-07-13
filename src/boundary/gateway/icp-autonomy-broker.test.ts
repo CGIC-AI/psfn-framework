@@ -78,8 +78,13 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
   beforeCreateEpisodeAndIssuePermit?: () => Promise<void>;
   beforeConsumePermit?: () => Promise<void>;
+  beforeAvailabilityInvalidationCommit?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
+    return this.publishAvailabilityNow(lease);
+  }
+
+  private publishAvailabilityNow(lease: IcpAvailabilityLease): IcpAvailabilityLease {
     const current = this.availability.get(lease.companionId);
     if ((current && current.revision + 1 !== lease.revision) || (!current && lease.revision !== 1)) {
       throw new Error('revision conflict');
@@ -93,6 +98,20 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return lease;
   }
 
+  async publishAvailabilityAndInvalidate(
+    lease: IcpAvailabilityLease,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<{ lease: IcpAvailabilityLease; revokedPermits: IcpInitiationPermit[] }> {
+    await this.beforeAvailabilityInvalidationCommit?.();
+    const published = this.publishAvailabilityNow(lease);
+    const revokedPermits = this.revokeOutstandingPermitsForCompanionNow(
+      lease.companionId,
+      lease.issuedAtMs,
+      reasonCode,
+    );
+    return { lease: published, revokedPermits };
+  }
+
   async getAvailability(companionId: string): Promise<IcpAvailabilityLease | null> {
     return this.availability.get(companionId) ?? null;
   }
@@ -102,12 +121,36 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     expectedRevision: number,
     request: { source: IcpAvailabilityLease['source']; nowMs: number },
   ): Promise<boolean> {
+    return this.clearAvailabilityNow(companionId, expectedRevision, request);
+  }
+
+  private clearAvailabilityNow(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+  ): boolean {
     const current = this.availability.get(companionId);
     if (current?.revision !== expectedRevision) return false;
     if (current.source === 'operator'
       && current.expiresAtMs > request.nowMs
       && request.source !== 'operator') return false;
     return this.availability.delete(companionId);
+  }
+
+  async clearAvailabilityAndInvalidate(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<{ cleared: boolean; revokedPermits: IcpInitiationPermit[] }> {
+    await this.beforeAvailabilityInvalidationCommit?.();
+    const cleared = this.clearAvailabilityNow(companionId, expectedRevision, request);
+    return {
+      cleared,
+      revokedPermits: cleared
+        ? this.revokeOutstandingPermitsForCompanionNow(companionId, request.nowMs, reasonCode)
+        : [],
+    };
   }
 
   async createEpisode(episode: IcpConversationEpisode): Promise<IcpConversationEpisode> {
@@ -259,6 +302,14 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     revokedAtMs: number,
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpInitiationPermit[]> {
+    return this.revokeOutstandingPermitsForCompanionNow(companionId, revokedAtMs, reasonCode);
+  }
+
+  private revokeOutstandingPermitsForCompanionNow(
+    companionId: string,
+    revokedAtMs: number,
+    reasonCode: IcpAutonomyReasonCode,
+  ): IcpInitiationPermit[] {
     this.invalidationGenerations.set(
       companionId,
       (this.invalidationGenerations.get(companionId) ?? 0) + 1,
@@ -607,6 +658,75 @@ describe('GatewayIcpAutonomyBroker', () => {
       });
     },
   );
+
+  it('does not expose restrictive availability before its fence and permit invalidation commit', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.permits.set(PERMIT_ID, {
+      permitId: PERMIT_ID,
+      candidateId: CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: A,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      provenanceRef: PROVENANCE_HANDLE,
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 30_000,
+      status: 'issued',
+      revision: 1,
+    });
+    const gate = deferred();
+    store.beforeAvailabilityInvalidationCommit = gate.wait;
+
+    const publishing = broker.publishAvailability(B, {
+      state: 'do_not_disturb',
+      expiresAtMs: NOW + 30_000,
+      revision: 2,
+    });
+    await gate.reached;
+    expect(store.availability.get(B)?.state).toBe('open_to_chat');
+    expect(store.permits.get(PERMIT_ID)?.status).toBe('issued');
+    gate.release();
+
+    await expect(publishing).resolves.toMatchObject({ state: 'do_not_disturb' });
+    expect(store.permits.get(PERMIT_ID)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'peer_do_not_disturb',
+    });
+  });
+
+  it('does not expose a cleared lease before its fence and permit invalidation commit', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.permits.set(PERMIT_ID, {
+      permitId: PERMIT_ID,
+      candidateId: CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: A,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      provenanceRef: PROVENANCE_HANDLE,
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 30_000,
+      status: 'issued',
+      revision: 1,
+    });
+    const gate = deferred();
+    store.beforeAvailabilityInvalidationCommit = gate.wait;
+
+    const clearing = broker.clearAvailability(B, 1);
+    await gate.reached;
+    expect(store.availability.get(B)?.state).toBe('open_to_chat');
+    expect(store.permits.get(PERMIT_ID)?.status).toBe('issued');
+    gate.release();
+
+    await expect(clearing).resolves.toBe(true);
+    expect(store.availability.has(B)).toBe(false);
+    expect(store.permits.get(PERMIT_ID)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'availability_missing',
+    });
+  });
 
   it('preserves operator overrides and invalidates pending permits on DND/clear/disconnect', async () => {
     const { broker, store } = makeBroker();

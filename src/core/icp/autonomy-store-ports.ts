@@ -47,6 +47,16 @@ export interface IcpAvailabilityStorePort {
   ): Promise<boolean>;
 }
 
+export interface IcpAvailabilityInvalidationResult {
+  lease: IcpAvailabilityLease;
+  revokedPermits: IcpInitiationPermit[];
+}
+
+export interface IcpAvailabilityClearInvalidationResult {
+  cleared: boolean;
+  revokedPermits: IcpInitiationPermit[];
+}
+
 export interface IcpConversationTransitionInput {
   conversationId: string;
   expectedStatus: IcpConversationStatus;
@@ -124,6 +134,16 @@ export interface IcpSharedAutonomyStorePort extends
   IcpAvailabilityStorePort,
   IcpConversationEpisodeStorePort,
   IcpInitiationPermitStorePort {
+  publishAvailabilityAndInvalidate(
+    lease: IcpAvailabilityLease,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpAvailabilityInvalidationResult>;
+  clearAvailabilityAndInvalidate(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilitySource; nowMs: number },
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpAvailabilityClearInvalidationResult>;
   createEpisodeAndIssuePermit(input: {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;

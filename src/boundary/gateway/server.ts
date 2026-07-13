@@ -248,6 +248,21 @@ export interface GatewayServerOptions {
   eventBus: EventBus;
 }
 
+type IcpQueuedInvalidationReason =
+  | 'peer_offline'
+  | 'operator_cancelled'
+  | 'unknown_participant';
+
+type IcpInvalidationAttemptOutcome =
+  | { readonly ok: true; readonly revokedCount: number }
+  | { readonly ok: false; readonly error: unknown };
+
+interface PendingIcpInvalidation {
+  readonly reasonCode: IcpQueuedInvalidationReason;
+  /** Never rejects so failed invalidations remain observable and chainable. */
+  readonly completion: Promise<IcpInvalidationAttemptOutcome>;
+}
+
 export class GatewayServer {
   private rpcServer: net.Server | https.Server | null = null;
   private readonly connections = new Set<GatewayRpcConnection>();
@@ -270,7 +285,7 @@ export class GatewayServer {
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
-  private readonly pendingIcpInvalidations = new Map<string, Promise<number>>();
+  private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -1388,22 +1403,43 @@ export class GatewayServer {
 
   private queueIcpInvalidation(
     companionId: string,
-    reasonCode: 'peer_offline' | 'operator_cancelled' | 'unknown_participant',
+    reasonCode: IcpQueuedInvalidationReason,
   ): Promise<number> {
     if (!this.icpAutonomyBroker) return Promise.resolve(0);
     const previous = this.pendingIcpInvalidations.get(companionId);
-    const invalidate = async (): Promise<number> => {
+    const attempt = (async (): Promise<number> => {
+      if (previous) await previous.completion;
       const revoked = await this.icpAutonomyBroker!.invalidateForCompanion(companionId, reasonCode);
       return revoked.length;
+    })();
+    const pending: PendingIcpInvalidation = {
+      reasonCode,
+      completion: attempt.then<IcpInvalidationAttemptOutcome>(
+        (revokedCount) => ({ ok: true, revokedCount }),
+        (error: unknown) => ({ ok: false, error }),
+      ),
     };
-    const next = previous ? previous.then(invalidate) : invalidate();
-    const tracked = next.finally(() => {
-      if (this.pendingIcpInvalidations.get(companionId) === tracked) {
+    this.pendingIcpInvalidations.set(companionId, pending);
+    void pending.completion.then((outcome) => {
+      if (outcome.ok && this.pendingIcpInvalidations.get(companionId) === pending) {
         this.pendingIcpInvalidations.delete(companionId);
       }
     });
-    this.pendingIcpInvalidations.set(companionId, tracked);
-    return tracked;
+    return attempt;
+  }
+
+  private async awaitIcpInvalidationBeforeReconnect(companionId: string): Promise<void> {
+    while (true) {
+      const pending = this.pendingIcpInvalidations.get(companionId);
+      if (!pending) return;
+      const outcome = await pending.completion;
+      if (this.pendingIcpInvalidations.get(companionId) !== pending) continue;
+      if (outcome.ok) {
+        this.pendingIcpInvalidations.delete(companionId);
+        return;
+      }
+      await this.queueIcpInvalidation(companionId, pending.reasonCode);
+    }
   }
 
   private async handleMalformedFrame(
@@ -1741,8 +1777,7 @@ export class GatewayServer {
         );
       }
       if (params.role === 'agent') {
-        const pendingInvalidation = this.pendingIcpInvalidations.get(companionId);
-        if (pendingInvalidation) await pendingInvalidation;
+        await this.awaitIcpInvalidationBeforeReconnect(companionId);
         const existing = this.companionConnections.get(companionId);
         if (existing && existing !== conn) {
           if (this.connections.has(existing)) {

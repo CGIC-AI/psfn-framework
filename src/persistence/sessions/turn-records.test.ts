@@ -68,7 +68,7 @@ describe('turn-records', () => {
   });
 
   it('round-trips logical session provenance and pages past the newest records', () => {
-    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-session-provenance-'));
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'turn-records-session-provenance-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
     const records = Array.from({ length: 4 }, (_, index) => createTurnRecord({
       turnId: `019d2326-d9e1-701d-bcee-250d2cbb0e${index + 1}e`,

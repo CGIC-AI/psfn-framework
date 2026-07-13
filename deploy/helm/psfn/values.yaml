@@ -534,7 +534,9 @@ satelliteHub:
     egressCIDRs: []
     egressPort: 8123
     # Server-owned device identities. credentialSha256 is a digest, never the
-    # plaintext HUB_DEVICE_TOKEN used by the satellite.
+    # plaintext HUB_DEVICE_TOKEN used by the satellite. Each device may list
+    # exact homeAssistantEntityIds; the Hub rejects reads and service calls
+    # outside that authenticated device's list.
     devices: []
   # A cert-manager client Certificate (chain: chart CA / existing psfn-ca
   # Issuer) is issued for the hub whenever it is enabled and mounted at

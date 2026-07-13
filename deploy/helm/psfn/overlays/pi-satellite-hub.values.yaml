@@ -40,6 +40,49 @@ satelliteHub:
   companionBridge:
     enabled: true
   elevenLabsVoiceId: ""
+  homeAssistant:
+    enabled: true
+    baseUrl: http://192.168.1.205:8123
+    egressCIDRs:
+      - 192.168.1.205/32
+    egressPort: 8123
+    devices:
+      # Existing app registration retained until psfn-satelite-hub-p5h moves
+      # Companion UI out of the physical Office place model.
+      - deviceId: psfn-satellite-mobile-chat-app
+        deviceName: PSFN Satellite Mobile Chat App
+        satelliteId: office
+        satelliteName: Office Companion UI
+        endpointId: companion-ui
+        claimType: text-only
+        credentialSha256: 5119cb48644369272907e63a9b988a143bee2109bb6c5b68a07d59374ded2a44
+        homeAssistantEntityIds: []
+        maxCapabilities:
+          input: [text]
+          output: [text, subtitle, artifact, tool_activity]
+          control: [interrupt, presence, session_attach, approvals]
+          safety: [confirmation_required, local_only]
+      - deviceId: purrsephone-bedroom
+        deviceName: Purrsephone Bedroom
+        satelliteId: bedroom
+        satelliteName: Bedroom
+        endpointId: waveshare-bedroom
+        claimType: voice-only
+        credentialSha256: d05cc7b446d7cd37e9ded3a64c9feb317315fe7e9c73309aba9d536a52e9ae85
+        homeAssistantEntityIds:
+          - light.main_bedroom
+          - fan.main_bedroom_2
+          - light.main_bathroom_light
+          - binary_sensor.motion_sensor_gen2_motion_detection_2
+          - switch.office_switch_1
+          - switch.lab_lightning_switch_1
+          - switch.studio_lighting_switch_1
+          - binary_sensor.motion_sensor_gen2_motion_detection
+        maxCapabilities:
+          input: [text, microphone_pcm, wake_event]
+          output: [text, subtitle, streamed_audio, tool_activity]
+          control: [interrupt, mute, sleep_wake, presence, session_attach]
+          safety: [action_allowlist, local_only]
 
 # LAN satellites (browsers/devices) connect to ws://<pi>:8787 directly, the
 # same single-node exposure mechanism the gateway API uses for its /v1 edge.

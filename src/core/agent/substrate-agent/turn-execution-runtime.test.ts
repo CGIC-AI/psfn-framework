@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,12 +58,20 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
-import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
 import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 import {
   DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
   inferDeferredCompanionOutreachActions,
+  registerDeferredCompanionOutreachRuntime,
 } from '../../tools/notify-companion-handoff.js';
+import { createNotifyTool } from '../../tools/ntfy.js';
+import { agentLoopWithScheduler } from '../scheduled-agent-loop.js';
+import { createIcpAutonomyCandidateDispatcher } from '../../../app/agent/icp-autonomy-candidate-dispatcher.js';
+import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
+import { Scheduler } from '../../scheduler/scheduler.js';
+import { wirePostTurnActionRuntime } from '../../../app/startup/composition/post-turn-actions.js';
+import { createAgentFacingIcpAutonomyRuntime } from '../../icp/agent-facing-autonomy.js';
+import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -3288,7 +3296,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     }));
   });
 
-  it('schedules typed outreach from a real non-recursive private candidate origin', async () => {
+  it('dispatches a permitted private candidate through the real notify tool loop and durable inference', async () => {
     const eventBus = new EventBus();
     const inferredActions: EventMap['agent.post_turn.actions.inferred']['actions'] = [];
     eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
@@ -3321,34 +3329,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.inferPostTurnActions = vi.fn(async context => (
       inferDeferredCompanionOutreachActions(context, 'extended_loaded')
     ));
-    runtime.agent.prompt = vi.fn(async (message) => {
-      runtime.agent.state.messages.push({ role: 'user', content: message.content });
-      runtime.agent.state.messages.push({
-        role: 'assistant',
-        content: [{
-          type: 'toolCall',
-          id: 'call-candidate-outreach',
-          name: 'notify',
-          arguments: {
-            action: 'send',
-            target_kind: 'companion',
-            contact_id: 'peer-contact-b',
-            initiation_permit: '44444444-4444-4444-8444-444444444444',
-          },
-        }],
-      });
-      runtime.agent.state.messages.push({
-        role: 'toolResult',
-        toolCallId: 'call-candidate-outreach',
-        toolName: 'notify',
-        isError: false,
-        content: [{
-          type: 'text',
-          text: 'notify: companion outreach queued for the target-channel turn.',
-        }],
-      });
-      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
-    });
     const candidate: IcpInitiationCandidate = {
       candidateId: '11111111-1111-4111-8111-111111111111',
       rootInitiationId: '22222222-2222-4222-8222-222222222222',
@@ -3365,14 +3345,199 @@ describe('handleMessageForTurn compaction scheduling', () => {
       status: 'permitted',
       revision: 2,
     };
-    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+    const permit: IcpInitiationPermit = {
+      permitId: '44444444-4444-4444-8444-444444444444',
+      candidateId: candidate.candidateId,
+      conversationId: '55555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: 1_500,
+      expiresAtMs: 5_000,
+      status: 'issued',
+      revision: 1,
+    };
+    const peerContact = {
+      id: candidate.peerContactId,
+      displayName: 'Peer B',
+      trustLevel: 'regular',
+      relationshipType: 'peer',
+      isMachineIntelligence: true,
+      channelIdentities: [{ channel: 'companion', userId: candidate.peerCompanionId }],
+      firstSeen: '2026-07-01T00:00:00.000Z',
+      lastSeen: '2026-07-13T00:00:00.000Z',
+    } as const;
+    const contactStore = {
+      getById: vi.fn(async (contactId: string) => (
+        contactId === peerContact.id ? peerContact : undefined
+      )),
+      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
+        channel === 'companion' && userId === candidate.peerCompanionId
+          ? peerContact
+          : undefined
+      )),
+      listAll: vi.fn(async () => [peerContact]),
+    } as unknown as ContactStorePort;
+    const prepareInitiationHandoff = vi.fn(async () => ({
+      authorized: true as const,
+      permit,
+      rootInitiationId: candidate.rootInitiationId,
+    }));
+    const targetCommand = {
+      execute: vi.fn(async () => ({ disposition: 'delivered' as const })),
+    };
+    const companionOutreach = createAgentFacingIcpAutonomyRuntime({
+      contactStore,
+      gateway: {
+        companionReadOwnAvailability: vi.fn(),
+        companionPublishAvailability: vi.fn(),
+        companionClearAvailability: vi.fn(),
+        companionReadPeerAvailability: vi.fn(),
+        companionPrepareInitiationHandoff: prepareInitiationHandoff,
+      },
+      command: targetCommand,
+    });
+    const notifyTool = createNotifyTool({ dispatch: vi.fn() }, {
+      companionOutreach,
+    });
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const queuePath = join(makeTempDir(), 'post-turn-actions.json');
+    const postTurnActions = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn(async () => undefined) },
+      persistencePath: queuePath,
+    });
+    const unregisterDeferredOutreach = registerDeferredCompanionOutreachRuntime({
+      agentLoop: {
+        registerPostTurnActionInferer: vi.fn(() => () => undefined),
+      },
+      postTurnActions,
+      runtime: companionOutreach,
+      resolveOriginActivationSource: () => 'extended_loaded',
+      isExecutionAuthorized: () => true,
+    });
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    };
+    let streamStep = 0;
+    const streamFn = vi.fn(async () => {
+      const message = streamStep === 0
+        ? {
+            role: 'assistant',
+            content: [{
+              type: 'toolCall',
+              id: 'call-candidate-outreach',
+              name: 'notify',
+              arguments: {
+                action: 'send',
+                target_kind: 'companion',
+                contact_id: candidate.peerContactId,
+                initiation_permit: permit.permitId,
+              },
+            }],
+            api: 'chat',
+            provider: 'test',
+            model: 'test-model',
+            usage: zeroUsage,
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          }
+        : {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Candidate handoff queued.' }],
+            api: 'chat',
+            provider: 'test',
+            model: 'test-model',
+            usage: zeroUsage,
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          };
+      streamStep += 1;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(message) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(message),
+      } as never;
+    });
+    runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
+      runtime.agent.setTools([notifyTool]);
+    });
+    runtime.agent.prompt = vi.fn(async (promptMessage) => {
+      const stream = agentLoopWithScheduler(
+        [promptMessage],
+        {
+          systemPrompt: 'System prompt',
+          messages: [],
+          tools: runtime.agent.state.tools,
+        } as never,
+        {
+          model: { id: 'test-model', api: 'chat', provider: 'test' },
+          convertToLlm: async messages => messages,
+          getSteeringMessages: async () => [],
+          getFollowUpMessages: async () => [],
+        } as never,
+        new AbortController().signal,
+        streamFn as never,
+        { maxParallelToolCalls: 1 },
+      );
+      let turnMessages: unknown[] = [];
+      for await (const event of stream) {
+        if ((event as { type?: string }).type === 'agent_end') {
+          turnMessages = (event as { messages: unknown[] }).messages;
+        }
+      }
+      runtime.agent.state.messages.push(...turnMessages);
+    });
+    const dispatcher = createIcpAutonomyCandidateDispatcher({
+      agentLoop: {
+        handleMessage: async message => await handleMessageForTurn(runtime, message),
+      },
+      now: () => new Date(2_000),
+    });
 
-    await handleMessageForTurn(runtime, message);
+    await dispatcher.dispatch({ candidate, permit });
 
     expect(runtime.inferPostTurnActions).toHaveBeenCalledWith(expect.objectContaining({
-      message,
+      message: expect.objectContaining({
+        id: `icp-autonomy-candidate:${candidate.candidateId}`,
+        content: expect.stringContaining(JSON.stringify(candidate.reasonSummary)),
+      }),
       taskKind: 'research',
     }));
+    expect(prepareInitiationHandoff).toHaveBeenCalledWith({
+      permitId: permit.permitId,
+      peerContactId: candidate.peerContactId,
+    });
+    const toolResult = runtime.agent.state.messages.find(message => (
+      message.role === 'toolResult' && message.toolName === 'notify'
+    ));
+    expect(toolResult).toMatchObject({
+      isError: false,
+      content: [{
+        type: 'text',
+        text: 'notify: companion outreach queued for the target-channel turn.',
+      }],
+    });
+    expect(JSON.stringify(toolResult)).not.toContain(permit.permitId);
+    expect(JSON.stringify(toolResult)).not.toContain(candidate.reasonSummary);
     expect(inferredActions).toEqual([
       expect.objectContaining({
         kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
@@ -3387,6 +3552,21 @@ describe('handleMessageForTurn compaction scheduling', () => {
         }),
       }),
     ]);
+    expect(postTurnActions.listQueued()).toHaveLength(1);
+    const persistedQueue = readFileSync(queuePath, 'utf8');
+    expect(persistedQueue).toContain(permit.permitId);
+    expect(persistedQueue).not.toContain(candidate.reasonSummary);
+
+    await scheduler.tick();
+
+    expect(targetCommand.execute).toHaveBeenCalledWith({
+      permit,
+      rootInitiationId: candidate.rootInitiationId,
+      peerContactId: candidate.peerContactId,
+      continuationTaskKind: candidate.continuationTaskKind,
+    });
+    expect(postTurnActions.listQueued()).toHaveLength(0);
+    unregisterDeferredOutreach();
   });
 
   it('routes runtime-authored repair guidance through system session + prompt lanes', async () => {

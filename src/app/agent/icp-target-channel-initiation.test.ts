@@ -11,6 +11,7 @@ import {
   createIcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-initiation.js';
+import { deriveStableIcpTargetTurnId } from './icp-target-channel-recovery.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import {
   chargeSurfaceDurably,
@@ -68,8 +69,9 @@ function expiredConsumedPermit(): IcpInitiationPermit {
 }
 
 function correlation(
-  turnId = '018f22a2-52b8-7a3a-8c16-25b7b14f7089',
+  turnId?: string,
 ): IcpConversationCorrelation {
+  const sourceMessageId = `icp-initiation:${CANDIDATE}`;
   return {
     conversationId: CONVERSATION,
     rootInitiationId: ROOT,
@@ -78,9 +80,15 @@ function correlation(
     peerCompanionId: RECIPIENT,
     peerContactId: CONTACT_ID,
     channelId: CHANNEL,
-    turnId,
-    messageId: `icp-initiation:${CANDIDATE}`,
-    requestId: `icp-initiation:${CANDIDATE}`,
+    turnId: turnId ?? deriveStableIcpTargetTurnId({
+      permit: permit(),
+      localCompanionId: SENDER,
+      peerContactId: CONTACT_ID,
+      rootInitiationId: ROOT,
+      sourceMessageId,
+    }),
+    messageId: sourceMessageId,
+    requestId: sourceMessageId,
     chargeLane: 'companion_social',
     surface: 'companion_dm',
     costPurpose: 'conversation_turn',
@@ -276,6 +284,100 @@ describe('ICP target-channel initiation', () => {
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
   });
 
+  it.each([
+    {
+      name: 'peer-initiated correlation',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        initiatedByCompanionId: RECIPIENT,
+      }),
+    },
+    {
+      name: 'reply-stage correlation',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        costOriginStage: 'reply' as const,
+      }),
+    },
+    {
+      name: 'interactive charge lane',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        chargeLane: 'interactive' as const,
+      }),
+    },
+    {
+      name: 'unrelated durable turn id',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7099',
+      }),
+    },
+    {
+      name: 'wrong channel surface',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        surface: 'companion_room' as const,
+      }),
+    },
+    {
+      name: 'wrong cost purpose',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        costPurpose: 'tool' as const,
+      }),
+    },
+    {
+      name: 'wrong candidate message lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        messageId: 'icp-initiation:88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong candidate request lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        requestId: 'icp-initiation:88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong root lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        rootInitiationId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+  ])('rejects $name before replaying any side effect', async ({ mutate }) => {
+    const invalidCorrelation = mutate(correlation());
+    const durableResponse = response({
+      id: invalidCorrelation.requestId,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: invalidCorrelation },
+    });
+    const restarted = createHarness({
+      content: durableResponse.content,
+      correlation: invalidCorrelation,
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: consumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow();
+
+    expect(restarted.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(restarted.sendInitiation).not.toHaveBeenCalled();
+    expect(restarted.recordDeliveryObservation).not.toHaveBeenCalled();
+  });
+
   it('reconstructs one stable social-charge identity after a pre-response process crash', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-icp-pre-response-charge-'));
     const ledgerPath = join(tempDir, 'charge-ledger.jsonl');
@@ -462,7 +564,7 @@ describe('ICP target-channel initiation', () => {
   });
 
   it('finishes post-turn recovery without resending after durable delivery', async () => {
-    const durableCorrelation = correlation('018f22a2-52b8-7a3a-8c16-25b7b14f7090');
+    const durableCorrelation = correlation();
     const recoveryResponse = response({
       id: durableCorrelation.requestId,
       channelId: CHANNEL,

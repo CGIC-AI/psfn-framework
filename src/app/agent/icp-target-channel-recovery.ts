@@ -8,6 +8,7 @@ import {
   type IcpConversationCorrelation,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
+import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import type { AgentResponse } from '../../shared/contracts/runtime.js';
 
 export interface RecordedIcpInitiationTurn {
@@ -49,13 +50,28 @@ export function validateIcpTargetCorrelationBinding(
 ): IcpConversationCorrelation {
   const parsed = parseIcpConversationCorrelation(value);
   const { permit } = binding;
+  const parsedChannel = parseCompanionChannelId(permit.channelId);
+  if (!parsedChannel) {
+    throw new Error('Recorded ICP initiation permit channel is not canonical');
+  }
+  const expectedSurface = parsedChannel.kind === 'dm'
+    ? 'companion_dm'
+    : 'companion_room';
+  const expectedTurnId = deriveStableIcpTargetTurnId(binding);
   if (parsed.localCompanionId !== binding.localCompanionId
+    || parsed.initiatedByCompanionId !== binding.localCompanionId
     || parsed.peerCompanionId !== permit.recipientCompanionId
     || parsed.peerContactId !== binding.peerContactId
     || parsed.channelId !== permit.channelId
     || parsed.conversationId !== permit.conversationId
     || parsed.rootInitiationId !== binding.rootInitiationId
-    || parsed.requestId !== binding.sourceMessageId) {
+    || parsed.messageId !== binding.sourceMessageId
+    || parsed.requestId !== binding.sourceMessageId
+    || parsed.turnId !== expectedTurnId
+    || parsed.chargeLane !== 'companion_social'
+    || parsed.surface !== expectedSurface
+    || parsed.costPurpose !== 'conversation_turn'
+    || parsed.costOriginStage !== 'initiation') {
     throw new Error('Recorded ICP initiation turn does not match the permit binding');
   }
   return parsed;

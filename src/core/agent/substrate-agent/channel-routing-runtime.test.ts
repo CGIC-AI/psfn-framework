@@ -4,6 +4,7 @@ import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { resolveTaskKind } from './channel-routing-runtime.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
 import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
+import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
 const PEER = '22222222-2222-4222-8222-222222222222';
@@ -11,6 +12,22 @@ const CHANNEL = `companion-dm:${LOCAL}:${PEER}`;
 const registry: ChannelPromptRegistryPort = {
   get: () => undefined,
 };
+
+function permitForCandidate(candidate: IcpInitiationCandidate): IcpInitiationPermit {
+  return {
+    permitId: '66666666-6666-4666-8666-666666666666',
+    candidateId: candidate.candidateId,
+    conversationId: '77777777-7777-4777-8777-777777777777',
+    senderCompanionId: candidate.localCompanionId,
+    recipientCompanionId: candidate.peerCompanionId,
+    channelId: CHANNEL,
+    provenanceRef: candidate.provenanceRef,
+    issuedAtMs: 1_500,
+    expiresAtMs: 5_000,
+    status: 'issued',
+    revision: 1,
+  };
+}
 
 function privateInitiationMessage(): SubstrateMessage {
   return {
@@ -83,7 +100,10 @@ describe('channel routing ICP continuation evidence', () => {
       status: 'permitted',
       revision: 1,
     };
-    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+    const message = createIcpAutonomyCandidateSchedulerMessage({
+      candidate,
+      permit: permitForCandidate(candidate),
+    }, new Date(2_000));
 
     expect(message.routing?.icpAutonomyCandidate).toMatchObject({
       candidateId: candidate.candidateId,
@@ -112,7 +132,10 @@ describe('channel routing ICP continuation evidence', () => {
       status: 'permitted',
       revision: 2,
     };
-    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+    const message = createIcpAutonomyCandidateSchedulerMessage({
+      candidate,
+      permit: permitForCandidate(candidate),
+    }, new Date(2_000));
     message.authorId = 'scheduler';
 
     expect(() => resolveTaskKind(message, registry)).toThrow(/canonical non-recursive scheduler turn/i);

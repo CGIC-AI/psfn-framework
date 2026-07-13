@@ -64,7 +64,7 @@ function ordinaryContext<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function candidateSchedulerMessage() {
-  return createIcpAutonomyCandidateSchedulerMessage({
+  const candidate = {
     ...CANDIDATE_ORIGIN,
     localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     peerContactId: 'peer-contact-b',
@@ -75,7 +75,23 @@ function candidateSchedulerMessage() {
     expiresAtMs: 10_000,
     status: 'permitted',
     revision: 1,
-  } satisfies IcpInitiationCandidate, new Date(2_000));
+  } satisfies IcpInitiationCandidate;
+  return createIcpAutonomyCandidateSchedulerMessage({
+    candidate,
+    permit: {
+      permitId: PERMIT_ID,
+      candidateId: candidate.candidateId,
+      conversationId: '55555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: 1_500,
+      expiresAtMs: 5_000,
+      status: 'issued',
+      revision: 1,
+    },
+  }, new Date(2_000));
 }
 
 describe('permit-governed notify companion handoff', () => {

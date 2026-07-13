@@ -34,6 +34,10 @@ import {
   resolveCompanionOutreachOriginActivationSource,
   type DeferredCompanionOutreachAuthorizationRuntime,
 } from '../../core/tools/notify-companion-handoff.js';
+import {
+  createIcpAutonomyCandidateDispatcher,
+  type IcpAutonomyCandidateDispatcher,
+} from './icp-autonomy-candidate-dispatcher.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -73,6 +77,7 @@ export interface BuildAgentControlPlaneOptions {
 export interface AgentControlPlaneRuntime {
   lifecycleNotifier: LifecycleNotifier;
   stopFn: () => Promise<void>;
+  icpAutonomyCandidateDispatcher?: IcpAutonomyCandidateDispatcher;
 }
 
 export function buildAgentControlPlane(
@@ -224,5 +229,13 @@ export function buildAgentControlPlane(
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
   }), 'extended');
 
-  return { lifecycleNotifier, stopFn };
+  const icpAutonomyCandidateDispatcher = icpAutonomyRuntime
+    ? createIcpAutonomyCandidateDispatcher({ agentLoop })
+    : undefined;
+
+  return {
+    lifecycleNotifier,
+    stopFn,
+    ...(icpAutonomyCandidateDispatcher ? { icpAutonomyCandidateDispatcher } : {}),
+  };
 }

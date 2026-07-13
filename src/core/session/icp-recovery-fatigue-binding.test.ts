@@ -6,103 +6,15 @@ import type {
   TurnID,
 } from '../../shared/contracts/runtime.js';
 import { parseIcpRecoveryResponse } from './icp-delivery-recovery.js';
-
-const LOCAL = '11111111-1111-4111-8111-111111111111';
-const PEER = '22222222-2222-4222-8222-222222222222';
-const CHANNEL = `companion-dm:${LOCAL}:${PEER}`;
-const SOURCE = 'companion-initiation-33333333-3333-4333-8333-333333333333';
-const FATIGUE_TIMESTAMP_MS = Date.parse('2026-03-02T00:00:00.000Z');
-const correlation = {
-  conversationId: '44444444-4444-4444-8444-444444444444',
-  rootInitiationId: '99999999-9999-4999-8999-999999999999',
-  initiatedByCompanionId: PEER,
-  localCompanionId: LOCAL,
-  peerCompanionId: PEER,
-  peerContactId: 'contact-peer',
-  channelId: CHANNEL,
-  turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
-  messageId: SOURCE,
-  requestId: SOURCE,
-  chargeLane: 'companion_social' as const,
-  surface: 'companion_dm' as const,
-  costPurpose: 'conversation_turn' as const,
-  costOriginStage: 'reply' as const,
-  fatigueDecision: 'not_evaluated' as const,
-} satisfies IcpConversationCorrelation;
-const chargedCorrelation = { ...correlation, fatigueDecision: 'allow' as const };
-const recoveryResponse = {
-  content: 'Durable reply',
-  channelId: CHANNEL,
-  metadata: {
-    model: 'strict-codec-test',
-    inputTokens: 3,
-    outputTokens: 2,
-    durationMs: 5,
-    turnId: correlation.turnId,
-    requestId: correlation.requestId,
-    icpCorrelation: correlation,
-  },
-};
-
-const fatigueScope = {
-  localCompanionId: LOCAL,
-  peerContactId: correlation.peerContactId,
-  channelId: CHANNEL,
-  dayKey: '2026-03-02',
-};
-const fatiguePeer = {
-  contactId: correlation.peerContactId,
-  channelAuthorId: PEER,
-  isMachineIntelligence: true,
-};
-const fatigueActor = {
-  role: 'machine_intelligence',
-  contactId: correlation.peerContactId,
-  channelAuthorId: PEER,
-  isMachineIntelligence: true,
-};
-const fatigueBudget = {
-  spentBefore: 0,
-  remainingBefore: 8,
-  allowance: 8,
-  softLimit: 6,
-  hardLimit: 8,
-  amount: 1,
-  spentAfterProjected: 1,
-  remainingAfterProjected: 7,
-  normalSpentBefore: 0,
-  normalSpentAfterProjected: 1,
-  overchargeSpentBefore: 0,
-  overchargeSpentAfterProjected: 0,
-  overchargeAllowance: 2,
-  overchargeRemainingBefore: 2,
-  overchargeRemainingAfterProjected: 2,
-};
-const fatigueMetadata = {
-  schemaVersion: 1,
-  decision: 'allowed_charged',
-  modelDisposition: 'allowed',
-  alertInjected: false,
-  shouldRecordSpend: true,
-  spendDecision: 'charged',
-  spendReason: 'machine_intelligence_response',
-  policyState: 'normal',
-  policyBaseState: 'normal',
-  intent: 'social',
-  relationshipClass: 'known_mi',
-  channelSetting: 'dm',
-  overchargeEligible: false,
-  overchargePermitted: false,
-  overchargeBlockedReasons: [
-    'normal_allowance_not_exhausted',
-    'no_qualifying_overcharge_trigger',
-  ],
-  overchargeReasons: [],
-  scope: fatigueScope,
-  peer: fatiguePeer,
-  triggeringAuthor: fatigueActor,
-  budget: fatigueBudget,
-};
+import {
+  FATIGUE_TIMESTAMP_MS,
+  PEER,
+  chargedCorrelation,
+  correlation,
+  fatigueBudget,
+  fatigueMetadata,
+  recoveryResponse,
+} from './icp-recovery-test-fixtures.js';
 interface FatigueRecoveryTestResponse {
   content: string;
   channelId: string;
@@ -386,6 +298,38 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
   }),
 ];
 
+function requireFatigueDecisionFixture(label: string): FatigueDecisionFixture {
+  const fixture = fatigueDecisionFixtures.find(candidate => candidate.label === label);
+  if (!fixture) throw new Error(`missing fatigue decision fixture: ${label}`);
+  return fixture;
+}
+
+const ROOM_CHANNEL = 'companion-room:recovery-room';
+
+function asRoomRecoveryResponse(
+  channelSetting: FatigueEnforcementMetadata['channelSetting'],
+): FatigueRecoveryTestResponse {
+  const response = structuredClone(
+    requireFatigueDecisionFixture('allowed_charged').response,
+  );
+  const roomCorrelation: IcpConversationCorrelation = {
+    ...response.metadata.icpCorrelation,
+    channelId: ROOM_CHANNEL,
+    surface: 'companion_room',
+  };
+  const pendingSpend = response.metadata.fatiguePendingSpend;
+  if (!pendingSpend) throw new Error('room recovery fixture requires pending spend');
+
+  response.channelId = ROOM_CHANNEL;
+  response.metadata.icpCorrelation = roomCorrelation;
+  response.metadata.fatigue.channelSetting = channelSetting;
+  response.metadata.fatigue.scope.channelId = ROOM_CHANNEL;
+  pendingSpend.scope.channelId = ROOM_CHANNEL;
+  pendingSpend.correlation.channelId = ROOM_CHANNEL;
+  pendingSpend.correlation.icpCorrelation = roomCorrelation;
+  return response;
+}
+
 interface FatigueMutation {
   label: string;
   mutate(fatigue: FatigueEnforcementMetadata): void;
@@ -641,6 +585,63 @@ describe('ICP recovery fatigue production invariants', () => {
       })).toEqual(response);
     },
   );
+
+  it.each([
+    'busy_human_group',
+    'one_human_companion_hosted',
+    'quiet_companion_room',
+  ] as const)('accepts the %s fatigue setting on an ICP room surface', channelSetting => {
+    const response = asRoomRecoveryResponse(channelSetting);
+    expect(parseIcpRecoveryResponse(response, {
+      label: 'test room recovery response',
+    })).toEqual(response);
+  });
+
+  it.each(['dm', 'public_group', 'unknown'] as const)(
+    'rejects the %s fatigue setting on an ICP room surface',
+    channelSetting => {
+      const response = asRoomRecoveryResponse(channelSetting);
+      expect(() => parseIcpRecoveryResponse(response, {
+        label: 'test room recovery response',
+      })).toThrow(/fatigue channel setting binding/i);
+    },
+  );
+
+  it.each([
+    'allowed_charged',
+    'overcharge_charged for work intent',
+  ])('rejects a coherent recorded ledger position below the %s projection', label => {
+    const response = structuredClone(requireFatigueDecisionFixture(label).response);
+    const pendingSpend = response.metadata.fatiguePendingSpend;
+    if (!pendingSpend) throw new Error(`${label} fixture requires pending spend`);
+    const normalSpentAfter = response.metadata.fatigue.budget.normalSpentBefore;
+    const overchargeSpentAfter = response.metadata.fatigue.budget.overchargeSpentBefore;
+    response.metadata.fatigue.recordedEvent = {
+      timestampMs: pendingSpend.timestampMs,
+      amount: pendingSpend.amount,
+      decision: pendingSpend.decision,
+      reason: pendingSpend.reason,
+      spentAfter: normalSpentAfter + overchargeSpentAfter,
+      remainingAllowance: Math.max(0, pendingSpend.limits.hardLimit - normalSpentAfter),
+      normalSpentAfter,
+      overchargeSpentAfter,
+      overchargeAllowance: pendingSpend.limits.overchargeLimit,
+      remainingOvercharge: Math.max(
+        0,
+        pendingSpend.limits.overchargeLimit - overchargeSpentAfter,
+      ),
+      softState: normalSpentAfter >= pendingSpend.limits.softLimit
+        ? 'soft_limit_reached'
+        : 'clear',
+      hardState: normalSpentAfter >= pendingSpend.limits.hardLimit
+        ? 'exhausted'
+        : 'available',
+    };
+
+    expect(() => parseIcpRecoveryResponse(response, {
+      label: 'test recovery response',
+    })).toThrow(/fatigue recorded event derived state is inconsistent/i);
+  });
 
   it.each(fatigueDecisionFixtures.flatMap(fixture => (
     fatigueMutations.map(mutation => ({ fixture, mutation }))

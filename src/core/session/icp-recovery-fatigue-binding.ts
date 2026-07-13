@@ -18,9 +18,10 @@ const ICP_ROOM_FATIGUE_CHANNEL_SETTINGS = new Set([
 function assertRecordedEventBinding(input: {
   recordedEvent: NonNullable<FatigueEnforcementMetadata['recordedEvent']>;
   pendingSpend: FatiguePendingSpendMetadata;
+  fatigue: FatigueEnforcementMetadata;
   label: string;
 }): void {
-  const { recordedEvent, pendingSpend, label } = input;
+  const { recordedEvent, pendingSpend, fatigue, label } = input;
   const normalSpentAfter = recordedEvent.normalSpentAfter;
   const overchargeSpentAfter = recordedEvent.overchargeSpentAfter;
   const overchargeAllowance = recordedEvent.overchargeAllowance;
@@ -40,6 +41,8 @@ function assertRecordedEventBinding(input: {
     || overchargeSpentAfter === undefined
     || overchargeAllowance === undefined
     || remainingOvercharge === undefined
+    || normalSpentAfter < fatigue.budget.normalSpentAfterProjected
+    || overchargeSpentAfter < fatigue.budget.overchargeSpentAfterProjected
     || recordedEvent.spentAfter !== normalSpentAfter + overchargeSpentAfter
     || recordedEvent.remainingAllowance
       !== Math.max(0, pendingSpend.limits.hardLimit - normalSpentAfter)
@@ -129,6 +132,6 @@ export function assertFatigueRecoveryBinding(input: {
     throw new Error(`${label}.fatigue recorded event binding is inconsistent`);
   }
   if (recordedEvent) {
-    assertRecordedEventBinding({ recordedEvent, pendingSpend, label });
+    assertRecordedEventBinding({ recordedEvent, pendingSpend, fatigue, label });
   }
 }

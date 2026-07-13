@@ -211,8 +211,6 @@ export class GatewayIcpAutonomyBroker {
     if (permit.status === 'consumed') {
       // A consumed permit is intentionally left to W3's durable recovery path.
       // The exact binding below prevents it from opening a different turn.
-    } else if (permit.status !== 'issued') {
-      return { authorized: false, reasonCode: 'permit_mismatch' };
     }
 
     const episode = await this.options.store.getEpisode(permit.conversationId);

@@ -869,6 +869,144 @@
       "contains": "See bead psfn-framework-vinz.10",
       "reason": "Beads issue-ID reference in a code comment (Sprint 10 world tool follow-up).",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/chat/+page.svelte",
+      "contains": "'psfn:model-room:participant-prompts:v1'",
+      "reason": "The versioned browser-storage key preserves existing model-room participant prompt state across UI upgrades.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/chat/+page.svelte",
+      "contains": "'psfn:model-room:operator-name:v1'",
+      "reason": "The versioned browser-storage key preserves the existing model-room operator-name preference across UI upgrades.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-kubernetes-helm-recovery-chart.ts",
+      "contains": "resolve('deploy/helm/psfn')",
+      "reason": "The verifier must address the repository's existing Helm chart directory by its checked-in path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/cert-manager/config.ts",
+      "contains": "DEFAULT_CA_COMMON_NAME = 'PSFN Private CA'",
+      "reason": "The default private-CA subject preserves the deployed certificate identity and trust-chain contract.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/gateway/fleet-status.ts",
+      "contains": "<title>PSFN Fleet Status</title>",
+      "reason": "The standalone fleet-status page retains its explicit operator-facing product title.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/gateway/fleet-status.ts",
+      "contains": "<h1>PSFN Fleet Status</h1>",
+      "reason": "The standalone fleet-status page retains its explicit operator-facing product heading.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "X-PSFN-Client-Cert-*",
+      "reason": "Protocol documentation names the exact trusted-proxy client-certificate header family enforced by this module.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "'x-psfn-client-cert-fingerprint-sha256'",
+      "reason": "The trusted-proxy protocol requires the deployed fingerprint header name exactly.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "'x-psfn-client-cert-spki-sha256'",
+      "reason": "The trusted-proxy protocol requires the deployed SPKI header name exactly.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "'x-psfn-client-cert-subject'",
+      "reason": "The trusted-proxy protocol requires the deployed certificate-subject header name exactly.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "'x-psfn-client-cert-san'",
+      "reason": "The trusted-proxy protocol requires the deployed certificate-SAN header name exactly.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "TRUSTED_PROXY_TOKEN_HEADER = 'x-psfn-trusted-proxy-token'",
+      "reason": "The trusted-proxy protocol requires the deployed proxy-token header name exactly.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/places-mermaid.ts",
+      "contains": "%% PSFN world map — sites, places, affordances, and bound satellites.",
+      "reason": "The generated operator-facing Mermaid artifact retains its explicit product title.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/contacts/postgres-adapter/factory.ts",
+      "contains": "applicationName ?? 'psfn-contacts'",
+      "reason": "Contact persistence uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/shared-pgvector-projection.ts",
+      "contains": "applicationName: 'psfn-shared-wiki-projection'",
+      "reason": "Shared wiki projection uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/kubernetes-helm-chart.ts",
+      "contains": "psfn.satelliteApiKeysValue",
+      "reason": "Recovery chart generation must preserve the checked-in Helm helper name consumed by chart templates.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/kubernetes-helm-chart.ts",
+      "contains": "psfn.postgresServiceName",
+      "reason": "Recovery chart generation must preserve the checked-in PostgreSQL Helm helper name consumed by chart templates.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/icp-initiation-candidate-store.ts",
+      "contains": "applicationName: 'psfn-icp-initiation-candidates'",
+      "reason": "Private ICP candidate persistence uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/icp-initiation-policy-authority.ts",
+      "contains": "applicationName: 'psfn-icp-initiation-policy'",
+      "reason": "ICP initiation-policy persistence uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/icp-shared-autonomy-store.ts",
+      "contains": "applicationName: 'psfn-icp-autonomy-shared'",
+      "reason": "Shared ICP autonomy persistence uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/shared-schema.ts",
+      "contains": "applicationName: 'psfn-shared-schema'",
+      "reason": "Shared-schema administration uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/runtime-factory.ts",
+      "contains": "applicationName: 'psfn-schema-bootstrap'",
+      "reason": "Schema bootstrap uses a stable project-scoped PostgreSQL application_name label for operations.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/satellite-registry.ts",
+      "contains": "X-PSFN-Client-Cert-*",
+      "reason": "Satellite authentication contract documentation names the exact trusted-proxy header family.",
+      "pattern": "identity-proper-name"
     }
   ]
 }

@@ -1,6 +1,6 @@
 // ── OpenRouter server-tools web backend ──
 //
-// Interim web search/fetch backend (bead psfn-framework-htm9.10). The prior
+// Interim web search/fetch backend (bead htm9.10). The prior
 // self-hosted crawler (Crawl4AI) + search engine (SearXNG) backend went
 // offline, so the gateway can be configured to route web search and fetch
 // through OpenRouter's built-in server tools instead. OpenRouter executes the

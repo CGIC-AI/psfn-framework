@@ -343,7 +343,7 @@ async function main(): Promise<void> {
     });
     log.info('Companion room-entry notes wired to co-location events');
 
-    // Presence-windowed private-room delivery (psfn-framework-s10rm): the
+    // Presence-windowed private-room delivery (bead s10rm): the
     // session layer serves a private companion-room channel only from this
     // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
     // never sees pre-join content in context. Public places and every other

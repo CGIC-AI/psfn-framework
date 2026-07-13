@@ -18,7 +18,7 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 export interface RegisterWebToolsOptions {
   gatewayMode?: boolean;
   searchQueryJson?: WebSearchQueryJson;
-  /** Explicit web backend selection (bead psfn-framework-htm9.10). */
+  /** Explicit web backend selection (bead htm9.10). */
   backend?: WebToolBackend;
 }
 

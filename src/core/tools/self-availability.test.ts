@@ -100,7 +100,7 @@ describe('self availability semantic actions', () => {
         expected_revision: 3,
       },
     });
-    expect(mixed.details?.isError).toBe(true);
+    expect(mixed.details.isError).toBe(true);
     expect(text(mixed)).toMatch(/unknown key.*expected_revision/i);
   });
 
@@ -128,7 +128,7 @@ describe('self availability semantic actions', () => {
         params: { action: 'availability_list_peers' },
       })
     ));
-    expect(result.details?.isError).toBe(true);
+    expect(result.details.isError).toBe(true);
     expect(text(result)).toMatch(/blocked during an ICP-correlated turn/i);
     expect(owner.listKnownPeerAvailability).not.toHaveBeenCalled();
   });

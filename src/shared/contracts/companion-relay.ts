@@ -1,9 +1,9 @@
 import type { SatelliteTelemetryScope } from './satellite-registry.js';
 
 /**
- * Companion event relay contract (psfn-framework-w9hj.1).
+ * Companion event relay contract (bead w9hj.1).
  *
- * PSFN pushes REDACTED operational events to the Satellite Hub over an
+ * The companion runtime pushes REDACTED operational events to the Satellite Hub over an
  * authenticated SSE stream, and accepts approval decisions back. The hub is
  * always the HTTP client (same direction as `/v1/chat/completions` and the
  * satellite config pull).

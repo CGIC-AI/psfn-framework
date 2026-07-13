@@ -214,7 +214,7 @@ export class SessionManager {
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   /**
-   * Presence-windowed room content gate (psfn-framework-s10rm). Null (the
+   * Presence-windowed room content gate (bead s10rm). Null (the
    * default) means every channel is unwindowed — byte-identical behavior.
    */
   private roomContentWindowPort: RoomContentWindowPort | null = null;
@@ -764,7 +764,7 @@ export class SessionManager {
           tokenBudget: historyBudget.tokenBudget,
           turnBudgetCharacteristics: params.turnBudgetCharacteristics,
         }).entries;
-        // Presence-window gate (psfn-framework-s10rm): a compaction summary is
+        // Presence-window gate (bead s10rm): a compaction summary is
         // itself a served surface — never let it summarize pre-window room
         // content, or the summary would smuggle it back into context.
         const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
@@ -1285,7 +1285,7 @@ export class SessionManager {
   }
 
   /**
-   * Wire the presence-windowed room content gate (psfn-framework-s10rm).
+   * Wire the presence-windowed room content gate (bead s10rm).
    * Composition sets this only in multi-companion mode; unset, every channel
    * serves full history exactly as before.
    */

@@ -111,7 +111,7 @@ interface MaintenanceCoreToolPolicy {
   readonly allowedTaskKinds?: readonly string[];
 }
 
-// psfn img2 audit / img1 follow-up: maintenance-restricted turns (heartbeat,
+// Image-tools img2 audit / img1 follow-up: maintenance-restricted turns (heartbeat,
 // reflection, maintenance) drop every core tool not listed here. The expressive
 // image tools live in core (img1), so without an explicit policy they would be
 // dropped from these turns entirely -- killing spontaneous inline self-portraits

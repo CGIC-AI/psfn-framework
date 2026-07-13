@@ -19,6 +19,7 @@
 //   taken down by a bad hot edit; the failure is always visible.
 
 import * as fs from 'node:fs';
+import { isRecord } from '../../../../shared/utils/types.js';
 import {
   isIntakeRiskLabel,
   INTAKE_RISK_LABELS,
@@ -109,12 +110,8 @@ function invalid(sourcePath: string, detail: string): Error {
   return new Error(`Invalid intake L1 rule file at ${sourcePath}: ${detail}`);
 }
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function compileMatch(match: unknown, ruleId: string, sourcePath: string): RegExp {
-  if (!isRecordValue(match)) {
+  if (!isRecord(match)) {
     throw invalid(sourcePath, `rule '${ruleId}' match must be an object`);
   }
   const field = `rule '${ruleId}' match`;
@@ -172,7 +169,7 @@ export function compileIntakeL1RuleFile(
   } catch (error) {
     throw invalid(sourcePath, `not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!isRecordValue(parsed)) {
+  if (!isRecord(parsed)) {
     throw invalid(sourcePath, 'root must be an object');
   }
   if (parsed.schemaVersion !== 1) {
@@ -196,7 +193,7 @@ export function compileIntakeL1RuleFile(
   const compiled: CompiledIntakeRule[] = [];
   for (const [index, ruleValue] of parsed.rules.entries()) {
     const at = `rules[${String(index)}]`;
-    if (!isRecordValue(ruleValue)) {
+    if (!isRecord(ruleValue)) {
       throw invalid(sourcePath, `${at} must be an object`);
     }
     const ruleUnknown = Object.keys(ruleValue)

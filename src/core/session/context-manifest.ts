@@ -108,7 +108,7 @@ export interface ContextManifestSessionSummary {
   maskedEntryCount: number;
   /**
    * Entries excluded by the presence-window gate (private rooms,
-   * psfn-framework-s10rm). Absent on unwindowed channels.
+   * bead s10rm). Absent on unwindowed channels.
    */
   roomWindowFilteredEntryCount?: number;
   compactedEntryCount: number;

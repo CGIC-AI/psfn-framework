@@ -823,7 +823,7 @@ export class GatewayServer {
     }
 
     // The envelope timestamp is minted BEFORE recipient resolution and handed
-    // to the lane: private-room windowing (psfn-framework-s10rm) compares each
+    // to the lane: private-room windowing (bead s10rm) compares each
     // recipient's presence `since` against this exact instant, so the window
     // check and the delivered envelope can never disagree on the clock.
     const mintedAt = new Date();
@@ -917,7 +917,7 @@ export class GatewayServer {
 
     if (resolution.windowExcluded && resolution.windowExcluded.length > 0) {
       // Private-room join race: present companions whose window opened after
-      // the mint receive nothing pre-join (psfn-framework-s10rm). Loud log,
+      // the mint receive nothing pre-join (bead s10rm). Loud log,
       // not a violation — this is the window working as designed.
       log.info('Companion room recipients excluded by presence window', {
         senderCompanionId,

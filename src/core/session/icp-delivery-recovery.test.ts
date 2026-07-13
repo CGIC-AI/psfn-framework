@@ -13,7 +13,6 @@ import {
   FATIGUE_TIMESTAMP_MS,
   PEER,
   SOURCE,
-  chargedCorrelation,
   correlation,
   fatigueActor,
   fatigueBudget,

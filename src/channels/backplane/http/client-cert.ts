@@ -17,7 +17,7 @@
 //    forwarding subject/SAN, and (b) strip/overwrite any inbound
 //    `X-PSFN-Client-Cert-*` headers from its own clients.
 //
-// Every PSFN listener must call `stripClientCertHeaders` after derivation so
+// Every runtime listener must call `stripClientCertHeaders` after derivation so
 // unauthenticated cert headers can never leak past the ingress.
 
 import { createHash, timingSafeEqual } from 'node:crypto';

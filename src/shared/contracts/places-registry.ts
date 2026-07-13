@@ -27,7 +27,7 @@ export const PLACES_REGISTRY_FILE_NAME = 'places.json';
 export type PlaceKind = 'physical' | 'virtual';
 
 /**
- * Room privacy classification (psfn-framework-s10rm, presence-windowed
+ * Room privacy classification (bead s10rm, presence-windowed
  * delivery). The place registry entry is the canonical home for this field:
  * a virtual place IS the room behind its `companion-room:<placeId>` channel,
  * so the room's privacy is a property of the place, not of any per-channel
@@ -110,7 +110,7 @@ export interface PlaceConfig {
    */
   mirrorsPlaceId?: string;
   /**
-   * Room privacy for presence-windowed delivery (psfn-framework-s10rm).
+   * Room privacy for presence-windowed delivery (bead s10rm).
    * Absent = `public` (zero behavior change). See {@link PlacePrivacy}.
    */
   privacy?: PlacePrivacy;

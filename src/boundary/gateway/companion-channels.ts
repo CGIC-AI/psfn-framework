@@ -19,7 +19,7 @@
 // presence row has gone stale between turns, and delivery-side trust gates
 // govern what a recipient does with the message.
 //
-// PRIVATE rooms (psfn-framework-s10rm, presence-windowed delivery): when the
+// PRIVATE rooms (bead s10rm, presence-windowed delivery): when the
 // addressed place is marked `privacy: 'private'`, a recipient additionally
 // must have JOINED before the message was minted — its presence row's `since`
 // (the join time; the one clock, no separate bookkeeping) must not be after
@@ -162,7 +162,7 @@ export class GatewayCompanionChannelLane {
     }
 
     const roomPrivacy = resolvePlacePrivacy(place);
-    // Private rooms deliver presence-WINDOWED (psfn-framework-s10rm): the
+    // Private rooms deliver presence-WINDOWED (bead s10rm): the
     // recipient must have joined (their `since`) no later than the message
     // mint. Public rooms never consult `since` — byte-identical behavior.
     const windowCutoffMs = roomPrivacy === 'private'

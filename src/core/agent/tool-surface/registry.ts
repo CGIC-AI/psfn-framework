@@ -506,7 +506,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
 // each domain. Non-canonical tools (plugins, channel extras) are unaudited
 // third-party surfaces; they rank at the very tail, after every first-party
 // domain including boundary/system, so the model's attention anchors on the
-// companion's own audited toolset before any plugin verb (psfn img2 audit).
+// companion's own audited toolset before any plugin verb (image-tools img2 audit).
 const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, number>> = {
   self_expression: 10,
   media: 20,

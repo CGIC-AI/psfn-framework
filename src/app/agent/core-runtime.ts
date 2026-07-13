@@ -359,7 +359,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,
     searchQueryJson: createWebSearchQueryJson(llmProvider),
-    // Explicit backend selection (bead psfn-framework-htm9.10): when OpenRouter
+    // Explicit backend selection (bead htm9.10): when OpenRouter
     // web tools are configured, the search action uses the gateway web.search
     // server-tool path instead of the local-crawler LLM planner.
     backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',

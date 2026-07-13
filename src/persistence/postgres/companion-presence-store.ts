@@ -129,7 +129,7 @@ export class PostgresCompanionPresenceStore implements CompanionPresenceStorePor
     // Same-place refresh keeps `since` (start of the current presence window)
     // ONLY while the previous row is still fresh under the staleness TTL — a
     // stale row already reads as "gone" everywhere, so refreshing it is a NEW
-    // arrival and `since` resets (psfn-framework-s10rm window semantics). A
+    // arrival and `since` resets (bead s10rm window semantics). A
     // move always resets `since`. `updated_at` always bumps — it is the
     // freshness beat readers key their staleness TTL off.
     const row = await queryOne<CompanionPresenceRow>(this.pool, `

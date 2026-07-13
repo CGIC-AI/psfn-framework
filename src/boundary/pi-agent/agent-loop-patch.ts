@@ -32,7 +32,7 @@ type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
  *
  * `prompt()` and `continue()` both funnel into `runPromptMessages` /
  * `runContinuation`; overriding those two methods swaps the stock agent loop
- * for PSFN's scheduled loop while keeping the public Agent surface
+ * for the companion runtime's scheduled loop while keeping the public Agent surface
  * (steer/followUp queues, abort, waitForIdle, subscribe) intact.
  */
 type PatchedAgent = {
@@ -56,7 +56,7 @@ type PatchedAgent = {
     pendingToolCalls: ReadonlySet<string>;
     errorMessage?: string;
     /**
-     * PSFN extension: index into messages where internal follow-up
+     * Companion-runtime extension: index into messages where internal follow-up
      * continuation begins for this run (null = no internal continuation).
      */
     userFacingBoundaryIndex?: number | null;

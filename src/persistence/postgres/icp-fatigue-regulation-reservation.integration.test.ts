@@ -445,6 +445,20 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             fatigue: finalizationFatigue(turn),
           }),
         ).resolves.toBeUndefined();
+        await expect(store.reserve(reservationInput(turn))).resolves.toMatchObject({
+          outcome: "replayed",
+          reservationOutcome: "delivered",
+        });
+        await expect(store.prepareDelivery({
+          correlation: turn,
+          fatigue: finalizationFatigue(turn),
+          recoveredOutcome: "delivered",
+        })).resolves.toBeUndefined();
+        await expect(store.prepareDelivery({
+          correlation: turn,
+          fatigue: finalizationFatigue(turn),
+          recoveredOutcome: "no_reply",
+        })).rejects.toThrow("terminal replay conflict");
         await expect(
           store.reserve(
             reservationInput({

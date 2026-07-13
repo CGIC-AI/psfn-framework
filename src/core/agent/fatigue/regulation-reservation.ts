@@ -24,6 +24,8 @@ export interface IcpFatigueReservationInput {
 
 export interface IcpFatigueReservationResult {
   outcome: "reserved" | "replayed" | "exhausted";
+  /** Durable row state; null only when no reservation was admitted. */
+  reservationOutcome?: IcpFatigueReservationOutcome | null;
   normalSpentBefore: number;
   overchargeSpentBefore: number;
   relationshipPressure: number;
@@ -69,6 +71,8 @@ export interface IcpFatigueRegulationReservationPort {
   prepareDelivery(input: {
     correlation: IcpConversationCorrelation;
     fatigue: FatigueEnforcementMetadata;
+    /** Expected terminal state when replay resumes after delivery finalization. */
+    recoveredOutcome?: Extract<IcpFatigueReservationOutcome, "delivered" | "no_reply">;
   }): Promise<void>;
   /** Release this process's pending-turn lease for crash/recovery handoff. */
   handoff(correlation: IcpConversationCorrelation): Promise<void>;

@@ -3,6 +3,7 @@ import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import type { DurableRunChargeRecorder } from '../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
@@ -45,7 +46,10 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
-import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
+import type {
+  IcpFatigueRegulationReservationPort,
+  IcpFatigueReservationOutcome,
+} from '../fatigue/regulation-reservation.js';
 import {
   attachRecordedFatigueEvent,
   evaluateFatigueForTurn,
@@ -120,6 +124,7 @@ function cloneComputedInternalStateForResponse(internalState: InternalState): In
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  durableChargeRecorder?: DurableRunChargeRecorder | null;
   fatigueBudget?: FatigueBudgetPort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
@@ -584,10 +589,7 @@ function resolveRecentHumanParticipationForFatigue(input: {
 }
 
 function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
-  if (authorContext.speakerRole === 'system') return 'system';
-  return authorContext.speakingWithIsMachineIntelligence === true
-    ? 'machine_intelligence'
-    : 'human';
+  return authorContext.actorKind;
 }
 
 function emitFatigueDecision(input: {
@@ -735,7 +737,14 @@ export async function handleMessageForTurn(
     message.channelId,
   );
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
-  const deferSessionEntryPersistence = hasVisionTurnInputs(message);
+  const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
+  // A fresh inbound companion correlation is not trusted until it has been
+  // bound to the resolved canonical peer below. Keep it out of L0 until that
+  // validation succeeds so a rejected envelope cannot poison actor history.
+  const deferSessionEntryPersistence = hasDeferredVisionPersistence
+    || inboundIcpCorrelation !== null;
+  const skipSessionEntryPersistence = recoveredResponse !== undefined
+    || deliveryLifecycle?.sourceAlreadyPersisted === true;
   const observability = createTurnExecutionObservability({
     runtime,
     message,
@@ -753,8 +762,7 @@ export async function handleMessageForTurn(
     turnCorrelationBase,
     observability,
     deferSessionEntryPersistence,
-    skipSessionEntryPersistence: recoveredResponse !== undefined
-      || deliveryLifecycle?.sourceAlreadyPersisted === true,
+    skipSessionEntryPersistence,
   });
   const {
     authorContext,
@@ -790,6 +798,7 @@ export async function handleMessageForTurn(
       || inboundIcpOrigin.peerCompanionId !== localCompanionId
       || inboundIcpOrigin.channelId !== message.channelId
       || !canonicalContactKey
+      || authorContext.actorKind !== 'machine_intelligence'
       || !authorContext.speakingWithIsMachineIntelligence) {
       throw new Error('Inbound ICP initiation correlation does not match recipient identity/contact routing');
     }
@@ -826,6 +835,7 @@ export async function handleMessageForTurn(
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
   let durableFatigueReservation: NonNullable<SubstrateMessage['routing']>['icpCorrelation'] | null = null;
+  let recoveredFatigueReservationOutcome: IcpFatigueReservationOutcome | null = null;
   let durableDeliveryFinalized = false;
   let durableRecoveryResponsePersisted = recoveredResponse !== undefined;
   const invocationState: AgentInvocationMutableState = {
@@ -852,6 +862,12 @@ export async function handleMessageForTurn(
       resolveSessionActorKind(authorContext),
     );
   };
+  if (inboundIcpCorrelation
+    && !hasDeferredVisionPersistence
+    && !skipSessionEntryPersistence
+    && userSessionEntryId == null) {
+    userSessionEntryId = recordDeferredSessionEntry();
+  }
 
   try {
     const channelType = runtime.resolveChannelType(message);
@@ -861,7 +877,7 @@ export async function handleMessageForTurn(
         || !runtime.config.chargePolicy) {
         throw new Error('Recovered ICP fatigue spend requires its durable reservation runtime');
       }
-      await resumeIcpFatigueRegulation({
+      recoveredFatigueReservationOutcome = await resumeIcpFatigueRegulation({
         correlation: message.routing.icpCorrelation,
         pendingSpend: recoveredResponse.metadata.fatiguePendingSpend,
         reservationPort: runtime.fatigueRegulationReservations,
@@ -1126,6 +1142,7 @@ export async function handleMessageForTurn(
       correlation: turnCorrelationBase,
       fatigue: fatigueDecision?.metadata,
       invoke: invokeWithCanary,
+      recordChargeEvent: runtime.durableChargeRecorder,
       turnId,
       withCorrelationPurpose: runtime.withCorrelationPurpose,
     });
@@ -1460,6 +1477,10 @@ export async function handleMessageForTurn(
       await runtime.fatigueRegulationReservations.prepareDelivery({
         correlation: message.routing.icpCorrelation,
         fatigue: responseFatigueMetadata,
+        ...(recoveredFatigueReservationOutcome === 'delivered'
+          || recoveredFatigueReservationOutcome === 'no_reply'
+          ? { recoveredOutcome: recoveredFatigueReservationOutcome }
+          : {}),
       });
     }
     await deliveryLifecycle?.finalizeDelivery(agentResponse);

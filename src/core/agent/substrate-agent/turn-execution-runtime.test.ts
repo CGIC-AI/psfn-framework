@@ -294,6 +294,7 @@ function machineIntelligenceAuthorContext(
   return {
     trustLevel: 'regular',
     speakerRole: 'user',
+    actorKind: 'machine_intelligence',
     resolvedUserName: 'Peer MI',
     speakingWithIsMachineIntelligence: true,
     relationshipType: 'acquaintance',
@@ -309,6 +310,7 @@ function humanAuthorContext(
   return {
     trustLevel: 'regular',
     speakerRole: 'user',
+    actorKind: 'human',
     resolvedUserName: 'Human',
     canonicalContactKey: 'contact-human',
     continuityFallbackKeys: [],
@@ -521,6 +523,7 @@ function createRuntime(params: {
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   fatigueBudget?: FatigueBudgetPort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
+  durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
   configOverrides?: Partial<SubstrateConfig>;
   cogSecMode?: TurnExecutionRuntime['cogSecMode'];
 }) {
@@ -541,6 +544,7 @@ function createRuntime(params: {
   const runtime = {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
+    durableChargeRecorder: params.durableChargeRecorder ?? vi.fn(async () => undefined),
     fatigueBudget: params.fatigueBudget ?? null,
     fatigueRegulationReservations: params.fatigueRegulationReservations ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
@@ -1100,6 +1104,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     configOverrides?: Partial<SubstrateConfig>;
     recordAssistantMessage?: ReturnType<typeof vi.fn>;
     consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
+    durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
   }) {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -1117,6 +1122,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       consumeIntentionalNoReplyDecision:
         params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
       fatigueBudget: params.fatigueBudget,
+      durableChargeRecorder: params.durableChargeRecorder,
       ...(params.fatigueRegulationReservations
         ? { fatigueRegulationReservations: params.fatigueRegulationReservations }
         : {}),
@@ -1192,6 +1198,28 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       peerContactId: 'contact-mi',
       channelId: 'ch1',
     });
+  });
+
+  it('rejects an invalid inbound companion correlation before persisting actor history', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: { companionId: localCompanionId },
+    });
+    const message = createInboundIcpFatigueMessage({
+      id: 'invalid-inbound-before-persistence',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777799',
+    });
+    message.authorId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+    await expect(handleMessageForTurn(runtime, message))
+      .rejects.toThrow('Inbound ICP initiation correlation does not match recipient identity/contact routing');
+    expect(runtime.recordUserMessage).not.toHaveBeenCalled();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
   });
 
   it('suppresses before the model when the durable cross-channel reservation loses the last slot', async () => {
@@ -1280,6 +1308,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 2,
@@ -1628,6 +1657,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     };
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 0,
@@ -1700,6 +1730,69 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(history.events).toHaveLength(1);
   });
 
+  it('fails closed before model or delivery when durable social charge persistence fails', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const reserve = vi.fn(async () => ({
+      outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
+      normalSpentBefore: 0,
+      overchargeSpentBefore: 0,
+      relationshipPressure: 2,
+      rootNormalSpent: 0,
+      rootOverchargeSpent: 0,
+      contributingReservationCount: 2,
+    }));
+    const prepareDelivery = vi.fn(async () => undefined);
+    const finalize = vi.fn(async () => undefined);
+    const handoff = vi.fn(async () => undefined);
+    const durableChargeRecorder = vi.fn(async () => {
+      throw new Error('charge ledger is read-only');
+    });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: {
+        reserve,
+        readInitiationPressure: vi.fn(),
+        prepareDelivery,
+        handoff,
+        finalize,
+        close: vi.fn(),
+      },
+      durableChargeRecorder,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+    const finalizeDelivery = vi.fn(async () => undefined);
+
+    const message = createInboundIcpFatigueMessage({
+      id: 'icp-charge-ledger-failure',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777798',
+    });
+    if (!message.routing?.icpCorrelation) throw new Error('test requires ICP correlation');
+    message.routing.icpCorrelation = {
+      ...message.routing.icpCorrelation,
+      chargeLane: 'companion_social',
+    };
+    await expect(runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      eventBus: runtime.eventBus,
+      lane: 'interactive',
+      runId: message.id,
+    }, async () => await handleMessageForTurn(runtime, message, { finalizeDelivery })))
+      .rejects.toThrow('charge ledger is read-only');
+
+    expect(durableChargeRecorder).toHaveBeenCalledOnce();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(finalizeDelivery).not.toHaveBeenCalled();
+    expect(prepareDelivery).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(0);
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed' }));
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { label: 'model error', error: new Error('generation failed') },
     {
@@ -1712,6 +1805,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 0,
@@ -1759,6 +1853,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 0,
@@ -1836,6 +1931,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     };
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 0,
@@ -1904,6 +2000,123 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(finalize).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed' }));
   });
 
+  it.each([
+    { label: 'delivered reply', terminalOutcome: 'delivered' as const, noReply: false },
+    { label: 'intentional no-reply', terminalOutcome: 'no_reply' as const, noReply: true },
+  ])('replays $label after reservation finalization without delivery or ordinary-artifact duplication', async ({
+    terminalOutcome,
+    noReply,
+  }) => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = `icp-terminal-replay-${terminalOutcome}`;
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const turnId = backfillLegacyTurnId([
+      'icp-reply',
+      localCompanionId,
+      channelId,
+      messageId,
+    ].join(':'));
+    const noReplyMetadata: IntentionalNoReplyMetadata | null = noReply
+      ? {
+          schemaVersion: 1,
+          disposition: 'intentional_no_reply',
+          source: 'response_control_tool',
+          auditId: `no-reply:${turnId}:tool-call-terminal`,
+          decidedAt: 10_000,
+          turnId,
+          requestId: messageId,
+          channelId,
+          toolCallId: 'tool-call-terminal',
+        }
+      : null;
+    let reservationOutcome: 'pending' | 'delivered' | 'no_reply' = 'pending';
+    let reserveCalls = 0;
+    const reserve = vi.fn(async () => {
+      reserveCalls += 1;
+      return {
+        outcome: reserveCalls === 1 ? 'reserved' as const : 'replayed' as const,
+        reservationOutcome,
+        normalSpentBefore: 0,
+        overchargeSpentBefore: 0,
+        relationshipPressure: 0,
+        rootNormalSpent: 0,
+        rootOverchargeSpent: 0,
+        contributingReservationCount: 0,
+      };
+    });
+    const prepareDelivery = vi.fn(async () => undefined);
+    const finalize = vi.fn(async (input: Parameters<IcpFatigueRegulationReservationPort['finalize']>[0]) => {
+      if (input.outcome === 'failed') throw new Error('terminal replay must not fail the reservation');
+      if (reservationOutcome !== 'pending' && reservationOutcome !== input.outcome) {
+        throw new Error('reservation terminal outcome changed across replay');
+      }
+      reservationOutcome = input.outcome;
+    });
+    let turnRecorded = false;
+    const recordTurn = vi.fn(() => { turnRecorded = true; });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: {
+        reserve,
+        readInitiationPressure: vi.fn(),
+        prepareDelivery,
+        handoff: vi.fn(),
+        finalize,
+        close: vi.fn(),
+      },
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+      consumeIntentionalNoReplyDecision: vi.fn(() => noReplyMetadata),
+      sessionManager: {
+        recordTurn,
+        hasRecordedTurn: vi.fn(() => turnRecorded),
+      },
+    });
+    if (noReply) runtime.extractResponseText = vi.fn(() => '');
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777797',
+    });
+    let durableResponse: AgentResponse | undefined;
+    let durableDeliveryRecorded = false;
+    let externalDeliveries = 0;
+    const finalizeDelivery = vi.fn(async (response: AgentResponse) => {
+      durableResponse = structuredClone(response);
+      if (!durableDeliveryRecorded) {
+        durableDeliveryRecorded = true;
+        if (response.content.trim()) externalDeliveries += 1;
+      }
+    });
+
+    const first = await handleMessageForTurn(runtime, message, { finalizeDelivery });
+    expect(reservationOutcome).toBe(terminalOutcome);
+    expect(first.metadata.noReply !== undefined).toBe(noReply);
+    expect(durableResponse).toBeDefined();
+    const modelCallsBeforeRecovery = runtime.agent.prompt.mock.calls.length;
+    if (!durableResponse) throw new Error('test expected a durable terminal response');
+
+    const recovered = await handleMessageForTurn(runtime, message, {
+      recoveredResponse: durableResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+
+    expect(recovered.content).toBe(first.content);
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(modelCallsBeforeRecovery);
+    expect(externalDeliveries).toBe(noReply ? 0 : 1);
+    expect(history.events).toHaveLength(1);
+    expect(recordTurn).toHaveBeenCalledOnce();
+    expect(prepareDelivery).toHaveBeenLastCalledWith(expect.objectContaining({
+      recoveredOutcome: terminalOutcome,
+    }));
+    expect(finalize).toHaveBeenLastCalledWith(expect.objectContaining({
+      outcome: terminalOutcome,
+    }));
+  });
+
   it('recovers the pending fatigue spend after the assistant row survives a crash', async () => {
     const { fatigueBudget, history } = createFatigueBudgetHarness();
     const originalRecord = fatigueBudget.recordFinalDecision.bind(fatigueBudget);
@@ -1919,6 +2132,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     });
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
+      reservationOutcome: 'pending' as const,
       normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 0,
@@ -3148,6 +3362,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.resolveAuthorContext = vi.fn(() => ({
       trustLevel: 'trusted',
       speakerRole: 'user',
+      actorKind: 'human',
       resolvedUserName: 'Alex',
       canonicalContactKey: 'contact-123',
       subjectIdentityKey: 'discord-user-1',
@@ -3475,6 +3690,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       resolveAuthorContext: vi.fn(() => ({
         trustLevel: 'regular',
         speakerRole: 'user',
+        actorKind: 'human',
         resolvedUserName: 'Vega',
         canonicalContactKey: 'contact-vega',
         continuityFallbackKeys: [],

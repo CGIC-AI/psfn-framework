@@ -38,10 +38,7 @@ const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
 function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
-  if (authorContext.speakerRole === 'system') return 'system';
-  return authorContext.speakingWithIsMachineIntelligence === true
-    ? 'machine_intelligence'
-    : 'human';
+  return authorContext.actorKind;
 }
 
 export interface PreparedTurnIdentityState {

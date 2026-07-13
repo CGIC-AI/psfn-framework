@@ -253,12 +253,15 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         if (existing && existing.outcome !== "failed") {
           assertReplayMatches(existing, normalizedInput);
           return {
-            result: await this.snapshotResult(
-              client,
-              normalizedInput,
-              "replayed",
-              correlation.turnId,
-            ),
+            result: {
+              ...(await this.snapshotResult(
+                client,
+                normalizedInput,
+                "replayed",
+                correlation.turnId,
+              )),
+              reservationOutcome: existing.outcome,
+            },
             keepLease: existing.outcome === "pending",
           };
         }
@@ -300,7 +303,11 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
             : snapshot.overchargeSpentBefore >= overchargeLimit;
         if (exhausted) {
           return {
-            result: { ...snapshot, outcome: "exhausted" as const },
+            result: {
+              ...snapshot,
+              outcome: "exhausted" as const,
+              reservationOutcome: null,
+            },
             keepLease: false,
           };
         }
@@ -347,7 +354,10 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           );
         }
         assertReplayMatches(inserted, normalizedInput);
-        return { result: snapshot, keepLease: true };
+        return {
+          result: { ...snapshot, reservationOutcome: "pending" as const },
+          keepLease: true,
+        };
       });
       if (!transaction.keepLease) {
         await this.releaseLease(correlation.turnId);
@@ -465,6 +475,20 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         [correlation.turnId],
       );
       const row = result.rows.at(0);
+      if (row && (row.outcome === "delivered" || row.outcome === "no_reply")) {
+        if (input.recoveredOutcome !== row.outcome) {
+          throw new Error(
+            `ICP fatigue delivery terminal replay conflict for turn ${correlation.turnId}`,
+          );
+        }
+        assertFinalizationMatches(
+          row,
+          correlation,
+          input.fatigue,
+          input.recoveredOutcome,
+        );
+        return;
+      }
       if (!row || !["pending", "delivering"].includes(row.outcome)) {
         throw new Error(
           `ICP fatigue delivery preparation conflict for turn ${correlation.turnId}`,
@@ -686,6 +710,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
     }, excludedTurnId);
     return {
       outcome,
+      reservationOutcome: null,
       normalSpentBefore: Math.max(
         snapshot.rootNormalSpent,
         Math.ceil(snapshot.directionalChargedPressure),

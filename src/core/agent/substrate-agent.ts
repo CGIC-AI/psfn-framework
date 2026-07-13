@@ -13,7 +13,11 @@ import type { AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
-import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import {
+  getRunChargeContext,
+  runWithChargeContext,
+  type DurableRunChargeRecorder,
+} from '../../shared/telemetry/run-charge.js';
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
@@ -274,6 +278,7 @@ export class SubstrateAgent {
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private readonly fatigueBudget: FatigueBudgetPort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
+  private durableChargeRecorder: DurableRunChargeRecorder | null = null;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -1034,6 +1039,11 @@ export class SubstrateAgent {
     this.behavioralPatternProvider = provider;
   }
 
+  /** Late-wired by the agent entrypoint before any message callback is exposed. */
+  setDurableChargeRecorder(recorder: DurableRunChargeRecorder): void {
+    this.durableChargeRecorder = recorder;
+  }
+
   setSelfModelRuntimeRequired(required: boolean): void {
     this.selfModelRuntimeRequired = required;
   }
@@ -1115,6 +1125,7 @@ export class SubstrateAgent {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
+      durableChargeRecorder: this.durableChargeRecorder,
       fatigueBudget: this.fatigueBudget,
       fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,

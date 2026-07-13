@@ -518,17 +518,21 @@ describe('runtime subject identity', () => {
 
   it('H3: derives provenance from speaker role and channel origin', () => {
     // Live human speaker → 'human' regardless of channel.
-    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'discord:dm:alice' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'user', actorKind: 'human' }, { channelId: 'discord:dm:alice' }))
       .toBe('human');
-    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'internal:heartbeat' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'user', actorKind: 'human' }, { channelId: 'internal:heartbeat' }))
       .toBe('human');
+    expect(resolveRequesterProvenance(
+      { speakerRole: 'user', actorKind: 'machine_intelligence' },
+      { channelId: 'discord:dm:peer' },
+    )).toBe('system');
     // System speaker on an internal channel → scheduler-driven self-directed.
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:heartbeat' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'internal:heartbeat' }))
       .toBe('self_directed');
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:reflection:whisper' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'internal:reflection:whisper' }))
       .toBe('self_directed');
     // System speaker off an internal channel → system-injected turn.
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'discord:group:ops' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'discord:group:ops' }))
       .toBe('system');
   });
 
@@ -1167,11 +1171,98 @@ describe('runtime subject identity', () => {
     );
     expect(authorContext).toMatchObject({
       speakerRole: 'user',
+      actorKind: 'machine_intelligence',
       speakingWithIsMachineIntelligence: true,
       canonicalContactKey: 'contact-nova',
       relationshipType: 'ai_companion',
       trustLevel: 'regular', // contact-owned, not special-cased
       resolvedUserName: 'Nova',
+    });
+  });
+
+  it.each([
+    ['operator override', async () => 'override_preserved' as const],
+    ['marker store failure', async () => { throw new Error('marker unavailable'); }],
+  ])('keeps gateway-observed companion provenance machine-intelligence after %s', async (_label, mark) => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => ({
+          id: 'contact-nova',
+          displayName: 'Nova',
+          trustLevel: 'regular',
+          relationshipType: 'ai_companion',
+          firstSeen: '2026-07-08T12:00:00Z',
+          lastSeen: '2026-07-08T12:00:00Z',
+        }),
+        markMachineIntelligenceFromObservation: mark,
+        getConversationChannelPrivacy: () => undefined,
+        recordChannelActivity: () => undefined,
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      canonicalContactKey: 'contact-nova',
+    });
+  });
+
+  it('keeps observed companion provenance machine-intelligence when contact resolution fails', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => { throw new Error('contact database unavailable'); },
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+    });
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+  });
+
+  it('keeps observed companion provenance machine-intelligence in approval-mode fallback', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        getByChannelIdentity: () => { throw new Error('approval lookup unavailable'); },
+      } as never,
+      contactTracking: {
+        resolveMode: () => 'approval',
+        reportUntrackedSpeaker: vi.fn(),
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      trustLevel: 'public',
     });
   });
 

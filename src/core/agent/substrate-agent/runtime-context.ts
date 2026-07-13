@@ -24,6 +24,7 @@ import type { ContactTrackingGate } from '../../contacts/tracking-gate.js';
 import { normalizeIdentity } from '../../contacts/store/identity-utils.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { SessionActorKind } from '../../session/turn-provenance.js';
 import {
   createGroupConversationScope,
   type ConversationScope,
@@ -151,6 +152,8 @@ function normalizeGeneratedMessageProvenance(
 export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
+  /** Author provenance resolved independently from mutable contact attributes. */
+  actorKind: SessionActorKind;
   resolvedUserName: string;
   /** True when the resolved contact is another machine intelligence (peer companion/agent). */
   speakingWithIsMachineIntelligence?: boolean;
@@ -183,13 +186,24 @@ function isInternalJournalChannel(channelId: string): boolean {
  * are refused even when `trustLevel` is 'primary' for scoping.
  */
 export function resolveRequesterProvenance(
-  authorContext: Pick<ResolvedAuthorContext, 'speakerRole'>,
+  authorContext: Pick<ResolvedAuthorContext, 'actorKind' | 'speakerRole'>,
   message: Pick<SubstrateMessage, 'channelId'>,
 ): RequesterProvenance {
-  if (authorContext.speakerRole === 'user') {
+  if (authorContext.actorKind === 'human') {
     return 'human';
   }
   return message.channelId.startsWith('internal:') ? 'self_directed' : 'system';
+}
+
+function resolveUserActorKind(
+  message: SubstrateMessage,
+  contact?: Pick<Contact, 'isMachineIntelligence'>,
+): SessionActorKind {
+  if (message.routing?.authorIsMachineIntelligence === true) {
+    return 'machine_intelligence';
+  }
+  if (!contact) return 'unknown';
+  return contact.isMachineIntelligence === true ? 'machine_intelligence' : 'human';
 }
 
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
@@ -736,6 +750,7 @@ async function resolveGeneratedMessageSourceContext(input: {
   if (!input.contactStore) {
     return {
       trustLevel: 'regular',
+      actorKind: resolveUserActorKind(generatedSourceMessage),
       continuitySubjectKey: fallbackContinuitySubjectKey,
       continuityFallbackKeys: [],
     };
@@ -754,7 +769,10 @@ async function resolveGeneratedMessageSourceContext(input: {
 
     return {
       trustLevel: contact?.trustLevel ?? 'regular',
-      ...(contact?.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
+      actorKind: resolveUserActorKind(generatedSourceMessage, contact),
+      ...(resolveUserActorKind(generatedSourceMessage, contact) === 'machine_intelligence'
+        ? { speakingWithIsMachineIntelligence: true }
+        : {}),
       ...(contact?.relationshipType ? { relationshipType: contact.relationshipType } : {}),
       ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
@@ -775,6 +793,7 @@ async function resolveGeneratedMessageSourceContext(input: {
     });
     return {
       trustLevel: 'regular',
+      actorKind: resolveUserActorKind(generatedSourceMessage),
       continuitySubjectKey: fallbackContinuitySubjectKey,
       continuityFallbackKeys: [],
     };
@@ -820,6 +839,7 @@ export async function resolveAuthorContext(input: {
         return {
           trustLevel: 'primary',
           speakerRole: 'system',
+          actorKind: 'system',
           resolvedUserName,
           ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
           ...(subjectIdentityKey ? { continuitySubjectKey: subjectIdentityKey } : {}),
@@ -837,6 +857,7 @@ export async function resolveAuthorContext(input: {
       return {
         trustLevel: 'primary',
         speakerRole: 'system',
+        actorKind: 'system',
         resolvedUserName,
         ...(canonicalContactKey ? { canonicalContactKey } : {}),
         ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
@@ -848,6 +869,7 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: 'primary',
       speakerRole: 'system',
+      actorKind: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
       canonicalContactKey: input.message.authorId,
       continuitySubjectKey: input.message.authorId,
@@ -874,6 +896,7 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: contact.trustLevel,
       speakerRole: 'system',
+      actorKind: 'system',
       resolvedUserName: resolvePromptUserName(input.message, contact),
       speakingWithIsMachineIntelligence: true,
       relationshipType: contact.relationshipType,
@@ -901,6 +924,7 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: generatedSourceContext?.trustLevel ?? 'regular',
       speakerRole: 'system',
+      actorKind: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
       ...(generatedSourceContext?.speakingWithIsMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
       ...(generatedSourceContext?.relationshipType ? { relationshipType: generatedSourceContext.relationshipType } : {}),
@@ -914,6 +938,7 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: 'regular',
       speakerRole: 'system',
+      actorKind: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
       continuitySubjectKey: input.message.authorId,
       continuityFallbackKeys: [],
@@ -924,7 +949,11 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: 'regular',
       speakerRole: 'user',
+      actorKind: resolveUserActorKind(input.message),
       resolvedUserName: resolvePromptUserName(input.message),
+      ...(resolveUserActorKind(input.message) === 'machine_intelligence'
+        ? { speakingWithIsMachineIntelligence: true }
+        : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         subjectIdentityKey: input.message.authorId,
         authorId: input.message.authorId,
@@ -949,7 +978,11 @@ export async function resolveAuthorContext(input: {
       // ceiling) and their self-asserted channel name is rendered marked-unverified.
       trustLevel: 'public',
       speakerRole: 'user',
+      actorKind: resolveUserActorKind(input.message),
       resolvedUserName: resolveUnverifiedSpeakerName(input.message),
+      ...(resolveUserActorKind(input.message) === 'machine_intelligence'
+        ? { speakingWithIsMachineIntelligence: true }
+        : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         subjectIdentityKey: input.message.authorId,
         authorId: input.message.authorId,
@@ -1039,11 +1072,13 @@ export async function resolveAuthorContext(input: {
       );
     }
 
+    const actorKind = resolveUserActorKind(input.message, contact);
     return {
       trustLevel: contact.trustLevel,
       speakerRole: 'user',
+      actorKind,
       resolvedUserName: resolvePromptUserName(input.message, contact),
-      ...(contact.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
+      ...(actorKind === 'machine_intelligence' ? { speakingWithIsMachineIntelligence: true } : {}),
       relationshipType: contact.relationshipType,
       ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
       canonicalContactKey,
@@ -1065,7 +1100,11 @@ export async function resolveAuthorContext(input: {
     return {
       trustLevel: 'regular',
       speakerRole: 'user',
+      actorKind: resolveUserActorKind(input.message),
       resolvedUserName: resolvePromptUserName(input.message),
+      ...(resolveUserActorKind(input.message) === 'machine_intelligence'
+        ? { speakingWithIsMachineIntelligence: true }
+        : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         subjectIdentityKey: input.message.authorId,
         authorId: input.message.authorId,

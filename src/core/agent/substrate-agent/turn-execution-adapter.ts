@@ -2,6 +2,7 @@ import type { Agent } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import type { DurableRunChargeRecorder } from '../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -142,6 +143,7 @@ interface TurnExecutionAdapterCallbacks {
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  durableChargeRecorder?: DurableRunChargeRecorder | null;
   fatigueBudget?: FatigueBudgetPort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
@@ -186,6 +188,7 @@ export function createTurnExecutionRuntimeAdapter(
   return {
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
+    durableChargeRecorder: options.durableChargeRecorder ?? null,
     fatigueBudget: options.fatigueBudget ?? null,
     fatigueRegulationReservations: options.fatigueRegulationReservations ?? null,
     satellitePresence: options.satellitePresence,

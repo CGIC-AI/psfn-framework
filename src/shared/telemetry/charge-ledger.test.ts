@@ -11,6 +11,7 @@ import {
   RunChargeLedger,
 } from './charge-ledger.js';
 import {
+  chargeSurfaceDurably,
   chargeSurface,
   getRunChargeRollingWindowSnapshot,
   resetRunChargeRollingWindowForTests,
@@ -167,6 +168,67 @@ describe('RunChargeLedger', () => {
     expect(data.aggregates.amount).toBe(12);
     expect(data.events[0].event.spentAfter).toBe(12);
     expect(data.events[0].event.quota).toBe(10);
+  });
+
+  it('fails before accounting when durable charge persistence fails', async () => {
+    const recordChargeEvent = vi.fn(async () => {
+      throw new Error('ledger append failed');
+    });
+
+    await expect(runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'durable-failure-run',
+    }, async () => await chargeSurfaceDurably('externalModelConsult', {
+      eventId: 'durable-failure-event',
+      recordChargeEvent,
+    }))).rejects.toThrow('ledger append failed');
+
+    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(0);
+  });
+
+  it('replays a stable durable charge identity after restart without a duplicate append', async () => {
+    const firstTimestampMs = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(firstTimestampMs);
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath);
+    const eventId = 'stable-companion-social-turn:companion-social';
+    await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'stable-charge-run',
+    }, async () => {
+      await chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        recordChargeEvent: (event) => {
+          return firstLedger.commitChargeEvent(event).outcome;
+        },
+      });
+    });
+    firstLedger.close();
+    expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+
+    resetRunChargeRollingWindowForTests();
+    vi.setSystemTime(firstTimestampMs + 24 * 60 * 60_000 + 1);
+    const restartedLedger = new RunChargeLedger(ledgerPath);
+    const replayRecorder = vi.fn((event: RunChargeEvent) => {
+      return restartedLedger.commitChargeEvent(event).outcome;
+    });
+    await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'stable-charge-run',
+    }, async () => {
+      await chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        recordChargeEvent: replayRecorder,
+      });
+    });
+
+    expect(replayRecorder).toHaveBeenCalledOnce();
+    expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(0);
   });
 
   it('hydrates rolling charge enforcement from persisted ledger events after restart', async () => {

@@ -219,6 +219,16 @@ function createLedgerEntry(event: RunChargeEvent): RunChargeLedgerEntry {
   };
 }
 
+function durableEventBinding(event: RunChargeEvent): string {
+  const {
+    timestampMs: _timestampMs,
+    spentAfter: _spentAfter,
+    remainingAfter: _remainingAfter,
+    ...binding
+  } = event;
+  return JSON.stringify(binding);
+}
+
 function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is RunChargeLedgerEntry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: expected object`);
@@ -522,10 +532,31 @@ export class RunChargeLedger {
   }
 
   recordChargeEvent(event: RunChargeEvent): RunChargeLedgerEntry {
+    return this.commitChargeEvent(event).entry;
+  }
+
+  commitChargeEvent(event: RunChargeEvent): {
+    outcome: 'recorded' | 'replayed';
+    entry: RunChargeLedgerEntry;
+  } {
     const entry = createLedgerEntry(event);
+    const existing = this.entries.find(candidate => candidate.eventId === entry.eventId);
+    if (existing) {
+      if (durableEventBinding(existing.event) !== durableEventBinding(entry.event)) {
+        throw new Error(`Charge ledger event identity collision for ${entry.eventId}`);
+      }
+      return {
+        outcome: 'replayed',
+        entry: {
+          ...existing,
+          event: cloneChargeEvent(existing.event),
+          ...(existing.metadata ? { metadata: { ...existing.metadata } } : {}),
+        },
+      };
+    }
     appendJsonLine(this.path, entry);
     this.entries.push(entry);
-    return entry;
+    return { outcome: 'recorded', entry };
   }
 
   listEntries(query: RunChargeLedgerQuery = {}): RunChargeLedgerEntry[] {

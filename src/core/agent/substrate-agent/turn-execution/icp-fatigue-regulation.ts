@@ -9,11 +9,13 @@ import type {
   FatiguePendingSpendMetadata,
 } from '../../../../shared/contracts/runtime.js';
 import {
-  chargeSurface,
+  chargeSurfaceDurably,
   getRunChargeContext,
   runWithChargeContext,
+  type DurableRunChargeRecorder,
 } from '../../../../shared/telemetry/run-charge.js';
 import type { IcpFatigueRegulationReservationPort } from '../../fatigue/regulation-reservation.js';
+import type { IcpFatigueReservationOutcome } from '../../fatigue/regulation-reservation.js';
 import {
   reconcileFatigueWithReservationSnapshot,
   suppressFatigueAfterReservationExhaustion,
@@ -32,7 +34,7 @@ export async function resumeIcpFatigueRegulation(input: {
   pendingSpend: FatiguePendingSpendMetadata;
   reservationPort: IcpFatigueRegulationReservationPort;
   fatiguePolicy: FatiguePolicyConfig;
-}): Promise<void> {
+}): Promise<IcpFatigueReservationOutcome> {
   if (input.pendingSpend.decision !== 'charged'
     && input.pendingSpend.decision !== 'overcharge') {
     throw new Error('Recovered ICP fatigue reservation must describe a charged spend');
@@ -57,6 +59,10 @@ export async function resumeIcpFatigueRegulation(input: {
       `Recovered ICP fatigue reservation ${input.correlation.turnId} no longer owns capacity`,
     );
   }
+  if (!reservation.reservationOutcome) {
+    throw new Error(`Recovered ICP fatigue reservation ${input.correlation.turnId} has no durable state`);
+  }
+  return reservation.reservationOutcome;
 }
 
 /**
@@ -170,6 +176,7 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   correlation: CorrelationMetadata;
   fatigue: FatigueEnforcementMetadata | null | undefined;
   invoke: () => Promise<T>;
+  recordChargeEvent: DurableRunChargeRecorder | null | undefined;
   turnId: string;
   withCorrelationPurpose: (
     correlation: CorrelationMetadata,
@@ -183,6 +190,9 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   if (!getRunChargeContext() || !input.chargePolicy) {
     throw new Error('Companion social continuation requires an active charge-policy context');
   }
+  if (!input.recordChargeEvent) {
+    throw new Error('Companion social continuation requires durable charge-ledger persistence');
+  }
   return await runWithChargeContext({
     lane: 'companion_social',
     runId: `${input.turnId}:companion-social`,
@@ -191,7 +201,9 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
       'agent.fatigue.social_charge',
     ),
   }, async () => {
-    chargeSurface('companionSocialContinuation', {
+    await chargeSurfaceDurably('companionSocialContinuation', {
+      eventId: `${input.turnId}:companion-social`,
+      recordChargeEvent: input.recordChargeEvent,
       details: {
         regulationState: regulation.state,
         rootInitiationId: regulation.rootInitiationId,

@@ -31,7 +31,7 @@ async function withStore<T>(
   if (!harness) throw new Error('Postgres integration harness is unavailable');
   const database = await harness.createDatabase();
   const pool = createPostgresPool(database.databaseUrl, {
-    applicationName: 'psfn-introspection-landmark-test',
+    applicationName: 'companion-introspection-landmark-test',
     allowExitOnIdle: true,
     max: 2,
   });

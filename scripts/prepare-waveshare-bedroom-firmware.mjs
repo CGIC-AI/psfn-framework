@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,15 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const targetRoot = path.join(projectRoot, "satellites", "waveshare-bedroom");
 const outputRoot = path.join(targetRoot, ".generated");
 const lock = JSON.parse(await readFile(path.join(targetRoot, "source-lock.json"), "utf8"));
+
+const wakeWordModel = await readFile(path.join(targetRoot, "wakeword", "purrsephone.tflite"));
+const wakeWordDigest = createHash("sha256").update(wakeWordModel).digest("hex");
+const lockedWakeWordDigest = lock.sources?.["purrsephone-micro-wake-word"]?.sha256;
+if (wakeWordDigest !== lockedWakeWordDigest) {
+  throw new Error(
+    `Purrsephone wake-word SHA-256 mismatch: expected ${lockedWakeWordDigest}, got ${wakeWordDigest}`,
+  );
+}
 
 const revision = (name) => {
   const value = lock.sources?.[name]?.revision;
@@ -89,7 +99,11 @@ const replaceRequired = (search, replacement, label) => {
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
 if (!idleAnimation.test(profile)) throw new Error("Prepared profile is missing the idle animation");
 profile = profile.replace(idleAnimation, "$1              - purrsephone_idle\n$2");
-replaceRequired("src: assistant_gui_listening", "src: purrsephone_idle", "listening sprite");
+replaceRequired(
+  "src: assistant_gui_listening",
+  "src: purrsephone_idle\n        - label:\n            text: \"Listening...\"\n            align: BOTTOM_MID\n            y: -18\n            text_font: montserrat_20\n            text_color: 0x8B5CF6",
+  "listening sprite",
+);
 replaceRequired("src: assistant_gui_thinking", "src: purrsephone_thinking", "thinking sprite");
 replaceRequired("src: assistant_gui_initializing", "src: purrsephone_sleeping", "initializing sprite");
 replaceRequired("src: assistant_gui_error", "src: purrsephone_sleeping", "error sprite");

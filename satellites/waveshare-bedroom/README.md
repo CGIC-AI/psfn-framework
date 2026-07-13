@@ -24,7 +24,9 @@ feedback, and display state local. PSFN Satellite Hub owns STT, Purrsephone turn
 routing, TTS, endpoint authentication, and bounded Home Assistant control.
 
 The first UI uses replaceable pixel-art states for idle, listening, thinking,
-speaking, and error. A deliberate tap on the head is a headpat. Horizontal
+speaking, and error. Wake detection immediately raises the backlight to full
+brightness and shows a purple `Listening...` label over Purrsephone's idle
+sprite. A deliberate tap on the head is a headpat. Horizontal
 swipes enter a bedroom-device carousel; only configured room affordances may be
 controlled.
 
@@ -69,8 +71,16 @@ and rebooted before `setup()`.
 
 The encrypted native API exposes `start_voice_turn` and `stop_voice_turn` as a
 stable push-to-talk seam. A Pi-side transport probe invoked the start action and
-captured more than 1.4 MB of live microphone PCM. The borrowed Alexa wake model
-still needs tuning or replacement; this does not block touch-to-talk.
+captured more than 1.4 MB of live microphone PCM. The repo-owned bare
+`Purrsephone` microWakeWord model is trained from the three pronunciations and
+near-name exclusions under `wakeword/`. Its training recipe selects checkpoints
+by ambient false activations before recall; touch-to-talk remains available
+independently of the wake detector.
+
+The model is not yet bound into the compiled runtime. The inherited profile
+routes its wake callback into Home Assistant Assist, which violates the product
+boundary. Binding and flashing `Purrsephone` is gated on the Satellite Hub
+voice-turn transport consuming the local detection event.
 
 This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update

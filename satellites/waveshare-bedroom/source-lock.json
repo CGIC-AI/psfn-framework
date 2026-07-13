@@ -30,6 +30,39 @@
     "google-fonts": {
       "repository": "https://github.com/google/fonts.git",
       "revision": "ec0464b978de222073645d6d3366f3fdf03376d8"
+    },
+    "micro-wake-word": {
+      "repository": "https://github.com/OHF-Voice/micro-wake-word.git",
+      "revision": "4665173cd35f1cff9a61e06fc427f124766c488e",
+      "license": "Apache-2.0"
+    },
+    "piper-sample-generator": {
+      "repository": "https://github.com/rhasspy/piper-sample-generator.git",
+      "revision": "2971426a55072f7d22fec416ca7800df8bd23207",
+      "license": "MIT"
+    },
+    "piper-libritts-r-medium": {
+      "url": "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt",
+      "sha256": "e95ee53770bf598c354a6e6dbfc95ccb259aeeb501d35a86be8a767429ab0ff6"
+    },
+    "micro-wake-word-negative-features": {
+      "urlRoot": "https://huggingface.co/datasets/kahrendt/microwakeword/resolve/main/",
+      "archives": {
+        "dinner_party.zip": "18a0885d595ced7faa73736a8680206f5ba6e80113ca3e6ce43130e510aac18f",
+        "dinner_party_eval.zip": "e08e23a5e654dd4415a1c41a4b6cd02d1f983c821512367ad937bac1aeed8299",
+        "no_speech.zip": "722dbcc967275c64c9581ecb85729549830a9094ce605ee22b2ddab9dbabf3c8",
+        "speech.zip": "68b6b811b347b8321169f9e75ea2b9be73245943b4470af9532ca288d9f1b3cc"
+      }
+    },
+    "purrsephone-micro-wake-word": {
+      "kind": "generated-model",
+      "sha256": "5a8d78d5d0aad0ac09a8adada75a7def86a6a36ee9ab53fbc9ed54c7b73d4a66",
+      "trainingSteps": 15000,
+      "probabilityCutoff": 0.93,
+      "quantizedStreamingEvaluation": {
+        "falseAcceptsPerHour": 0.375,
+        "falseRejectRate": 0.02
+      }
     }
   }
 }

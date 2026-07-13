@@ -1,0 +1,7 @@
+# Python 3.10 compatibility constraints for the pinned source revisions.
+tensorflow==2.21.0
+tensorboard==2.21.0
+datasets==3.6.0
+audiomentations==0.43.1
+setuptools==80.9.0
+audio-metadata @ git+https://github.com/whatsnowplaying/audio-metadata@d4ebb238e6a401bb1a5aaaac60c9e2b3cb30929f

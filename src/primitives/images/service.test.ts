@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ImageService } from './service.js';
+import { ImageService, type ImageProviderAttempt } from './service.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -133,7 +133,7 @@ describe('ImageService', () => {
   });
 
   it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
-    const settledAttempts: Array<Record<string, unknown>> = [];
+    const settledAttempts: ImageProviderAttempt[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
@@ -169,7 +169,7 @@ describe('ImageService', () => {
       fetchMock as typeof fetch,
       {
         onProviderAttempt: async attempt => {
-          settledAttempts.push(attempt as unknown as Record<string, unknown>);
+          settledAttempts.push(attempt);
         },
       },
     );
@@ -198,7 +198,39 @@ describe('ImageService', () => {
     ]);
   });
 
+  it('does not retry a successful FAL provider call when attempt settlement fails', async () => {
+    const settlementFailure = new Error('connect ECONNREFUSED while recording image usage');
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image',
+      'fal-settlement-failure-1',
+      () => {},
+    );
+    const recordAttempt = vi.fn(async (_attempt: ImageProviderAttempt) => {
+      throw settlementFailure;
+    });
+    const service = new ImageService(
+      { falApiKey: 'fal-key' },
+      fetchMock as typeof fetch,
+      { onProviderAttempt: recordAttempt },
+    );
+
+    await expect(service.create({ prompt: 'a lighthouse at dusk' })).rejects.toMatchObject({
+      name: 'ImageProviderAttemptSettlementError',
+      cause: settlementFailure,
+      attempt: {
+        attempt: 1,
+        provider: 'fal',
+        status: 'success',
+      },
+    });
+
+    expect(recordAttempt).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/xai/grok-imagine-image')).toHaveLength(1);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('fal-ai/nano-banana-2'))).toBe(false);
+  });
+
   it('falls back through the configured default FAL create model chain in auto mode', async () => {
+    const settledAttempts: ImageProviderAttempt[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
@@ -237,6 +269,11 @@ describe('ImageService', () => {
         falApiKey: 'fal-key',
       },
       fetchMock as typeof fetch,
+      {
+        onProviderAttempt: async attempt => {
+          settledAttempts.push(attempt);
+        },
+      },
     );
 
     const result = await service.create({
@@ -246,6 +283,15 @@ describe('ImageService', () => {
     expect(result.model).toBe('fal-ai/gpt-image-1.5');
     expect(result.fallbackUsed).toBe(true);
     expect(result.fallbackReason).toBe('fal_transient_model_fallback');
+    expect(settledAttempts.at(-1)).toMatchObject({
+      provider: 'fal',
+      status: 'success',
+      result: {
+        model: 'fal-ai/gpt-image-1.5',
+        fallbackUsed: true,
+        fallbackReason: 'fal_transient_model_fallback',
+      },
+    });
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/xai/grok-imagine-image')).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/fal-ai/nano-banana-2')).toHaveLength(2);
   });
@@ -856,6 +902,7 @@ describe('ImageService', () => {
   it('falls back to a configured ComfyUI create workflow on FAL content-policy failures', async () => {
     vi.useFakeTimers();
 
+    const settledAttempts: ImageProviderAttempt[] = [];
     let comfyPromptBody: string | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -921,6 +968,11 @@ describe('ImageService', () => {
         },
       },
       fetchMock as typeof fetch,
+      {
+        onProviderAttempt: async attempt => {
+          settledAttempts.push(attempt);
+        },
+      },
     );
 
     const resultPromise = service.create({
@@ -943,6 +995,14 @@ describe('ImageService', () => {
           fileName: 'fallback.png',
         },
       ],
+    });
+    expect(settledAttempts.at(-1)).toMatchObject({
+      provider: 'comfyui',
+      status: 'success',
+      result: {
+        fallbackUsed: true,
+        fallbackReason: 'fal_content_policy_422',
+      },
     });
   });
 

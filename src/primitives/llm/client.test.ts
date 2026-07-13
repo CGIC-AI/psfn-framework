@@ -2415,6 +2415,223 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
+  it('records failed and successful fallback attempts under one logical call', async () => {
+    const config = makeConfig({ retryMaxAttempts: 0 });
+    config.modelRegistry = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'requested-primary',
+          rank: 10,
+          identity: {
+            provider: 'litellm',
+            model: 'primary-model',
+            source: { type: 'litellm' },
+          },
+          purposes: [{ purpose: 'background', primary: true }],
+          capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 1024 },
+          cost: {
+            inputPer1MUsd: 2,
+            outputPer1MUsd: 8,
+            cacheReadPer1MUsd: 0.2,
+            cacheWritePer1MUsd: 2.5,
+            currency: 'USD',
+          },
+        },
+        {
+          id: 'routed-fallback',
+          rank: 20,
+          identity: {
+            provider: 'openrouter',
+            model: 'fallback-model',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'background', primary: false }],
+          capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 1024 },
+          cost: {
+            inputPer1MUsd: 1,
+            outputPer1MUsd: 4,
+            cacheReadPer1MUsd: 0.1,
+            cacheWritePer1MUsd: 1.25,
+            currency: 'USD',
+          },
+        },
+      ],
+    };
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple
+      .mockRejectedValueOnce(new Error('503 primary unavailable'))
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'done' }],
+        model: 'fallback-model',
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 3,
+          cacheWrite: 2,
+          totalTokens: 20,
+          cost: { total: 0.25, currency: 'USD' },
+        },
+        stopReason: 'stop',
+      });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Do the work' }],
+      correlation: {
+        requestId: 'request-fallback-accounting',
+        callType: 'background',
+      },
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(2);
+    const [failed, succeeded] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+    expect(failed).toMatchObject({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'unknown',
+      provider: 'litellm',
+      model: 'primary-model',
+      requestedProvider: 'litellm',
+      requestedModel: 'primary-model',
+      costSource: 'none',
+    });
+    expect(succeeded).toMatchObject({
+      attempt: 2,
+      status: 'success',
+      settlement: 'complete',
+      provider: 'openrouter',
+      model: 'fallback-model',
+      requestedProvider: 'litellm',
+      requestedModel: 'primary-model',
+      providerCost: { total: 0.25, currency: 'USD' },
+      effectiveCost: { total: 0.25, currency: 'USD' },
+      costSource: 'provider',
+    });
+    expect(failed.logicalCallId).toBe(succeeded.logicalCallId);
+    expect(succeeded.estimatedCost).toEqual({
+      input: 0.00001,
+      output: 0.00002,
+      cacheRead: 0.0000003,
+      cacheWrite: 0.0000025,
+      total: 0.0000328,
+      currency: 'USD',
+    });
+  });
+
+  it('settles a stream failure after emitted text as one partial attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'text_delta', delta: 'partial provider output' };
+      yield {
+        type: 'error',
+        error: { errorMessage: 'provider stream disconnected' },
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Stream this' }],
+      correlation: {
+        requestId: 'request-partial-stream',
+        callType: 'chat',
+      },
+    })).rejects.toThrow('provider stream disconnected');
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'partial',
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+      requestedProvider: 'openrouter',
+      requestedModel: 'z-ai/glm-5',
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        partialOutputChars: 23,
+      }),
+    });
+    expect(event.inputTokens).toBeGreaterThan(0);
+    expect(event.outputTokens).toBeGreaterThan(0);
+    expect(event.totalTokens).toBe(
+      event.inputTokens + event.outputTokens + event.cacheReadTokens + event.cacheWriteTokens,
+    );
+  });
+
+  it('records a completed provider response with malformed usage as failed unknown economics', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider returned content' }],
+      model: 'z-ai/glm-5',
+      usage: { bananas: 7 },
+      stopReason: 'stop',
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true })).rejects.toThrow('Unsupported provider usage shape');
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'complete',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costSource: 'none',
+      errorMessage: 'Unsupported provider usage shape',
+      metadata: expect.objectContaining({
+        malformedRawUsage: { bananas: 7 },
+      }),
+    }));
+  });
+
+  it('settles late gateway-captured provider cost into the durable attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({ total: 0.42, currency: 'USD' }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      providerCost: { total: 0.42, currency: 'USD' },
+      effectiveCost: { total: 0.42, currency: 'USD' },
+      providerCostUsd: 0.42,
+      effectiveCostUsd: 0.42,
+      costSource: 'provider',
+    }));
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;

@@ -943,6 +943,8 @@ export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
 export interface ModelRegistryCostMetadata {
   inputPer1MUsd?: number;
   outputPer1MUsd?: number;
+  cacheReadPer1MUsd?: number;
+  cacheWritePer1MUsd?: number;
   currency?: string;
   [key: string]: unknown;
 }
@@ -1036,6 +1038,8 @@ export interface ModelUsageLedgerRecord {
   process: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   estimatedCostUsd: number;
 }
 

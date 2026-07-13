@@ -1,8 +1,8 @@
 import type { Pool } from 'pg';
+import { createHash } from 'node:crypto';
 import {
   createPostgresPool,
   ensurePostgresSchema,
-  executeQuery,
   queryOne,
   queryRows,
 } from '../postgres.js';
@@ -12,6 +12,7 @@ import type {
   ModelUsageBreakdown,
   ModelUsageCallKind,
   ModelUsageCostSource,
+  ModelUsageCostBreakdown,
   ModelUsageData,
   ModelUsageEvent,
   ModelUsageEventInput,
@@ -19,8 +20,11 @@ import type {
   ModelUsageQueryPort,
   ModelUsageRecorder,
   ModelUsageStatus,
+  ModelUsageSettlement,
   ModelUsageTotals,
 } from '../../shared/telemetry/model-usage.js';
+import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
+import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 2_000;
@@ -38,6 +42,7 @@ interface ModelUsageEventRow {
   day_key: string;
   month_key: string;
   status: ModelUsageStatus;
+  settlement: ModelUsageSettlement;
   call_kind: ModelUsageCallKind;
   call_type: ModelUsageEvent['callType'];
   purpose: string;
@@ -65,14 +70,28 @@ interface ModelUsageEventRow {
   cache_read_tokens: number | string;
   cache_write_tokens: number | string;
   total_tokens: number | string;
+  provider_input_cost_usd: number | string | null;
+  provider_output_cost_usd: number | string | null;
+  provider_cache_read_cost_usd: number | string | null;
+  provider_cache_write_cost_usd: number | string | null;
   provider_cost_usd: number | string | null;
+  estimated_input_cost_usd: number | string | null;
+  estimated_output_cost_usd: number | string | null;
+  estimated_cache_read_cost_usd: number | string | null;
+  estimated_cache_write_cost_usd: number | string | null;
   estimated_cost_usd: number | string;
+  effective_input_cost_usd: number | string | null;
+  effective_output_cost_usd: number | string | null;
+  effective_cache_read_cost_usd: number | string | null;
+  effective_cache_write_cost_usd: number | string | null;
+  effective_cost_usd: number | string | null;
   cost_source: ModelUsageCostSource;
   currency: string | null;
   stop_reason: string | null;
   error_code: string | null;
   error_message: string | null;
   metadata_json: unknown;
+  event_fingerprint: string;
 }
 
 interface TotalsRow {
@@ -135,20 +154,51 @@ function nonNegativeInteger(value: unknown): number {
   return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
 }
 
+function inputNonNegativeInteger(
+  value: unknown,
+  field: string,
+  fallback: number = 0,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new Error(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
 function nonNegativeCost(value: unknown): number | undefined {
   const numeric = asNullableNumber(value);
   if (numeric === undefined || numeric < 0) return undefined;
   return numeric;
 }
 
-function resolveCostSource(
-  input: ModelUsageEventInput,
-  providerCostUsd: number | undefined,
-  estimatedCostUsd: number,
-): ModelUsageCostSource {
-  if (input.costSource) return input.costSource;
-  if (providerCostUsd !== undefined) return 'provider';
-  return estimatedCostUsd > 0 ? 'estimate' : 'none';
+function mergeCostTotal(
+  cost: ModelUsageCostBreakdown | undefined,
+  total: number | undefined,
+): ModelUsageCostBreakdown | undefined {
+  if (!cost && total === undefined) return undefined;
+  return {
+    ...(cost ?? {}),
+    ...(cost?.total === undefined && total !== undefined ? { total } : {}),
+  };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (typeof value !== 'object' || value === null) return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .filter(key => record[key] !== undefined)
+      .map(key => [key, canonicalize(record[key])]),
+  );
+}
+
+function eventFingerprint(event: ModelUsageEvent): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(event)))
+    .digest('hex');
 }
 
 function dayKey(timestampMs: number): string {
@@ -184,25 +234,42 @@ function parseMetadata(value: unknown): Record<string, unknown> {
 }
 
 function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
-  const recordedAtMs = nonNegativeInteger(input.recordedAtMs ?? Date.now());
-  const startedAtMs = nonNegativeInteger(input.startedAtMs ?? recordedAtMs);
+  const recordedAtMs = inputNonNegativeInteger(input.recordedAtMs, 'recordedAtMs', Date.now());
+  const startedAtMs = inputNonNegativeInteger(input.startedAtMs, 'startedAtMs', recordedAtMs);
   const completedAtMs = input.completedAtMs !== undefined
-    ? nonNegativeInteger(input.completedAtMs)
+    ? inputNonNegativeInteger(input.completedAtMs, 'completedAtMs')
     : undefined;
   const durationMs = input.durationMs !== undefined
-    ? nonNegativeInteger(input.durationMs)
+    ? inputNonNegativeInteger(input.durationMs, 'durationMs')
     : (completedAtMs !== undefined ? Math.max(0, completedAtMs - startedAtMs) : undefined);
-  const inputTokens = nonNegativeInteger(input.inputTokens);
-  const outputTokens = nonNegativeInteger(input.outputTokens);
-  const cacheReadTokens = nonNegativeInteger(input.cacheReadTokens);
-  const cacheWriteTokens = nonNegativeInteger(input.cacheWriteTokens);
-  const totalTokens = nonNegativeInteger(
-    input.totalTokens ?? inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
-  );
-  const providerCostUsd = nonNegativeCost(input.providerCostUsd);
-  const estimatedCostUsd = nonNegativeCost(input.estimatedCostUsd) ?? 0;
+  const inputTokens = inputNonNegativeInteger(input.inputTokens, 'inputTokens');
+  const outputTokens = inputNonNegativeInteger(input.outputTokens, 'outputTokens');
+  const cacheReadTokens = inputNonNegativeInteger(input.cacheReadTokens, 'cacheReadTokens');
+  const cacheWriteTokens = inputNonNegativeInteger(input.cacheWriteTokens, 'cacheWriteTokens');
+  const accounting = reconcileModelUsageAccounting({
+    usage: {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      ...(input.totalTokens !== undefined ? { totalTokens: input.totalTokens } : {}),
+    },
+    ...(mergeCostTotal(input.providerCost, input.providerCostUsd)
+      ? { providerCost: mergeCostTotal(input.providerCost, input.providerCostUsd) }
+      : {}),
+    ...(mergeCostTotal(input.estimatedCost, input.estimatedCostUsd)
+      ? { estimatedCost: mergeCostTotal(input.estimatedCost, input.estimatedCostUsd) }
+      : {}),
+    ...(mergeCostTotal(input.effectiveCost, input.effectiveCostUsd)
+      ? { effectiveCost: mergeCostTotal(input.effectiveCost, input.effectiveCostUsd) }
+      : {}),
+    ...(input.costSource ? { costSource: input.costSource } : {}),
+  });
+  const providerCostUsd = accounting.providerCost.total;
+  const estimatedCostUsd = accounting.estimatedCost.total ?? 0;
+  const effectiveCostUsd = accounting.effectiveCost.total;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
-  const attempt = nonNegativeInteger(input.attempt);
+  const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
 
   return {
     id: normalizeText(input.id, `${logicalCallId}:${attempt}`),
@@ -212,10 +279,11 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     startedAtMs,
     ...(completedAtMs !== undefined ? { completedAtMs } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
-    ...(input.ttftMs !== undefined ? { ttftMs: nonNegativeInteger(input.ttftMs) } : {}),
+    ...(input.ttftMs !== undefined ? { ttftMs: inputNonNegativeInteger(input.ttftMs, 'ttftMs') } : {}),
     dayKey: dayKey(recordedAtMs),
     monthKey: monthKey(recordedAtMs),
     status: input.status,
+    settlement: input.settlement ?? (input.status === 'success' ? 'complete' : 'unknown'),
     callKind: input.callKind,
     callType: input.callType,
     purpose: normalizeText(input.purpose, 'unknown'),
@@ -242,15 +310,21 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
-    totalTokens,
+    totalTokens: accounting.usage.totalTokens,
     ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
     estimatedCostUsd,
-    costSource: resolveCostSource(input, providerCostUsd, estimatedCostUsd),
-    ...(optionalText(input.currency) ? { currency: optionalText(input.currency) } : {}),
+    ...(effectiveCostUsd !== undefined ? { effectiveCostUsd } : {}),
+    providerCost: accounting.providerCost,
+    estimatedCost: accounting.estimatedCost,
+    effectiveCost: accounting.effectiveCost,
+    costSource: accounting.costSource,
+    ...(optionalText(input.currency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency)
+      ? { currency: optionalText(input.currency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency) }
+      : {}),
     ...(optionalText(input.stopReason) ? { stopReason: optionalText(input.stopReason) } : {}),
     ...(optionalText(input.errorCode) ? { errorCode: optionalText(input.errorCode) } : {}),
     ...(optionalText(input.errorMessage) ? { errorMessage: optionalText(input.errorMessage) } : {}),
-    metadata: input.metadata ?? {},
+    metadata: boundModelUsageMetadata(input.metadata),
   };
 }
 
@@ -264,6 +338,7 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     dayKey: row.day_key,
     monthKey: row.month_key,
     status: row.status,
+    settlement: row.settlement,
     callKind: row.call_kind,
     callType: row.call_type,
     purpose: row.purpose,
@@ -275,6 +350,9 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     cacheWriteTokens: nonNegativeInteger(row.cache_write_tokens),
     totalTokens: nonNegativeInteger(row.total_tokens),
     estimatedCostUsd: nonNegativeCost(row.estimated_cost_usd) ?? 0,
+    providerCost: mapCostBreakdown(row, 'provider'),
+    estimatedCost: mapCostBreakdown(row, 'estimated'),
+    effectiveCost: mapCostBreakdown(row, 'effective'),
     costSource: row.cost_source,
     metadata: parseMetadata(row.metadata_json),
   };
@@ -304,11 +382,52 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
       event.providerCostUsd = providerCostUsd;
     }
   }
+  if (row.effective_cost_usd !== null) {
+    const effectiveCostUsd = nonNegativeCost(row.effective_cost_usd);
+    if (effectiveCostUsd !== undefined) event.effectiveCostUsd = effectiveCostUsd;
+  }
   if (row.currency) event.currency = row.currency;
   if (row.stop_reason) event.stopReason = row.stop_reason;
   if (row.error_code) event.errorCode = row.error_code;
   if (row.error_message) event.errorMessage = row.error_message;
   return event;
+}
+
+function mapCostBreakdown(
+  row: ModelUsageEventRow,
+  source: 'provider' | 'estimated' | 'effective',
+): ModelUsageCostBreakdown {
+  const values = source === 'provider'
+    ? {
+        input: row.provider_input_cost_usd,
+        output: row.provider_output_cost_usd,
+        cacheRead: row.provider_cache_read_cost_usd,
+        cacheWrite: row.provider_cache_write_cost_usd,
+        total: row.provider_cost_usd,
+      }
+    : source === 'estimated'
+      ? {
+          input: row.estimated_input_cost_usd,
+          output: row.estimated_output_cost_usd,
+          cacheRead: row.estimated_cache_read_cost_usd,
+          cacheWrite: row.estimated_cache_write_cost_usd,
+          total: row.estimated_cost_usd,
+        }
+      : {
+          input: row.effective_input_cost_usd,
+          output: row.effective_output_cost_usd,
+          cacheRead: row.effective_cache_read_cost_usd,
+          cacheWrite: row.effective_cache_write_cost_usd,
+          total: row.effective_cost_usd,
+        };
+  return {
+    ...(values.input !== null ? { input: nonNegativeCost(values.input) } : {}),
+    ...(values.output !== null ? { output: nonNegativeCost(values.output) } : {}),
+    ...(values.cacheRead !== null ? { cacheRead: nonNegativeCost(values.cacheRead) } : {}),
+    ...(values.cacheWrite !== null ? { cacheWrite: nonNegativeCost(values.cacheWrite) } : {}),
+    ...(values.total !== null ? { total: nonNegativeCost(values.total) } : {}),
+    ...(row.currency ? { currency: row.currency } : {}),
+  };
 }
 
 function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
@@ -362,30 +481,42 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   async recordUsageEvent(input: ModelUsageEventInput): Promise<void> {
     const event = normalizeEvent(input);
     await this.ready;
-    await executeQuery(this.pool, `
+    const inserted = await queryOne<{ id: string }>(this.pool, `
       INSERT INTO model_usage_events (
         id, logical_call_id, attempt, recorded_at_ms, started_at_ms, completed_at_ms,
-        duration_ms, ttft_ms, day_key, month_key, status, call_kind, call_type,
+        duration_ms, ttft_ms, day_key, month_key, status, settlement, call_kind, call_type,
         purpose, origin_type, origin_stage, service, process, turn_id, request_id,
         channel_id, tool_name, tool_call_id, charge_lane, charge_surface,
         charge_run_id, charge_root_run_id, charge_parent_run_id, provider, model,
         slot_key, requested_provider, requested_model, input_tokens, output_tokens,
-        cache_read_tokens, cache_write_tokens, total_tokens, provider_cost_usd,
-        estimated_cost_usd, cost_source, currency, stop_reason, error_code,
-        error_message, metadata_json
+        cache_read_tokens, cache_write_tokens, total_tokens,
+        provider_input_cost_usd, provider_output_cost_usd,
+        provider_cache_read_cost_usd, provider_cache_write_cost_usd, provider_cost_usd,
+        estimated_input_cost_usd, estimated_output_cost_usd,
+        estimated_cache_read_cost_usd, estimated_cache_write_cost_usd, estimated_cost_usd,
+        effective_input_cost_usd, effective_output_cost_usd,
+        effective_cache_read_cost_usd, effective_cache_write_cost_usd, effective_cost_usd,
+        cost_source, currency, stop_reason, error_code, error_message, metadata_json,
+        event_fingerprint
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24, $25,
-        $26, $27, $28, $29, $30,
-        $31, $32, $33, $34, $35,
-        $36, $37, $38, $39,
+        $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $17, $18, $19, $20, $21,
+        $22, $23, $24, $25, $26,
+        $27, $28, $29, $30, $31,
+        $32, $33, $34, $35, $36,
+        $37, $38, $39,
         $40, $41, $42, $43, $44,
-        $45, $46::jsonb
+        $45, $46, $47, $48, $49,
+        $50, $51, $52, $53, $54,
+        $55, $56, $57, $58, $59, $60::jsonb,
+        $61
       )
-      ON CONFLICT (logical_call_id, attempt) DO NOTHING
+      ON CONFLICT (logical_call_id, attempt) DO UPDATE
+        SET id = model_usage_events.id
+        WHERE model_usage_events.event_fingerprint = EXCLUDED.event_fingerprint
+      RETURNING id
     `, [
       event.id,
       event.logicalCallId,
@@ -398,6 +529,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.dayKey,
       event.monthKey,
       event.status,
+      event.settlement,
       event.callKind,
       event.callType,
       event.purpose,
@@ -425,15 +557,34 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.cacheReadTokens,
       event.cacheWriteTokens,
       event.totalTokens,
+      event.providerCost.input ?? null,
+      event.providerCost.output ?? null,
+      event.providerCost.cacheRead ?? null,
+      event.providerCost.cacheWrite ?? null,
       event.providerCostUsd ?? null,
+      event.estimatedCost.input ?? null,
+      event.estimatedCost.output ?? null,
+      event.estimatedCost.cacheRead ?? null,
+      event.estimatedCost.cacheWrite ?? null,
       event.estimatedCostUsd,
+      event.effectiveCost.input ?? null,
+      event.effectiveCost.output ?? null,
+      event.effectiveCost.cacheRead ?? null,
+      event.effectiveCost.cacheWrite ?? null,
+      event.effectiveCostUsd ?? null,
       event.costSource,
       event.currency ?? null,
       event.stopReason ?? null,
       event.errorCode ?? null,
       event.errorMessage ?? null,
       JSON.stringify(event.metadata),
+      eventFingerprint(event),
     ]);
+    if (!inserted) {
+      throw new Error(
+        `Model usage attempt ${event.logicalCallId}:${event.attempt} conflicts with an existing immutable model usage attempt`,
+      );
+    }
   }
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
@@ -447,7 +598,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       this.queryBreakdown(where, "COALESCE(tool_name, '(none)')"),
       this.queryBreakdown(where, 'call_kind'),
       this.queryEvents(where, normalizedQuery.limit, 'recorded_at_ms DESC, id DESC'),
-      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(provider_cost_usd, estimated_cost_usd, 0) DESC, recorded_at_ms DESC'),
+      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC'),
     ]);
     return {
       query: normalizedQuery,
@@ -474,7 +625,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         COALESCE(SUM(total_tokens), 0) AS total_tokens,
         COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
         COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
-        COALESCE(SUM(COALESCE(provider_cost_usd, estimated_cost_usd, 0)), 0) AS total_cost_usd,
+        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd,
         AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS average_duration_ms,
         AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL) AS average_ttft_ms
       FROM model_usage_events
@@ -491,7 +642,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         COALESCE(SUM(input_tokens), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(COALESCE(provider_cost_usd, estimated_cost_usd, 0)), 0) AS total_cost_usd
+        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd
       FROM model_usage_events
       ${where.clause}
       GROUP BY key

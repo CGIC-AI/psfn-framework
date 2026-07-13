@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { LLMResponse } from '../../shared/contracts/runtime.js';
+import type { LLMResponse, LLMUsageCostDetails } from '../../shared/contracts/runtime.js';
 
 export interface GatewayCapturedLLMCost {
-  providerCostUsd?: number;
+  providerCost?: LLMUsageCostDetails;
 }
 
 interface GatewayLLMCostCaptureContext {
@@ -24,17 +24,17 @@ const COST_HEADER_NAMES = [
   'x-litellm-model-response-cost',
 ] as const;
 
-function parsePositiveCost(value: unknown): number | undefined {
+function parseNonNegativeCost(value: unknown): number | undefined {
   const numeric = typeof value === 'number'
     ? value
     : (typeof value === 'string' ? Number(value.trim().replace(/^\$/, '')) : NaN);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-function providerCostFromHeaders(headers: Headers): number | undefined {
+function providerCostFromHeaders(headers: Headers): LLMUsageCostDetails | undefined {
   for (const name of COST_HEADER_NAMES) {
-    const cost = parsePositiveCost(headers.get(name));
-    if (cost !== undefined) return cost;
+    const cost = parseNonNegativeCost(headers.get(name));
+    if (cost !== undefined) return { total: cost, currency: 'USD' };
   }
   return undefined;
 }
@@ -45,23 +45,60 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function providerCostFromPayload(value: unknown): number | undefined {
+function costComponent(
+  records: Array<Record<string, unknown> | undefined>,
+  ...keys: string[]
+): number | undefined {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const cost = parseNonNegativeCost(record[key]);
+      if (cost !== undefined) return cost;
+    }
+  }
+  return undefined;
+}
+
+export function extractGatewayProviderCost(value: unknown): LLMUsageCostDetails | undefined {
   const record = objectRecord(value);
-  if (!record) return parsePositiveCost(value);
+  if (!record) {
+    const total = parseNonNegativeCost(value);
+    return total !== undefined ? { total, currency: 'USD' } : undefined;
+  }
   const usage = objectRecord(record.usage);
   const usageCostDetails = objectRecord(usage?.cost_details);
   const costDetails = objectRecord(record.cost_details);
-  return parsePositiveCost(usage?.cost)
-    ?? parsePositiveCost(usageCostDetails?.upstream_inference_cost)
-    ?? parsePositiveCost(usageCostDetails?.total)
-    ?? parsePositiveCost(record.cost)
-    ?? parsePositiveCost(costDetails?.upstream_inference_cost)
-    ?? parsePositiveCost(costDetails?.total);
+  const details = [usageCostDetails, costDetails];
+  const input = costComponent(details, 'input_cost', 'prompt_cost');
+  const output = costComponent(details, 'output_cost', 'completion_cost');
+  const cacheRead = costComponent(details, 'cache_read_cost', 'cached_input_cost');
+  const cacheWrite = costComponent(details, 'cache_write_cost', 'cache_creation_cost');
+  const total = parseNonNegativeCost(usage?.cost)
+    ?? costComponent(details, 'upstream_inference_cost', 'total', 'total_cost')
+    ?? parseNonNegativeCost(record.cost);
+  if (
+    input === undefined
+    && output === undefined
+    && cacheRead === undefined
+    && cacheWrite === undefined
+    && total === undefined
+  ) return undefined;
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(total !== undefined ? { total } : {}),
+    currency: 'USD',
+  };
 }
 
-function recordProviderCost(capture: GatewayCapturedLLMCost, providerCostUsd: number | undefined): void {
-  if (providerCostUsd !== undefined) {
-    capture.providerCostUsd = providerCostUsd;
+function recordProviderCost(capture: GatewayCapturedLLMCost, providerCost: LLMUsageCostDetails | undefined): void {
+  if (providerCost) {
+    capture.providerCost = {
+      ...(capture.providerCost ?? {}),
+      ...providerCost,
+    };
   }
 }
 
@@ -75,7 +112,7 @@ function inspectSseEvent(rawEvent: string, capture: GatewayCapturedLLMCost): voi
   const payload = dataLines.join('\n').trim();
   if (!payload || payload === '[DONE]') return;
   try {
-    recordProviderCost(capture, providerCostFromPayload(JSON.parse(payload) as unknown));
+    recordProviderCost(capture, extractGatewayProviderCost(JSON.parse(payload) as unknown));
   } catch {
     return;
   }
@@ -124,7 +161,7 @@ async function inspectJsonBody(response: Response, capture: GatewayCapturedLLMCo
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('application/json')) return;
   try {
-    recordProviderCost(capture, providerCostFromPayload(await response.clone().json() as unknown));
+    recordProviderCost(capture, extractGatewayProviderCost(await response.clone().json() as unknown));
   } catch {
     return;
   }
@@ -167,18 +204,33 @@ export function latestGatewayCapturedProviderCostUsd(
   captures: readonly GatewayCapturedLLMCost[],
 ): number | undefined {
   for (let index = captures.length - 1; index >= 0; index -= 1) {
-    const cost = captures[index]?.providerCostUsd;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) return cost;
+    const cost = captures[index]?.providerCost?.total;
+    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0) return cost;
   }
   return undefined;
+}
+
+export function latestGatewayCapturedProviderCost(
+  captures: readonly GatewayCapturedLLMCost[],
+): LLMUsageCostDetails | undefined {
+  for (let index = captures.length - 1; index >= 0; index -= 1) {
+    const cost = captures[index]?.providerCost;
+    if (cost) return cost;
+  }
+  return undefined;
+}
+
+export function activeGatewayCapturedProviderCost(): LLMUsageCostDetails | undefined {
+  const context = captureStorage.getStore();
+  return context ? latestGatewayCapturedProviderCost(context.captures) : undefined;
 }
 
 export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
   response: T,
   captures: readonly GatewayCapturedLLMCost[],
 ): T {
-  const providerCostUsd = latestGatewayCapturedProviderCostUsd(captures);
-  if (providerCostUsd === undefined) return response;
+  const providerCost = latestGatewayCapturedProviderCost(captures);
+  if (!providerCost) return response;
   const usageDetails = response.usageDetails ?? {
     input: response.inputTokens,
     output: response.outputTokens,
@@ -192,8 +244,8 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
       ...usageDetails,
       cost: {
         ...(usageDetails.cost ?? {}),
-        total: providerCostUsd,
-        currency: usageDetails.cost?.currency ?? 'USD',
+        ...providerCost,
+        currency: providerCost.currency ?? usageDetails.cost?.currency ?? 'USD',
       },
     },
   };

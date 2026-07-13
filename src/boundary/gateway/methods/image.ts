@@ -1,52 +1,32 @@
+import { randomUUID } from 'node:crypto';
 import type { ImageGenerationRpcResult } from '../protocol.js';
 import type {
   ImageCreateParams,
   ImageEditParams,
-  ImageGenerationResult,
   ImageMode,
 } from '../../../primitives/images/types.js';
-import { ImageService } from '../../../primitives/images/service.js';
+import {
+  ImageService,
+  type ImageProviderAttempt,
+} from '../../../primitives/images/service.js';
 import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
-import { createComponentLogger } from '../../../shared/logger.js';
-
-const log = createComponentLogger('GatewayImageMethods');
-
-function requireImageService(runtime: GatewayMethodRuntime): ImageService {
-  if (!runtime.imageConfig) {
-    throw new Error('Image provider config is not wired on the gateway');
-  }
-  return new ImageService(runtime.imageConfig, fetch, {
-    personalFilesDir: runtime.workspacePath,
-  });
-}
-
-function createImageUsageLogicalCallId(result: ImageGenerationResult | undefined): string {
-  if (result?.requestId) {
-    return `image:${result.requestId}`;
-  }
-  return `image:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
 
 type ImageUsageParams = ImageCreateParams | ImageEditParams;
 
-function recordImageUsage(
+async function recordImageProviderAttempt(
   runtime: GatewayMethodRuntime,
   callKind: 'image_create' | 'image_edit',
   mode: ImageMode,
   params: ImageUsageParams,
-  startedAtMs: number,
-  status: 'success' | 'failure',
-  result?: ImageGenerationResult,
-  error?: unknown,
-): void {
+  logicalCallId: string,
+  providerAttempt: ImageProviderAttempt,
+): Promise<void> {
   const recorder = runtime.modelUsageRecorder;
   if (!recorder) return;
 
-  const completedAtMs = Date.now();
+  const { result, error } = providerAttempt;
   const sourceToolName = params.sourceToolName?.trim();
-  const provider = result?.provider ?? (params.provider === 'auto' ? undefined : params.provider);
-  const model = result?.model ?? params.model;
   const imageCount = result?.images.length ?? params.numImages ?? 1;
   const inputImageCount = 'imageUrls' in params ? params.imageUrls.length : 0;
   const metadata: Record<string, unknown> = {
@@ -60,14 +40,15 @@ function recordImageUsage(
   if (result?.requestId) metadata.requestId = result.requestId;
   if (params.referenceImageIds?.length) metadata.referenceImageIds = params.referenceImageIds;
 
-  recorder.recordUsageEvent({
-    logicalCallId: createImageUsageLogicalCallId(result),
-    attempt: 0,
-    recordedAtMs: completedAtMs,
-    startedAtMs,
-    completedAtMs,
-    durationMs: completedAtMs - startedAtMs,
-    status,
+  await recorder.recordUsageEvent({
+    logicalCallId,
+    attempt: providerAttempt.attempt,
+    recordedAtMs: providerAttempt.completedAtMs,
+    startedAtMs: providerAttempt.startedAtMs,
+    completedAtMs: providerAttempt.completedAtMs,
+    durationMs: Math.max(0, providerAttempt.completedAtMs - providerAttempt.startedAtMs),
+    status: providerAttempt.status,
+    settlement: providerAttempt.status === 'success' ? 'complete' : 'unknown',
     callKind,
     callType: 'tool',
     purpose: sourceToolName ?? callKind,
@@ -76,24 +57,21 @@ function recordImageUsage(
     service: 'gateway',
     process: sourceToolName ?? mode,
     ...(sourceToolName ? { toolName: sourceToolName } : {}),
-    provider: provider ?? 'unknown',
-    model: model ?? 'unknown',
+    provider: providerAttempt.provider,
+    model: providerAttempt.model,
+    requestedProvider: params.provider ?? 'auto',
+    requestedModel: params.model ?? 'default',
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     totalTokens: 0,
-    estimatedCostUsd: 0,
     costSource: 'none',
-    ...(status === 'failure' ? {
-      errorCode: error instanceof Error ? error.name : 'ImageError',
-      errorMessage: error instanceof Error ? error.message : String(error ?? 'Image request failed'),
+    ...(providerAttempt.status === 'failure' ? {
+      errorCode: error?.name ?? 'ImageError',
+      errorMessage: error?.message ?? 'Image request failed',
     } : {}),
     metadata,
-  }).catch(recordError => {
-    log.warn('Failed to record image model usage', {
-      error: recordError instanceof Error ? recordError.message : String(recordError),
-    });
   });
 }
 
@@ -102,17 +80,27 @@ async function runImageWithUsage(
   callKind: 'image_create' | 'image_edit',
   mode: ImageMode,
   params: ImageUsageParams,
-  operation: () => Promise<ImageGenerationRpcResult>,
 ): Promise<ImageGenerationRpcResult> {
-  const startedAtMs = Date.now();
-  try {
-    const result = await operation();
-    recordImageUsage(runtime, callKind, mode, params, startedAtMs, 'success', result);
-    return result;
-  } catch (error) {
-    recordImageUsage(runtime, callKind, mode, params, startedAtMs, 'failure', undefined, error);
-    throw error;
+  if (!runtime.imageConfig) {
+    throw new Error('Image provider config is not wired on the gateway');
   }
+  const logicalCallId = `image:${randomUUID()}`;
+  const imageService = new ImageService(runtime.imageConfig, fetch, {
+    personalFilesDir: runtime.workspacePath,
+    onProviderAttempt: async providerAttempt => {
+      await recordImageProviderAttempt(
+        runtime,
+        callKind,
+        mode,
+        params,
+        logicalCallId,
+        providerAttempt,
+      );
+    },
+  });
+  return mode === 'create'
+    ? await imageService.create(params as ImageCreateParams)
+    : await imageService.edit(params as ImageEditParams);
 }
 
 const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationRpcResult>> = [
@@ -124,7 +112,6 @@ const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationR
         'image_create',
         'create',
         params,
-        () => requireImageService(runtime).create(params),
       ),
     summary: (params: ImageCreateParams) => ({
       provider: params.provider ?? 'auto',
@@ -141,7 +128,6 @@ const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationR
         'image_edit',
         'edit',
         params,
-        () => requireImageService(runtime).edit(params),
       ),
     summary: (params: ImageEditParams) => ({
       provider: params.provider ?? 'auto',

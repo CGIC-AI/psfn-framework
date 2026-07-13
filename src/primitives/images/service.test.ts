@@ -133,6 +133,7 @@ describe('ImageService', () => {
   });
 
   it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
+    const settledAttempts: Array<Record<string, unknown>> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
@@ -166,6 +167,11 @@ describe('ImageService', () => {
         falApiKey: 'fal-key',
       },
       fetchMock as typeof fetch,
+      {
+        onProviderAttempt: async attempt => {
+          settledAttempts.push(attempt as unknown as Record<string, unknown>);
+        },
+      },
     );
 
     const result = await service.create({
@@ -174,6 +180,22 @@ describe('ImageService', () => {
 
     expect(result.requestId).toBe('fal-retry-1');
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/xai/grok-imagine-image')).toHaveLength(2);
+    expect(settledAttempts).toMatchObject([
+      {
+        attempt: 1,
+        provider: 'fal',
+        model: 'xai/grok-imagine-image',
+        status: 'failure',
+        error: expect.any(Error),
+      },
+      {
+        attempt: 2,
+        provider: 'fal',
+        model: 'xai/grok-imagine-image',
+        status: 'success',
+        result: { requestId: 'fal-retry-1' },
+      },
+    ]);
   });
 
   it('falls back through the configured default FAL create model chain in auto mode', async () => {

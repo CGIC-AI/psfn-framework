@@ -6,6 +6,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from '@mariozechner/pi-ai';
+import { randomUUID } from 'node:crypto';
 import type {
   CompletionPurpose,
   CorrelationMetadata,
@@ -58,6 +59,7 @@ import {
   ModelBudgetController,
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
+  resolveModelUsageCostRates,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
 import {
@@ -75,6 +77,7 @@ import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lan
 import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 import {
   type CircuitBreakerTransition,
@@ -91,7 +94,6 @@ import {
   normalizeLLMUsageDetails,
   normalizeProxyModelId,
   normalizeSharedRouteKey,
-  normalizeUsageCost,
 } from './client-response-helpers.js';
 import {
   mergeModelHints,
@@ -142,6 +144,7 @@ export interface LLMClientRuntimeOptions {
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   usageRecorder?: ModelUsageRecorder;
+  providerCostResolver?: () => LLMUsageDetails['cost'] | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
@@ -172,8 +175,8 @@ export class LLMClient {
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
+  private providerCostResolver?: () => LLMUsageDetails['cost'] | undefined;
   private circuitBreaker: SlidingWindowCircuitBreaker;
-  private usageCallCounter = 0;
 
   constructor(
     config: SubstrateConfig,
@@ -192,6 +195,7 @@ export class LLMClient {
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
     this.usageRecorder = runtimeOptions.usageRecorder;
+    this.providerCostResolver = runtimeOptions.providerCostResolver;
     this.modelCallGate = new ModelCallGate();
     this.circuitBreaker = runtimeOptions.circuitBreaker ?? new SlidingWindowCircuitBreaker({
       failureThreshold: LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
@@ -621,26 +625,19 @@ export class LLMClient {
   private createUsageLogicalCallId(
     callKind: 'chat' | 'completion',
     purpose: RoutingPurpose,
-    candidate: RoutingCandidate,
     correlation: ResolvedCorrelationMetadata | undefined,
-    attempt: number,
   ): string {
-    this.usageCallCounter += 1;
     return [
       'llm',
-      process.pid,
-      this.usageCallCounter,
+      randomUUID(),
       callKind,
       purpose,
       correlation?.requestId ?? 'unknown',
       correlation?.toolCallId ?? 'none',
-      candidate.provider,
-      candidate.model,
-      attempt,
     ].join(':');
   }
 
-  private recordUsage(
+  private async recordUsage(
     purpose: RoutingPurpose,
     callKind: 'chat' | 'completion',
     candidate: RoutingCandidate,
@@ -653,26 +650,60 @@ export class LLMClient {
       completedAtMs: number;
       ttftMs?: number;
       attempt: number;
+      logicalCallId: string;
+      requestedProvider: string;
+      requestedModel: string;
+      status: 'success' | 'failure';
+      settlement: 'complete' | 'partial' | 'unknown';
       stopReason?: string;
+      error?: Error;
       providerObservability?: LLMProviderObservability;
       metadata?: Record<string, unknown>;
     },
-  ): void {
+  ): Promise<void> {
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
-    const budgetRecord = this.budgetController.recordUsage({
-      candidate,
-      purpose,
-      service,
-      process,
-      inputTokens,
-      outputTokens,
-      correlation,
-    });
+    if (
+      options.status === 'success'
+      || inputTokens > 0
+      || outputTokens > 0
+      || (usageDetails?.cacheRead ?? 0) > 0
+      || (usageDetails?.cacheWrite ?? 0) > 0
+    ) {
+      this.budgetController.recordUsage({
+        candidate,
+        purpose,
+        service,
+        process,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens: usageDetails?.cacheRead ?? 0,
+        cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
+        correlation,
+      });
+    }
     const chargeSnapshot = getRunChargeSnapshot();
-    const providerCostUsd = normalizeUsageCost(usageDetails?.cost?.total);
-    const estimatedCostUsd = normalizeUsageCost(budgetRecord.estimatedCostUsd) ?? 0;
-    const logicalCallId = this.createUsageLogicalCallId(callKind, purpose, candidate, correlation, options.attempt);
+    const capturedProviderCost = this.providerCostResolver?.();
+    const providerCost = usageDetails?.cost || capturedProviderCost
+      ? {
+          ...(usageDetails?.cost ?? {}),
+          ...(capturedProviderCost ?? {}),
+        }
+      : undefined;
+    const accountingRates = resolveModelUsageCostRates(this.config, candidate);
+    const accounting = reconcileModelUsageAccounting({
+      usage: {
+        inputTokens: usageDetails?.input ?? inputTokens,
+        outputTokens: usageDetails?.output ?? outputTokens,
+        cacheReadTokens: usageDetails?.cacheRead ?? 0,
+        cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
+        ...(usageDetails?.totalTokens !== undefined
+          ? { totalTokens: usageDetails.totalTokens }
+          : {}),
+      },
+      ...(providerCost ? { providerCost } : {}),
+      ...(accountingRates ? { estimatedRates: accountingRates } : {}),
+    });
     const metadata = {
       ...(options.metadata ?? {}),
       ...(options.providerObservability
@@ -687,18 +718,21 @@ export class LLMClient {
           }
         : {}),
       ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
-      ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
+      ...(providerCost ? { providerCost } : {}),
     };
 
-    void this.usageRecorder?.recordUsageEvent({
-      logicalCallId,
+    if (!this.usageRecorder) return;
+    try {
+      await this.usageRecorder.recordUsageEvent({
+      logicalCallId: options.logicalCallId,
       attempt: options.attempt,
       recordedAtMs: options.completedAtMs,
       startedAtMs: options.startedAtMs,
       completedAtMs: options.completedAtMs,
       durationMs: Math.max(0, options.completedAtMs - options.startedAtMs),
       ...(options.ttftMs !== undefined ? { ttftMs: options.ttftMs } : {}),
-      status: 'success',
+      status: options.status,
+      settlement: options.settlement,
       callKind,
       callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
       purpose,
@@ -722,20 +756,30 @@ export class LLMClient {
       provider: candidate.provider,
       model: normalizeModelIdForProvider(candidate.provider, candidate.model),
       ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
-      requestedProvider: candidate.provider,
-      requestedModel: candidate.model,
-      inputTokens: usageDetails?.input ?? inputTokens,
-      outputTokens: usageDetails?.output ?? outputTokens,
-      cacheReadTokens: usageDetails?.cacheRead ?? 0,
-      cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
-      ...(usageDetails?.totalTokens !== undefined ? { totalTokens: usageDetails.totalTokens } : {}),
-      ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
-      estimatedCostUsd,
-      costSource: providerCostUsd !== undefined ? 'provider' : (estimatedCostUsd > 0 ? 'estimate' : 'none'),
-      ...(usageDetails?.cost?.currency ? { currency: usageDetails.cost.currency } : {}),
+      requestedProvider: options.requestedProvider,
+      requestedModel: options.requestedModel,
+      ...accounting.usage,
+      providerCost: accounting.providerCost,
+      estimatedCost: accounting.estimatedCost,
+      effectiveCost: accounting.effectiveCost,
+      ...(accounting.providerCost.total !== undefined
+        ? { providerCostUsd: accounting.providerCost.total }
+        : {}),
+      ...(accounting.estimatedCost.total !== undefined
+        ? { estimatedCostUsd: accounting.estimatedCost.total }
+        : {}),
+      ...(accounting.effectiveCost.total !== undefined
+        ? { effectiveCostUsd: accounting.effectiveCost.total }
+        : {}),
+      costSource: accounting.costSource,
+      ...(accounting.effectiveCost.currency ? { currency: accounting.effectiveCost.currency } : {}),
       ...(options.stopReason ? { stopReason: options.stopReason } : {}),
+      ...(options.error
+        ? { errorCode: options.error.name, errorMessage: options.error.message }
+        : {}),
       metadata,
-    }).catch((error) => {
+      });
+    } catch (error) {
       log.warn('Failed to persist model usage event', {
         error: error instanceof Error ? error.message : String(error),
         provider: candidate.provider,
@@ -743,20 +787,23 @@ export class LLMClient {
         purpose,
         ...correlation,
       });
-    });
+      throw markErrorAsNonRetryable(new Error(
+        `Failed to persist model usage event: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      ));
+    }
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
+    const accountingInputTokens = this.estimateBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const modelHint = mergeModelHints(context.modelHint, undefined);
-    const startedAtMs = Date.now();
-    let firstTokenAtMs: number | undefined;
-    // mihm: retries spent re-running the winning completion because it carried a
-    // corrupt-empty tool call. Recorded into model-usage metadata_json so incidents
-    // are queryable. Stays 0 unless the empty-args backstop engaged.
-    let emptyArgsRetries = 0;
+    const logicalCallId = this.createUsageLogicalCallId('chat', 'chat', correlation);
+    let physicalAttempt = 0;
+    let requestedProvider = modelHint?.provider;
+    let requestedModel = modelHint?.model;
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -806,8 +853,15 @@ export class LLMClient {
             correlation,
             purpose: 'chat',
             extractToolCalls: (result) => result.toolCalls,
-            onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+            onRetriesResolved: () => {},
             attempt: (attemptIndex) => withRetry(async () => {
+            physicalAttempt += 1;
+            const usageAttempt = physicalAttempt;
+            const attemptStartedAtMs = Date.now();
+            let attemptFirstTokenAtMs: number | undefined;
+            const markFirstToken = (): void => {
+              attemptFirstTokenAtMs ??= Date.now();
+            };
             const eventStream = streamSimple(
               model,
               piContext,
@@ -821,6 +875,8 @@ export class LLMClient {
             let emittedData = false;
             let emittedTextLength = 0;
             let sawTextDelta = false;
+            let providerCompleted = false;
+            let rawUsageEvidence: unknown;
             // gu8m: total raw tool-argument-fragment bytes observed across the whole
             // stream. Lets us classify empty final tool arguments as provider_emitted_empty
             // (no fragments ever arrived) vs stream_parse_dropped (fragments arrived but the
@@ -832,7 +888,7 @@ export class LLMClient {
               for await (const event of eventStream) {
                 switch (event.type) {
                   case 'text_delta':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                    markFirstToken();
                     sawTextDelta = true;
                     content += event.delta;
                     assertNoProviderResponsePrefixArtifact(content, candidateTarget);
@@ -850,7 +906,7 @@ export class LLMClient {
                     break;
 
                   case 'thinking_delta':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                    markFirstToken();
                     emittedData = true;
                     reasoning += event.delta;
                     break;
@@ -864,7 +920,7 @@ export class LLMClient {
                   }
 
                   case 'toolcall_end':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                    markFirstToken();
                     emittedData = true;
                     toolCalls.push({
                       id: event.toolCall.id,
@@ -875,7 +931,9 @@ export class LLMClient {
                     break;
 
                   case 'done': {
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                    markFirstToken();
+                    providerCompleted = true;
+                    rawUsageEvidence = event.message.usage;
                     const contentBlocks = event.message.content as unknown[];
                     const finalTextContent = extractTextContent(contentBlocks);
                     // If text_delta events didn't fire, extract text from content blocks
@@ -931,11 +989,82 @@ export class LLMClient {
               if (emittedData) {
                 markErrorAsNonRetryable(err);
               }
+              const partialOutput = `${content}${reasoning}`;
+              const partialUsage = emittedData && !providerCompleted
+                ? normalizeLLMUsageDetails(
+                    undefined,
+                    accountingInputTokens,
+                    Math.max(1, countMessageTokens([{ role: 'assistant', content: partialOutput }])),
+                  )
+                : undefined;
+              await this.recordUsage(
+                'chat',
+                'chat',
+                candidateTarget,
+                partialUsage?.input ?? 0,
+                partialUsage?.output ?? 0,
+                correlation,
+                partialUsage,
+                {
+                  startedAtMs: attemptStartedAtMs,
+                  completedAtMs: Date.now(),
+                  ...(attemptFirstTokenAtMs !== undefined
+                    ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
+                    : {}),
+                  attempt: usageAttempt,
+                  logicalCallId,
+                  requestedProvider: requestedProvider ?? candidateTarget.provider,
+                  requestedModel: requestedModel ?? candidateTarget.model,
+                  status: 'failure',
+                  settlement: providerCompleted ? 'complete' : emittedData ? 'partial' : 'unknown',
+                  error: err,
+                  providerObservability,
+                  metadata: {
+                    emptyToolArgsAttempt: attemptIndex,
+                    emptyArgsRetries: attemptIndex,
+                    partialOutputChars: partialOutput.length,
+                    ...(providerCompleted ? { malformedRawUsage: rawUsageEvidence } : {}),
+                  },
+                },
+              );
               throw err;
             }
 
             if (response) {
-              assertUsableProviderResponse(response, candidateTarget);
+              try {
+                assertUsableProviderResponse(response, candidateTarget);
+              } catch (error) {
+                const err = error instanceof Error ? error : new Error(String(error));
+                await this.recordUsage(
+                  'chat',
+                  'chat',
+                  candidateTarget,
+                  response.inputTokens,
+                  response.outputTokens,
+                  correlation,
+                  response.usageDetails,
+                  {
+                    startedAtMs: attemptStartedAtMs,
+                    completedAtMs: Date.now(),
+                    ...(attemptFirstTokenAtMs !== undefined
+                      ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
+                      : {}),
+                    attempt: usageAttempt,
+                    logicalCallId,
+                    requestedProvider: requestedProvider ?? candidateTarget.provider,
+                    requestedModel: requestedModel ?? candidateTarget.model,
+                    status: 'failure',
+                    settlement: 'complete',
+                    error: err,
+                    providerObservability,
+                    metadata: {
+                      emptyToolArgsAttempt: attemptIndex,
+                      emptyArgsRetries: attemptIndex,
+                    },
+                  },
+                );
+                throw err;
+              }
               logEmptyToolArgumentProvenance(
                 response.toolCalls,
                 toolArgumentFragmentBytes,
@@ -943,22 +1072,85 @@ export class LLMClient {
                 correlation,
                 attemptIndex,
               );
+              await this.recordUsage(
+                'chat',
+                'chat',
+                candidateTarget,
+                response.inputTokens,
+                response.outputTokens,
+                correlation,
+                response.usageDetails,
+                {
+                  startedAtMs: attemptStartedAtMs,
+                  completedAtMs: Date.now(),
+                  ...(attemptFirstTokenAtMs !== undefined
+                    ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
+                    : {}),
+                  attempt: usageAttempt,
+                  logicalCallId,
+                  requestedProvider: requestedProvider ?? candidateTarget.provider,
+                  requestedModel: requestedModel ?? candidateTarget.model,
+                  status: 'success',
+                  settlement: 'complete',
+                  stopReason: response.stopReason,
+                  providerObservability,
+                  metadata: {
+                    emptyToolArgsAttempt: attemptIndex,
+                    emptyArgsRetries: attemptIndex,
+                    toolCallCount: response.toolCalls.length,
+                  },
+                },
+              );
               return response;
             }
 
             log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
+            const incompleteUsage = normalizeLLMUsageDetails(
+              undefined,
+              accountingInputTokens,
+              Math.max(1, countMessageTokens([{ role: 'assistant', content: `${content}${reasoning}` }])),
+            );
             const incompleteResponse = {
               content,
               ...(reasoning ? { reasoning } : {}),
               providerObservability,
               toolCalls,
               model: String(model.id),
-              inputTokens: 0,
-              outputTokens: 0,
-              usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
+              inputTokens: incompleteUsage.input,
+              outputTokens: incompleteUsage.output,
+              usageDetails: incompleteUsage,
               stopReason: 'unknown',
             };
             assertUsableProviderResponse(incompleteResponse, candidateTarget);
+            await this.recordUsage(
+              'chat',
+              'chat',
+              candidateTarget,
+              incompleteUsage.input,
+              incompleteUsage.output,
+              correlation,
+              incompleteUsage,
+              {
+                startedAtMs: attemptStartedAtMs,
+                completedAtMs: Date.now(),
+                ...(attemptFirstTokenAtMs !== undefined
+                  ? { ttftMs: Math.max(0, attemptFirstTokenAtMs - attemptStartedAtMs) }
+                  : {}),
+                attempt: usageAttempt,
+                logicalCallId,
+                requestedProvider: requestedProvider ?? candidateTarget.provider,
+                requestedModel: requestedModel ?? candidateTarget.model,
+                status: 'success',
+                settlement: 'partial',
+                stopReason: 'unknown',
+                providerObservability,
+                metadata: {
+                  emptyToolArgsAttempt: attemptIndex,
+                  emptyArgsRetries: attemptIndex,
+                  partialOutputChars: content.length + reasoning.length,
+                },
+              },
+            );
             return incompleteResponse;
           }, llmRetryConfig(this.config), {
             circuitBreaker: {
@@ -987,6 +1179,10 @@ export class LLMClient {
           modelHint,
           correlation,
           estimatedInputTokens,
+          onCandidateSelected: candidate => {
+            requestedProvider ??= candidate.provider;
+            requestedModel ??= candidate.model;
+          },
         },
       );
 
@@ -1001,29 +1197,6 @@ export class LLMClient {
         ...correlation,
         purpose: 'chat',
       });
-
-      this.recordUsage(
-        'chat',
-        'chat',
-        candidate,
-        finalResponse.inputTokens,
-        finalResponse.outputTokens,
-        correlation,
-        finalResponse.usageDetails,
-        {
-          startedAtMs,
-          completedAtMs: Date.now(),
-          ...(firstTokenAtMs !== undefined ? { ttftMs: Math.max(0, firstTokenAtMs - startedAtMs) } : {}),
-          attempt: attempts,
-          stopReason: finalResponse.stopReason,
-          providerObservability: finalResponse.providerObservability,
-          metadata: {
-            fallbackAttempts: attempts,
-            toolCallCount: finalResponse.toolCalls.length,
-            emptyArgsRetries,
-          },
-        },
-      );
 
       callbacks?.onDone?.(finalResponse);
       return finalResponse;
@@ -1044,10 +1217,10 @@ export class LLMClient {
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     const modelHint = mergeModelHints(context.modelHint, options.modelHint);
-    const startedAtMs = Date.now();
-    // mihm: see stream(). disableRetry callers opt out of all retries, so the
-    // empty-args backstop only engages on the retrying path; stays 0 otherwise.
-    let emptyArgsRetries = 0;
+    const logicalCallId = this.createUsageLogicalCallId('completion', routingPurpose, correlation);
+    let physicalAttempt = 0;
+    let requestedProvider = modelHint?.provider;
+    let requestedModel = modelHint?.model;
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -1100,25 +1273,139 @@ export class LLMClient {
           promptCaching ?? undefined,
         );
 
-        const request = async () => {
+        const request = async (emptyArgsRetries: number) => {
+          physicalAttempt += 1;
+          const attempt = physicalAttempt;
+          const attemptStartedAtMs = Date.now();
+          let response: Awaited<ReturnType<typeof completeSimple>>;
           try {
-            return await completeSimple(
+            response = await completeSimple(
               model,
               piContext,
               requestOptions,
             );
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
+            await this.recordUsage(
+              routingPurpose,
+              'completion',
+              candidateTarget,
+              0,
+              0,
+              correlation,
+              undefined,
+              {
+                startedAtMs: attemptStartedAtMs,
+                completedAtMs: Date.now(),
+                attempt,
+                logicalCallId,
+                requestedProvider: requestedProvider ?? candidateTarget.provider,
+                requestedModel: requestedModel ?? candidateTarget.model,
+                status: 'failure',
+                settlement: 'unknown',
+                error: err,
+                providerObservability,
+                metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
+              },
+            );
             if (isAbortError(err) || options.signal?.aborted) {
               markErrorAsNonRetryable(err);
             }
             throw err;
           }
+          let usageDetails: LLMUsageDetails;
+          try {
+            usageDetails = normalizeLLMUsageDetails(
+              response.usage,
+              response.inputTokens ?? 0,
+              response.outputTokens ?? 0,
+            );
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            await this.recordUsage(
+              routingPurpose,
+              'completion',
+              candidateTarget,
+              0,
+              0,
+              correlation,
+              undefined,
+              {
+                startedAtMs: attemptStartedAtMs,
+                completedAtMs: Date.now(),
+                attempt,
+                logicalCallId,
+                requestedProvider: requestedProvider ?? candidateTarget.provider,
+                requestedModel: requestedModel ?? candidateTarget.model,
+                status: 'failure',
+                settlement: 'complete',
+                error: err,
+                providerObservability,
+                metadata: {
+                  completionPurpose: purpose,
+                  routingPurpose,
+                  emptyArgsRetries,
+                  malformedRawUsage: response.usage,
+                },
+              },
+            );
+            throw err;
+          }
+          try {
+            assertUsableProviderResponse(response, candidateTarget);
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            await this.recordUsage(
+              routingPurpose,
+              'completion',
+              candidateTarget,
+              usageDetails.input,
+              usageDetails.output,
+              correlation,
+              usageDetails,
+              {
+                startedAtMs: attemptStartedAtMs,
+                completedAtMs: Date.now(),
+                attempt,
+                logicalCallId,
+                requestedProvider: requestedProvider ?? candidateTarget.provider,
+                requestedModel: requestedModel ?? candidateTarget.model,
+                status: 'failure',
+                settlement: 'complete',
+                error: err,
+                providerObservability,
+                metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
+              },
+            );
+            throw err;
+          }
+          await this.recordUsage(
+            routingPurpose,
+            'completion',
+            candidateTarget,
+            usageDetails.input,
+            usageDetails.output,
+            correlation,
+            usageDetails,
+            {
+              startedAtMs: attemptStartedAtMs,
+              completedAtMs: Date.now(),
+              attempt,
+              logicalCallId,
+              requestedProvider: requestedProvider ?? candidateTarget.provider,
+              requestedModel: requestedModel ?? candidateTarget.model,
+              status: 'success',
+              settlement: 'complete',
+              stopReason: response.stopReason,
+              providerObservability,
+              metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
+            },
+          );
+          return response;
         };
 
         if (options.disableRetry) {
-          const response = await request();
-          assertUsableProviderResponse(response, candidateTarget);
+          const response = await request(0);
           return {
             response,
             providerObservability,
@@ -1134,10 +1421,9 @@ export class LLMClient {
           correlation,
           purpose,
           extractToolCalls: (result) => extractCompletionToolCalls(result.response),
-          onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+          onRetriesResolved: () => {},
           attempt: (attemptIndex) => withRetry(async () => {
-            const attemptResponse = await request();
-            assertUsableProviderResponse(attemptResponse, candidateTarget);
+            const attemptResponse = await request(attemptIndex);
             logEmptyToolArgumentProvenance(
               extractCompletionToolCalls(attemptResponse),
               // Non-streaming: there is no fragment channel, so an empty payload is
@@ -1177,6 +1463,10 @@ export class LLMClient {
           correlation,
           estimatedInputTokens,
           signal: options.signal,
+          onCandidateSelected: candidate => {
+            requestedProvider ??= candidate.provider;
+            requestedModel ??= candidate.model;
+          },
         },
       );
 
@@ -1230,29 +1520,6 @@ export class LLMClient {
     );
     const inputTokens = usageDetails.input;
     const outputTokens = usageDetails.output;
-
-    this.recordUsage(
-      routingPurpose,
-      'completion',
-      candidate,
-      inputTokens,
-      outputTokens,
-      correlation,
-      usageDetails,
-      {
-        startedAtMs,
-        completedAtMs: Date.now(),
-        attempt: attempts,
-        stopReason: completionResponse.stopReason ?? 'unknown',
-        providerObservability,
-        metadata: {
-          completionPurpose: purpose,
-          routingPurpose,
-          fallbackAttempts: attempts,
-          emptyArgsRetries,
-        },
-      },
-    );
 
     return {
       content: normalizeContent(content),
@@ -1320,6 +1587,7 @@ export class LLMClient {
       correlation?: ResolvedCorrelationMetadata;
       estimatedInputTokens?: number;
       signal?: AbortSignal;
+      onCandidateSelected?: (candidate: RoutingCandidate) => void;
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     if (this.eligibilityGate) {
@@ -1351,6 +1619,7 @@ export class LLMClient {
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       const effectiveCandidate = this.applyPurposeOutputLimits(purpose, candidate);
+      options.onCandidateSelected?.(effectiveCandidate);
       this.evaluateBudgetPreflight(
         purpose,
         effectiveCandidate,

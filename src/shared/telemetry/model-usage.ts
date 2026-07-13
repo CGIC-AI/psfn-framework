@@ -14,6 +14,7 @@ export const MODEL_USAGE_CALL_KINDS = [
 
 export type ModelUsageCallKind = typeof MODEL_USAGE_CALL_KINDS[number];
 export type ModelUsageStatus = 'success' | 'failure';
+export type ModelUsageSettlement = 'complete' | 'partial' | 'unknown';
 export type ModelUsageCostSource = 'provider' | 'estimate' | 'none';
 
 export interface ModelUsageCostBreakdown {
@@ -35,6 +36,7 @@ export interface ModelUsageEventInput {
   durationMs?: number;
   ttftMs?: number;
   status: ModelUsageStatus;
+  settlement?: ModelUsageSettlement;
   callKind: ModelUsageCallKind;
   callType: ObservabilityCallType;
   purpose: string;
@@ -64,6 +66,10 @@ export interface ModelUsageEventInput {
   totalTokens?: number;
   providerCostUsd?: number;
   estimatedCostUsd?: number;
+  effectiveCostUsd?: number;
+  providerCost?: ModelUsageCostBreakdown;
+  estimatedCost?: ModelUsageCostBreakdown;
+  effectiveCost?: ModelUsageCostBreakdown;
   costSource?: ModelUsageCostSource;
   currency?: string;
   stopReason?: string;
@@ -80,6 +86,7 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'recordedAtMs'
   | 'startedAtMs'
   | 'status'
+  | 'settlement'
   | 'callKind'
   | 'callType'
   | 'purpose'
@@ -92,6 +99,9 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'totalTokens'
   | 'estimatedCostUsd'
   | 'costSource'
+  | 'providerCost'
+  | 'estimatedCost'
+  | 'effectiveCost'
 >> {
   dayKey: string;
   monthKey: string;
@@ -116,6 +126,7 @@ export interface ModelUsageEvent extends Required<Pick<
   requestedProvider?: string;
   requestedModel?: string;
   providerCostUsd?: number;
+  effectiveCostUsd?: number;
   currency?: string;
   stopReason?: string;
   errorCode?: string;

@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
+import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createHarness() {
+function createHarness(options: {
+  embeddingService?: GatewayMethodRuntime['embeddingService'] & {
+    embedBatchWithUsage?: (texts: string[]) => Promise<unknown>;
+  };
+  usageEvents?: ModelUsageEventInput[];
+} = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn(async () => ({
     content: 'streamed',
@@ -75,11 +81,18 @@ function createHarness() {
       stream,
       complete,
     } as any,
-    embeddingService: {
+    embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),
       dims: 1,
     } as any,
+    ...(options.usageEvents ? {
+      modelUsageRecorder: {
+        async recordUsageEvent(event: ModelUsageEventInput) {
+          options.usageEvents?.push(event);
+        },
+      },
+    } : {}),
     modelDiscovery,
     discordAdapter: {} as any,
     policyConfig: { workspacePath: process.cwd() },
@@ -332,5 +345,53 @@ describe('registerLLMMethods', () => {
         currency: 'USD',
       },
     });
+  });
+
+  it('awaits canonical embedding usage persistence with provider token and cost evidence', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 2,
+          cacheWrite: 0,
+          totalTokens: 9,
+          cost: { total: 0.000009, currency: 'USD' },
+          raw: { prompt_tokens: 9, total_tokens: 9 },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await expect(harness.invoke('llm.embed', { texts: ['first'] })).resolves.toEqual({
+      embeddings: [[1, 2, 3]],
+    });
+
+    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first']);
+    expect(embeddingService.embedBatch).not.toHaveBeenCalled();
+    expect(usageEvents).toMatchObject([{
+      attempt: 1,
+      status: 'success',
+      settlement: 'complete',
+      callKind: 'embedding',
+      provider: 'api',
+      model: 'text-embedding-3-small',
+      inputTokens: 7,
+      outputTokens: 0,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 0,
+      totalTokens: 9,
+      providerCost: { total: 0.000009, currency: 'USD' },
+      metadata: expect.objectContaining({
+        rawUsage: { prompt_tokens: 9, total_tokens: 9 },
+      }),
+    }]);
   });
 });

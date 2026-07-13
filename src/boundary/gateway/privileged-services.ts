@@ -11,6 +11,7 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import type { PolicyConfig } from './policy.js';
+import { activeGatewayCapturedProviderCost } from './llm-cost-capture.js';
 
 export interface GatewayPrivilegedServiceRegistry extends ProviderRuntimeServices {
   modelDiscovery?: ModelDiscovery;
@@ -53,7 +54,11 @@ export function createGatewayPrivilegedServiceRegistry(
   const providerRuntime = createProviderRuntimeServices({
     config: input.config,
     providerEnv: input.providerEnv,
-    llmOptions: input.llmOptions,
+    llmOptions: {
+      ...(input.llmOptions ?? {}),
+      providerCostResolver: input.llmOptions?.providerCostResolver
+        ?? activeGatewayCapturedProviderCost,
+    },
   });
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(input.config);
   const modelDiscovery = litellmBaseUrl

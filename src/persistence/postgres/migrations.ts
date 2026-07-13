@@ -1006,6 +1006,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     day_key TEXT NOT NULL,
     month_key TEXT NOT NULL,
     status TEXT NOT NULL,
+    settlement TEXT NOT NULL DEFAULT 'unknown',
     call_kind TEXT NOT NULL,
     call_type TEXT NOT NULL,
     purpose TEXT NOT NULL,
@@ -1033,19 +1034,104 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     total_tokens INTEGER NOT NULL DEFAULT 0,
+    provider_input_cost_usd DOUBLE PRECISION,
+    provider_output_cost_usd DOUBLE PRECISION,
+    provider_cache_read_cost_usd DOUBLE PRECISION,
+    provider_cache_write_cost_usd DOUBLE PRECISION,
     provider_cost_usd DOUBLE PRECISION,
+    estimated_input_cost_usd DOUBLE PRECISION,
+    estimated_output_cost_usd DOUBLE PRECISION,
+    estimated_cache_read_cost_usd DOUBLE PRECISION,
+    estimated_cache_write_cost_usd DOUBLE PRECISION,
     estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    effective_input_cost_usd DOUBLE PRECISION,
+    effective_output_cost_usd DOUBLE PRECISION,
+    effective_cache_read_cost_usd DOUBLE PRECISION,
+    effective_cache_write_cost_usd DOUBLE PRECISION,
+    effective_cost_usd DOUBLE PRECISION,
     cost_source TEXT NOT NULL DEFAULT 'none',
     currency TEXT,
     stop_reason TEXT,
     error_code TEXT,
     error_message TEXT,
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    event_fingerprint TEXT NOT NULL,
     CHECK (status IN ('success', 'failure')),
+    CHECK (settlement IN ('complete', 'partial', 'unknown')),
     CHECK (call_kind IN ('chat', 'completion', 'embedding', 'image_create', 'image_edit')),
     CHECK (cost_source IN ('provider', 'estimate', 'none')),
+    CONSTRAINT model_usage_events_token_accounting_check CHECK (
+      attempt >= 0
+      AND input_tokens >= 0
+      AND output_tokens >= 0
+      AND cache_read_tokens >= 0
+      AND cache_write_tokens >= 0
+      AND total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+    ),
     UNIQUE (logical_call_id, attempt)
   );
+  `,
+  `
+  ALTER TABLE model_usage_events
+    ADD COLUMN IF NOT EXISTS settlement TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS provider_input_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS provider_output_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS provider_cache_read_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS provider_cache_write_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS estimated_input_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS estimated_output_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS estimated_cache_read_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS estimated_cache_write_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS effective_input_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS effective_output_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS effective_cache_read_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS effective_cache_write_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS effective_cost_usd DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS event_fingerprint TEXT;
+  `,
+  `
+  UPDATE model_usage_events
+  SET
+    settlement = CASE WHEN status = 'success' THEN 'complete' ELSE 'unknown' END,
+    effective_cost_usd = COALESCE(effective_cost_usd, provider_cost_usd, estimated_cost_usd),
+    event_fingerprint = COALESCE(event_fingerprint, 'legacy:' || id)
+  WHERE event_fingerprint IS NULL OR effective_cost_usd IS NULL;
+  `,
+  `ALTER TABLE model_usage_events ALTER COLUMN event_fingerprint SET NOT NULL;`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_settlement_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_settlement_check
+        CHECK (settlement IN ('complete', 'partial', 'unknown'));
+    END IF;
+  END $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_token_accounting_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_token_accounting_check
+        CHECK (
+          attempt >= 0
+          AND input_tokens >= 0
+          AND output_tokens >= 0
+          AND cache_read_tokens >= 0
+          AND cache_write_tokens >= 0
+          AND total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        ) NOT VALID;
+    END IF;
+  END $$;
   `,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_recorded_at ON model_usage_events(recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_day ON model_usage_events(day_key, recorded_at_ms DESC);`,

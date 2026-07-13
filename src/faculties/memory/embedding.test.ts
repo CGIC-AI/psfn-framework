@@ -5,6 +5,7 @@ import {
   DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
   STARTUP_EMBEDDING_WARMUP_TEXT,
   OllamaEmbeddingProvider,
+  ApiEmbeddingProvider,
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromConfig,
   createEmbeddingProviderFromEnv,
@@ -315,6 +316,42 @@ describe('embedding providers', () => {
     expect(JSON.parse(String(init.body))).toEqual({
       model: 'text-embedding-3-small',
       input: ['first', 'second'],
+    });
+  });
+
+  it('preserves provider token and cost usage alongside API embedding vectors', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+        cost: {
+          input: 0.0000011,
+          total: 0.0000011,
+          currency: 'usd',
+        },
+      },
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.embeddings).toEqual([new Float32Array([1, 2, 3])]);
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 11,
+      cost: {
+        input: 0.0000011,
+        total: 0.0000011,
+        currency: 'USD',
+      },
     });
   });
 

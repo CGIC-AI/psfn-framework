@@ -84,14 +84,72 @@ export function normalizeLLMUsageDetails(
   fallbackInputTokens: number,
   fallbackOutputTokens: number,
 ): LLMUsageDetails {
+  if (value !== undefined && !isRecord(value)) {
+    throw new Error('Provider usage must be an object when present');
+  }
   const record = isRecord(value) ? value : {};
+  const recognizedKeys = [
+    'input',
+    'output',
+    'cacheRead',
+    'cacheWrite',
+    'totalTokens',
+    'prompt_tokens',
+    'completion_tokens',
+    'total_tokens',
+    'input_tokens',
+    'output_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+    'prompt_cache_hit_tokens',
+    'promptTokenCount',
+    'candidatesTokenCount',
+    'cachedContentTokenCount',
+    'totalTokenCount',
+    'prompt_tokens_details',
+    'input_tokens_details',
+    'cost',
+  ] as const;
+  if (value !== undefined && !recognizedKeys.some(key => Object.hasOwn(record, key))) {
+    throw new Error('Unsupported provider usage shape');
+  }
+  const countKeys = recognizedKeys.filter(key => ![
+    'prompt_tokens_details',
+    'input_tokens_details',
+    'cost',
+  ].includes(key));
+  for (const key of countKeys) {
+    if (!Object.hasOwn(record, key)) continue;
+    const count = record[key];
+    if (typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+      throw new Error(`usage.${key} must be a non-negative integer`);
+    }
+  }
   const promptTokenDetails = optionalRecord(record.prompt_tokens_details);
-  const promptTokens = normalizeUsageCount(record.prompt_tokens);
-  const cacheWriteFromRaw = normalizeUsageCount(promptTokenDetails.cache_write_tokens);
+  const inputTokenDetails = optionalRecord(record.input_tokens_details);
+  for (const [detailsName, details] of [
+    ['prompt_tokens_details', promptTokenDetails],
+    ['input_tokens_details', inputTokenDetails],
+  ] as const) {
+    for (const key of ['cached_tokens', 'cache_write_tokens'] as const) {
+      if (!Object.hasOwn(details, key)) continue;
+      const count = details[key];
+      if (typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+        throw new Error(`usage.${detailsName}.${key} must be a non-negative integer`);
+      }
+    }
+  }
+  const promptTokens = normalizeUsageCount(record.prompt_tokens)
+    || normalizeUsageCount(record.promptTokenCount);
+  const responseInputTokens = normalizeUsageCount(record.input_tokens);
+  const cacheWriteFromRaw = normalizeUsageCount(promptTokenDetails.cache_write_tokens)
+    || normalizeUsageCount(record.cache_creation_input_tokens);
   const reportedCachedTokens = normalizeUsageCount(promptTokenDetails.cached_tokens)
-    || normalizeUsageCount(record.prompt_cache_hit_tokens);
-  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
-    || cacheWriteFromRaw;
+    || normalizeUsageCount(inputTokenDetails.cached_tokens)
+    || normalizeUsageCount(record.prompt_cache_hit_tokens)
+    || normalizeUsageCount(record.cachedContentTokenCount)
+    || normalizeUsageCount(record.cache_read_input_tokens);
+  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite') || cacheWriteFromRaw;
   const cacheReadFromRaw = cacheWriteFromRaw > 0
     ? Math.max(0, reportedCachedTokens - cacheWriteFromRaw)
     : reportedCachedTokens;
@@ -99,16 +157,42 @@ export function normalizeLLMUsageDetails(
     || cacheReadFromRaw;
   const inputFromRaw = promptTokens > 0
     ? Math.max(0, promptTokens - cacheReadFromRaw - cacheWriteFromRaw)
-    : 0;
+    : responseInputTokens > 0
+      ? (Object.hasOwn(record, 'cache_read_input_tokens') || Object.hasOwn(record, 'cache_creation_input_tokens')
+          ? responseInputTokens
+          : Math.max(0, responseInputTokens - cacheReadFromRaw - cacheWriteFromRaw))
+      : 0;
   const input = normalizeUsageCountFromRecord(record, 'input')
     || inputFromRaw
     || normalizeUsageCount(fallbackInputTokens);
   // pi-ai 0.73.1 follows OpenAI semantics: completion_tokens already includes
   // completion_tokens_details.reasoning_tokens, so do not add reasoning again.
-  const output = normalizeUsageCountFromRecord(record, 'output', 'completion_tokens')
+  const output = normalizeUsageCountFromRecord(
+    record,
+    'output',
+    'completion_tokens',
+    'output_tokens',
+    'candidatesTokenCount',
+  )
     || normalizeUsageCount(fallbackOutputTokens);
-  const totalTokens = normalizeUsageCountFromRecord(record, 'totalTokens', 'total_tokens')
-    || input + output + cacheRead + cacheWrite;
+  const reconciledTotalTokens = input + output + cacheRead + cacheWrite;
+  const reportedTotalTokens = normalizeUsageCountFromRecord(
+    record,
+    'totalTokens',
+    'total_tokens',
+    'totalTokenCount',
+  );
+  if (reportedTotalTokens > 0 && reportedTotalTokens !== reconciledTotalTokens) {
+    const totalKey = Object.hasOwn(record, 'totalTokens')
+      ? 'totalTokens'
+      : Object.hasOwn(record, 'total_tokens')
+        ? 'total_tokens'
+        : 'totalTokenCount';
+    throw new Error(
+      `usage.${totalKey} must equal input + output + cacheRead + cacheWrite (${reconciledTotalTokens})`,
+    );
+  }
+  const totalTokens = reportedTotalTokens || reconciledTotalTokens;
   const cost = normalizeLLMUsageCostDetails(record.cost);
   return {
     input,

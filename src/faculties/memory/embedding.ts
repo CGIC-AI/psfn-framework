@@ -15,6 +15,9 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
+import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -45,6 +48,11 @@ interface FeatureExtractionPipelineType {
 export interface EmbeddingRuntimeProvider extends EmbeddingProviderPort {
   readonly kind: EmbeddingProviderKind;
   readonly model: string;
+}
+
+export interface EmbeddingBatchWithUsageResult {
+  embeddings: Float32Array[];
+  usageDetails?: LLMUsageDetails;
 }
 
 export interface EmbeddingConfig {
@@ -407,6 +415,27 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
   }
 
   protected async embedInternal(texts: string[], options: EmbedOptions): Promise<Float32Array[]> {
+    return (await this.requestEmbeddings(texts, options)).embeddings;
+  }
+
+  async embedBatchWithUsage(
+    texts: string[],
+    options: EmbedOptions = {},
+  ): Promise<EmbeddingBatchWithUsageResult> {
+    if (texts.length === 0) return { embeddings: [] };
+    const result = await this.requestEmbeddings(texts, options);
+    if (result.embeddings.length !== texts.length) {
+      throw new Error(
+        `${this.kind} embedding response count mismatch: expected ${texts.length}, got ${result.embeddings.length}`,
+      );
+    }
+    return result;
+  }
+
+  private async requestEmbeddings(
+    texts: string[],
+    options: EmbedOptions,
+  ): Promise<EmbeddingBatchWithUsageResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.config.apiKey) {
       headers.Authorization = `Bearer ${this.config.apiKey}`;
@@ -428,7 +457,13 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
     }
 
     const json = await response.json() as unknown;
-    return toFloat32Embeddings(json);
+    const usageDetails = isRecord(json) && Object.hasOwn(json, 'usage')
+      ? normalizeLLMUsageDetails(json.usage, 0, 0)
+      : undefined;
+    return {
+      embeddings: toFloat32Embeddings(json),
+      ...(usageDetails ? { usageDetails } : {}),
+    };
   }
 }
 

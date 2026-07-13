@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CorrelationMetadata, ModelBudgetBlockedEvent, ModelBudgetBlockReason, ModelBudgetWindowSnapshot, ModelRegistryEntry, ModelUsageLedgerRecord } from '../../shared/contracts/runtime.js';
+import {
+  reconcileModelUsageAccounting,
+  type ModelUsageCostRates,
+} from '../../shared/telemetry/model-usage-accounting.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
@@ -18,6 +22,8 @@ export interface ModelUsageTotals {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   estimatedCostUsd: number;
 }
 
@@ -131,6 +137,8 @@ function validateModelUsageRecord(value: unknown, index: number): ModelUsageLedg
   const process = typeof record.process === 'string' ? record.process.trim() : '';
   const inputTokens = toNonNegativeInteger(record.inputTokens);
   const outputTokens = toNonNegativeInteger(record.outputTokens);
+  const cacheReadTokens = toNonNegativeInteger(record.cacheReadTokens);
+  const cacheWriteTokens = toNonNegativeInteger(record.cacheWriteTokens);
   const estimatedCostUsd = typeof record.estimatedCostUsd === 'number' && Number.isFinite(record.estimatedCostUsd) && record.estimatedCostUsd >= 0
     ? record.estimatedCostUsd
     : 0;
@@ -157,6 +165,8 @@ function validateModelUsageRecord(value: unknown, index: number): ModelUsageLedg
     process,
     inputTokens,
     outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     estimatedCostUsd,
   };
 }
@@ -238,6 +248,38 @@ function resolveUsdCostRates(
     inputPer1MUsd: inputRate ?? outputRate ?? 0,
     outputPer1MUsd: outputRate ?? inputRate ?? 0,
   };
+}
+
+export function resolveModelUsageCostRates(
+  config: SubstrateConfig,
+  candidate: RoutingCandidate,
+): ModelUsageCostRates | undefined {
+  const entry = resolveRegistryEntryForCandidate(config, candidate);
+  if (!entry?.cost) return undefined;
+  const currency = typeof entry.cost.currency === 'string'
+    ? entry.cost.currency.trim().toUpperCase()
+    : 'USD';
+  const rate = (value: unknown): number | undefined => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : undefined
+  );
+  const rates: ModelUsageCostRates = {
+    ...(rate(entry.cost.inputPer1MUsd) !== undefined
+      ? { inputPer1MUsd: rate(entry.cost.inputPer1MUsd) }
+      : {}),
+    ...(rate(entry.cost.outputPer1MUsd) !== undefined
+      ? { outputPer1MUsd: rate(entry.cost.outputPer1MUsd) }
+      : {}),
+    ...(rate(entry.cost.cacheReadPer1MUsd) !== undefined
+      ? { cacheReadPer1MUsd: rate(entry.cost.cacheReadPer1MUsd) }
+      : {}),
+    ...(rate(entry.cost.cacheWritePer1MUsd) !== undefined
+      ? { cacheWritePer1MUsd: rate(entry.cost.cacheWritePer1MUsd) }
+      : {}),
+    currency,
+  };
+  return Object.keys(rates).length > 1 ? rates : undefined;
 }
 
 function estimateCostUsd(
@@ -473,11 +515,16 @@ export class ModelBudgetController {
   recordUsage(params: RecordModelUsageParams): ModelUsageLedgerRecord {
     const nowMs = params.nowMs ?? Date.now();
     const ledger = this.loadLedger();
-    const entry = resolveRegistryEntryForCandidate(this.config, params.candidate);
-    const rates = resolveUsdCostRates(entry);
     const inputTokens = Math.max(0, Math.floor(params.inputTokens));
     const outputTokens = Math.max(0, Math.floor(params.outputTokens));
-    const estimatedCostUsd = estimateCostUsd(inputTokens, outputTokens, rates);
+    const cacheReadTokens = Math.max(0, Math.floor(params.cacheReadTokens ?? 0));
+    const cacheWriteTokens = Math.max(0, Math.floor(params.cacheWriteTokens ?? 0));
+    const accountingRates = resolveModelUsageCostRates(this.config, params.candidate);
+    const accounting = reconcileModelUsageAccounting({
+      usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens },
+      ...(accountingRates ? { estimatedRates: accountingRates } : {}),
+    });
+    const estimatedCostUsd = accounting.estimatedCost.total ?? 0;
 
     const record: ModelUsageLedgerRecord = {
       id: `${nowMs}-${Math.random().toString(16).slice(2, 12)}`,
@@ -492,6 +539,8 @@ export class ModelBudgetController {
       process: sanitizeProcess(params.process),
       inputTokens,
       outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
       estimatedCostUsd,
     };
 

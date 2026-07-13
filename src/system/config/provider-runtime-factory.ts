@@ -4,6 +4,7 @@ import {
   createEmbeddingProviderFromConfig,
   type EmbeddingRuntimeProvider,
 } from '../../faculties/memory/embedding.js';
+import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-accounting.js';
 import {
   createPostgresModelUsageStoreFromConfig,
   type PostgresModelUsageStore,
@@ -26,6 +27,7 @@ export function createProviderRuntimeServices(
 ): ProviderRuntimeServices {
   const providerEnv = options.providerEnv ?? process.env;
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const embeddingProvider = createEmbeddingProviderFromConfig(options.config, providerEnv);
   const llmOptions = modelUsageStore
     ? {
         ...(options.llmOptions ?? {}),
@@ -34,7 +36,9 @@ export function createProviderRuntimeServices(
     : options.llmOptions;
   return {
     llmClient: new LLMClient(options.config, llmOptions),
-    embeddingProvider: createEmbeddingProviderFromConfig(options.config, providerEnv),
+    embeddingProvider: modelUsageStore
+      ? withEmbeddingUsageAccounting(embeddingProvider, modelUsageStore)
+      : embeddingProvider,
     ...(modelUsageStore ? { modelUsageStore } : {}),
   };
 }

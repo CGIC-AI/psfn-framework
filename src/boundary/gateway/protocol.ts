@@ -6,6 +6,7 @@ import type {
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMCallAccountingContext,
   LLMSystemPromptCacheBoundaries,
   LLMUsageDetails,
   ModelThinkingEffort,
@@ -90,6 +91,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   repetitionPenalty?: number;
   frequencyPenalty?: number;
   tools?: ToolSchema[];
+  accounting?: LLMCallAccountingContext;
 }
 
 export interface LLMCompleteParams extends GatewayCorrelationParams {

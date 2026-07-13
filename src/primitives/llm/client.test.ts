@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { Context } from '@mariozechner/pi-ai';
 import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -41,6 +44,12 @@ import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
+import { createSubstrateStreamFn, resolveModel } from '../../core/agent/stream-adapter.js';
+import { GatewayClient } from '../../boundary/gateway/client.js';
+import { registerLLMMethods } from '../../boundary/gateway/methods/llm.js';
+import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
+import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
+import type { GatewayMethodRuntime } from '../../boundary/gateway/methods/types.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -802,6 +811,35 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
     ]);
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({ emptyArgsRetries: 2 }),
+    }));
+  });
+
+  it('does not hide additional physical attempts when the caller owns retry sequencing', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+      accounting: {
+        logicalCallId: 'llm:caller-owned-empty-tool-args',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'llm:caller-owned-empty-tool-args',
+      attempt: 4,
+      metadata: expect.objectContaining({ emptyArgsRetries: 0 }),
     }));
   });
 
@@ -2227,6 +2265,200 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
+  it('uses propagated logical identity and disables nested retries when the caller owns retry sequencing', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 3, retryBaseDelayMs: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      throw new Error('503 provider unavailable');
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Stream this' }],
+      modelHint: {
+        model: 'z-ai/glm-5',
+        provider: 'openrouter',
+        pin: true,
+      },
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 7,
+        retryOwner: 'caller',
+      },
+    })).rejects.toThrow('503 provider unavailable');
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'llm:caller-operation',
+      attempt: 7,
+      status: 'failure',
+    }));
+  });
+
+  it('records adapter fallback attempts under one logical call through the production gateway stack', async () => {
+    const config = makeConfig({
+      litellmBaseUrl: 'http://litellm.test/v1',
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      models: [
+        ...baseRegistry.models,
+        {
+          id: 'chat-fallback',
+          rank: 20,
+          identity: {
+            provider: 'openrouter',
+            model: 'moonshotai/kimi-k2.5',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 2_048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2_048, contextWindow: 128_000 },
+        },
+      ],
+    };
+    const usageEvents: ModelUsageEventInput[] = [];
+    const gatewayLlmClient = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder: {
+        async recordUsageEvent(event) {
+          usageEvents.push(event);
+        },
+      },
+    });
+
+    let providerAttempt = 0;
+    mocks.streamSimple.mockImplementation(async function* (_model: unknown) {
+      providerAttempt += 1;
+      if (providerAttempt === 1) {
+        throw new Error('403 primary unavailable');
+      }
+      yield {
+        type: 'done',
+        message: {
+          model: 'moonshotai/kimi-k2.5',
+          usage: { input: 7, output: 4, totalTokens: 11 },
+          content: [{ type: 'text', text: 'Recovered on fallback.' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    let receiveFromGateway: ((message: unknown) => void) | undefined;
+    const serverRpc = new JSONRPCServerAndClient(
+      new JSONRPCServer(),
+      new JSONRPCClient(async request => {
+        receiveFromGateway?.(request);
+      }),
+    );
+    const connection: GatewayRpcConnection = Object.assign(new EventEmitter(), {
+      send(message: unknown): boolean {
+        void serverRpc.receiveAndSend(message);
+        return true;
+      },
+      onMessage(handler: (message: unknown) => void): void {
+        receiveFromGateway = handler;
+      },
+      destroy(): void {},
+      get destroyed(): boolean {
+        return false;
+      },
+    });
+    const gatewayClient = new GatewayClient(connection, 2, { keepaliveIntervalMs: 60_000 });
+    const runtime: GatewayMethodRuntime = {
+      target: serverRpc,
+      llmProvider: gatewayLlmClient,
+      embeddingService: {
+        dims: 2,
+        async embed() {
+          return new Float32Array([0, 0]);
+        },
+        async embedBatch() {
+          return [];
+        },
+      },
+      modelDiscovery: { getAvailableModels: vi.fn(async () => []), invalidateCache: vi.fn() },
+      discordAdapter: {
+        id: 'test',
+        outbound: {
+          textChunkLimit: 2_000,
+          async sendText() {},
+        },
+      },
+      policyConfig: { workspacePath: process.cwd() },
+      workspacePath: process.cwd(),
+      sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test' } },
+      approvalBoundary: {
+        listPendingConfirmations: () => [],
+        listConfirmationHistory: () => [],
+        resolveConfirmation: async () => ({
+          id: 'noop',
+          status: 'not_found',
+          message: 'noop',
+          executed: false,
+        }),
+        gate: options => options.handler,
+      },
+      notifyRequester(method, params) {
+        receiveFromGateway?.({ jsonrpc: '2.0', method, params });
+      },
+      listPendingConfirmations: () => [],
+      listConfirmationHistory: () => [],
+      resolveConfirmation: async () => ({
+        id: 'noop',
+        status: 'not_found',
+        message: 'noop',
+        executed: false,
+      }),
+      sendNtfy: async () => ({ status: 'debounced', topic: 'test' }),
+      getRuntimeHealth: () => ({ checkedAt: 0, services: [] }),
+      nextStreamRequestId: () => 'gateway-stream-1',
+      audited: (_method, handler) => handler,
+    };
+    registerLLMMethods(runtime);
+
+    try {
+      const streamFn = createSubstrateStreamFn(config, { transport: gatewayClient });
+      const context: Context = {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+      };
+      const stream = await streamFn(resolveModel(config, 'chat'), context, {});
+      for await (const _event of stream as AsyncIterable<unknown>) {
+        // Drain the public stream to completion.
+      }
+    } finally {
+      gatewayClient.destroy();
+    }
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents).toMatchObject([
+      {
+        logicalCallId: expect.stringMatching(/^llm:/),
+        attempt: 1,
+        status: 'failure',
+        provider: 'openrouter',
+        model: 'z-ai/glm-5',
+      },
+      {
+        logicalCallId: expect.stringMatching(/^llm:/),
+        attempt: 2,
+        status: 'success',
+        provider: 'openrouter',
+        model: 'moonshotai/kimi-k2.5',
+      },
+    ]);
+    expect(usageEvents[0]?.logicalCallId).toBe(usageEvents[1]?.logicalCallId);
+  });
+
   it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
@@ -2293,7 +2525,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         routeKind: 'configured_litellm_proxy',
         backendProvider: 'litellm',
         backendBaseUrl: 'http://litellm.test/v1',
-        providerCost: { total: 0.95 },
+        providerCost: { total: 0.95, currency: 'USD' },
         rawUsage: expect.objectContaining({
           cost: 0.95,
           cost_details: { upstream_inference_cost: 19 },
@@ -2609,7 +2841,12 @@ describe('LLMClient model budget gates and usage metering', () => {
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
       litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
-      providerCostResolver: () => ({ total: 0.42, currency: 'USD' }),
+      providerCostResolver: () => ({
+        providerCost: { total: 0.42, currency: 'USD' },
+        providerCostEvidence: {
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+      }),
     });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
@@ -2629,6 +2866,84 @@ describe('LLMClient model budget gates and usage metering', () => {
       providerCostUsd: 0.42,
       effectiveCostUsd: 0.42,
       costSource: 'provider',
+    }));
+  });
+
+  it('quarantines contradictory response and gateway-captured cost from durable totals', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({
+        providerCost: { total: 0.42, currency: 'USD' },
+        providerCostEvidence: {
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+      }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        input: 20,
+        output: 4,
+        totalTokens: 24,
+        cost: { total: 0.21, currency: 'USD' },
+      },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      effectiveCost: {},
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        providerCostEvidence: {
+          responseUsage: { total: 0.21, currency: 'USD' },
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+        providerCostEvidenceConflict: { fields: ['total'] },
+      }),
+    }));
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event.providerCostUsd).toBeUndefined();
+    expect(event.effectiveCostUsd).toBeUndefined();
+  });
+
+  it('keeps malformed gateway cost evidence unresolved instead of estimating a complete attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: {},
+        providerCostEvidenceConflict: { fields: ['header.x-litellm-response-cost'] },
+      }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      metadata: expect.objectContaining({
+        providerCostEvidenceConflict: { fields: ['header.x-litellm-response-cost'] },
+      }),
     }));
   });
 
@@ -3379,6 +3694,11 @@ describe('LLMClient model budget gates and usage metering', () => {
       {
         systemPrompt: 'System',
         messages: [{ role: 'user', content: 'Stream this reply' }],
+        accounting: {
+          logicalCallId: 'llm:transport-caller',
+          attempt: 5,
+          retryOwner: 'caller',
+        },
       },
       callbacks,
     );
@@ -3392,6 +3712,11 @@ describe('LLMClient model budget gates and usage metering', () => {
           pin: true,
           maxTokens: 4096,
         }),
+        accounting: {
+          logicalCallId: 'llm:transport-caller',
+          attempt: 5,
+          retryOwner: 'caller',
+        },
       }),
       callbacks,
     );

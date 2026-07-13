@@ -26,6 +26,9 @@ import {
   applyGatewayCapturedProviderCost,
   withGatewayLLMCostCapture,
 } from '../llm-cost-capture.js';
+import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accounting-context.js';
+import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
+import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -36,6 +39,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
       const purpose = normalizePurpose(params.purpose) ?? (shardRouting ? 'shard.execution' : 'chat');
       const modelHint = extractModelHintFromParams(params);
+      const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId,
@@ -55,6 +59,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             ...(params.tools?.length ? { tools: params.tools } : {}),
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
+            ...(accounting ? { accounting } : {}),
             correlation,
           },
           params.stream ? {
@@ -66,7 +71,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       );
       const response = applyGatewayCapturedProviderCost(
         captured.result,
-        captured.finalAttemptProviderCost,
+        captured.finalAttemptProviderCostEvidence,
       );
       return {
         content: response.content,
@@ -132,7 +137,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       );
       const response = applyGatewayCapturedProviderCost(
         captured.result,
-        captured.finalAttemptProviderCost,
+        captured.finalAttemptProviderCostEvidence,
       );
       return {
         content: response.content,
@@ -184,7 +189,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             logicalCallId,
             startedAtMs,
             'failure',
-            undefined,
+            extractProviderAttemptUsageDetails(error),
             error,
           );
         }
@@ -324,7 +329,9 @@ async function recordEmbeddingUsage(
     completedAtMs,
     durationMs: Math.max(0, completedAtMs - startedAtMs),
     status,
-    settlement: status === 'success' && usageDetails ? 'complete' : 'unknown',
+    settlement: usageDetails
+      ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
+      : 'unknown',
     callKind: 'embedding',
     callType: 'memory',
     purpose: 'embedding',

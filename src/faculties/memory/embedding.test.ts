@@ -380,8 +380,39 @@ describe('embedding providers', () => {
       cost: { total: 0.0000011, currency: 'USD' },
       raw: {
         providerCostEvidence: {
-          headers: { total: 0.0000011, currency: 'USD' },
+          'header.x-litellm-response-cost': { total: 0.0000011, currency: 'USD' },
         },
+      },
+    });
+  });
+
+  it('quarantines contradictory embedding body and header cost evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+        cost: { total: 0.0000011, currency: 'USD' },
+      },
+    }, {
+      'x-litellm-response-cost': '0.0000022',
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails?.cost).toBeUndefined();
+    expect(result.usageDetails?.raw).toMatchObject({
+      providerCostEvidence: {
+        bodyUsage: { total: 0.0000011, currency: 'USD' },
+        'header.x-litellm-response-cost': { total: 0.0000022, currency: 'USD' },
+      },
+      providerCostEvidenceConflict: {
+        fields: ['total'],
       },
     });
   });
@@ -409,7 +440,7 @@ describe('embedding providers', () => {
       cost: { total: 0.0000011, currency: 'USD' },
       raw: {
         providerCostEvidence: {
-          body: { total: 0.0000011, currency: 'USD' },
+          'body.cost': { total: 0.0000011, currency: 'USD' },
         },
       },
     });

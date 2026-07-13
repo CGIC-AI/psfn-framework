@@ -175,8 +175,16 @@ function nonNegativeCost(value: unknown): number | undefined {
 function mergeCostTotal(
   cost: ModelUsageCostBreakdown | undefined,
   total: number | undefined,
+  field: string,
 ): ModelUsageCostBreakdown | undefined {
   if (!cost && total === undefined) return undefined;
+  if (
+    cost?.total !== undefined
+    && total !== undefined
+    && Math.round(cost.total * 1_000_000_000_000) !== Math.round(total * 1_000_000_000_000)
+  ) {
+    throw new Error(`${field}Usd must match the structured total`);
+  }
   return {
     ...(cost ?? {}),
     ...(cost?.total === undefined && total !== undefined ? { total } : {}),
@@ -250,6 +258,9 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
   const outputTokens = inputNonNegativeInteger(input.outputTokens, 'outputTokens');
   const cacheReadTokens = inputNonNegativeInteger(input.cacheReadTokens, 'cacheReadTokens');
   const cacheWriteTokens = inputNonNegativeInteger(input.cacheWriteTokens, 'cacheWriteTokens');
+  const providerCost = mergeCostTotal(input.providerCost, input.providerCostUsd, 'providerCost');
+  const estimatedCost = mergeCostTotal(input.estimatedCost, input.estimatedCostUsd, 'estimatedCost');
+  const effectiveCost = mergeCostTotal(input.effectiveCost, input.effectiveCostUsd, 'effectiveCost');
   const accounting = reconcileModelUsageAccounting({
     usage: {
       inputTokens,
@@ -258,15 +269,9 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
       cacheWriteTokens,
       ...(input.totalTokens !== undefined ? { totalTokens: input.totalTokens } : {}),
     },
-    ...(mergeCostTotal(input.providerCost, input.providerCostUsd)
-      ? { providerCost: mergeCostTotal(input.providerCost, input.providerCostUsd) }
-      : {}),
-    ...(mergeCostTotal(input.estimatedCost, input.estimatedCostUsd)
-      ? { estimatedCost: mergeCostTotal(input.estimatedCost, input.estimatedCostUsd) }
-      : {}),
-    ...(mergeCostTotal(input.effectiveCost, input.effectiveCostUsd)
-      ? { effectiveCost: mergeCostTotal(input.effectiveCost, input.effectiveCostUsd) }
-      : {}),
+    ...(providerCost ? { providerCost } : {}),
+    ...(estimatedCost ? { estimatedCost } : {}),
+    ...(effectiveCost ? { effectiveCost } : {}),
     ...(input.costSource ? { costSource: input.costSource } : {}),
   });
   const providerCostUsd = accounting.providerCost.total;

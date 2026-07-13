@@ -73,6 +73,17 @@ describe('PostgresModelUsageStore reconciliation', () => {
         inputTokens: -1,
         totalTokens: 19,
       })).rejects.toThrow('inputTokens must be a non-negative integer');
+      for (const mismatch of [
+        { providerCostUsd: 0.96 },
+        { estimatedCostUsd: 0.000397 },
+        { effectiveCostUsd: 0.96 },
+      ]) {
+        await expect(firstStore.recordUsageEvent({
+          ...event,
+          logicalCallId: `mismatched-${Object.keys(mismatch)[0]}`,
+          ...mismatch,
+        })).rejects.toThrow('must match the structured total');
+      }
       await firstStore.recordUsageEvent(event);
       await firstStore.recordUsageEvent(event);
 

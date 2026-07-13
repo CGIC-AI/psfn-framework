@@ -238,6 +238,7 @@ export interface ModelUsagePricingIdentity {
 function resolveRegistryEntryForIdentity(
   config: SubstrateConfig,
   identity: ModelUsagePricingIdentity,
+  purpose?: RoutingPurpose,
 ): ModelRegistryEntry | undefined {
   const registry = config.modelRegistry;
   if (!registry) return undefined;
@@ -245,6 +246,8 @@ function resolveRegistryEntryForIdentity(
   if (identity.slotKey) {
     const byId = registry.models.find(entry => entry.id === identity.slotKey);
     if (!byId) return undefined;
+    if (byId.enabled === false) return undefined;
+    if (purpose && !byId.purposes.some(tag => tag.purpose === purpose)) return undefined;
     return toModelKey(byId.identity.provider, byId.identity.model)
       === toModelKey(identity.provider, identity.model)
       ? byId
@@ -253,7 +256,9 @@ function resolveRegistryEntryForIdentity(
 
   const candidateKey = toModelKey(identity.provider, identity.model);
   const matches = registry.models.filter(
-    (entry) => toModelKey(entry.identity.provider, entry.identity.model) === candidateKey,
+    (entry) => entry.enabled !== false
+      && (!purpose || entry.purposes.some(tag => tag.purpose === purpose))
+      && toModelKey(entry.identity.provider, entry.identity.model) === candidateKey,
   );
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -283,8 +288,10 @@ function resolveUsdCostRates(
 export function resolveModelUsageCostRates(
   config: SubstrateConfig,
   candidate: RoutingCandidate,
+  purpose?: RoutingPurpose,
 ): ModelUsageCostRates | undefined {
-  return resolveModelUsageCostRatesForIdentity(config, candidate);
+  const entry = resolveRegistryEntryForIdentity(config, candidate, purpose);
+  return resolveCostRatesForEntry(entry);
 }
 
 export function resolveModelUsageCostRatesForIdentity(
@@ -292,6 +299,12 @@ export function resolveModelUsageCostRatesForIdentity(
   identity: ModelUsagePricingIdentity,
 ): ModelUsageCostRates | undefined {
   const entry = resolveRegistryEntryForIdentity(config, identity);
+  return resolveCostRatesForEntry(entry);
+}
+
+function resolveCostRatesForEntry(
+  entry: ModelRegistryEntry | undefined,
+): ModelUsageCostRates | undefined {
   if (!entry?.cost) return undefined;
   const currency = typeof entry.cost.currency === 'string'
     ? entry.cost.currency.trim().toUpperCase()
@@ -478,7 +491,7 @@ export class ModelBudgetController {
 
     const usage = this.getUsageSnapshot(nowMs);
     const snapshot = toWindowSnapshot(nowMs, usage, policy.dailyUsdLimit, policy.monthlyUsdLimit);
-    const entry = resolveRegistryEntryForIdentity(this.config, params.candidate);
+    const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
     const rates = resolveUsdCostRates(entry);
     const estimatedInputTokens = Math.max(0, Math.floor(params.estimatedInputTokens));
     const estimatedOutputTokens = Math.max(
@@ -563,7 +576,7 @@ export class ModelBudgetController {
     const outputTokens = Math.max(0, Math.floor(params.outputTokens));
     const cacheReadTokens = Math.max(0, Math.floor(params.cacheReadTokens ?? 0));
     const cacheWriteTokens = Math.max(0, Math.floor(params.cacheWriteTokens ?? 0));
-    const accountingRates = resolveModelUsageCostRates(this.config, params.candidate);
+    const accountingRates = resolveModelUsageCostRates(this.config, params.candidate, params.purpose);
     const accounting = reconcileModelUsageAccounting({
       usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens },
       ...(accountingRates ? { estimatedRates: accountingRates } : {}),

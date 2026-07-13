@@ -239,6 +239,30 @@ describe('GatewayClient streaming', () => {
     });
   });
 
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+    void client.stream(
+      {
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        accounting: {
+          logicalCallId: 'llm:caller-operation',
+          attempt: 3,
+          retryOwner: 'caller',
+        },
+      },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { params: Record<string, unknown> };
+    expect(req.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 3,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 

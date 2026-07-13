@@ -1,15 +1,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { LLMResponse, LLMUsageCostDetails } from '../../shared/contracts/runtime.js';
+import {
+  mergeProviderCostEvidenceConflicts,
+  reconcileProviderCostEvidence,
+  type ReconciledProviderCostEvidence,
+} from '../../shared/telemetry/provider-cost-evidence.js';
+import { isRecord } from '../../shared/utils/types.js';
 
-export interface GatewayCapturedLLMCost {
-  providerCost?: LLMUsageCostDetails;
-}
+export type GatewayCapturedLLMCost = ReconciledProviderCostEvidence;
 
 interface GatewayLLMCostCaptureContext {
   captures: GatewayCapturedLLMCost[];
   consumedCaptureCount: number;
   attemptConsumptionCount: number;
-  lastConsumedProviderCost: LLMUsageCostDetails | undefined;
+  lastConsumedProviderCostEvidence: GatewayCapturedLLMCost | undefined;
 }
 
 const captureStorage = new AsyncLocalStorage<GatewayLLMCostCaptureContext>();
@@ -34,78 +38,153 @@ function parseNonNegativeCost(value: unknown): number | undefined {
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-export function extractGatewayProviderCostFromHeaders(headers: Headers): LLMUsageCostDetails | undefined {
+export function extractGatewayProviderCostEvidenceFromHeaders(
+  headers: Headers,
+): ReconciledProviderCostEvidence {
+  const sources: Record<string, LLMUsageCostDetails> = {};
+  const conflicts = new Set<string>();
   for (const name of COST_HEADER_NAMES) {
-    const cost = parseNonNegativeCost(headers.get(name));
-    if (cost !== undefined) return { total: cost, currency: 'USD' };
-  }
-  return undefined;
-}
-
-function objectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function costComponent(
-  records: Array<Record<string, unknown> | undefined>,
-  ...keys: string[]
-): number | undefined {
-  for (const record of records) {
-    if (!record) continue;
-    for (const key of keys) {
-      const cost = parseNonNegativeCost(record[key]);
-      if (cost !== undefined) return cost;
+    const rawCost = headers.get(name);
+    if (rawCost === null) continue;
+    const cost = parseNonNegativeCost(rawCost);
+    if (cost !== undefined) {
+      sources[`header.${name}`] = { total: cost, currency: 'USD' };
+    } else {
+      conflicts.add(`header.${name}`);
     }
   }
-  return undefined;
+  return mergeProviderCostEvidenceConflicts(
+    reconcileProviderCostEvidence(sources),
+    conflicts.size > 0 ? { fields: [...conflicts] } : undefined,
+  );
+}
+
+export function extractGatewayProviderCostFromHeaders(headers: Headers): LLMUsageCostDetails | undefined {
+  return extractGatewayProviderCostEvidenceFromHeaders(headers).providerCost;
+}
+
+function recordCostObservation(
+  sources: Record<string, LLMUsageCostDetails>,
+  conflicts: Set<string>,
+  source: string,
+  field: keyof Pick<LLMUsageCostDetails, 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'total'>,
+  value: unknown,
+  currency = 'USD',
+): void {
+  if (value === undefined) return;
+  const cost = parseNonNegativeCost(value);
+  if (cost !== undefined) {
+    sources[source] = { [field]: cost, currency };
+  } else {
+    conflicts.add(source);
+  }
+}
+
+function recordCostDetailObservations(
+  sources: Record<string, LLMUsageCostDetails>,
+  conflicts: Set<string>,
+  prefix: string,
+  details: Record<string, unknown> | undefined,
+): void {
+  if (!details) return;
+  const currency = typeof details.currency === 'string' && details.currency.trim().length > 0
+    ? details.currency.trim().toUpperCase()
+    : 'USD';
+  const fields = [
+    ['input', 'input'],
+    ['input_cost', 'input'],
+    ['prompt_cost', 'input'],
+    ['output', 'output'],
+    ['output_cost', 'output'],
+    ['completion_cost', 'output'],
+    ['cacheRead', 'cacheRead'],
+    ['cache_read_cost', 'cacheRead'],
+    ['cached_input_cost', 'cacheRead'],
+    ['cacheWrite', 'cacheWrite'],
+    ['cache_write_cost', 'cacheWrite'],
+    ['cache_creation_cost', 'cacheWrite'],
+    ['upstream_inference_cost', 'total'],
+    ['total', 'total'],
+    ['total_cost', 'total'],
+  ] as const;
+  for (const [key, field] of fields) {
+    recordCostObservation(sources, conflicts, `${prefix}.${key}`, field, details[key], currency);
+  }
+}
+
+function recordCostValue(
+  sources: Record<string, LLMUsageCostDetails>,
+  conflicts: Set<string>,
+  prefix: string,
+  value: unknown,
+): void {
+  if (isRecord(value)) {
+    recordCostDetailObservations(sources, conflicts, prefix, value);
+    return;
+  }
+  recordCostObservation(sources, conflicts, prefix, 'total', value);
+}
+
+export function extractGatewayProviderCostEvidence(
+  value: unknown,
+  prefix = 'body',
+): ReconciledProviderCostEvidence {
+  const record = isRecord(value) ? value : undefined;
+  if (!record) {
+    if (value === undefined || value === null) return reconcileProviderCostEvidence({});
+    const total = parseNonNegativeCost(value);
+    return mergeProviderCostEvidenceConflicts(
+      reconcileProviderCostEvidence(total === undefined
+        ? {}
+        : { [`${prefix}.value`]: { total, currency: 'USD' } }),
+      total === undefined ? { fields: [`${prefix}.value`] } : undefined,
+    );
+  }
+  const usage = isRecord(record.usage) ? record.usage : undefined;
+  const usageCostDetails = isRecord(usage?.cost_details) ? usage.cost_details : undefined;
+  const costDetails = isRecord(record.cost_details) ? record.cost_details : undefined;
+  const sources: Record<string, LLMUsageCostDetails> = {};
+  const conflicts = new Set<string>();
+  recordCostValue(sources, conflicts, `${prefix}.usage.cost`, usage?.cost);
+  recordCostDetailObservations(sources, conflicts, `${prefix}.usage.cost_details`, usageCostDetails);
+  recordCostDetailObservations(sources, conflicts, `${prefix}.cost_details`, costDetails);
+  recordCostValue(sources, conflicts, `${prefix}.cost`, record.cost);
+  return mergeProviderCostEvidenceConflicts(
+    reconcileProviderCostEvidence(sources),
+    conflicts.size > 0 ? { fields: [...conflicts] } : undefined,
+  );
 }
 
 export function extractGatewayProviderCost(value: unknown): LLMUsageCostDetails | undefined {
-  const record = objectRecord(value);
-  if (!record) {
-    const total = parseNonNegativeCost(value);
-    return total !== undefined ? { total, currency: 'USD' } : undefined;
-  }
-  const usage = objectRecord(record.usage);
-  const usageCostDetails = objectRecord(usage?.cost_details);
-  const costDetails = objectRecord(record.cost_details);
-  const details = [usageCostDetails, costDetails];
-  const input = costComponent(details, 'input_cost', 'prompt_cost');
-  const output = costComponent(details, 'output_cost', 'completion_cost');
-  const cacheRead = costComponent(details, 'cache_read_cost', 'cached_input_cost');
-  const cacheWrite = costComponent(details, 'cache_write_cost', 'cache_creation_cost');
-  const total = parseNonNegativeCost(usage?.cost)
-    ?? costComponent(details, 'upstream_inference_cost', 'total', 'total_cost')
-    ?? parseNonNegativeCost(record.cost);
-  if (
-    input === undefined
-    && output === undefined
-    && cacheRead === undefined
-    && cacheWrite === undefined
-    && total === undefined
-  ) return undefined;
-  return {
-    ...(input !== undefined ? { input } : {}),
-    ...(output !== undefined ? { output } : {}),
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    ...(total !== undefined ? { total } : {}),
-    currency: 'USD',
-  };
+  return extractGatewayProviderCostEvidence(value).providerCost;
 }
 
-function recordProviderCost(capture: GatewayCapturedLLMCost, providerCost: LLMUsageCostDetails | undefined): void {
-  if (providerCost) {
-    capture.providerCost = {
-      ...(capture.providerCost ?? {}),
-      ...providerCost,
-    };
+function recordProviderCostEvidence(
+  capture: GatewayCapturedLLMCost,
+  observation: ReconciledProviderCostEvidence,
+): void {
+  const reconciliation = mergeProviderCostEvidenceConflicts(
+    reconcileProviderCostEvidence({
+      ...capture.providerCostEvidence,
+      ...observation.providerCostEvidence,
+    }),
+    capture.providerCostEvidenceConflict,
+    observation.providerCostEvidenceConflict,
+  );
+  capture.providerCostEvidence = reconciliation.providerCostEvidence;
+  if (reconciliation.providerCost) {
+    capture.providerCost = reconciliation.providerCost;
+  } else {
+    delete capture.providerCost;
+  }
+  if (reconciliation.providerCostEvidenceConflict) {
+    capture.providerCostEvidenceConflict = reconciliation.providerCostEvidenceConflict;
+  } else {
+    delete capture.providerCostEvidenceConflict;
   }
 }
 
-function inspectSseEvent(rawEvent: string, capture: GatewayCapturedLLMCost): void {
+function inspectSseEvent(rawEvent: string, capture: GatewayCapturedLLMCost, eventIndex: number): void {
   const dataLines = rawEvent
     .split(/\r?\n/)
     .map(line => line.trim())
@@ -114,24 +193,31 @@ function inspectSseEvent(rawEvent: string, capture: GatewayCapturedLLMCost): voi
   if (dataLines.length === 0) return;
   const payload = dataLines.join('\n').trim();
   if (!payload || payload === '[DONE]') return;
+  let parsed: unknown;
   try {
-    recordProviderCost(capture, extractGatewayProviderCost(JSON.parse(payload) as unknown));
+    parsed = JSON.parse(payload) as unknown;
   } catch {
     return;
   }
+  recordProviderCostEvidence(
+    capture,
+    extractGatewayProviderCostEvidence(parsed, `sse[${eventIndex}]`),
+  );
 }
 
 function createSseInspector(capture: GatewayCapturedLLMCost): (text: string, final?: boolean) => void {
   let pending = '';
+  let eventIndex = 0;
   return (text: string, final = false): void => {
     pending += text;
     const events = pending.split(/\r?\n\r?\n/);
     pending = final ? '' : (events.pop() ?? '');
     for (const event of events) {
-      inspectSseEvent(event, capture);
+      inspectSseEvent(event, capture, eventIndex);
+      eventIndex += 1;
     }
     if (final && pending.trim().length > 0) {
-      inspectSseEvent(pending, capture);
+      inspectSseEvent(pending, capture, eventIndex);
       pending = '';
     }
   };
@@ -163,11 +249,16 @@ function wrapStreamingBody(response: Response, capture: GatewayCapturedLLMCost):
 async function inspectJsonBody(response: Response, capture: GatewayCapturedLLMCost): Promise<void> {
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('application/json')) return;
+  let parsed: unknown;
   try {
-    recordProviderCost(capture, extractGatewayProviderCost(await response.clone().json() as unknown));
+    parsed = await response.clone().json() as unknown;
   } catch {
     return;
   }
+  recordProviderCostEvidence(
+    capture,
+    extractGatewayProviderCostEvidence(parsed, 'jsonBody'),
+  );
 }
 
 function ensureGatewayLLMCostCaptureInstalled(): void {
@@ -181,8 +272,8 @@ function ensureGatewayLLMCostCaptureInstalled(): void {
     const context = captureStorage.getStore();
     if (!context) return response;
 
-    const capture: GatewayCapturedLLMCost = {};
-    recordProviderCost(capture, extractGatewayProviderCostFromHeaders(response.headers));
+    const capture: GatewayCapturedLLMCost = { providerCostEvidence: {} };
+    recordProviderCostEvidence(capture, extractGatewayProviderCostEvidenceFromHeaders(response.headers));
     context.captures.push(capture);
     await inspectJsonBody(response, capture);
     return wrapStreamingBody(response, capture);
@@ -196,7 +287,7 @@ export async function withGatewayLLMCostCapture<T>(
 ): Promise<{
   result: T;
   captures: GatewayCapturedLLMCost[];
-  finalAttemptProviderCost?: LLMUsageCostDetails;
+  finalAttemptProviderCostEvidence?: GatewayCapturedLLMCost;
 }> {
   if (typeof globalThis.fetch !== 'function') {
     return { result: await operation(), captures: [] };
@@ -206,54 +297,50 @@ export async function withGatewayLLMCostCapture<T>(
     captures: [],
     consumedCaptureCount: 0,
     attemptConsumptionCount: 0,
-    lastConsumedProviderCost: undefined,
+    lastConsumedProviderCostEvidence: undefined,
   };
   const result = await captureStorage.run(context, operation);
-  const finalAttemptProviderCost = context.attemptConsumptionCount > 0
-    ? context.lastConsumedProviderCost
-    : latestGatewayCapturedProviderCost(context.captures);
+  const finalAttemptProviderCostEvidence = context.attemptConsumptionCount > 0
+    ? context.lastConsumedProviderCostEvidence
+    : latestGatewayCapturedProviderCostEvidence(context.captures);
   return {
     result,
     captures: context.captures,
-    ...(finalAttemptProviderCost ? { finalAttemptProviderCost } : {}),
+    ...(finalAttemptProviderCostEvidence ? { finalAttemptProviderCostEvidence } : {}),
   };
 }
 
-export function latestGatewayCapturedProviderCostUsd(
+function latestGatewayCapturedProviderCostEvidence(
   captures: readonly GatewayCapturedLLMCost[],
-): number | undefined {
+): GatewayCapturedLLMCost | undefined {
   for (let index = captures.length - 1; index >= 0; index -= 1) {
-    const cost = captures[index]?.providerCost?.total;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0) return cost;
+    const capture = captures[index];
+    if (
+      capture
+      && (
+        Object.keys(capture.providerCostEvidence).length > 0
+        || capture.providerCostEvidenceConflict !== undefined
+      )
+    ) return capture;
   }
   return undefined;
 }
 
-export function latestGatewayCapturedProviderCost(
-  captures: readonly GatewayCapturedLLMCost[],
-): LLMUsageCostDetails | undefined {
-  for (let index = captures.length - 1; index >= 0; index -= 1) {
-    const cost = captures[index]?.providerCost;
-    if (cost) return cost;
-  }
-  return undefined;
-}
-
-export function consumeActiveGatewayCapturedProviderCost(): LLMUsageCostDetails | undefined {
+export function consumeActiveGatewayCapturedProviderCostEvidence(): GatewayCapturedLLMCost | undefined {
   const context = captureStorage.getStore();
   if (!context) return undefined;
   const attemptCaptures = context.captures.slice(context.consumedCaptureCount);
   context.consumedCaptureCount = context.captures.length;
   context.attemptConsumptionCount += 1;
-  context.lastConsumedProviderCost = latestGatewayCapturedProviderCost(attemptCaptures);
-  return context.lastConsumedProviderCost;
+  context.lastConsumedProviderCostEvidence = latestGatewayCapturedProviderCostEvidence(attemptCaptures);
+  return context.lastConsumedProviderCostEvidence;
 }
 
 export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
   response: T,
-  providerCost: LLMUsageCostDetails | undefined,
+  capturedCost: GatewayCapturedLLMCost | undefined,
 ): T {
-  if (!providerCost) return response;
+  if (!capturedCost) return response;
   const usageDetails = response.usageDetails ?? {
     input: response.inputTokens,
     output: response.outputTokens,
@@ -261,14 +348,30 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
     cacheWrite: 0,
     totalTokens: response.inputTokens + response.outputTokens,
   };
+  const reconciliation = mergeProviderCostEvidenceConflicts(
+    reconcileProviderCostEvidence({
+      responseUsage: usageDetails.cost,
+      ...capturedCost.providerCostEvidence,
+    }, {
+      input: usageDetails.input,
+      output: usageDetails.output,
+      cacheRead: usageDetails.cacheRead,
+      cacheWrite: usageDetails.cacheWrite,
+    }),
+    capturedCost.providerCostEvidenceConflict,
+  );
+  const { cost: _quarantinedCost, raw, ...usageWithoutCost } = usageDetails;
   return {
     ...response,
     usageDetails: {
-      ...usageDetails,
-      cost: {
-        ...(usageDetails.cost ?? {}),
-        ...providerCost,
-        currency: providerCost.currency ?? usageDetails.cost?.currency ?? 'USD',
+      ...usageWithoutCost,
+      ...(reconciliation.providerCost ? { cost: reconciliation.providerCost } : {}),
+      raw: {
+        ...(raw ?? {}),
+        providerCostEvidence: reconciliation.providerCostEvidence,
+        ...(reconciliation.providerCostEvidenceConflict
+          ? { providerCostEvidenceConflict: reconciliation.providerCostEvidenceConflict }
+          : {}),
       },
     },
   };

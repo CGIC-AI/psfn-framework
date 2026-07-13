@@ -201,6 +201,48 @@ describe('registerLLMMethods', () => {
     });
   });
 
+  it('preserves validated caller-owned accounting identity into the provider context', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      pin: true,
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    expect(harness.stream.mock.calls[0]?.[0]).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('rejects malformed caller-owned accounting identity before provider transport', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: '',
+        attempt: 0,
+        retryOwner: 'caller',
+      },
+    })).rejects.toThrow('accounting.logicalCallId');
+    expect(harness.stream).not.toHaveBeenCalled();
+  });
+
   it('returns reasoning and provider observability from llm.chat', async () => {
     const harness = createHarness();
 
@@ -323,7 +365,6 @@ describe('registerLLMMethods', () => {
           cacheRead: 0,
           cacheWrite: 0,
           totalTokens: 12,
-          cost: { total: 0 },
         },
         stopReason: 'stop',
       };
@@ -391,6 +432,48 @@ describe('registerLLMMethods', () => {
       providerCost: { total: 0.000009, currency: 'USD' },
       metadata: expect.objectContaining({
         rawUsage: { prompt_tokens: 9, total_tokens: 9 },
+      }),
+    }]);
+  });
+
+  it('records direct gateway embedding cost conflicts as partially settled', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 7,
+          raw: {
+            providerCostEvidence: {
+              bodyUsage: { total: 0.1, currency: 'USD' },
+              headers: { total: 0.2, currency: 'USD' },
+            },
+            providerCostEvidenceConflict: { fields: ['total'] },
+          },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await harness.invoke('llm.embed', { texts: ['first'] });
+
+    expect(usageEvents).toMatchObject([{
+      status: 'success',
+      settlement: 'partial',
+      inputTokens: 7,
+      metadata: expect.objectContaining({
+        rawUsage: expect.objectContaining({
+          providerCostEvidenceConflict: { fields: ['total'] },
+        }),
       }),
     }]);
   });

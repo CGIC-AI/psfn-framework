@@ -390,6 +390,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(context.correlation?.originStage ? { originStage: context.correlation.originStage } : {}),
         purpose,
         ...(context.tools?.length ? { tools: context.tools } : {}),
+        ...(context.accounting ? { accounting: context.accounting } : {}),
       }) as LLMChatResult;
 
       const response: LLMResponse = {

@@ -19,9 +19,14 @@ import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
-  extractGatewayProviderCost,
-  extractGatewayProviderCostFromHeaders,
+  extractGatewayProviderCostEvidence,
+  extractGatewayProviderCostEvidenceFromHeaders,
 } from '../../boundary/gateway/llm-cost-capture.js';
+import {
+  mergeProviderCostEvidenceConflicts,
+  reconcileProviderCostEvidence,
+} from '../../shared/telemetry/provider-cost-evidence.js';
+import { ProviderResponseValidationError } from '../../shared/telemetry/provider-attempt-error.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -429,8 +434,9 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
     if (texts.length === 0) return { embeddings: [] };
     const result = await this.requestEmbeddings(texts, options);
     if (result.embeddings.length !== texts.length) {
-      throw new Error(
+      throw new ProviderResponseValidationError(
         `${this.kind} embedding response count mismatch: expected ${texts.length}, got ${result.embeddings.length}`,
+        result.usageDetails,
       );
     }
     return result;
@@ -460,40 +466,58 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
       throw new Error(`API embedding error ${response.status}: ${body}`);
     }
 
-    const providerCostFromHeaders = extractGatewayProviderCostFromHeaders(response.headers);
+    const providerCostFromHeaders = extractGatewayProviderCostEvidenceFromHeaders(response.headers);
     const json = await response.json() as unknown;
     const normalizedUsage = isRecord(json) && Object.hasOwn(json, 'usage')
       ? normalizeLLMUsageDetails(json.usage, 0, 0)
       : undefined;
-    const providerCostFromBody = extractGatewayProviderCost(json);
-    const providerCost = normalizedUsage?.cost || providerCostFromBody || providerCostFromHeaders
+    const providerCostFromBody = extractGatewayProviderCostEvidence(json, 'body');
+    const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
+      reconcileProviderCostEvidence({
+        bodyUsage: normalizedUsage?.cost,
+        ...providerCostFromBody.providerCostEvidence,
+        ...providerCostFromHeaders.providerCostEvidence,
+      }, {
+        input: normalizedUsage?.input ?? 0,
+        output: normalizedUsage?.output ?? 0,
+        cacheRead: normalizedUsage?.cacheRead ?? 0,
+        cacheWrite: normalizedUsage?.cacheWrite ?? 0,
+      }),
+      providerCostFromBody.providerCostEvidenceConflict,
+      providerCostFromHeaders.providerCostEvidenceConflict,
+    );
+    const providerCost = providerCostReconciliation.providerCost;
+    const { cost: _quarantinedCost, raw: normalizedRaw, ...normalizedUsageWithoutCost } = normalizedUsage
+      ?? normalizeLLMUsageDetails(undefined, 0, 0);
+    const hasProviderCostObservation = Object.keys(providerCostReconciliation.providerCostEvidence).length > 0
+      || providerCostReconciliation.providerCostEvidenceConflict !== undefined;
+    const usageDetails = normalizedUsage || hasProviderCostObservation
       ? {
-          ...(normalizedUsage?.cost ?? {}),
-          ...(providerCostFromBody ?? {}),
-          ...(providerCostFromHeaders ?? {}),
-        }
-      : undefined;
-    const usageDetails = normalizedUsage || providerCost
-      ? {
-          ...(normalizedUsage ?? normalizeLLMUsageDetails(undefined, 0, 0)),
+          ...normalizedUsageWithoutCost,
           ...(providerCost ? { cost: providerCost } : {}),
-          ...(providerCostFromBody || providerCostFromHeaders
+          ...(hasProviderCostObservation
             ? {
                 raw: {
-                  ...(normalizedUsage?.raw ?? {}),
-                  providerCostEvidence: {
-                    ...(providerCostFromBody ? { body: providerCostFromBody } : {}),
-                    ...(providerCostFromHeaders ? { headers: providerCostFromHeaders } : {}),
-                  },
+                  ...(normalizedRaw ?? {}),
+                  providerCostEvidence: providerCostReconciliation.providerCostEvidence,
+                  ...(providerCostReconciliation.providerCostEvidenceConflict
+                    ? { providerCostEvidenceConflict: providerCostReconciliation.providerCostEvidenceConflict }
+                    : {}),
                 },
               }
             : {}),
         }
       : undefined;
-    return {
-      embeddings: toFloat32Embeddings(json),
-      ...(usageDetails ? { usageDetails } : {}),
-    };
+    let embeddings: Float32Array[];
+    try {
+      embeddings = toFloat32Embeddings(json);
+    } catch (error) {
+      throw new ProviderResponseValidationError(
+        error instanceof Error ? error.message : String(error),
+        usageDetails,
+      );
+    }
+    return { embeddings, ...(usageDetails ? { usageDetails } : {}) };
   }
 }
 

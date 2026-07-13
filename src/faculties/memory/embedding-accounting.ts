@@ -9,6 +9,8 @@ import type {
   EmbeddingBatchWithUsageResult,
   EmbeddingRuntimeProvider,
 } from './embedding.js';
+import { extractProviderAttemptUsageDetails } from '../../shared/telemetry/provider-attempt-error.js';
+import { hasProviderCostEvidenceConflict } from '../../shared/telemetry/provider-cost-evidence.js';
 
 interface EmbeddingProviderWithUsage extends EmbeddingRuntimeProvider {
   embedBatchWithUsage?(texts: string[]): Promise<EmbeddingBatchWithUsageResult>;
@@ -58,7 +60,9 @@ export function withEmbeddingUsageAccounting(
       completedAtMs,
       durationMs: Math.max(0, completedAtMs - startedAtMs),
       status,
-      settlement: status === 'success' && usageDetails ? 'complete' : 'unknown',
+      settlement: usageDetails
+        ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
+        : 'unknown',
       callKind: 'embedding',
       callType: 'memory',
       purpose: 'embedding',
@@ -116,7 +120,14 @@ export function withEmbeddingUsageAccounting(
         ? await provider.embedBatchWithUsage(texts)
         : { embeddings: await provider.embedBatch(texts) };
     } catch (error) {
-      await record(logicalCallId, startedAtMs, 'failure', texts, undefined, error);
+      await record(
+        logicalCallId,
+        startedAtMs,
+        'failure',
+        texts,
+        extractProviderAttemptUsageDetails(error),
+        error,
+      );
       throw error;
     }
     await record(logicalCallId, startedAtMs, 'success', texts, result.usageDetails);

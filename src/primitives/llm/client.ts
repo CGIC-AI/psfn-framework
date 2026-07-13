@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   CompletionPurpose,
   CorrelationMetadata,
+  LLMCallAccountingContext,
   LLMContext,
   LLMUsageDetails,
   LLMPromptCacheObservability,
@@ -103,6 +104,12 @@ import {
   logEmptyToolArgumentProvenance,
   retryCompletionOnCorruptEmptyToolArgs,
 } from './empty-tool-argument-retry.js';
+import { normalizeLLMCallAccountingContext } from './accounting-context.js';
+import {
+  mergeProviderCostEvidenceConflicts,
+  reconcileProviderCostEvidence,
+  type ReconciledProviderCostEvidence,
+} from '../../shared/telemetry/provider-cost-evidence.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -144,7 +151,7 @@ export interface LLMClientRuntimeOptions {
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   usageRecorder?: ModelUsageRecorder;
-  providerCostResolver?: () => LLMUsageDetails['cost'] | undefined;
+  providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
@@ -175,7 +182,7 @@ export class LLMClient {
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
-  private providerCostResolver?: () => LLMUsageDetails['cost'] | undefined;
+  private providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   private circuitBreaker: SlidingWindowCircuitBreaker;
 
   constructor(
@@ -320,6 +327,7 @@ export class LLMClient {
     context: LLMContext,
     candidate: RoutingCandidate,
     correlation: ResolvedCorrelationMetadata | undefined,
+    accounting?: LLMCallAccountingContext,
   ): LLMContext {
     const hintModel = this.shouldNormalizeProxyModelId(candidate)
       ? normalizeProxyModelId(candidate.provider, candidate.model)
@@ -344,6 +352,7 @@ export class LLMClient {
         ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
       },
       ...(correlation ? { correlation } : {}),
+      ...(accounting ? { accounting } : {}),
     };
   }
 
@@ -684,13 +693,20 @@ export class LLMClient {
     }
     const chargeSnapshot = getRunChargeSnapshot();
     const capturedProviderCost = this.providerCostResolver?.();
-    const providerCost = usageDetails?.cost || capturedProviderCost
-      ? {
-          ...(usageDetails?.cost ?? {}),
-          ...(capturedProviderCost ?? {}),
-        }
-      : undefined;
-    const accountingRates = resolveModelUsageCostRates(this.config, candidate);
+    const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
+      reconcileProviderCostEvidence({
+        responseUsage: usageDetails?.cost,
+        ...(capturedProviderCost?.providerCostEvidence ?? {}),
+      }, {
+        input: usageDetails?.input ?? inputTokens,
+        output: usageDetails?.output ?? outputTokens,
+        cacheRead: usageDetails?.cacheRead ?? 0,
+        cacheWrite: usageDetails?.cacheWrite ?? 0,
+      }),
+      capturedProviderCost?.providerCostEvidenceConflict,
+    );
+    const providerCost = providerCostReconciliation.providerCost;
+    const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
     const accounting = reconcileModelUsageAccounting({
       usage: {
         inputTokens: usageDetails?.input ?? inputTokens,
@@ -718,6 +734,12 @@ export class LLMClient {
           }
         : {}),
       ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
+      ...(Object.keys(providerCostReconciliation.providerCostEvidence).length > 0
+        ? { providerCostEvidence: providerCostReconciliation.providerCostEvidence }
+        : {}),
+      ...(providerCostReconciliation.providerCostEvidenceConflict
+        ? { providerCostEvidenceConflict: providerCostReconciliation.providerCostEvidenceConflict }
+        : {}),
       ...(providerCost ? { providerCost } : {}),
     };
 
@@ -732,7 +754,9 @@ export class LLMClient {
       durationMs: Math.max(0, options.completedAtMs - options.startedAtMs),
       ...(options.ttftMs !== undefined ? { ttftMs: options.ttftMs } : {}),
       status: options.status,
-      settlement: options.settlement,
+      settlement: providerCostReconciliation.providerCostEvidenceConflict && options.settlement === 'complete'
+        ? 'partial'
+        : options.settlement,
       callKind,
       callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
       purpose,
@@ -800,8 +824,13 @@ export class LLMClient {
     const accountingInputTokens = this.estimateBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const modelHint = mergeModelHints(context.modelHint, undefined);
-    const logicalCallId = this.createUsageLogicalCallId('chat', 'chat', correlation);
-    let physicalAttempt = 0;
+    const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
+    const logicalCallId = externalAccounting?.logicalCallId
+      ?? this.createUsageLogicalCallId('chat', 'chat', correlation);
+    let physicalAttempt = (externalAccounting?.attempt ?? 1) - 1;
+    const streamRetryConfig = externalAccounting?.retryOwner === 'caller'
+      ? { ...llmRetryConfig(this.config), maxRetries: 0 }
+      : llmRetryConfig(this.config);
     let requestedProvider = modelHint?.provider;
     let requestedModel = modelHint?.model;
 
@@ -811,7 +840,12 @@ export class LLMClient {
         async (candidateTarget) => {
           const transport = this.transport;
           if (transport) {
-            const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+            const transportContext = this.buildTransportContext(
+              context,
+              candidateTarget,
+              correlation,
+              externalAccounting,
+            );
             return await this.runTransportWithCircuitBreaker(
               'llm.stream',
               candidateTarget,
@@ -852,6 +886,7 @@ export class LLMClient {
             candidate: candidateTarget,
             correlation,
             purpose: 'chat',
+            ...(externalAccounting?.retryOwner === 'caller' ? { maxRetries: 0 } : {}),
             extractToolCalls: (result) => result.toolCalls,
             onRetriesResolved: () => {},
             attempt: (attemptIndex) => withRetry(async () => {
@@ -1152,7 +1187,7 @@ export class LLMClient {
               },
             );
             return incompleteResponse;
-          }, llmRetryConfig(this.config), {
+          }, streamRetryConfig, {
             circuitBreaker: {
               breaker: this.circuitBreaker,
               key: this.resolveCircuitBreakerKey('llm.stream', candidateTarget),

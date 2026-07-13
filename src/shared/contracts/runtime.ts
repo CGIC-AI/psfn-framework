@@ -144,6 +144,15 @@ export interface LLMModelHint extends ModelControlKnobs {
   pin?: boolean;
 }
 
+export interface LLMCallAccountingContext {
+  /** Stable identity shared by every physical attempt of one caller operation. */
+  logicalCallId: string;
+  /** One-based physical attempt number within the logical call. */
+  attempt: number;
+  /** The upstream caller owns retry/fallback sequencing for this operation. */
+  retryOwner?: 'caller';
+}
+
 export interface MessageModelOverride extends ModelControlKnobs {
   provider: string;
   model: string;
@@ -693,6 +702,7 @@ export interface LLMContext {
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;
+  accounting?: LLMCallAccountingContext;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];

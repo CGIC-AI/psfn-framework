@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '../../boundary/pi-agent/index.js';
 import type { AgentEvent } from '../../boundary/pi-agent/index.js';
-import { validateToolArguments } from '@mariozechner/pi-ai';
+import { validateToolArguments, type Context, type Model } from '@mariozechner/pi-ai';
 import { Type } from '@sinclair/typebox';
-import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelBudgetBlockedEvent, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
@@ -209,6 +209,28 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
     events.push(event);
   }
   return events;
+}
+
+function makeExternalPiModel(id: string): Model<'openai-completions'> {
+  return {
+    id,
+    provider: 'openrouter',
+    name: id,
+    api: 'openai-completions',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 4_096,
+    maxTokens: 128,
+  };
+}
+
+function makePiContext(): Context {
+  return {
+    systemPrompt: 'System',
+    messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+  };
 }
 
 describe('createSubstrateStreamFn', () => {
@@ -648,6 +670,117 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the only matching priced stream entry is disabled or for another purpose', async () => {
+    for (const variant of ['disabled', 'wrong-purpose'] as const) {
+      const baseConfig = makeConfig();
+      const targetModel = `${variant}/model`;
+      const targetEntry: ModelRegistryEntry = {
+        id: `${variant}-entry`,
+        rank: 1,
+        ...(variant === 'disabled' ? { enabled: false } : {}),
+        identity: {
+          provider: 'openrouter',
+          model: targetModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [{ purpose: variant === 'disabled' ? 'chat' : 'memory', primary: true }],
+        capabilities: { maxOutputTokens: 128, contextWindow: 4_096 },
+        tuning: { maxOutputTokens: 128, contextWindow: 4_096 },
+        cost: { inputPer1MUsd: 1, outputPer1MUsd: 2, currency: 'USD' },
+      };
+      const config = makeConfig({
+        modelRegistry: {
+          ...baseConfig.modelRegistry!,
+          budgetPolicy: {
+            enabled: true,
+            dailyUsdLimit: 100,
+            monthlyUsdLimit: 1_000,
+            currency: 'USD',
+          },
+          models: [...baseConfig.modelRegistry!.models, targetEntry],
+        },
+      });
+      const blockedEvents: ModelBudgetBlockedEvent[] = [];
+      const streamFn = makeStreamFn(config, {
+        onBudgetBlocked: event => blockedEvents.push(event),
+      });
+      streamAdapterMocks.transportStream.mockResolvedValue({
+        content: 'must not run',
+        toolCalls: [],
+        model: targetModel,
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      });
+
+      const stream = await streamFn(makeExternalPiModel(targetModel), makePiContext(), {});
+
+      await expect(collectStreamEvents(stream))
+        .rejects.toThrow('Model budget blocked');
+      expect(blockedEvents).toMatchObject([{
+        reason: 'missing_cost_metadata',
+        provider: 'openrouter',
+        model: targetModel,
+      }]);
+    }
+
+    expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
+  });
+
+  it('quarantines disabled and wrong-purpose stream pricing when budgets are disabled', async () => {
+    for (const variant of ['disabled', 'wrong-purpose'] as const) {
+      const baseConfig = makeConfig();
+      const targetModel = `${variant}/model`;
+      const targetEntry: ModelRegistryEntry = {
+        id: `${variant}-entry`,
+        rank: 1,
+        ...(variant === 'disabled' ? { enabled: false } : {}),
+        identity: {
+          provider: 'openrouter',
+          model: targetModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [{ purpose: variant === 'disabled' ? 'chat' : 'memory', primary: true }],
+        capabilities: { maxOutputTokens: 128, contextWindow: 4_096 },
+        tuning: { maxOutputTokens: 128, contextWindow: 4_096 },
+        cost: { inputPer1MUsd: 10, outputPer1MUsd: 20, currency: 'USD' },
+      };
+      const config = makeConfig({
+        modelRegistry: {
+          ...baseConfig.modelRegistry!,
+          budgetPolicy: {
+            enabled: false,
+            dailyUsdLimit: 100,
+            monthlyUsdLimit: 1_000,
+            currency: 'USD',
+          },
+          models: [...baseConfig.modelRegistry!.models, targetEntry],
+        },
+      });
+      streamAdapterMocks.transportStream.mockResolvedValueOnce({
+        content: 'unpriced but allowed',
+        toolCalls: [],
+        model: targetModel,
+        inputTokens: 100,
+        outputTokens: 5,
+        stopReason: 'stop',
+      });
+
+      const stream = await makeStreamFn(config)(makeExternalPiModel(targetModel), makePiContext(), {});
+      await collectStreamEvents(stream);
+
+      const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+      const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
+      expect(parsed.records).toHaveLength(1);
+      expect(parsed.records[0]).toMatchObject({
+        provider: 'openrouter',
+        model: targetModel,
+        estimatedCostUsd: 0,
+      });
+      expect(parsed.records[0]).not.toHaveProperty('slotKey');
+    }
+  });
+
   it('records ambiguous stream usage without an arbitrary slot or estimated cost', async () => {
     for (const order of ['priced-first', 'unpriced-first'] as const) {
       const baseConfig = makeConfig();
@@ -897,6 +1030,37 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
     expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('deepseek/deepseek-v3.2');
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
+  });
+
+  it('uses one logical call with monotonic physical attempts and pinned transport candidates', async () => {
+    const config = makeConfig({
+      retryMaxAttempts: 1,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream
+      .mockRejectedValueOnce(new Error('503 provider unavailable'))
+      .mockResolvedValueOnce({
+        content: 'Recovered on retry.',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+    await collectStreamEvents(stream);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    const contexts = streamAdapterMocks.transportStream.mock.calls.map(call => call[0] as LLMContext);
+    const accounting = contexts.map(context => context.accounting);
+    expect(accounting).toEqual([
+      { logicalCallId: expect.stringMatching(/^llm:/), attempt: 1, retryOwner: 'caller' },
+      { logicalCallId: expect.stringMatching(/^llm:/), attempt: 2, retryOwner: 'caller' },
+    ]);
+    expect(accounting[0]?.logicalCallId).toBe(accounting[1]?.logicalCallId);
+    expect(contexts.map(context => context.modelHint?.pin)).toEqual([true, true]);
   });
 
   it('falls back to the next configured chat candidate when the primary response has no text', async () => {

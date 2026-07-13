@@ -52,7 +52,13 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   config: SubstrateConfig;
   env?: NodeJS.ProcessEnv;
   eligibilityGate: EligibilityGate;
-  gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
+  gateway: Pick<
+    GatewayServer,
+    | 'requestAgent'
+    | 'subscribeApiStream'
+    | 'requestAgentVoiceStream'
+    | 'invalidateIcpAutonomyForCompanion'
+  >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
   /**
@@ -341,6 +347,10 @@ export async function startOptionalGatewayApiServer(
       : {},
     ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
     ...(options.companionRelay ? { companionRelay: options.companionRelay } : {}),
+    icpAutonomyOperator: {
+      cancelForCompanion: async companionId => await options.gateway
+        .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
+    },
   });
   await apiServer.start();
   return apiServer;

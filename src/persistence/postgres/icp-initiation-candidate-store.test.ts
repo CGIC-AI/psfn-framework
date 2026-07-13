@@ -13,7 +13,7 @@ const CANDIDATE_ROW = {
   peer_companion_id: B,
   preferred_channel: 'dm',
   source: 'weighted_thought',
-  provenance_ref: 'weighted-thought:wt-42',
+  provenance_ref: 'icp-prov:11111111-1111-4111-8111-111111111111',
   reason_summary: 'Follow up on the research question.',
   created_at_ms: '10000',
   expires_at_ms: '70000',

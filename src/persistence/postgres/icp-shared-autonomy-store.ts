@@ -15,6 +15,7 @@ import {
   parseIcpInitiationPermit,
   type IcpAutonomyReasonCode,
   type IcpAvailabilityLease,
+  type IcpAvailabilitySource,
   type IcpConversationEpisode,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -222,7 +223,12 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     });
     try {
       await ensureSharedSchema(pool);
-      return new PostgresIcpSharedAutonomyStore(pool, knownCompanionIds);
+      const store = new PostgresIcpSharedAutonomyStore(pool, knownCompanionIds);
+      await store.revokeOutstandingPermitsOutsideFleet(
+        [...knownCompanionIds],
+        Date.now(),
+      );
+      return store;
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -238,15 +244,46 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       SELECT $1::uuid, $2::text, $3::bigint, $4::bigint, $5::text, $6::bigint
       WHERE $6::bigint = 1 OR EXISTS (
         SELECT 1 FROM icp_availability_leases
-        WHERE companion_id = $1 AND revision + 1 = $6
+        WHERE companion_id = $1
+          AND (
+            (
+              revision + 1 = $6
+              AND (
+                $5::text = 'operator'
+                OR source <> 'operator'
+                OR expires_at_ms <= $3
+              )
+            )
+            OR (
+              $5::text = 'operator'
+              AND source <> 'operator'
+              AND revision = $6
+            )
+          )
       )
       ON CONFLICT (companion_id) DO UPDATE SET
         state = EXCLUDED.state,
         issued_at_ms = EXCLUDED.issued_at_ms,
         expires_at_ms = EXCLUDED.expires_at_ms,
         source = EXCLUDED.source,
-        revision = EXCLUDED.revision
-      WHERE icp_availability_leases.revision + 1 = EXCLUDED.revision
+        revision = CASE
+          WHEN icp_availability_leases.revision = EXCLUDED.revision
+            THEN icp_availability_leases.revision + 1
+          ELSE EXCLUDED.revision
+        END
+      WHERE (
+          icp_availability_leases.revision + 1 = EXCLUDED.revision
+          AND (
+            EXCLUDED.source = 'operator'
+            OR icp_availability_leases.source <> 'operator'
+            OR icp_availability_leases.expires_at_ms <= EXCLUDED.issued_at_ms
+          )
+        )
+        OR (
+          EXCLUDED.source = 'operator'
+          AND icp_availability_leases.source <> 'operator'
+          AND icp_availability_leases.revision = EXCLUDED.revision
+        )
       RETURNING ${AVAILABILITY_COLUMNS}
     `, [
       lease.companionId,
@@ -270,13 +307,24 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     return row ? mapAvailability(row) : null;
   }
 
-  async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
+  async clearAvailability(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilitySource; nowMs: number },
+  ): Promise<boolean> {
     const result = await executeQuery(this.pool, `
       DELETE FROM icp_availability_leases
       WHERE companion_id = $1 AND revision = $2
+        AND (
+          $3::text = 'operator'
+          OR source <> 'operator'
+          OR expires_at_ms <= $4
+        )
     `, [
       requireUuid(companionId, 'companionId'),
       requirePositiveInteger(expectedRevision, 'expectedRevision'),
+      request.source,
+      requireTimestamp(request.nowMs, 'nowMs'),
     ]);
     return (result.rowCount ?? 0) > 0;
   }
@@ -490,7 +538,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         permit.status,
         permit.revision,
       ]);
-      const permitRow = permitResult.rows[0];
+      const permitRow = permitResult.rows.at(0);
       if (!permitRow) {
         const outstandingResult = await client.query<PermitRow>(`
           SELECT ${PERMIT_COLUMNS}
@@ -500,12 +548,12 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
             AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
           LIMIT 1
         `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
-        if (outstandingResult.rows[0]) {
+        if (outstandingResult.rows.at(0)) {
           throw new Error('ICP outstanding invitation conflict for companion pair');
         }
         throw new Error('ICP permit conversation/channel/participant/candidate binding mismatch');
       }
-      const episodeRow = episodeResult.rows[0];
+      const episodeRow = episodeResult.rows.at(0);
       if (!episodeRow) throw new Error('Failed to create ICP conversation episode atomically');
       return {
         episode: mapConversation(episodeRow, this.knownCompanionIds),
@@ -639,6 +687,28 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       requireUuid(companionId, 'companionId'),
       requireTimestamp(revokedAtMs, 'revokedAtMs'),
       reasonCode,
+    ]);
+    return rows.map(mapPermit);
+  }
+
+  async revokeOutstandingPermitsOutsideFleet(
+    knownCompanionIdsInput: readonly string[],
+    revokedAtMs: number,
+  ): Promise<IcpInitiationPermit[]> {
+    const knownCompanionIds = normalizeKnownCompanionIds(knownCompanionIdsInput);
+    const rows = await queryRows<PermitRow>(this.pool, `
+      UPDATE icp_initiation_permits
+      SET status = 'revoked', revoked_at_ms = GREATEST($2, issued_at_ms),
+          reason_code = 'unknown_participant', revision = revision + 1
+      WHERE status = 'issued'
+        AND NOT (
+          sender_companion_id = ANY($1::uuid[])
+          AND recipient_companion_id = ANY($1::uuid[])
+        )
+      RETURNING ${PERMIT_COLUMNS}
+    `, [
+      [...knownCompanionIds],
+      requireTimestamp(revokedAtMs, 'revokedAtMs'),
     ]);
     return rows.map(mapPermit);
   }

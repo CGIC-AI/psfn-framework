@@ -10,6 +10,7 @@ import {
 
 export const MAX_ICP_AVAILABILITY_LEASE_TTL_MS = 24 * 60 * 60_000;
 export const MAX_ICP_PERMIT_TTL_MS = 15 * 60_000;
+const ICP_PROVENANCE_HANDLE_PATTERN = /^icp-prov:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export const ICP_AVAILABILITY_STATES = [
   'available',
@@ -215,6 +216,14 @@ function requireString(value: unknown, field: string, maxLength = 512): string {
   return value;
 }
 
+/** Opaque content-free handle; descriptive provenance remains companion-local. */
+export function parseIcpProvenanceHandle(value: unknown, field = 'provenanceRef'): string {
+  if (typeof value !== 'string' || !ICP_PROVENANCE_HANDLE_PATTERN.test(value)) {
+    throw new Error(`${field} must be an opaque provenance handle (icp-prov:<lowercase RFC-4122 UUID>)`);
+  }
+  return value;
+}
+
 function requireTimestamp(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer timestamp`);
@@ -378,10 +387,9 @@ export function parseIcpConversationEpisode(
       ICP_INITIATION_SOURCES,
       'ICP conversation episode.initiationSource',
     ),
-    provenanceRef: requireString(
+    provenanceRef: parseIcpProvenanceHandle(
       raw.provenanceRef,
       'ICP conversation episode.provenanceRef',
-      1_024,
     ),
     openedAtMs,
     lastActivityAtMs,
@@ -479,7 +487,7 @@ export function parseIcpInitiationPermit(
     senderCompanionId,
     recipientCompanionId,
     channelId,
-    provenanceRef: requireString(raw.provenanceRef, 'ICP initiation permit.provenanceRef', 1_024),
+    provenanceRef: parseIcpProvenanceHandle(raw.provenanceRef, 'ICP initiation permit.provenanceRef'),
     issuedAtMs,
     expiresAtMs,
     status,

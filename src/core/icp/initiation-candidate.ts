@@ -1,6 +1,7 @@
 import {
   ICP_AUTONOMY_REASON_CODES,
   ICP_INITIATION_SOURCES,
+  parseIcpProvenanceHandle,
   type IcpAutonomyReasonCode,
   type IcpInitiationSource,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -144,7 +145,7 @@ export function parseIcpInitiationCandidate(
       'ICP candidate.preferredChannel',
     ),
     source: requireEnum(value.source, ICP_INITIATION_SOURCES, 'ICP candidate.source'),
-    provenanceRef: requireString(value.provenanceRef, 'ICP candidate.provenanceRef'),
+    provenanceRef: parseIcpProvenanceHandle(value.provenanceRef, 'ICP candidate.provenanceRef'),
     reasonSummary: requireString(
       value.reasonSummary,
       'ICP candidate.reasonSummary',

@@ -1,5 +1,6 @@
 import type {
   IcpAutonomyReasonCode,
+  IcpAvailabilitySource,
   IcpAvailabilityLease,
   IcpConversationEpisode,
   IcpConversationStatus,
@@ -13,7 +14,11 @@ import type {
 export interface IcpAvailabilityStorePort {
   publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease>;
   getAvailability(companionId: string): Promise<IcpAvailabilityLease | null>;
-  clearAvailability(companionId: string, expectedRevision: number): Promise<boolean>;
+  clearAvailability(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilitySource; nowMs: number },
+  ): Promise<boolean>;
 }
 
 export interface IcpConversationTransitionInput {
@@ -74,6 +79,10 @@ export interface IcpInitiationPermitStorePort {
     companionId: string,
     revokedAtMs: number,
     reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpInitiationPermit[]>;
+  revokeOutstandingPermitsOutsideFleet(
+    knownCompanionIds: readonly string[],
+    revokedAtMs: number,
   ): Promise<IcpInitiationPermit[]>;
 }
 

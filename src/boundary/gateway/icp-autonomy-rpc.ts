@@ -16,12 +16,14 @@ import {
   parseIcpPermitRevokeParams,
 } from './icp-autonomy-contract.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 
 interface GatewayIcpAutonomyRpcOptions {
   store: IcpSharedAutonomyStorePort;
   fleetCompanionIds: ReadonlySet<string>;
   companionChannels?: GatewayCompanionChannelLane;
   isCompanionReady(companionId: string): boolean;
+  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
 }
@@ -44,6 +46,7 @@ export function createGatewayIcpAutonomyBroker(
     store: options.store,
     fleetCompanionIds: options.fleetCompanionIds,
     isCompanionReady: options.isCompanionReady,
+    policyAuthority: options.policyAuthority,
     resolveInitiationChannel: async (senderCompanionId, peerCompanionId, channelId) => {
       const lane = options.companionChannels;
       if (!lane) return { ok: false, reasonCode: 'channel_mismatch' };

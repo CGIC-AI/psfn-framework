@@ -18,6 +18,7 @@ import type {
   IcpInitiationPreflightInput,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
+import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 
 export interface IcpInitiationChannelResolution {
   ok: boolean;
@@ -33,6 +34,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
     peerCompanionId: string,
     channelId: string,
   ): Promise<IcpInitiationChannelResolution>;
+  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
   now?: () => number;
@@ -62,10 +64,6 @@ export class GatewayIcpAutonomyBroker {
       source: 'companion',
       revision: input.revision,
     }, { nowMs, requireCurrent: true });
-    const existing = await this.options.store.getAvailability(companionId);
-    if (existing?.source === 'operator' && existing.expiresAtMs > nowMs) {
-      throw new Error('Operator availability override is active and cannot be replaced by a companion lease');
-    }
     const published = await this.options.store.publishAvailability(lease);
     if (published.state === 'busy' || published.state === 'resting' || published.state === 'do_not_disturb') {
       await this.invalidateForCompanion(companionId, availabilityReason(published.state));
@@ -84,18 +82,18 @@ export class GatewayIcpAutonomyBroker {
 
   async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
     this.requireFleetCompanion(companionId, 'availability publisher');
-    const existing = await this.options.store.getAvailability(companionId);
-    if (existing?.source === 'operator' && existing.expiresAtMs > this.now()) {
-      throw new Error('Operator availability override is active and cannot be cleared by a companion');
-    }
-    const cleared = await this.options.store.clearAvailability(companionId, expectedRevision);
+    const nowMs = this.now();
+    const cleared = await this.options.store.clearAvailability(companionId, expectedRevision, {
+      source: 'companion',
+      nowMs,
+    });
     if (cleared) {
       await this.invalidateForCompanion(companionId, 'availability_missing');
       await this.options.eventBus.emit('icp.availability.changed', {
         companionId,
         action: 'cleared',
         revision: expectedRevision,
-        timestamp: this.now(),
+        timestamp: nowMs,
       });
     }
     return cleared;
@@ -305,7 +303,7 @@ export class GatewayIcpAutonomyBroker {
     senderCompanionId: string,
     input: IcpInitiationPreflightInput,
   ): Promise<IcpInitiationGateDecision> {
-    const { candidate, policy } = input;
+    const { candidate } = input;
     if (candidate.localCompanionId !== senderCompanionId) {
       this.options.alarm('icp_candidate_sender_mismatch', 'ICP candidate sender identity mismatch', {
         authenticatedCompanionId: senderCompanionId,
@@ -326,6 +324,12 @@ export class GatewayIcpAutonomyBroker {
     }
     if (candidate.status !== 'pending') return closedDecision('candidate_cancelled', 'terminal');
     if (candidate.expiresAtMs <= this.now()) return closedDecision('candidate_expired', 'terminal');
+    const policy = await this.options.policyAuthority.resolve({
+      senderCompanionId,
+      candidate,
+      channelId: input.channelId,
+      nowMs: this.now(),
+    });
     if (!policy.canonicalPeerContact) return closedDecision('invalid_identity', 'terminal');
     if (policy.senderBlocksPeer || policy.peerBlocksSender) return closedDecision('peer_blocked', 'terminal');
     if (!policy.trustAllows) return closedDecision('policy_denied', 'terminal');

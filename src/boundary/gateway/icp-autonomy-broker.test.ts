@@ -32,6 +32,7 @@ const ROOT_ID = '22222222-2222-4222-8222-222222222222';
 const CONVERSATION_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const CHANNEL = `companion-dm:${A}:${B}`;
+const PROVENANCE_HANDLE = `icp-prov:${CANDIDATE_ID}`;
 
 const OPEN_POLICY: IcpInitiationPolicySnapshot = {
   canonicalPeerContact: true,
@@ -55,7 +56,7 @@ function candidate(overrides: Partial<IcpInitiationCandidateSharedMetadata> = {}
     peerCompanionId: B,
     preferredChannel: 'dm',
     source: 'free_time',
-    provenanceRef: 'free-time:block:17',
+    provenanceRef: PROVENANCE_HANDLE,
     createdAtMs: NOW - 1_000,
     expiresAtMs: NOW + 60_000,
     status: 'pending',
@@ -74,6 +75,11 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     if ((current && current.revision + 1 !== lease.revision) || (!current && lease.revision !== 1)) {
       throw new Error('revision conflict');
     }
+    if (current?.source === 'operator'
+      && current.expiresAtMs > lease.issuedAtMs
+      && lease.source !== 'operator') {
+      throw new Error('operator availability override');
+    }
     this.availability.set(lease.companionId, lease);
     return lease;
   }
@@ -82,8 +88,16 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return this.availability.get(companionId) ?? null;
   }
 
-  async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
-    if (this.availability.get(companionId)?.revision !== expectedRevision) return false;
+  async clearAvailability(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+  ): Promise<boolean> {
+    const current = this.availability.get(companionId);
+    if (current?.revision !== expectedRevision) return false;
+    if (current.source === 'operator'
+      && current.expiresAtMs > request.nowMs
+      && request.source !== 'operator') return false;
     return this.availability.delete(companionId);
   }
 
@@ -220,6 +234,28 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return revoked;
   }
 
+  async revokeOutstandingPermitsOutsideFleet(
+    knownCompanionIds: readonly string[],
+    revokedAtMs: number,
+  ): Promise<IcpInitiationPermit[]> {
+    const known = new Set(knownCompanionIds);
+    const revoked: IcpInitiationPermit[] = [];
+    for (const permit of this.permits.values()) {
+      if (permit.status !== 'issued'
+        || (known.has(permit.senderCompanionId) && known.has(permit.recipientCompanionId))) continue;
+      const next: IcpInitiationPermit = {
+        ...permit,
+        status: 'revoked',
+        revokedAtMs,
+        reasonCode: 'unknown_participant',
+        revision: permit.revision + 1,
+      };
+      this.permits.set(permit.permitId, next);
+      revoked.push(next);
+    }
+    return revoked;
+  }
+
   async close(): Promise<void> {}
 }
 
@@ -227,6 +263,7 @@ function makeBroker(input: {
   store?: MemoryStore;
   ready?: boolean;
   channelOk?: boolean;
+  policy?: IcpInitiationPolicySnapshot;
   alarm?: ReturnType<typeof vi.fn>;
   eventBus?: EventBus;
 } = {}) {
@@ -241,6 +278,9 @@ function makeBroker(input: {
     resolveInitiationChannel: async () => input.channelOk === false
       ? { ok: false, reasonCode: 'channel_mismatch' }
       : { ok: true },
+    policyAuthority: {
+      resolve: async () => input.policy ?? OPEN_POLICY,
+    },
     eventBus,
     alarm,
     now: () => NOW,
@@ -261,17 +301,16 @@ async function makeAvailable(store: MemoryStore, companionId = B): Promise<void>
 }
 
 describe('GatewayIcpAutonomyBroker', () => {
-  it('strictly rejects private candidate fields and missing policy gates', () => {
+  it('strictly rejects private candidate fields and sender-supplied policy claims', () => {
     expect(() => parseIcpInitiationPreflightInput({
       candidate: { ...candidate(), reasonSummary: 'must stay private' },
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
     }, NOW)).toThrow(/unknown key.*reasonSummary/i);
     expect(() => parseIcpInitiationPreflightInput({
       candidate: candidate(),
       channelId: CHANNEL,
-      policy: { ...OPEN_POLICY, costAllows: undefined },
-    }, NOW)).toThrow(/costAllows must be a boolean/);
+      policy: OPEN_POLICY,
+    }, NOW)).toThrow(/unknown key.*policy/i);
   });
 
   it.each([
@@ -286,12 +325,11 @@ describe('GatewayIcpAutonomyBroker', () => {
     ['fatigueAllows', false, 'fatigue_exhausted', 'terminal'],
     ['costAllows', false, 'cost_hard_stop', 'terminal'],
   ] as const)('closes %s deterministically with %s', async (key, value, reasonCode, reasonClass) => {
-    const { broker, store } = makeBroker();
+    const { broker, store } = makeBroker({ policy: { ...OPEN_POLICY, [key]: value } });
     await makeAvailable(store);
     await expect(broker.preflight(A, {
       candidate: candidate(),
       channelId: CHANNEL,
-      policy: { ...OPEN_POLICY, [key]: value },
     })).resolves.toEqual({ eligible: false, reasonCode, reasonClass });
   });
 
@@ -334,7 +372,6 @@ describe('GatewayIcpAutonomyBroker', () => {
     const input = parseIcpInitiationPermitIssueInput({
       candidate: candidate(),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: NOW + 30_000,
     }, NOW);
     const issued = await broker.issuePermit(A, input);
@@ -369,7 +406,6 @@ describe('GatewayIcpAutonomyBroker', () => {
     const input = {
       candidate: candidate(),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: NOW + 30_000,
     };
     await expect(broker.issuePermit(A, input)).resolves.toMatchObject({
@@ -407,7 +443,7 @@ describe('GatewayIcpAutonomyBroker', () => {
       senderCompanionId: A,
       recipientCompanionId: B,
       channelId: CHANNEL,
-      provenanceRef: 'free-time:block:17',
+      provenanceRef: PROVENANCE_HANDLE,
       issuedAtMs: NOW - 1_000,
       expiresAtMs: NOW + 30_000,
       status: 'issued',
@@ -440,7 +476,6 @@ describe('GatewayIcpAutonomyBroker', () => {
     await broker.issuePermit(A, {
       candidate: candidate(),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: NOW + 30_000,
     });
     expect(gates).toHaveLength(1);

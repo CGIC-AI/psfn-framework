@@ -79,6 +79,7 @@ import type {
 import type { AuditSummaryEntry } from './audit-port.js';
 import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import type { GatewayIcpAutonomyBroker } from './icp-autonomy-broker.js';
 import {
   createGatewayIcpAutonomyBroker,
@@ -236,6 +237,8 @@ export interface GatewayServerOptions {
   companionChannels?: GatewayCompanionChannelLane;
   /** Durable shared-schema authority for the content-free ICP autonomy broker. */
   icpAutonomyStore?: IcpSharedAutonomyStorePort;
+  /** Canonical gateway-owned deterministic policy authority for ICP initiation. */
+  icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
   /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke
@@ -285,12 +288,18 @@ export class GatewayServer {
         + 'the autonomy broker must not exist in single-companion topology',
       );
     }
+    if (Boolean(options.icpAutonomyStore) !== Boolean(options.icpInitiationPolicyAuthority)) {
+      throw new Error(
+        'GatewayServer requires icpAutonomyStore and icpInitiationPolicyAuthority together',
+      );
+    }
     this.icpAutonomyBroker = options.icpAutonomyStore
       ? createGatewayIcpAutonomyBroker({
           store: options.icpAutonomyStore,
           fleetCompanionIds: this.fleetCompanionIds,
           companionChannels: options.companionChannels,
           isCompanionReady: companionId => this.resolveReadyCompanionConnection(companionId) !== null,
+          policyAuthority: options.icpInitiationPolicyAuthority!,
           eventBus: options.eventBus,
           alarm: (event, message, details) => this.alarmCompanionViolation(event, message, details),
         })

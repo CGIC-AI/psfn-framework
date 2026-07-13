@@ -9,6 +9,7 @@ import {
 
 const COMPANION_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const COMPANION_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PROVENANCE_HANDLE = 'icp-prov:44444444-4444-4444-8444-444444444444';
 
 describe('private ICP initiation candidate contract', () => {
   const rawCandidate = {
@@ -19,7 +20,7 @@ describe('private ICP initiation candidate contract', () => {
     peerCompanionId: COMPANION_B,
     preferredChannel: 'dm',
     source: 'weighted_thought',
-    provenanceRef: 'weighted-thought:wt-42',
+    provenanceRef: PROVENANCE_HANDLE,
     reasonSummary: 'I want to follow up on our shared research question.',
     createdAtMs: 10_000,
     expiresAtMs: 70_000,
@@ -43,6 +44,14 @@ describe('private ICP initiation candidate contract', () => {
       nowMs: 70_000,
       requireCurrent: true,
     })).toThrow('expired');
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      provenanceRef: 'icp-prov:private motivation must not cross',
+    })).toThrow(/opaque provenance handle/i);
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      provenanceRef: `${PROVENANCE_HANDLE}:private`,
+    })).toThrow(/opaque provenance handle/i);
   });
 
   it('projects only content-free metadata for shared arbitration', () => {

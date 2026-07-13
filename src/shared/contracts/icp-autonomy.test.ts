@@ -17,6 +17,7 @@ const CANDIDATE_ID = '11111111-1111-4111-8111-111111111111';
 const CONVERSATION_ID = '22222222-2222-4222-8222-222222222222';
 const ROOT_INITIATION_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const PROVENANCE_HANDLE = 'icp-prov:55555555-5555-4555-8555-555555555555';
 
 describe('ICP autonomy shared contracts', () => {
   it('strictly parses a bounded current availability lease', () => {
@@ -46,7 +47,7 @@ describe('ICP autonomy shared contracts', () => {
       rootInitiationId: ROOT_INITIATION_ID,
       initiatedByCompanionId: COMPANION_A,
       initiationSource: 'free_time',
-      provenanceRef: 'free-time:block:17',
+      provenanceRef: PROVENANCE_HANDLE,
       openedAtMs: 10_000,
       lastActivityAtMs: 10_000,
       status: 'invited',
@@ -67,6 +68,10 @@ describe('ICP autonomy shared contracts', () => {
     })).toThrow(`unknown participant ${COMPANION_B}`);
     expect(() => parseIcpConversationEpisode({ ...episode, lastActivityAtMs: 9_999 }))
       .toThrow('lastActivityAtMs must not precede openedAtMs');
+    expect(() => parseIcpConversationEpisode({
+      ...episode,
+      provenanceRef: 'icp-prov:private reason text',
+    })).toThrow(/opaque provenance handle/i);
   });
 
   it('rejects invalid episode lifecycle transitions', () => {
@@ -86,7 +91,7 @@ describe('ICP autonomy shared contracts', () => {
       senderCompanionId: COMPANION_A,
       recipientCompanionId: COMPANION_B,
       channelId: `companion-dm:${COMPANION_A}:${COMPANION_B}`,
-      provenanceRef: 'free-time:block:17',
+      provenanceRef: PROVENANCE_HANDLE,
       issuedAtMs: 10_000,
       expiresAtMs: 70_000,
       status: 'issued',

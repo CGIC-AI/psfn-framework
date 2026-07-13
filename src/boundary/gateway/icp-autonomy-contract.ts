@@ -34,7 +34,6 @@ export interface IcpInitiationPolicySnapshot {
 export interface IcpInitiationPreflightInput {
   candidate: IcpInitiationCandidateSharedMetadata;
   channelId: string;
-  policy: IcpInitiationPolicySnapshot;
 }
 
 export interface IcpInitiationPermitIssueInput extends IcpInitiationPreflightInput {
@@ -73,7 +72,7 @@ const POLICY_KEYS = [
   'chargeAllows', 'fatigueAllows', 'costAllows',
 ] as const;
 
-const PREFLIGHT_KEYS = ['candidate', 'channelId', 'policy', 'companionId'] as const;
+const PREFLIGHT_KEYS = ['candidate', 'channelId', 'companionId'] as const;
 const ISSUE_KEYS = [...PREFLIGHT_KEYS, 'permitExpiresAtMs'] as const;
 
 function requireBoolean(value: unknown, field: string): boolean {
@@ -107,7 +106,7 @@ function requireUuid(value: unknown, field: string): string {
   return value;
 }
 
-function parsePolicySnapshot(value: unknown): IcpInitiationPolicySnapshot {
+export function parseIcpInitiationPolicySnapshot(value: unknown): IcpInitiationPolicySnapshot {
   if (!isRecord(value)) throw new Error('ICP initiation policy snapshot must be an object');
   assertNoUnknownKeys(value, POLICY_KEYS, 'ICP initiation policy snapshot');
   return {
@@ -137,7 +136,6 @@ export function parseIcpInitiationPreflightInput(
       requireCurrent: true,
     }),
     channelId: requireTrimmedString(value.channelId, 'channelId'),
-    policy: parsePolicySnapshot(value.policy),
   };
 }
 
@@ -150,7 +148,6 @@ export function parseIcpInitiationPermitIssueInput(
   const base = parseIcpInitiationPreflightInput({
     candidate: value.candidate,
     channelId: value.channelId,
-    policy: value.policy,
     ...(value.companionId !== undefined ? { companionId: value.companionId } : {}),
   }, nowMs);
   const permitExpiresAtMs = requireTimestamp(value.permitExpiresAtMs, 'permitExpiresAtMs');

@@ -38,6 +38,7 @@ import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../ch
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
+import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -212,6 +213,7 @@ async function main(): Promise<void> {
   // closed at the RPC surface.
   let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
   let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
+  let icpInitiationPolicyAuthority: PostgresIcpInitiationPolicyAuthority | null = null;
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
     const databaseUrl = config.postgresDatabaseUrl?.trim();
@@ -225,6 +227,10 @@ async function main(): Promise<void> {
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
     icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: fleetCompanionIds,
+    });
+    icpInitiationPolicyAuthority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
+      fleet: config.companionFleet.companions,
+      quietHours: startupHydration.schedulerConfig.episodicProcessing,
     });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
@@ -242,6 +248,7 @@ async function main(): Promise<void> {
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
+    ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
   });
   const {
     apiHost,
@@ -351,6 +358,7 @@ async function main(): Promise<void> {
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
+        { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);

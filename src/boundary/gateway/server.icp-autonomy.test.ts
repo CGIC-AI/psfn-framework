@@ -68,8 +68,16 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return this.availability.get(companionId) ?? null;
   }
 
-  async clearAvailability(companionId: string, expectedRevision: number): Promise<boolean> {
-    if (this.availability.get(companionId)?.revision !== expectedRevision) return false;
+  async clearAvailability(
+    companionId: string,
+    expectedRevision: number,
+    request: { source: IcpAvailabilityLease['source']; nowMs: number },
+  ): Promise<boolean> {
+    const current = this.availability.get(companionId);
+    if (current?.revision !== expectedRevision) return false;
+    if (current.source === 'operator'
+      && current.expiresAtMs > request.nowMs
+      && request.source !== 'operator') return false;
     return this.availability.delete(companionId);
   }
 
@@ -205,6 +213,28 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return rows;
   }
 
+  async revokeOutstandingPermitsOutsideFleet(
+    knownCompanionIds: readonly string[],
+    revokedAtMs: number,
+  ): Promise<IcpInitiationPermit[]> {
+    const known = new Set(knownCompanionIds);
+    const rows: IcpInitiationPermit[] = [];
+    for (const permit of this.permits.values()) {
+      if (permit.status !== 'issued'
+        || (known.has(permit.senderCompanionId) && known.has(permit.recipientCompanionId))) continue;
+      const revoked: IcpInitiationPermit = {
+        ...permit,
+        status: 'revoked',
+        revokedAtMs,
+        reasonCode: 'unknown_participant',
+        revision: permit.revision + 1,
+      };
+      this.permits.set(permit.permitId, revoked);
+      rows.push(revoked);
+    }
+    return rows;
+  }
+
   async close(): Promise<void> {}
 }
 
@@ -284,7 +314,7 @@ function candidate(candidateId: string, localCompanionId = A, peerCompanionId = 
     peerCompanionId,
     preferredChannel: 'dm' as const,
     source: 'free_time' as const,
-    provenanceRef: `free-time:${candidateId}`,
+    provenanceRef: `icp-prov:${candidateId}`,
     createdAtMs: now - 1_000,
     expiresAtMs: now + 120_000,
     status: 'pending' as const,
@@ -292,7 +322,7 @@ function candidate(candidateId: string, localCompanionId = A, peerCompanionId = 
   };
 }
 
-async function setup() {
+async function setup(policy = OPEN_POLICY) {
   const eventBus = new EventBus();
   const store = new RpcMemoryStore();
   const llmProvider = { stream: vi.fn(), complete: vi.fn() };
@@ -312,6 +342,7 @@ async function setup() {
     multiCompanion: multiCompanion(),
     companionChannels: lane,
     icpAutonomyStore: store,
+    icpInitiationPolicyAuthority: { resolve: async () => policy },
     eventBus,
   };
   let onConnection: ((conn: GatewayRpcConnection) => void) | undefined;
@@ -331,7 +362,7 @@ async function setup() {
 
 describe('GatewayServer ICP autonomy RPC', () => {
   it('authenticates coarse availability and closes deterministic gates with zero LLM calls', async () => {
-    const { connect, llmProvider, eventBus } = await setup();
+    const { connect, llmProvider, eventBus } = await setup({ ...OPEN_POLICY, quietHours: true });
     const a = connect();
     const b = connect();
     await identify(a, A, 1);
@@ -350,7 +381,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: A,
       candidate: candidate('22222222-2222-4222-8222-222222222222'),
       channelId: CHANNEL,
-      policy: { ...OPEN_POLICY, quietHours: true },
     });
     expect(closed.result).toEqual({
       eligible: false,
@@ -381,7 +411,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: A,
       candidate: candidate('33333333-3333-4333-8333-333333333333'),
       channelId: `companion-dm:${A}:${C}`,
-      policy: OPEN_POLICY,
     });
     expect(substituted.result).toEqual({
       eligible: false,
@@ -415,7 +444,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: A,
       candidate: candidate('55555555-5555-4555-8555-555555555555'),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: Date.now() + 60_000,
     });
     expect(issue.result.decision).toEqual({ eligible: true });
@@ -442,7 +470,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: A,
       candidate: candidate('66666666-6666-4666-8666-666666666666'),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: Date.now() + 60_000,
     });
     expect(second.result.decision).toEqual({ eligible: true });
@@ -461,7 +488,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
       companionId: A,
       candidate: candidate('77777777-7777-4777-8777-777777777777'),
       channelId: CHANNEL,
-      policy: OPEN_POLICY,
       permitExpiresAtMs: Date.now() + 60_000,
     });
     expect(third.result.decision).toEqual({ eligible: true });

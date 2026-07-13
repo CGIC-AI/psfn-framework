@@ -9,6 +9,7 @@ const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const CHANNEL = `companion-dm:${A}:${B}`;
 const CONVERSATION_ID = '22222222-2222-4222-8222-222222222222';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const PROVENANCE_HANDLE = 'icp-prov:11111111-1111-4111-8111-111111111111';
 
 const mocks = vi.hoisted(() => ({
   pool: { end: vi.fn(async () => undefined) },
@@ -42,7 +43,7 @@ const EPISODE_ROW = {
   root_initiation_id: '33333333-3333-4333-8333-333333333333',
   initiated_by_companion_id: A,
   initiation_source: 'free_time',
-  provenance_ref: 'free-time:block:17',
+  provenance_ref: PROVENANCE_HANDLE,
   opened_at_ms: '10000',
   last_activity_at_ms: '10000',
   status: 'invited',
@@ -56,7 +57,7 @@ const PERMIT_ROW = {
   sender_companion_id: A,
   recipient_companion_id: B,
   channel_id: CHANNEL,
-  provenance_ref: 'free-time:block:17',
+  provenance_ref: PROVENANCE_HANDLE,
   issued_at_ms: '10000',
   expires_at_ms: '70000',
   status: 'issued',
@@ -126,7 +127,25 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(sql).toContain('ON CONFLICT (companion_id) DO UPDATE');
     expect(sql).toContain('WHERE $6::bigint = 1 OR EXISTS');
     expect(sql).toContain('icp_availability_leases.revision + 1 = EXCLUDED.revision');
+    expect(sql).toContain("EXCLUDED.source = 'operator'");
+    expect(sql).toContain("icp_availability_leases.source <> 'operator'");
+    expect(sql).toContain('icp_availability_leases.revision = EXCLUDED.revision');
+    expect(sql).toContain('THEN icp_availability_leases.revision + 1');
     expect(lease.revision).toBe(1);
+  });
+
+  it('atomically prevents a companion clear from deleting an active operator lease', async () => {
+    const store = await connect();
+    mocks.executeQuery.mockClear();
+    await expect(store.clearAvailability(A, 2, {
+      source: 'companion',
+      nowMs: 2_000,
+    })).resolves.toBe(true);
+    const [, sql, values] = mocks.executeQuery.mock.calls[0] as [unknown, string, unknown[]];
+    expect(sql).toContain("$3::text = 'operator'");
+    expect(sql).toContain("source <> 'operator'");
+    expect(sql).toContain('expires_at_ms <= $4');
+    expect(values).toEqual([A, 2, 'companion', 2_000]);
   });
 
   it('creates a channel-bound episode with optimistic transitions', async () => {
@@ -266,6 +285,8 @@ describe('PostgresIcpSharedAutonomyStore', () => {
   });
 
   it('atomically revokes every outstanding permit involving a disconnected companion', async () => {
+    const store = await connect();
+    mocks.queryRows.mockClear();
     mocks.queryRows.mockResolvedValue([{
       ...PERMIT_ROW,
       status: 'revoked',
@@ -273,7 +294,6 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       reason_code: 'peer_offline',
       revision: '2',
     }]);
-    const store = await connect();
     await expect(store.revokeOutstandingPermitsForCompanion(B, 11_000, 'peer_offline'))
       .resolves.toEqual([expect.objectContaining({ status: 'revoked', reasonCode: 'peer_offline' })]);
     const [, sql] = mocks.queryRows.mock.calls[0] as [unknown, string];

@@ -86,7 +86,7 @@ export class IntrospectionLandmarkPostgresStore implements IntrospectionAuditPer
     options: { schema?: string } = {},
   ): Promise<IntrospectionLandmarkPostgresStore> {
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-introspection-landmarks',
+      applicationName: 'companion-introspection-landmarks',
       allowExitOnIdle: true,
       schema: options.schema,
     });

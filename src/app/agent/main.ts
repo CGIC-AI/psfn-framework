@@ -59,10 +59,13 @@ import { createCompanionRoomContentWindowPort } from '../../core/agent/companion
 import {
   resolveDriftReviewCardsPath,
   resolveIntakeQuarantinePath,
+  resolveIntrospectionValuesFindingsPath,
+  resolveLegacyValuesJournalPath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
   resolveSocialGraphBuilderWatermarkPath,
+  resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { createFilePendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import {
@@ -116,7 +119,12 @@ import {
 import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
 import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
-import { createIntrospectionValuesEvidencePort } from '../../faculties/introspection/values-consistency.js';
+import {
+  createLLMValuesConsistencyEvaluator,
+  IntrospectionValuesConsistencyRuntime,
+  ValuesConsistencyFindingStore,
+} from '../../faculties/introspection/values-consistency.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
 import {
   createOptionalJournalAutoPublisher,
   registerMarkdownJournalTools,
@@ -480,14 +488,27 @@ async function main(): Promise<void> {
     ),
     persistence: persistenceRuntime.introspectionLandmarkStore,
   });
+  const introspectionValuesConsistencyRuntime = new IntrospectionValuesConsistencyRuntime({
+    landmarks: persistenceRuntime.introspectionLandmarkStore,
+    claimedValues: new ValuesJournalStore(
+      resolveValuesJournalPath(pathSnapshot.companionDataDir),
+      { legacyFilePaths: [resolveLegacyValuesJournalPath(pathSnapshot.companionDataDir)] },
+    ),
+    findings: new ValuesConsistencyFindingStore(
+      resolveIntrospectionValuesFindingsPath(pathSnapshot.companionDataDir),
+    ),
+    evaluator: createLLMValuesConsistencyEvaluator({
+      llmProvider,
+      companionSystemPrompt: systemPrompt,
+      maxTokens: introspectionAuditConfig.reflectionMaxTokens,
+    }),
+  });
   registerIntrospectionAuditTask({
     scheduler,
     runtime: introspectionAuditRuntime,
+    valuesConsistencyRuntime: introspectionValuesConsistencyRuntime,
     config: introspectionAuditConfig,
   });
-  const introspectionValuesEvidence = createIntrospectionValuesEvidencePort(
-    persistenceRuntime.introspectionLandmarkStore,
-  );
 
   const moduleLoader = new ModuleLoader({
     eventBus,
@@ -1150,7 +1171,6 @@ async function main(): Promise<void> {
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       promptRegistry: promptState.registry,
-      introspectionValuesEvidence,
       reflectionStore,
       sessionManager,
       emotionState,

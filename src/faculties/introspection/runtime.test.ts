@@ -114,7 +114,14 @@ describe('scheduled blinded introspection audit', () => {
       now: () => new Date('2026-07-13T12:00:00.000Z'),
     });
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 1_000 });
-    registerIntrospectionAuditTask({ scheduler, runtime, config, skipFirstRun: false });
+    const valuesConsistencyRun = vi.fn(async () => ({ evaluated: 1 }));
+    registerIntrospectionAuditTask({
+      scheduler,
+      runtime,
+      config,
+      valuesConsistencyRuntime: { runOnce: valuesConsistencyRun },
+      skipFirstRun: false,
+    });
 
     await scheduler.tick();
 
@@ -138,6 +145,7 @@ describe('scheduled blinded introspection audit', () => {
     expect(companionContext).not.toContain('STABLE_REPLY_SENTINEL');
     expect(calls.every(call => call.tools === undefined)).toBe(true);
     expect(persistence.landmarks).toHaveLength(1);
+    expect(valuesConsistencyRun).toHaveBeenCalledOnce();
     expect(persistence.landmarks[0]).toMatchObject({
       divergenceType: 'substantive',
       confidence: 0.91,

@@ -29,6 +29,7 @@ import {
   resolveGeneratedImagesDir,
   resolveHeartbeatPolicyPath,
   resolveIntrospectionConsentLedgerPath,
+  resolveIntrospectionValuesFindingsPath,
   resolveIdentityAssetsDir,
   resolvePersonalDocsDir,
   resolvePersonalDownloadsDir,
@@ -123,6 +124,7 @@ describe('persistence layout', () => {
     expect(resolveNorthStarPath(dataDir)).toBe(join(dataDir, 'state', 'north-star.json'));
     expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'state', 'heartbeat-policy.json'));
     expect(resolveIntrospectionConsentLedgerPath(dataDir)).toBe(join(dataDir, 'state', 'introspection-consent.jsonl'));
+    expect(resolveIntrospectionValuesFindingsPath(dataDir)).toBe(join(dataDir, 'state', 'introspection-values-findings.jsonl'));
     expect(resolvePostTurnActionQueuePath(dataDir)).toBe(join(dataDir, 'state', 'post-turn-actions.queue.json'));
     expect(resolveOutreachOutboxLedgerPath(dataDir)).toBe(join(dataDir, 'state', 'outreach-outbox.jsonl'));
     expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'state', 'safeguards-audit.jsonl'));

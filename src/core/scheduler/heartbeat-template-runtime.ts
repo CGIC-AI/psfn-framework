@@ -771,21 +771,11 @@ export function createHeartbeatTemplateRuntime(
       reflectionPromptContext.substrateContext,
     );
     let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
-    let reflectionPrompt = formatNarrativePromptInput(
+    const reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
       reflectionPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
-    if (isValuesReflectionTemplateId(template.id) && runtimeOptions.introspectionValuesEvidence) {
-      const landmarkEvidence = await runtimeOptions.introspectionValuesEvidence.buildEvidence();
-      if (landmarkEvidence) {
-        reflectionPrompt = `${reflectionPrompt}\n\n${landmarkEvidence.content}`;
-        reflectionGroundingProvenanceRefs = [...new Set([
-          ...reflectionGroundingProvenanceRefs,
-          ...landmarkEvidence.provenanceRefs,
-        ])];
-      }
-    }
     let reflectionText = '';
     let silentInterval = false;
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;

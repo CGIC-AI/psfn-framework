@@ -7,6 +7,7 @@ export const INTROSPECTION_AUDIT_TASK_ID = 'introspection.blinded_audit';
 export function registerIntrospectionAuditTask(options: {
   scheduler: Scheduler;
   runtime: Pick<IntrospectionAuditRuntime, 'runOnce'>;
+  valuesConsistencyRuntime?: { runOnce(): Promise<unknown> };
   config: IntrospectionAuditConfig;
   skipFirstRun?: boolean;
 }): void {
@@ -18,6 +19,7 @@ export function registerIntrospectionAuditTask(options: {
     intervalMs: options.config.intervalMs,
     handler: async () => {
       await options.runtime.runOnce();
+      await options.valuesConsistencyRuntime?.runOnce();
     },
     eligibility: { requiredTokens: ['memory.write'] },
     state: 'idle',

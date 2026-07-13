@@ -112,10 +112,7 @@ export async function reserveIcpFatigueRegulation(input: {
   if (reservation.outcome === 'exhausted'
     && localDecision === 'charged'
     && input.fatiguePolicy.overcharge.enabled
-    && input.fatigueDecision.metadata.socialRegulation.continuationEvidence.some(
-      evidence => evidence === 'recent_human_participation'
-        || evidence === 'active_work_or_research',
-    )
+    && input.fatigueDecision.metadata.socialRegulation.continuationEvidence.length > 0
     && reservation.overchargeSpentBefore < evaluation.stateBefore.overchargeAllowance) {
     reservation = await reserve('overcharge');
     reservedDecision = 'overcharge';

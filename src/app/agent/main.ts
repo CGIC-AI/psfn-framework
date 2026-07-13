@@ -30,6 +30,7 @@ import {
   getRunChargeSnapshot,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
+import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
@@ -58,6 +59,7 @@ import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room
 import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveDriftReviewCardsPath,
+  resolveChargeLedgerPath,
   resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -687,6 +689,13 @@ async function main(): Promise<void> {
     channelsConfig.discord,
     config.companionId,
   );
+  // Hydrate and subscribe before any gateway callback can execute. Prompt and
+  // quota decisions must see the canonical rolling 24-hour balance even when
+  // the optional Garden transport is disabled.
+  const chargeLedger = new RunChargeLedger(
+    resolveChargeLedgerPath(pathSnapshot.companionDataDir),
+    eventBus,
+  );
 
   const apiBackend = new AgentApiBackend({
     agentLoop,
@@ -734,6 +743,7 @@ async function main(): Promise<void> {
     channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,
+    chargeLedger,
     scheduler,
     postTurnActions,
     outreachOutbox,
@@ -820,6 +830,7 @@ async function main(): Promise<void> {
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;
+  shutdownTargets.chargeLedger = chargeLedger;
   if (coreRuntime.fatigueRegulationReservations) {
     shutdownTargets.fatigueRegulationReservations =
       coreRuntime.fatigueRegulationReservations;

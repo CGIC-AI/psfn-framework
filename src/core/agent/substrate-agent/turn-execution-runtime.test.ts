@@ -53,9 +53,11 @@ import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
-import { backfillLegacyTurnId } from '../../turns/id.js';
+import { backfillLegacyTurnId, createTurnId } from '../../turns/id.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
+import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
+import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1097,6 +1099,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     sessionManager?: Partial<SessionManager>;
     configOverrides?: Partial<SubstrateConfig>;
     recordAssistantMessage?: ReturnType<typeof vi.fn>;
+    consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
   }) {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -1111,6 +1114,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: params.recordAssistantMessage ?? vi.fn(() => 2),
+      consumeIntentionalNoReplyDecision:
+        params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
       fatigueBudget: params.fatigueBudget,
       ...(params.fatigueRegulationReservations
         ? { fatigueRegulationReservations: params.fatigueRegulationReservations }
@@ -1248,13 +1253,14 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       },
     }));
 
-    expect(reserve).toHaveBeenCalledOnce();
+    expect(reserve.mock.calls.map(([call]) => call.decision)).toEqual(['charged', 'overcharge']);
     expect(runtime.agent.prompt).not.toHaveBeenCalled();
     expect(response.content).toBe('');
     expect(response.metadata.fatigue).toMatchObject({
       decision: 'suppressed_hard_exhausted',
       modelDisposition: 'suppressed',
       shouldRecordSpend: false,
+      overchargeReasons: ['explicit_peer_invitation'],
       socialRegulation: {
         state: 'suppressed',
         relationshipPressure: 5,
@@ -1267,17 +1273,17 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(history.events).toHaveLength(0);
   });
 
-  it('rebases a stale local decision onto the locked soft-limit snapshot before prompt assembly', async () => {
+  it('rebases a fresh directional budget onto pair-shared pressure before prompt assembly', async () => {
     const { fatigueBudget } = createFatigueBudgetHarness();
     const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
     const reserve = vi.fn(async () => ({
       outcome: 'reserved' as const,
-      normalSpentBefore: 2,
+      normalSpentBefore: 0,
       overchargeSpentBefore: 0,
       relationshipPressure: 2,
-      rootNormalSpent: 2,
+      rootNormalSpent: 0,
       rootOverchargeSpent: 0,
       contributingReservationCount: 2,
     }));
@@ -1343,7 +1349,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(buildContext.mock.calls[0]?.[1]).toContain('charge lane: companion_social');
     expect(response.metadata.fatigue).toMatchObject({
       decision: 'wrap_up_charged',
-      budget: { normalSpentBefore: 2 },
+      budget: { normalSpentBefore: 0 },
       socialRegulation: {
         state: 'charge_lane_active',
         chargeLane: 'companion_social',
@@ -1386,16 +1392,18 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       fatigueRegulationReservations: reservations,
       configOverrides: { multiCompanion: true, companionId: localCompanionId },
     });
-    runtime.resolveTaskKind = vi.fn(() => 'work');
+    runtime.resolveTaskKind = vi.fn(message => resolveChannelTaskKind(message, {
+      get: () => undefined,
+    }));
     const inboundCorrelation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
       rootInitiationId: '99999999-9999-4999-8999-999999999999',
-      initiatedByCompanionId: peerCompanionId,
-      localCompanionId: peerCompanionId,
-      peerCompanionId: localCompanionId,
-      peerContactId: 'peer-local-contact',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-mi',
       channelId,
-      turnId: '77777777-7777-4777-8777-777777777781',
+      turnId: createTurnId(),
       messageId: 'companion-initiation:33333333-3333-4333-8333-333333333337',
       requestId: 'companion-initiation:33333333-3333-4333-8333-333333333337',
       chargeLane: 'interactive' as const,
@@ -1410,16 +1418,18 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       eventBus: runtime.eventBus,
       lane: 'interactive',
       runId: 'inbound-icp-hard-work-race',
-    }, async () => await handleMessageForTurn(runtime, createMessage('inbound-icp-hard-work-race', {
+    }, async () => await handleMessageForTurn(runtime, createMessage(inboundCorrelation.requestId, {
       channelId,
       channelType: 'companion',
       isDirectMessage: true,
-      authorId: peerCompanionId,
-      authorName: 'Peer MI',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
       routing: {
         source: 'companion',
         canonicalContactId: 'contact-mi',
         authorIsMachineIntelligence: true,
+        privateTurnTrigger: true,
+        icpContinuationTaskKind: 'work',
         icpCorrelation: inboundCorrelation,
       },
     }), { finalizeDelivery: vi.fn(async () => undefined) }));
@@ -1445,6 +1455,82 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       outcome: 'delivered',
       fatigue: expect.objectContaining({ spendDecision: 'overcharge' }),
     }));
+  });
+
+  it('uses verified inbound initiation lineage as explicit invitation evidence', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const reserve = vi.fn(async (input: Parameters<IcpFatigueRegulationReservationPort['reserve']>[0]) => ({
+      outcome: input.decision === 'charged' ? 'exhausted' as const : 'reserved' as const,
+      normalSpentBefore: input.hardLimit,
+      overchargeSpentBefore: 0,
+      relationshipPressure: input.hardLimit,
+      rootNormalSpent: input.hardLimit,
+      rootOverchargeSpent: 0,
+      contributingReservationCount: input.hardLimit,
+    }));
+    const reservations: IcpFatigueRegulationReservationPort = {
+      reserve,
+      readInitiationPressure: vi.fn(),
+      prepareDelivery: vi.fn(),
+      handoff: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+    const messageId = 'companion-initiation:33333333-3333-4333-8333-333333333339';
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: peerCompanionId,
+      localCompanionId: peerCompanionId,
+      peerCompanionId: localCompanionId,
+      peerContactId: 'peer-local-contact',
+      channelId,
+      turnId: createTurnId(),
+      messageId,
+      requestId: messageId,
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'allow' as const,
+    };
+
+    const response = await runWithChargeContext({
+      chargePolicy: runtime.config.chargePolicy!,
+      eventBus: runtime.eventBus,
+      lane: 'interactive',
+      runId: 'inbound-explicit-invitation',
+    }, async () => await handleMessageForTurn(runtime, createMessage(messageId, {
+        channelId,
+        channelType: 'companion',
+        isDirectMessage: true,
+        authorId: peerCompanionId,
+        authorName: 'Peer MI',
+        routing: {
+          source: 'companion',
+          canonicalContactId: 'contact-mi',
+          authorIsMachineIntelligence: true,
+          icpCorrelation: correlation,
+        },
+      }), { finalizeDelivery: vi.fn(async () => undefined) }));
+
+    expect(reserve.mock.calls.map(([call]) => call.decision)).toEqual(['charged', 'overcharge']);
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'overcharge_charged',
+      overchargeReasons: ['explicit_peer_invitation'],
+      socialRegulation: {
+        continuationEvidence: ['explicit_peer_invitation'],
+      },
+    });
+    expect(runtime.agent.prompt).toHaveBeenCalledOnce();
   });
 
   it('suppresses without a model call when the fenced overcharge retry loses its race', async () => {
@@ -1712,6 +1798,110 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(finalize).not.toHaveBeenCalled();
     expect(handoff).toHaveBeenCalledOnce();
     expect(history.events).toHaveLength(1);
+  });
+
+  it.each([
+    'fatigue_append',
+    'prepare_delivery',
+  ] as const)('writes intentional no-reply recovery before a crash at %s and replays without a second model call', async (crashPoint) => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const originalRecord = fatigueBudget.recordFinalDecision.bind(fatigueBudget);
+    if (crashPoint === 'fatigue_append') {
+      vi.spyOn(fatigueBudget, 'recordFinalDecision')
+        .mockImplementationOnce(() => {
+          throw new Error('simulated no-reply crash before fatigue append');
+        })
+        .mockImplementation((evaluation, input) => originalRecord(evaluation, input));
+    }
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = `icp-no-reply-${crashPoint}`;
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const turnId = backfillLegacyTurnId([
+      'icp-reply',
+      localCompanionId,
+      channelId,
+      messageId,
+    ].join(':'));
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: `no-reply:${turnId}:tool-call-1`,
+      decidedAt: 10_000,
+      turnId,
+      requestId: messageId,
+      channelId,
+      toolCallId: 'tool-call-1',
+    };
+    const reserve = vi.fn(async () => ({
+      outcome: 'reserved' as const,
+      normalSpentBefore: 0,
+      overchargeSpentBefore: 0,
+      relationshipPressure: 0,
+      rootNormalSpent: 0,
+      rootOverchargeSpent: 0,
+      contributingReservationCount: 0,
+    }));
+    const prepareDelivery = vi.fn(async () => {
+      if (crashPoint === 'prepare_delivery' && prepareDelivery.mock.calls.length === 1) {
+        throw new Error('simulated no-reply crash after preparation');
+      }
+    });
+    const handoff = vi.fn(async () => undefined);
+    const finalize = vi.fn(async () => undefined);
+    const reservations: IcpFatigueRegulationReservationPort = {
+      reserve,
+      readInitiationPressure: vi.fn(),
+      prepareDelivery,
+      handoff,
+      finalize,
+      close: vi.fn(),
+    };
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+      consumeIntentionalNoReplyDecision: vi.fn(() => noReply),
+    });
+    runtime.extractResponseText = vi.fn(() => '');
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-777777777790',
+    });
+    let durableNoReply: AgentResponse | undefined;
+    const finalizeDelivery = vi.fn(async (response: AgentResponse) => {
+      durableNoReply = structuredClone(response);
+    });
+
+    await expect(handleMessageForTurn(runtime, message, { finalizeDelivery }))
+      .rejects.toThrow('simulated no-reply crash');
+    expect(durableNoReply).toMatchObject({
+      content: '',
+      metadata: {
+        noReply,
+        fatiguePendingSpend: { amount: 1 },
+      },
+    });
+    expect(handoff).toHaveBeenCalledOnce();
+    const modelCallsBeforeRecovery = runtime.agent.prompt.mock.calls.length;
+    if (!durableNoReply) throw new Error('test expected durable no-reply response');
+
+    const recovered = await handleMessageForTurn(runtime, message, {
+      recoveredResponse: durableNoReply,
+      finalizeDelivery,
+    });
+
+    expect(recovered).toMatchObject({ content: '', metadata: { noReply } });
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(modelCallsBeforeRecovery);
+    expect(history.events).toHaveLength(1);
+    expect(prepareDelivery).toHaveBeenCalledTimes(
+      crashPoint === 'prepare_delivery' ? 2 : 1,
+    );
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'no_reply' }));
+    expect(finalize).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed' }));
   });
 
   it('recovers the pending fatigue spend after the assistant row survives a crash', async () => {
@@ -2121,6 +2311,12 @@ describe('handleMessageForTurn fatigue enforcement', () => {
             authorId: 'human-user',
             authorName: 'Human',
             timestamp: Date.now() - 60_000,
+            metadata: buildSessionMetadataWithTurn(undefined, {
+              turnId: backfillLegacyTurnId('human-fatigue-history'),
+              requestId: 'human-fatigue-history',
+              role: 'user',
+              actorKind: 'human',
+            }),
           },
         ]),
       },
@@ -2158,6 +2354,46 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     });
   });
 
+  it('does not treat a third companion room message as recent human participation', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => [
+          {
+            id: 100,
+            channelId: 'ch1',
+            role: 'user',
+            content: 'I can continue the companion discussion.',
+            authorId: 'third-companion',
+            authorName: 'Third companion',
+            timestamp: Date.now() - 60_000,
+            metadata: buildSessionMetadataWithTurn(undefined, {
+              turnId: backfillLegacyTurnId('third-companion-fatigue-history'),
+              requestId: 'third-companion-fatigue-history',
+              role: 'user',
+              actorKind: 'machine_intelligence',
+            }),
+          },
+        ]),
+      },
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-third-companion', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      overchargeEligible: false,
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(5);
+  });
+
   it('hard-stops MI continuation after overcharge reserve is depleted', async () => {
     const { fatigueBudget, history } = createFatigueBudgetHarness();
     seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
@@ -2174,6 +2410,12 @@ describe('handleMessageForTurn fatigue enforcement', () => {
             authorId: 'human-user',
             authorName: 'Human',
             timestamp: Date.now() - 60_000,
+            metadata: buildSessionMetadataWithTurn(undefined, {
+              turnId: backfillLegacyTurnId('depleted-human-fatigue-history'),
+              requestId: 'depleted-human-fatigue-history',
+              role: 'user',
+              actorKind: 'human',
+            }),
           },
         ]),
       },
@@ -2930,6 +3172,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       expect.any(String),
       'trusted',
       'contact-123',
+      undefined,
+      'human',
     );
     expect(recordAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3270,6 +3514,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'msg-group-current',
       'regular',
       'contact-vega',
+      undefined,
+      'human',
     );
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };

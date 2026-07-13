@@ -6,6 +6,9 @@ import { IcpFatigueInitiationCapacityAuthority } from "./initiation-capacity.js"
 
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const emptyChargeBalance = {
+  read: () => ({ windowMs: 24 * 60 * 60_000, spentByLane: {}, entryCount: 0 }),
+};
 
 function input(): IcpInitiationCapacityPolicyInput {
   return {
@@ -51,6 +54,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
     const authority = new IcpFatigueInitiationCapacityAuthority(
       { readInitiationPressure },
       policy,
+      emptyChargeBalance,
     );
 
     await expect(authority.resolve(input())).resolves.toEqual({
@@ -92,6 +96,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
         }),
       },
       policy,
+      emptyChargeBalance,
     );
 
     await expect(authority.resolve(input())).resolves.toMatchObject({
@@ -100,5 +105,43 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
       fatigueAllows: true,
       costAllows: false,
     });
+  });
+
+  it("uses authoritative rolling social spend across separate initiations", async () => {
+    const policy = makeTestChargePolicyConfig();
+    policy.runChargeQuotaByLane.companion_social = 12;
+    policy.surfaceCosts.companionSocialContinuation = 1;
+    const read = vi
+      .fn()
+      .mockReturnValueOnce({
+        windowMs: 24 * 60 * 60_000,
+        spentByLane: { companion_social: 11 },
+        entryCount: 11,
+      })
+      .mockReturnValueOnce({
+        windowMs: 24 * 60 * 60_000,
+        spentByLane: { companion_social: 12 },
+        entryCount: 12,
+      });
+    const authority = new IcpFatigueInitiationCapacityAuthority(
+      { readInitiationPressure: async () => ({ relationshipPressure: 0 }) },
+      policy,
+      { read },
+    );
+
+    await expect(authority.resolve(input())).resolves.toMatchObject({ chargeAllows: true });
+    await expect(authority.resolve(input())).resolves.toMatchObject({ chargeAllows: false });
+    expect(read).toHaveBeenCalledWith({ senderCompanionId: A, nowMs: 10_000 });
+  });
+
+  it("propagates a canonical charge-ledger read failure instead of falling back", async () => {
+    const policy = makeTestChargePolicyConfig();
+    const authority = new IcpFatigueInitiationCapacityAuthority(
+      { readInitiationPressure: async () => ({ relationshipPressure: 0 }) },
+      policy,
+      { read: async () => { throw new Error("charge ledger unavailable"); } },
+    );
+
+    await expect(authority.resolve(input())).rejects.toThrow("charge ledger unavailable");
   });
 });

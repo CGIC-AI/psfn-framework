@@ -41,6 +41,7 @@ import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-s
 import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
+import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -48,6 +49,7 @@ import {
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
   resolveGeneratedImagesDir,
+  resolveChargeLedgerPath,
 } from '../../persistence/layout.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
@@ -227,6 +229,9 @@ async function main(): Promise<void> {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
     }
     const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
+    const fleetByCompanionId = new Map(
+      config.companionFleet.companions.map(entry => [entry.companionId, entry]),
+    );
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
     icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: fleetCompanionIds,
@@ -239,6 +244,18 @@ async function main(): Promise<void> {
       capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
         icpFatigueRegulationStore,
         startupHydration.chargePolicyConfig,
+        {
+          read: ({ senderCompanionId, nowMs }) => {
+            const fleetEntry = fleetByCompanionId.get(senderCompanionId);
+            if (!fleetEntry) {
+              throw new Error('ICP social charge balance requires a known fleet sender');
+            }
+            return readRunChargeRollingWindowFromLedger(
+              resolveChargeLedgerPath(fleetEntry.companionDataDir),
+              nowMs,
+            );
+          },
+        },
       ),
     });
     companionChannelLane = new GatewayCompanionChannelLane({

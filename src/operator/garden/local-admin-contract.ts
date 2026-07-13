@@ -161,6 +161,8 @@ export interface InProcessGardenAdminContractOptions {
    * enrollment routes are simply not mounted. Biometrics never enter core.
    */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
+  /** Shared runtime charge ledger; supplying it avoids duplicate event subscribers. */
+  chargeLedger?: RunChargeLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
 }
@@ -190,7 +192,8 @@ export function createInProcessGardenAdminContract(
     resolveReflectionJournalPath(companionDataDir),
   );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
-  const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const chargeLedger = options.chargeLedger
+    ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditHistory = new AdminAuditHistoryDataService({

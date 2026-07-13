@@ -18,6 +18,7 @@ const FATIGUE_REASONS = new Set([
   'machine_intelligence_response',
   'overcharge_recent_human_participation',
   'overcharge_work_intent_wrapup',
+  'overcharge_explicit_peer_invitation',
   'peer_not_machine_intelligence',
   'triggering_author_not_machine_intelligence',
 ]);
@@ -417,7 +418,8 @@ function assertPendingSpend(pending: FatiguePendingSpendMetadata): void {
       && value.reason === 'machine_intelligence_response')
     || (value.decision === 'overcharge'
       && (value.reason === 'overcharge_recent_human_participation'
-        || value.reason === 'overcharge_work_intent_wrapup'))
+        || value.reason === 'overcharge_work_intent_wrapup'
+        || value.reason === 'overcharge_explicit_peer_invitation'))
     || (value.decision === 'free'
       && (value.reason === 'peer_not_machine_intelligence'
         || value.reason === 'triggering_author_not_machine_intelligence'));
@@ -636,7 +638,12 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
 
 export function createOverchargeFatigueEvaluation(
   evaluation: FatigueBudgetEvaluation,
-  reason: Extract<FatigueBudgetReason, 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup'>,
+  reason: Extract<
+    FatigueBudgetReason,
+    | 'overcharge_recent_human_participation'
+    | 'overcharge_work_intent_wrapup'
+    | 'overcharge_explicit_peer_invitation'
+  >,
 ): FatigueBudgetEvaluation {
   const amount = evaluation.amount > 0 ? evaluation.amount : 0;
   return {
@@ -691,6 +698,7 @@ export function rebaseFatigueEvaluation(input: {
     | 'machine_intelligence_response'
     | 'overcharge_recent_human_participation'
     | 'overcharge_work_intent_wrapup'
+    | 'overcharge_explicit_peer_invitation'
   >;
   normalSpentBefore: number;
   overchargeSpentBefore: number;

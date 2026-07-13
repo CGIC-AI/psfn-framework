@@ -6,7 +6,11 @@ import {
   type IcpConversationCorrelation,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
-import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type {
+  AgentResponse,
+  IcpContinuationTaskKind,
+  SubstrateMessage,
+} from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   assertIcpRecoveryStatusBinding,
@@ -83,6 +87,8 @@ export interface IcpTargetChannelInitiationRequest {
   rootInitiationId: string;
   /** Sender-local canonical contact for the recipient companion. */
   peerContactId: string;
+  /** Private scheduler-owned work intent; never derived from motivation prose. */
+  continuationTaskKind?: IcpContinuationTaskKind;
 }
 
 export type IcpTargetChannelInitiationResult =
@@ -107,6 +113,16 @@ function requirePeerContactId(value: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error('ICP target-channel initiation requires peerContactId');
   return normalized;
+}
+
+function requireContinuationTaskKind(
+  value: unknown,
+): IcpContinuationTaskKind | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'work' || value === 'research' || value === 'problem_solving') {
+    return value;
+  }
+  throw new Error('ICP target-channel continuationTaskKind is invalid');
 }
 
 function buildCorrelation(input: {
@@ -140,7 +156,10 @@ function buildCorrelation(input: {
   });
 }
 
-function buildPrivateTurnMessage(correlation: IcpConversationCorrelation): SubstrateMessage {
+function buildPrivateTurnMessage(
+  correlation: IcpConversationCorrelation,
+  continuationTaskKind?: IcpContinuationTaskKind,
+): SubstrateMessage {
   return {
     id: correlation.requestId,
     channelId: correlation.channelId,
@@ -156,6 +175,7 @@ function buildPrivateTurnMessage(correlation: IcpConversationCorrelation): Subst
       authorIsMachineIntelligence: true,
       privateTurnTrigger: true,
       icpCorrelation: correlation,
+      ...(continuationTaskKind ? { icpContinuationTaskKind: continuationTaskKind } : {}),
     },
   };
 }
@@ -176,6 +196,9 @@ export function createIcpTargetChannelInitiator(input: {
     permit: IcpInitiationPermit,
   ): Promise<IcpTargetChannelInitiationResult> => {
     const peerContactId = requirePeerContactId(request.peerContactId);
+    const continuationTaskKind = requireContinuationTaskKind(
+      request.continuationTaskKind,
+    );
     const sourceMessageId = `icp-initiation:${permit.candidateId}`;
     const previousObservation = await input.agent.findIcpDeliveryObservation(
       permit.channelId,
@@ -351,7 +374,10 @@ export function createIcpTargetChannelInitiator(input: {
     const resumeOrdinaryTurn = async (): Promise<IcpTargetChannelInitiationResult> => {
       if (!turnResponse) throw new Error('ICP recovery requires a durable response');
       const finalization: { result?: IcpTargetChannelInitiationResult } = {};
-      await input.agent.handleMessage(buildPrivateTurnMessage(correlation), {
+      await input.agent.handleMessage(buildPrivateTurnMessage(
+        correlation,
+        continuationTaskKind,
+      ), {
         recoveredResponse: turnResponse,
         finalizeDelivery: async (response) => {
           turnResponse = response;
@@ -418,7 +444,10 @@ export function createIcpTargetChannelInitiator(input: {
       });
       content = '';
       const finalization: { result?: IcpTargetChannelInitiationResult } = {};
-      await input.agent.handleMessage(buildPrivateTurnMessage(correlation), {
+      await input.agent.handleMessage(buildPrivateTurnMessage(
+        correlation,
+        continuationTaskKind,
+      ), {
         finalizeDelivery: async (response) => {
           turnResponse = response;
           content = response.content;

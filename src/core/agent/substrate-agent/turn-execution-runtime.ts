@@ -98,6 +98,10 @@ import {
 } from './turn-execution/icp-fatigue-regulation.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
+import {
+  resolveSessionEntryActorKind,
+  type SessionActorKind,
+} from '../../session/turn-provenance.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
@@ -248,6 +252,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     contentOverride?: string,
+    actorKind?: SessionActorKind,
   ) => number | null;
   recordSystemMessage: (
     message: SubstrateMessage,
@@ -487,6 +492,7 @@ function evaluateRuntimeFatigue(input: {
   channelType: string | undefined;
   channelMeta: ChannelMeta;
   taskKind: string | undefined;
+  explicitPeerInvitation: boolean;
   turnCorrelationBase: CorrelationMetadata;
   timestampMs: number;
 }): FatigueTurnDecision | null {
@@ -507,6 +513,7 @@ function evaluateRuntimeFatigue(input: {
     channelType: input.channelType,
     channelMeta: input.channelMeta,
     taskKind: input.taskKind,
+    explicitPeerInvitation: input.explicitPeerInvitation,
     recentHumanParticipation: resolveRecentHumanParticipationForFatigue({
       runtime: input.runtime,
       message: input.message,
@@ -558,7 +565,7 @@ function resolveRecentHumanParticipationForFatigue(input: {
   }
 
   for (const entry of input.runtime.sessionManager.getRecentMessages(input.sessionChannelId, 32)) {
-    if (entry.role !== 'user') {
+    if (entry.role !== 'user' || resolveSessionEntryActorKind(entry) !== 'human') {
       continue;
     }
     if (entry.authorId && entry.authorId === input.message.authorId) {
@@ -574,6 +581,13 @@ function resolveRecentHumanParticipationForFatigue(input: {
       ? { latestMessageAgeMs: input.nowMs - latestHumanTimestampMs }
       : {}),
   };
+}
+
+function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
+  if (authorContext.speakerRole === 'system') return 'system';
+  return authorContext.speakingWithIsMachineIntelligence === true
+    ? 'machine_intelligence'
+    : 'human';
 }
 
 function emitFatigueDecision(input: {
@@ -759,6 +773,8 @@ export async function handleMessageForTurn(
     conversationScope,
   } = identityState;
   const inboundIcpOrigin = message.routing?.icpCorrelation;
+  const explicitPeerInvitation = privateIcpCorrelation === null
+    && inboundIcpOrigin?.costOriginStage === 'initiation';
   if (recoveredCorrelation) {
     if (!canonicalContactKey || recoveredCorrelation.peerContactId !== canonicalContactKey) {
       throw new Error('Recovered ICP delivery peer does not match the resolved canonical contact');
@@ -833,6 +849,7 @@ export async function handleMessageForTurn(
       trustLevel,
       continuitySubjectKey,
       contentOverride,
+      resolveSessionActorKind(authorContext),
     );
   };
 
@@ -861,6 +878,7 @@ export async function handleMessageForTurn(
           channelType,
           channelMeta,
           taskKind,
+          explicitPeerInvitation,
           turnCorrelationBase,
           timestampMs: startTime,
         });
@@ -1346,6 +1364,17 @@ export async function handleMessageForTurn(
         ...(honorNoReply ? { noReply: noReplyDecision } : {}),
       },
     });
+
+    if (!recoveredResponse
+      && !broadcastSafetyMeta?.approvalRequired
+      && honorNoReply
+      && message.routing?.icpCorrelation) {
+      if (!deliveryLifecycle) {
+        throw new Error('Intentional ICP no-reply requires durable delivery recovery');
+      }
+      await deliveryLifecycle.finalizeDelivery(buildGeneratedResponse());
+      durableRecoveryResponsePersisted = true;
+    }
 
     if (!recoveredResponse && !broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
       const durableRecoveryResponse = message.routing?.icpCorrelation

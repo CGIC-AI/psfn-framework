@@ -467,6 +467,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'user',
+        actorKind: options.actorKind ?? 'unknown',
       })
       : options.metadata;
     const previewMetadata = options.roleEnvelopePreview
@@ -611,6 +612,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'assistant',
+        actorKind: 'machine_intelligence',
       })
       : options.metadata;
     const metadata = options.roleEnvelopePreview
@@ -696,6 +698,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'system',
+        actorKind: 'system',
       })
       : options.metadata;
     const metadata = options.roleEnvelopePreview
@@ -849,6 +852,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'tool',
+        actorKind: 'system',
       })
       : options.metadata;
     const envelopeMetadata = options.roleEnvelopePreview

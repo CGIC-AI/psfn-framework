@@ -469,6 +469,7 @@ describe('charge producer', () => {
       chargeSnapshot: {
         lane: 'interactive',
         quotaSpentByLane: { interactive: 5 },
+        rollingWindow: { windowMs: 24 * 60 * 60_000, spentByLane: {}, entryCount: 0 },
       } as RunChargeSnapshot,
       analysisWorkbenchAvailable: false,
     });
@@ -498,12 +499,31 @@ describe('charge producer', () => {
       chargeSnapshot: {
         lane: 'interactive',
         quotaSpentByLane: { interactive: 5, companion_social: 2 },
+        rollingWindow: { windowMs: 24 * 60 * 60_000, spentByLane: {}, entryCount: 0 },
       } as RunChargeSnapshot,
       laneOverride: 'companion_social',
     });
     expect(variables.runtime_charge_lane).toBe('companion_social');
     expect(variables.runtime_charge_quota).toBe('12');
     expect(variables.runtime_charge_remaining).toBe('10');
+  });
+
+  it('renders the rolling 24-hour balance when it exceeds current-root spend', () => {
+    const variables = buildChargePromptVariables({
+      chargePolicy: TEST_CHARGE_POLICY,
+      chargeSnapshot: {
+        lane: 'interactive',
+        quotaSpentByLane: { companion_social: 1 },
+        rollingWindow: {
+          windowMs: 24 * 60 * 60_000,
+          spentByLane: { companion_social: 11 },
+          entryCount: 11,
+        },
+      } as RunChargeSnapshot,
+      laneOverride: 'companion_social',
+    });
+
+    expect(variables.runtime_charge_remaining).toBe('1');
   });
 });
 

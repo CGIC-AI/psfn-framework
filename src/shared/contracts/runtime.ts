@@ -253,6 +253,9 @@ export type ReflectionScopeHint =
   | { kind: 'dm'; contactId: string; displayName?: string }
   | { kind: 'group'; roomId: string; roomName?: string };
 
+/** Trusted, process-local ICP continuation intent. Never inferred from peer prose. */
+export type IcpContinuationTaskKind = 'work' | 'research' | 'problem_solving';
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
@@ -306,6 +309,11 @@ export interface MessageRoutingMetadata {
    * `icpCorrelation` on a companion channel.
    */
   privateTurnTrigger?: true;
+  /**
+   * Scheduler-owned structured intent for a private ICP target turn. This is
+   * valid only with `privateTurnTrigger` and a bound ICP correlation.
+   */
+  icpContinuationTaskKind?: IcpContinuationTaskKind;
   workerExecution?: {
     lane: string;
     profileClass: string;
@@ -404,6 +412,7 @@ export type FatigueBudgetReason =
   | 'machine_intelligence_response'
   | 'overcharge_recent_human_participation'
   | 'overcharge_work_intent_wrapup'
+  | 'overcharge_explicit_peer_invitation'
   | 'peer_not_machine_intelligence'
   | 'triggering_author_not_machine_intelligence';
 

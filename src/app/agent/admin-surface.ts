@@ -29,6 +29,7 @@ import {
   resolveAdminTransportMode,
   resolveAdminTransportServerEndpoint,
 } from '../../operator/garden/transport-paths.js';
+import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -40,6 +41,7 @@ export interface StartOptionalAdminTransportServerOptions {
   channelGroupMemory?: ChannelGroupMemoryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
+  chargeLedger: RunChargeLedger;
   scheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
@@ -98,6 +100,7 @@ export async function startOptionalAdminTransportServer(
     outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,
     eventBus: options.eventBus,
+    chargeLedger: options.chargeLedger,
     contactStore: options.coreRuntime.contactStore,
     pendingContactApprovals: options.pendingContactApprovals ?? null,
     socialGraphProposals: options.socialGraphProposals ?? null,

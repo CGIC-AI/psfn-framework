@@ -270,7 +270,8 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           WITH orphaned AS (
             SELECT turn_id
             FROM icp_fatigue_turn_reservations
-            WHERE local_companion_id = $1 AND peer_companion_id = $2
+            WHERE ((local_companion_id = $1 AND peer_companion_id = $2)
+                OR (local_companion_id = $2 AND peer_companion_id = $1))
               AND outcome = 'pending' AND turn_id <> $3::uuid
               AND pg_try_advisory_xact_lock(
                 hashtextextended(turn_id::text, ${FATIGUE_LEASE_LOCK_SEED})
@@ -687,7 +688,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       outcome,
       normalSpentBefore: Math.max(
         snapshot.rootNormalSpent,
-        Math.ceil(snapshot.relationshipPressure),
+        Math.ceil(snapshot.directionalChargedPressure),
       ),
       overchargeSpentBefore: snapshot.rootOverchargeSpent,
       relationshipPressure: snapshot.relationshipPressure,
@@ -704,6 +705,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
   ): Promise<{
     rootNormalSpent: number;
     rootOverchargeSpent: number;
+    directionalChargedPressure: number;
     relationshipPressure: number;
     chargedPressure: number;
     declinedPressure: number;
@@ -720,6 +722,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       normal_spent: string | number;
       overcharge_spent: string | number;
       charged_pressure: string | number;
+      directional_charged_pressure: string | number;
       declined_pressure: string | number;
       deferred_pressure: string | number;
       unanswered_pressure: string | number;
@@ -743,9 +746,16 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
               THEN amount * POWER(2::double precision, -($4::bigint - reserved_at_ms)::double precision / $6::double precision)
               ELSE 0 END
           ), 0) AS charged_pressure,
+          COALESCE(SUM(
+            CASE WHEN decision = 'charged'
+                AND local_companion_id = $1 AND peer_companion_id = $2
+              THEN amount * POWER(2::double precision, -($4::bigint - reserved_at_ms)::double precision / $6::double precision)
+              ELSE 0 END
+          ), 0) AS directional_charged_pressure,
           COUNT(*) FILTER (WHERE decision = 'charged') AS reservation_count
         FROM icp_fatigue_turn_reservations
-        WHERE local_companion_id = $1 AND peer_companion_id = $2
+        WHERE ((local_companion_id = $1 AND peer_companion_id = $2)
+            OR (local_companion_id = $2 AND peer_companion_id = $1))
           AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
           AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
@@ -762,7 +772,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
             ELSE 0 END), 0) AS unanswered_pressure,
           COUNT(*) AS episode_count
         FROM icp_conversation_episodes
-        WHERE initiated_by_companion_id = $1
+        WHERE initiated_by_companion_id = ANY(ARRAY[$1::uuid, $2::uuid])
           AND participant_companion_ids @> ARRAY[$1::uuid, $2::uuid]
           AND last_activity_at_ms BETWEEN $5::bigint AND $4::bigint
           AND (status IN ('declined', 'deferred')
@@ -770,6 +780,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       )
       SELECT root_spend.normal_spent, root_spend.overcharge_spent,
         reservation_pressure.charged_pressure,
+        reservation_pressure.directional_charged_pressure,
         episode_pressure.declined_pressure, episode_pressure.deferred_pressure,
         episode_pressure.unanswered_pressure, reservation_pressure.reservation_count,
         episode_pressure.episode_count
@@ -802,10 +813,15 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       deferredPressure: Number(row.deferred_pressure),
       unansweredPressure: Number(row.unanswered_pressure),
     };
+    const directionalChargedPressure = Number(
+      row.directional_charged_pressure,
+    );
     if (
       Object.values(pressures).some(
         (value) => !Number.isFinite(value) || value < 0,
       )
+      || !Number.isFinite(directionalChargedPressure)
+      || directionalChargedPressure < 0
     ) {
       throw new Error(
         "reservation pressure components must be finite non-negative numbers",
@@ -821,6 +837,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         row.overcharge_spent,
         "reservation.overchargeSpent",
       ),
+      directionalChargedPressure,
       relationshipPressure,
       ...pressures,
       contributingReservationCount: safeInteger(

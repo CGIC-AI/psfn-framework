@@ -27,6 +27,7 @@ import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
+import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import {
   isDeferredCompanionOutreachExecutionAuthorized,
   registerDeferredCompanionOutreachRuntime,
@@ -42,6 +43,7 @@ export interface AgentControlPlaneShutdownTargets {
   adminTransport?: Lifecycle;
   appCache?: { close?: () => Promise<void> };
   fatigueRegulationReservations?: { close: () => Promise<void> };
+  chargeLedger?: Pick<RunChargeLedger, 'close'>;
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -172,6 +174,7 @@ export function buildAgentControlPlane(
         { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
         { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
         { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+        { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
         { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
         { step: 'destroy gateway client', action: () => gateway.destroy() },
         { step: 'close database', action: () => closeDatabase() },

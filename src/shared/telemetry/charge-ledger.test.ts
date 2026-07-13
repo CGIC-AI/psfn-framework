@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../event-bus.js';
 import type { RunChargeEvent } from '../contracts/runtime.js';
 import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
-import { RunChargeLedger } from './charge-ledger.js';
+import {
+  readRunChargeRollingWindowFromLedger,
+  RunChargeLedger,
+} from './charge-ledger.js';
 import {
   chargeSurface,
   getRunChargeRollingWindowSnapshot,
@@ -191,6 +194,25 @@ describe('RunChargeLedger', () => {
       chargeSurface('externalModelConsult', { amount: 2 });
     })).rejects.toThrow('rolling 24-hour budget');
     rebootedLedger.close();
+  });
+
+  it('freshly reads the canonical rolling balance without process hydration', () => {
+    const nowMs = 1_800_000_000_000;
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    ledger.recordChargeEvent(makeEvent({
+      timestampMs: nowMs - 60_000,
+      lane: 'companion_social',
+      amount: 11,
+    }));
+    ledger.close();
+    resetRunChargeRollingWindowForTests();
+
+    expect(readRunChargeRollingWindowFromLedger(ledgerPath, nowMs)).toEqual({
+      windowMs: 24 * 60 * 60_000,
+      spentByLane: { companion_social: 11 },
+      entryCount: 1,
+    });
   });
 
   it('hydrates two persisted events with identical metadata as two spends', () => {

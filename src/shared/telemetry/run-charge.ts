@@ -40,6 +40,7 @@ export interface RunChargeSnapshot {
   foldBacks: RunChargeLineageProvenance[];
   orphanedChildren: RunChargeLineageProvenance[];
   quotaSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  rollingWindow: RunChargeRollingWindowSnapshot;
 }
 
 export interface RunChargeRollingWindowSnapshot {
@@ -442,6 +443,7 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
     foldBacks: context.account.foldBacks.map(cloneLineageProvenance),
     orphanedChildren: context.account.orphanedChildren.map(cloneLineageProvenance),
     quotaSpentByLane: cloneSpentByLane(context.quotaAccount.spentByLane),
+    rollingWindow: getRunChargeRollingWindowSnapshot(),
   };
 }
 

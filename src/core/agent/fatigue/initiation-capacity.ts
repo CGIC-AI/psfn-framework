@@ -6,6 +6,14 @@ import type {
 import type { ChargePolicyConfig } from "../../../shared/contracts/charge-policy.js";
 import type { IcpFatigueRegulationReservationPort } from "./regulation-reservation.js";
 import { evaluateFatiguePolicy } from "./policy.js";
+import type { RunChargeRollingWindowSnapshot } from "../../../shared/telemetry/run-charge.js";
+
+export interface IcpSocialChargeBalanceReader {
+  read(input: {
+    senderCompanionId: string;
+    nowMs: number;
+  }): Promise<RunChargeRollingWindowSnapshot> | RunChargeRollingWindowSnapshot;
+}
 
 /**
  * Content-free deterministic initiation pressure. Cost remains a separate W7
@@ -19,6 +27,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       "readInitiationPressure"
     >,
     private readonly chargePolicy: ChargePolicyConfig,
+    private readonly chargeBalance: IcpSocialChargeBalanceReader,
   ) {}
 
   async resolve(
@@ -66,11 +75,16 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
     });
     const socialChargeCost =
       this.chargePolicy.surfaceCosts.companionSocialContinuation;
+    const rollingCharge = await this.chargeBalance.read({
+      senderCompanionId: input.senderCompanionId,
+      nowMs: input.nowMs,
+    });
+    const rollingSocialSpent = rollingCharge.spentByLane.companion_social ?? 0;
     return {
       socialPressureAllows: spent < policy.softTarget,
       chargeAllows:
-        this.chargePolicy.runChargeQuotaByLane.companion_social >=
-        socialChargeCost,
+        rollingSocialSpent + socialChargeCost <=
+        this.chargePolicy.runChargeQuotaByLane.companion_social,
       fatigueAllows: spent < policy.hardCap,
       costAllows: false,
     };

@@ -354,10 +354,16 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             localCompanionId: B,
             peerCompanionId: A,
           });
-          expect(
-            (await restarted.reserve(reservationInput(peerChoice, 12_000)))
-              .outcome,
-          ).toBe("reserved");
+          const peerReservation = await restarted.reserve(
+            reservationInput(peerChoice, 12_000),
+          );
+          expect(peerReservation).toMatchObject({
+            outcome: "reserved",
+            normalSpentBefore: 0,
+            rootNormalSpent: 0,
+            contributingReservationCount: 1,
+          });
+          expect(peerReservation.relationshipPressure).toBeGreaterThan(0);
         } finally {
           await restarted.close();
         }
@@ -746,8 +752,8 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             unansweredPressureUnits: 1,
           }),
         ).resolves.toMatchObject({
-          relationshipPressure: 0,
-          contributingEpisodeCount: 0,
+          relationshipPressure: 3,
+          contributingEpisodeCount: 3,
         });
       } finally {
         await Promise.all([episodes.close(), store.close()]);

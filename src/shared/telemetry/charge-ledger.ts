@@ -7,7 +7,11 @@ import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
 } from '../contracts/charge-policy.js';
-import { hydrateRunChargeRollingWindowFromEvents } from './run-charge.js';
+import {
+  hydrateRunChargeRollingWindowFromEvents,
+  RUN_CHARGE_ROLLING_WINDOW_MS,
+  type RunChargeRollingWindowSnapshot,
+} from './run-charge.js';
 
 export interface RunChargeLedgerMetadata {
   provider?: string;
@@ -265,6 +269,37 @@ function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
       assertLedgerEntry(parsed, index + 1);
       return withEventIdentity(parsed);
     });
+}
+
+/**
+ * Fresh read-only deployment balance for authorities running outside the
+ * agent process. The JSONL ledger remains canonical; every decision rereads
+ * it so a gateway cannot authorize from stale process-local charge state.
+ */
+export function readRunChargeRollingWindowFromLedger(
+  path: string,
+  nowMs = Date.now(),
+): RunChargeRollingWindowSnapshot {
+  const cutoffMs = nowMs - RUN_CHARGE_ROLLING_WINDOW_MS;
+  const seenEventIds = new Set<string>();
+  const spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>> = {};
+  let entryCount = 0;
+  for (const entry of readLedgerEntries(path)) {
+    const event = entry.event;
+    if (event.timestampMs < cutoffMs || event.timestampMs > nowMs || event.amount <= 0) {
+      continue;
+    }
+    const eventId = event.eventId.trim() || entry.eventId;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    addRecordAmount(spentByLane, event.lane, event.amount);
+    entryCount += 1;
+  }
+  return {
+    windowMs: RUN_CHARGE_ROLLING_WINDOW_MS,
+    spentByLane,
+    entryCount,
+  };
 }
 
 // Rows persisted before RunChargeEvent carried its own eventId reuse the

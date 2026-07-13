@@ -81,7 +81,8 @@ export function projectFatigueSocialRegulation(input: {
   const state = resolveState({
     decision: input.decision,
     policyBaseState: input.policyBaseState,
-    spentBefore: input.stateBefore.normalSpent,
+    spentBefore: input.stateBefore.regulation?.relationshipPressure
+      ?? input.stateBefore.normalSpent,
     softLimit: input.stateBefore.softLimit,
     maturingRatio: input.config.socialRegulation.conversationMaturingRatio,
     overchargeRemainingBefore: input.stateBefore.remainingOvercharge,

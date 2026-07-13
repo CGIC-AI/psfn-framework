@@ -50,6 +50,19 @@ export function resolveTaskKind(
   message: SubstrateMessage,
   channelRegistry: ChannelPromptRegistryPort,
 ): string | undefined {
+  if (message.routing?.icpContinuationTaskKind) {
+    if (message.routing.privateTurnTrigger !== true
+      || !message.routing.icpCorrelation
+      || message.channelType !== 'companion'
+      || message.authorId !== 'system:icp-initiation') {
+      throw new Error('ICP continuation task kind requires a bound private target turn');
+    }
+    const taskKind: unknown = message.routing.icpContinuationTaskKind;
+    if (taskKind !== 'work' && taskKind !== 'research' && taskKind !== 'problem_solving') {
+      throw new Error('ICP continuation task kind is invalid');
+    }
+    return taskKind;
+  }
   if (isDeferredToolHandoffMessageId(message.id)) {
     return 'deferred_tool_handoff';
   }

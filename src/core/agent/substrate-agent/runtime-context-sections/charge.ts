@@ -82,7 +82,10 @@ export function buildChargePromptVariables(input: {
       ? snapshot.lane
       : 'interactive';
   const quota = chargePolicy.runChargeQuotaByLane[lane];
-  const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
+  const spent = Math.max(
+    snapshot?.quotaSpentByLane[lane] ?? 0,
+    snapshot?.rollingWindow.spentByLane[lane] ?? 0,
+  );
   const remaining = Math.max(0, quota - spent);
   const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
     .map(surface => ({

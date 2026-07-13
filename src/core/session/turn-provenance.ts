@@ -15,7 +15,10 @@ interface SessionTurnEnvelope {
   sourceMessageId?: string;
   role: SessionEntry['role'];
   speakerRole?: SessionEntry['role'];
+  actorKind?: SessionActorKind;
 }
+
+export type SessionActorKind = 'human' | 'machine_intelligence' | 'system' | 'unknown';
 
 interface SessionMetadataEnvelope {
   turn?: unknown;
@@ -67,6 +70,7 @@ export function buildSessionMetadataWithTurn(
     requestId: string;
     sourceMessageId?: string;
     role: SessionEntry['role'];
+    actorKind?: SessionActorKind;
   },
 ): string {
   const base = parseMetadataEnvelope(existingMetadata);
@@ -85,6 +89,7 @@ export function buildSessionMetadataWithTurn(
     requestId,
     role: input.role,
     speakerRole: input.role,
+    ...(input.actorKind ? { actorKind: input.actorKind } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
   };
 
@@ -92,6 +97,25 @@ export function buildSessionMetadataWithTurn(
     ...base,
     turn,
   });
+}
+
+export function resolveSessionEntryActorKind(
+  entry: Pick<SessionEntry, 'metadata'>,
+): SessionActorKind {
+  const metadata = parseMetadataEnvelope(entry.metadata);
+  if (metadata.turn === undefined) return 'unknown';
+  if (!isRecord(metadata.turn)) {
+    throw new Error('Session metadata turn field must be an object');
+  }
+  const actorKind = metadata.turn.actorKind;
+  if (actorKind === undefined) return 'unknown';
+  if (actorKind === 'human'
+    || actorKind === 'machine_intelligence'
+    || actorKind === 'system'
+    || actorKind === 'unknown') {
+    return actorKind;
+  }
+  throw new Error('Session turn metadata field "actorKind" is invalid');
 }
 
 export function buildSessionMetadataWithRoleEnvelopePreview(

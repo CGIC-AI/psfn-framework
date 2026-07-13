@@ -17,6 +17,7 @@ import {
 const OVERCHARGE_REASON_ORDER = [
   'recent_human_participation',
   'work_intent_wrapup',
+  'explicit_peer_invitation',
 ] as const;
 const OVERCHARGE_REASONS = new Set<string>(OVERCHARGE_REASON_ORDER);
 const OVERCHARGE_BLOCKED_REASON_ORDER = [
@@ -169,6 +170,10 @@ function assertSnapshotInvariants(metadata: FatigueEnforcementMetadata): void {
 function assertPolicyStateBudgetInvariants(metadata: FatigueEnforcementMetadata): void {
   const peerIsMachineIntelligence = metadata.peer.isMachineIntelligence === true;
   const { normalSpentBefore, softLimit, hardLimit } = metadata.budget;
+  const effectiveSoftPressure = Math.max(
+    normalSpentBefore,
+    metadata.socialRegulation.relationshipPressure,
+  );
   if (!peerIsMachineIntelligence) {
     if (metadata.policyBaseState !== 'normal') fail('non-MI policy base state');
     return;
@@ -179,11 +184,11 @@ function assertPolicyStateBudgetInvariants(metadata: FatigueEnforcementMetadata)
   }
   if ((metadata.policyBaseState === 'normal'
       || metadata.policyBaseState === 'nearing_limit')
-    && normalSpentBefore >= softLimit) {
+    && effectiveSoftPressure >= softLimit) {
     fail('pre-soft-limit policy base state');
   }
   if (metadata.policyBaseState === 'soft_exhausted'
-    && (normalSpentBefore < softLimit || hardExhausted)) {
+    && (effectiveSoftPressure < softLimit || hardExhausted)) {
     fail('soft-exhausted policy base state');
   }
 }
@@ -291,7 +296,9 @@ export function assertFatigueEnforcementMetadataInvariants(
   const expectedReason: FatigueBudgetReason = metadata.decision === 'overcharge_charged'
     ? metadata.overchargeReasons.includes('recent_human_participation')
       ? 'overcharge_recent_human_participation'
-      : 'overcharge_work_intent_wrapup'
+      : metadata.overchargeReasons.includes('work_intent_wrapup')
+        ? 'overcharge_work_intent_wrapup'
+        : 'overcharge_explicit_peer_invitation'
     : baseSpend.reason;
   const expectedAmount = contract.spendDecision === 'free' ? 0 : 1;
   const expectedShouldRecordSpend = contract.pendingSpend === 'required';
@@ -326,11 +333,15 @@ export function assertFatigueEnforcementMetadataInvariants(
     fail('overcharge blocked reasons');
   }
   const workIntent = isFatigueWorkIntent(metadata.intent);
+  const explicitPeerInvitation = metadata.socialRegulation.continuationEvidence
+    .includes('explicit_peer_invitation');
   if (metadata.overchargeEligible) {
     if (metadata.policyState !== 'overcharge_eligible'
       || metadata.policyBaseState !== 'hard_exhausted'
       || metadata.overchargeReasons.length === 0
-      || metadata.overchargeReasons.includes('work_intent_wrapup') !== workIntent) {
+      || metadata.overchargeReasons.includes('work_intent_wrapup') !== workIntent
+      || metadata.overchargeReasons.includes('explicit_peer_invitation')
+        !== explicitPeerInvitation) {
       fail('overcharge eligibility');
     }
     const expectedBlockedReasons = metadata.overchargePermitted
@@ -345,6 +356,8 @@ export function assertFatigueEnforcementMetadataInvariants(
     || metadata.overchargeBlockedReasons.length === 0
     || metadata.overchargeBlockedReasons.includes('overcharge_reserve_exhausted')
     || (workIntent
+      && metadata.overchargeBlockedReasons.includes('no_qualifying_overcharge_trigger'))
+    || (explicitPeerInvitation
       && metadata.overchargeBlockedReasons.includes('no_qualifying_overcharge_trigger'))) {
     fail('ineligible overcharge policy');
   }

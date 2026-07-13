@@ -63,6 +63,7 @@ export interface EvaluateFatigueForTurnInput {
   channelType?: string;
   channelMeta: ChannelMeta;
   taskKind?: string;
+  explicitPeerInvitation?: boolean;
   recentHumanParticipation?: FatigueRecentHumanParticipation;
   timestampMs: number;
   correlation: CorrelationMetadata;
@@ -256,10 +257,14 @@ function resolveRecentHumanParticipation(input: {
 
 function selectOverchargeReason(
   policy: ReturnType<typeof evaluateFatiguePolicy>,
-): 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup' {
+): 'overcharge_recent_human_participation'
+  | 'overcharge_work_intent_wrapup'
+  | 'overcharge_explicit_peer_invitation' {
   return policy.overcharge.reasons.includes('recent_human_participation')
     ? 'overcharge_recent_human_participation'
-    : 'overcharge_work_intent_wrapup';
+    : policy.overcharge.reasons.includes('work_intent_wrapup')
+      ? 'overcharge_work_intent_wrapup'
+      : 'overcharge_explicit_peer_invitation';
 }
 
 export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): FatigueTurnDecision {
@@ -304,6 +309,7 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
       structuredOnly: input.message.routing?.icpCorrelation !== undefined,
     }),
     triggerAuthorKind,
+    explicitPeerInvitation: input.explicitPeerInvitation === true,
   };
   const preliminaryPolicy = evaluateFatiguePolicy({
     ...policyInputBase,
@@ -393,6 +399,7 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     intent: policy.intent,
     ...(input.taskKind ? { taskKind: input.taskKind } : {}),
     hasRecentHumanParticipation: policy.overcharge.inputs.hasRecentHumanParticipation,
+    explicitPeerInvitation: input.explicitPeerInvitation === true,
     stateBefore: evaluation.stateBefore,
     amount: evaluation.amount,
   });
@@ -470,6 +477,7 @@ export function attachRecordedFatigueEvent(
 function resolveReconciledPolicyBaseState(input: {
   config: FatiguePolicyConfig;
   normalSpentBefore: number;
+  relationshipPressure: number;
   softLimit: number;
   hardLimit: number;
 }): FatigueEnforcementMetadata['policyBaseState'] {
@@ -478,8 +486,8 @@ function resolveReconciledPolicyBaseState(input: {
     <= input.config.stateThresholds.wrapUpRemainingResponses) {
     return 'wrap_up_allowed';
   }
-  if (input.normalSpentBefore >= input.softLimit) return 'soft_exhausted';
-  if (input.softLimit - input.normalSpentBefore
+  if (input.relationshipPressure >= input.softLimit) return 'soft_exhausted';
+  if (input.softLimit - input.relationshipPressure
     <= input.config.stateThresholds.nearingLimitRemainingResponses) {
     return 'nearing_limit';
   }
@@ -488,13 +496,16 @@ function resolveReconciledPolicyBaseState(input: {
 
 function resolveReconciledOverchargeReasons(
   metadata: FatigueEnforcementMetadata,
-): Array<'recent_human_participation' | 'work_intent_wrapup'> {
+): Array<'recent_human_participation' | 'work_intent_wrapup' | 'explicit_peer_invitation'> {
   return [
     ...(metadata.socialRegulation.continuationEvidence.includes('recent_human_participation')
       ? ['recent_human_participation' as const]
       : []),
     ...(metadata.socialRegulation.continuationEvidence.includes('active_work_or_research')
       ? ['work_intent_wrapup' as const]
+      : []),
+    ...(metadata.socialRegulation.continuationEvidence.includes('explicit_peer_invitation')
+      ? ['explicit_peer_invitation' as const]
       : []),
   ];
 }
@@ -513,7 +524,9 @@ export function reconcileFatigueWithReservationSnapshot(input: {
   const reason = input.decision === 'overcharge'
     ? reasons.includes('recent_human_participation')
       ? 'overcharge_recent_human_participation' as const
-      : 'overcharge_work_intent_wrapup' as const
+      : reasons.includes('work_intent_wrapup')
+        ? 'overcharge_work_intent_wrapup' as const
+        : 'overcharge_explicit_peer_invitation' as const
     : 'machine_intelligence_response' as const;
   const evaluation = rebaseFatigueEvaluation({
     evaluation: input.fatigueDecision.evaluation,
@@ -529,6 +542,7 @@ export function reconcileFatigueWithReservationSnapshot(input: {
   const policyBaseState = resolveReconciledPolicyBaseState({
     config: input.fatiguePolicy,
     normalSpentBefore: evaluation.stateBefore.normalSpent,
+    relationshipPressure: input.reservation.relationshipPressure,
     softLimit: evaluation.stateBefore.softLimit,
     hardLimit: evaluation.stateBefore.allowance,
   });

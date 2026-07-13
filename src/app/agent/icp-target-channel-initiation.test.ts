@@ -150,6 +150,7 @@ describe('ICP target-channel initiation', () => {
       permit: permit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
+      continuationTaskKind: 'research',
     });
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
@@ -164,6 +165,7 @@ describe('ICP target-channel initiation', () => {
         source: 'companion',
         canonicalContactId: CONTACT_ID,
         privateTurnTrigger: true,
+        icpContinuationTaskKind: 'research',
         icpCorrelation: {
           conversationId: CONVERSATION,
           rootInitiationId: ROOT,
@@ -201,6 +203,20 @@ describe('ICP target-channel initiation', () => {
       gatewayMessageId: `companion-initiation-${CANDIDATE}`,
     }));
     expect(result.recoveredTurn).toBe(false);
+  });
+
+  it('rejects an untyped scheduler continuation kind before starting a turn', async () => {
+    const harness = createHarness();
+
+    await expect(harness.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+      continuationTaskKind: 'chat' as 'work',
+    })).rejects.toThrow('continuationTaskKind is invalid');
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
   });
 
   it('recovers the recorded assistant turn after restart and retries without another model turn', async () => {

@@ -14,6 +14,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
+import type { SessionActorKind } from '../../session/turn-provenance.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -46,6 +47,7 @@ export function recordUserMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   contentOverride?: string;
+  actorKind: SessionActorKind;
 }): number | null {
   const content = input.contentOverride ?? input.message.content;
   // htm9.3: intake-envelope snapshots screened by the channel adapter ride
@@ -60,6 +62,7 @@ export function recordUserMessage(input: {
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
+    actorKind: input.actorKind,
     channelMeta: resolveSessionChannelMeta(input.message),
     ...(icpMetadata ? { metadata: icpMetadata } : {}),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),

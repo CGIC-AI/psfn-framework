@@ -271,6 +271,17 @@ assertIncludes(
 
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');
+assertIncludes(
+  liteLlmConfig,
+  'model_name: "z-ai-glm-5.2-nitro"',
+  'LiteLLM colon-free GLM 5.2 Nitro alias',
+);
+assertIncludes(
+  liteLlmConfig,
+  'model: "openrouter/z-ai/glm-5.2:nitro"',
+  'LiteLLM GLM 5.2 Nitro upstream variant',
+);
+assertIncludes(liteLlmConfig, 'reasoning_effort: "none"', 'LiteLLM Nitro reasoning disabled');
 assertIncludes(liteLlmConfig, 'api_key: "os.environ/OPENROUTER_API_KEY"', 'LiteLLM provider key env reference');
 assertIncludes(liteLlmConfig, 'master_key: "os.environ/LITELLM_MASTER_KEY"', 'LiteLLM master key env reference');
 

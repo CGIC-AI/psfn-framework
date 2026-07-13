@@ -40,6 +40,26 @@ async function fetchCachedResource(request) {
   return response;
 }
 
+async function scheduleLegacyClientRecovery() {
+  const windows = await self.clients.matchAll({
+    includeUncontrolled: true,
+    type: 'window',
+  });
+  const foreground = windows.filter((client) => (
+    client.focused && client.visibilityState === 'visible'
+  ));
+  const targets = foreground.length > 0
+    ? foreground
+    : (windows.length === 1 ? windows : []);
+  for (const client of targets) {
+    // Do not await navigation inside activation: the navigation is handled by
+    // this worker, so awaiting it would keep activation open behind itself.
+    void client.navigate(client.url).catch((error) => {
+      console.error('Failed to recover a legacy companion-ui client', error);
+    });
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
   self.skipWaiting();
@@ -49,12 +69,14 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
+      const migratingLegacyClient = keys.some((key) => LEGACY_CACHE_NAMES.has(key));
       const staleCacheNames = keys.filter((key) => (
         key !== CACHE_NAME
         && (key.startsWith(CACHE_PREFIX) || LEGACY_CACHE_NAMES.has(key))
       ));
       await Promise.all(staleCacheNames.map((key) => caches.delete(key)));
       await self.clients.claim();
+      if (migratingLegacyClient) await scheduleLegacyClientRecovery();
     })(),
   );
 });

@@ -3,9 +3,10 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, resolve, sep } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { build } from 'vite';
+import { build, type Plugin } from 'vite';
 
 const COMPANION_UI_ROOT = resolve(import.meta.dirname, '..');
+const LEGACY_CLIENT_PATH = resolve(import.meta.dirname, 'fixtures/legacy-main.tsx');
 const LEGACY_WORKER_PATH = resolve(import.meta.dirname, 'fixtures/legacy-sw.js');
 const MIME_TYPES: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
@@ -95,15 +96,25 @@ class MutableBuildServer {
 async function buildFixture(
   marker: string,
   revision: string,
-  options: { legacyWorker?: boolean } = {},
+  options: { legacyClient?: boolean; legacyWorker?: boolean } = {},
 ): Promise<BuiltFixture> {
   const directory = await mkdtemp(resolve(tmpdir(), 'psfn-companion-ui-browser-'));
   const previousRevision = process.env.COMPANION_UI_BUILD_REVISION;
   process.env.COMPANION_UI_BUILD_REVISION = revision;
   try {
+    const legacyClientPlugin: Plugin = {
+      name: 'psfn-legacy-client-entry',
+      enforce: 'pre',
+      resolveId(source) {
+        return options.legacyClient && source === '/src/main.tsx'
+          ? LEGACY_CLIENT_PATH
+          : null;
+      },
+    };
     await build({
       root: COMPANION_UI_ROOT,
       configFile: resolve(COMPANION_UI_ROOT, 'vite.config.ts'),
+      plugins: [legacyClientPlugin],
       define: {
         __PSFN_COMPANION_UI_SW_UPDATE_INTERVAL_MS__: JSON.stringify(100),
       },
@@ -132,6 +143,37 @@ async function buildFixture(
   return { directory, marker, revision };
 }
 
+async function installNavigationRecorder(
+  page: import('@playwright/test').Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const marker = document.documentElement.dataset.testBuild ?? 'unknown';
+      let history: unknown = [];
+      try {
+        history = JSON.parse(window.name || '[]') as unknown;
+      } catch {
+        history = [];
+      }
+      const entries = Array.isArray(history)
+        ? history.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      window.name = JSON.stringify([...entries, marker]);
+    }, { once: true });
+  });
+}
+
+async function navigationHistory(
+  page: import('@playwright/test').Page,
+): Promise<string[]> {
+  return await page.evaluate(() => {
+    const value = JSON.parse(window.name || '[]') as unknown;
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+  });
+}
+
 async function waitForWorkerRevision(
   page: import('@playwright/test').Page,
   revision: string,
@@ -144,15 +186,19 @@ async function waitForWorkerRevision(
   }, { expectedRevision: revision, staleName: staleCacheName })).toBe(true);
 }
 
-test('migrates the legacy worker without destroying active state and one reload reaches B', async ({
+test('one ordinary reload migrates the actual legacy client to B and remains available offline', async ({
   context,
   page,
 }) => {
-  const legacy = await buildFixture('legacy-A', 'legacy-a', { legacyWorker: true });
+  const legacy = await buildFixture('legacy-A', 'legacy-a', {
+    legacyClient: true,
+    legacyWorker: true,
+  });
   const current = await buildFixture('current-B', 'current-b');
   const server = new MutableBuildServer(legacy.directory);
   const url = await server.start();
   try {
+    await installNavigationRecorder(page);
     await page.goto(url);
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
@@ -170,17 +216,18 @@ test('migrates the legacy worker without destroying active state and one reload 
     });
 
     server.use(current.directory);
-    await waitForWorkerRevision(page, current.revision, 'psfn-satellite-mobile-chat-app-v1');
-
-    await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
-    await expect(session).toHaveValue('operator-session-in-progress');
-    await expect(channel).toHaveValue('operator-channel-in-progress');
-    await expect(credential).toHaveValue('operator-credential-in-progress');
-    await expect(page.getByText('unfinished-notes.txt')).toBeVisible();
-    await expect(page.getByText('Update ready')).toBeVisible();
-
-    await page.reload();
+    // This is deliberately the first browser action after deploy. The legacy
+    // client has no registration.update() loop that can preactivate B.
+    await page.reload().catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.includes('ERR_ABORTED')) throw error;
+    });
     await expect(page.locator('html')).toHaveAttribute('data-test-build', current.marker);
+    await waitForWorkerRevision(page, current.revision, 'psfn-satellite-mobile-chat-app-v1');
+    expect(await navigationHistory(page)).toEqual([
+      legacy.marker,
+      legacy.marker,
+      current.marker,
+    ]);
 
     await context.setOffline(true);
     await page.reload();
@@ -203,6 +250,7 @@ test('generated A to B keeps active state, reaches B in one reload, and remains 
   const server = new MutableBuildServer(buildA.directory);
   const url = await server.start();
   try {
+    await installNavigationRecorder(page);
     await page.goto(url);
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
@@ -230,9 +278,11 @@ test('generated A to B keeps active state, reaches B in one reload, and remains 
     await expect(page.getByText('active-draft.txt')).toBeVisible();
     await expect(page.getByText('Update ready')).toBeVisible();
     await expect(page.getByText(/reload this page when your draft and live work are safe/i)).toBeVisible();
+    expect(await navigationHistory(page)).toEqual([buildA.marker]);
 
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildB.marker);
+    expect(await navigationHistory(page)).toEqual([buildA.marker, buildB.marker]);
 
     await context.setOffline(true);
     await page.reload();

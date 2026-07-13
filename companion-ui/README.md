@@ -98,6 +98,11 @@ shows an update-ready notice so the operator can reload at a safe point.
 The client checks for a new worker at startup, once per minute, and when the app
 returns online or to the foreground, so a deployed build is ready before that
 operator-chosen reload.
+Clients still controlled by the original cache-first worker recover during the
+first operator-chosen reload: the replacement worker removes the legacy cache
+and redirects only the foreground legacy client (or the sole open client) after
+activation. Generated-worker updates remain passive and never navigate an open
+client.
 
 ## In-Cluster Test Deployment
 

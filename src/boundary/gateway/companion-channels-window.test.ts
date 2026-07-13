@@ -74,6 +74,7 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
   it('fails closed on a private-room row without a parseable since', async () => {
     const lane = makeLane({
       'vhome/den': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
         { companionId: 'comp-b', updatedAt: FRESH }, // no since
         { companionId: 'comp-c', updatedAt: FRESH, since: 'not-a-date' },
       ],
@@ -105,6 +106,7 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
   it('uses now() as the cutoff when no mint timestamp is provided', async () => {
     const lane = makeLane({
       'vhome/den': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
         { companionId: 'comp-b', updatedAt: FRESH, since: new Date(NOW - 1).toISOString() },
         { companionId: 'comp-c', updatedAt: FRESH, since: new Date(NOW + 1_000).toISOString() },
       ],
@@ -115,6 +117,7 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
 
   it('public rooms (default privacy) ignore since entirely — byte-identical recipients', async () => {
     const rows: CompanionPresenceReadRow[] = [
+      { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
       { companionId: 'comp-b', updatedAt: FRESH, since: JOINED_AFTER_MINT }, // would be windowed out
       { companionId: 'comp-c', updatedAt: FRESH }, // no since at all
       { companionId: 'comp-d', updatedAt: STALE, since: JOINED_BEFORE_MINT }, // stale still excluded
@@ -130,5 +133,45 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
       roomPrivacy: 'public',
     });
     expect('windowExcluded' in resolution && resolution.windowExcluded).toBeFalsy();
+  });
+
+  it('rejects a location-room send when the sender is absent or stale', async () => {
+    const absent = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+    const stale = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: STALE },
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+
+    await expect(absent.resolveDelivery('comp-a', 'companion-room:living_room'))
+      .resolves.toMatchObject({
+        ok: false,
+        violation: { event: 'companion_room_sender_not_present' },
+      });
+    await expect(stale.resolveDelivery('comp-a', 'companion-room:living_room'))
+      .resolves.toMatchObject({
+        ok: false,
+        violation: { event: 'companion_room_sender_not_present' },
+      });
+  });
+
+  it('allows an absent sender only through a gateway-verified stale-reply carveout', async () => {
+    const lane = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+
+    await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room', {
+      senderReplyAuthorized: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      recipients: ['comp-b'],
+    });
   });
 });

@@ -35,7 +35,10 @@ import {
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
-import { COMPANION_CHANNEL_TYPE } from '../../shared/contracts/companion-channels.js';
+import {
+  COMPANION_CHANNEL_TYPE,
+  parseCompanionChannelId,
+} from '../../shared/contracts/companion-channels.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
@@ -620,15 +623,25 @@ export class GatewayServer {
       throw new Error('companion.message.send requires an identified agent companion connection');
     }
 
-    const { channelId, content, authorName } = parseCompanionMessageSendParams(params);
+    const { channelId, content, authorName, replyToMessageId } = parseCompanionMessageSendParams(params);
 
     // The envelope timestamp is minted BEFORE recipient resolution and handed
     // to the lane: private-room windowing (psfn-framework-s10rm) compares each
     // recipient's presence `since` against this exact instant, so the window
     // check and the delivered envelope can never disagree on the clock.
     const mintedAt = new Date();
+    const parsedChannel = parseCompanionChannelId(channelId);
+    const senderReplyAuthorized = parsedChannel?.kind === 'room' && replyToMessageId !== undefined
+      ? this.companionDeliveryFailureReceipts.claimRoomReply(
+        senderCompanionId,
+        channelId,
+        replyToMessageId,
+        mintedAt.getTime(),
+      ) !== null
+      : false;
     const resolution = await lane.resolveDelivery(senderCompanionId, channelId, {
       messageTimestampMs: mintedAt.getTime(),
+      senderReplyAuthorized,
     });
     if (!resolution.ok) {
       this.alarmCompanionViolation(
@@ -1739,6 +1752,7 @@ function extractViolationCompanionId(details: Record<string, unknown>): string |
 
 const COMPANION_MESSAGE_MAX_CONTENT_CHARS = 65_536;
 const COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS = 200;
+const COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS = 256;
 
 /**
  * Fail-closed validation for companion.message.send params. Note the sender
@@ -1750,6 +1764,7 @@ function parseCompanionMessageSendParams(params: unknown): {
   channelId: string;
   content: string;
   authorName?: string;
+  replyToMessageId?: string;
 } {
   if (!isRecord(params)) {
     throw new Error('companion.message.send requires an object params payload');
@@ -1779,7 +1794,25 @@ function parseCompanionMessageSendParams(params: unknown): {
       );
     }
   }
-  return { channelId, content, ...(authorName ? { authorName } : {}) };
+  let replyToMessageId: string | undefined;
+  if (params.replyToMessageId !== undefined) {
+    if (typeof params.replyToMessageId !== 'string') {
+      throw new Error('companion.message.send replyToMessageId must be a string when provided');
+    }
+    replyToMessageId = params.replyToMessageId.trim();
+    if (!replyToMessageId || replyToMessageId.length > COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS) {
+      throw new Error(
+        'companion.message.send replyToMessageId must be '
+        + `1-${COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS} characters`,
+      );
+    }
+  }
+  return {
+    channelId,
+    content,
+    ...(authorName ? { authorName } : {}),
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+  };
 }
 
 function extractGatewayCorrelation(

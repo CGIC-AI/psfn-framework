@@ -14,10 +14,11 @@
 // `companion_presence` row sits at the addressed place (and is fresher than
 // the staleness TTL — the same read-side TTL the agent presence runtime uses)
 // are the room's members; the sender is always excluded so a companion never
-// receives its own message back. The sender is NOT required to be present at
-// the place: the reply path must keep working even when the replier's own
-// presence row has gone stale between turns, and delivery-side trust gates
-// govern what a recipient does with the message.
+// receives its own message back. A room sender MUST have a fresh presence row
+// at the addressed place. The only exception is a gateway-verified, one-shot
+// reply to a message that was delivered while the sender was present; the
+// gateway owns that capability, not the agent payload. Companion DMs bypass
+// location membership because they are the location-free direct-chat lane.
 //
 // PRIVATE rooms (psfn-framework-s10rm, presence-windowed delivery): when the
 // addressed place is marked `privacy: 'private'`, a recipient additionally
@@ -102,6 +103,12 @@ export interface CompanionDeliveryResolveOptions {
    * whose `since` is after this instant are excluded. Defaults to now().
    */
   messageTimestampMs?: number;
+  /**
+   * Gateway-verified one-shot authorization to finish an active exchange
+   * after the sender's room presence went stale. Callers must never derive
+   * this from an untrusted boolean in the agent payload.
+   */
+  senderReplyAuthorized?: boolean;
 }
 
 export class GatewayCompanionChannelLane {
@@ -168,14 +175,34 @@ export class GatewayCompanionChannelLane {
     const windowCutoffMs = roomPrivacy === 'private'
       ? options?.messageTimestampMs ?? this.now()
       : null;
+    if (windowCutoffMs !== null && !Number.isFinite(windowCutoffMs)) {
+      return violation(
+        'companion_room_message_timestamp_invalid',
+        'Private companion-room delivery requires a finite message timestamp',
+        { senderCompanionId, channelId, messageTimestampMs: windowCutoffMs },
+      );
+    }
 
     const rows = await this.presence.listByPlace(place.siteId, place.placeId);
     const staleCutoffMs = this.now() - this.staleTtlMs;
+    const senderPresent = rows.some((row) => {
+      if (row.companionId !== senderCompanionId) return false;
+      const updatedAtMs = Date.parse(row.updatedAt);
+      return Number.isFinite(updatedAtMs) && updatedAtMs >= staleCutoffMs;
+    });
+    if (!senderPresent && options?.senderReplyAuthorized !== true) {
+      return violation(
+        'companion_room_sender_not_present',
+        `Companion room sender "${senderCompanionId}" is not present at place "${place.placeId}"`,
+        { senderCompanionId, channelId, siteId: place.siteId, placeId: place.placeId },
+      );
+    }
     const recipients: string[] = [];
     const windowExcluded: string[] = [];
     for (const row of rows) {
       if (row.companionId === senderCompanionId) continue; // never echo the sender
-      if (Date.parse(row.updatedAt) < staleCutoffMs) continue; // crashed/idle-out rows
+      const updatedAtMs = Date.parse(row.updatedAt);
+      if (!Number.isFinite(updatedAtMs) || updatedAtMs < staleCutoffMs) continue;
       if (recipients.includes(row.companionId) || windowExcluded.includes(row.companionId)) continue;
       if (windowCutoffMs !== null) {
         const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;

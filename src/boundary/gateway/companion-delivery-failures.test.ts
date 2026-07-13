@@ -48,6 +48,60 @@ describe('CompanionDeliveryFailureReceipts', () => {
       reason: 'processing_failed',
     }, 1_000 + 60 * 60_000 + 1)).toBeNull();
   });
+
+  it('mints a one-shot, short-lived reply authorization for the exact recipient and room', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-reply-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+    });
+
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:elsewhere',
+      'companion-reply-source',
+      1_001,
+    )).toBeNull();
+    expect(receipts.claimRoomReply(
+      'comp-c',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_001,
+    )).toBeNull();
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_001,
+    )).toMatchObject({ senderCompanionId: 'comp-a' });
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_002,
+    )).toBeNull();
+  });
+
+  it('expires room reply authorization at the presence-staleness boundary', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-old-reply-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+    });
+
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-old-reply-source',
+      1_000 + 15 * 60_000 + 1,
+    )).toBeNull();
+  });
 });
 
 describe('parseCompanionMessageFailureReport', () => {

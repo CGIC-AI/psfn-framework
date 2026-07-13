@@ -333,6 +333,64 @@ describe('companion.message.send routing (W6)', () => {
     });
   });
 
+  it('requires sender presence but permits one verified reply after the sender row goes stale', async () => {
+    const auditStore = createMockAuditStore();
+    const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH },
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    };
+    const lane = makeLane({ presenceRows });
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: lane,
+      auditStore,
+    });
+    const agentA = await connect();
+    const agentB = await connect();
+    await identifyAgent(agentA, 'comp-a');
+    await identifyAgent(agentB, 'comp-b', 901);
+
+    const opening = await invokeRpc(agentA, 13, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'are you still there?',
+      companionId: 'comp-a',
+    });
+    expect(opening.result.deliveredTo).toEqual(['comp-b']);
+
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: FRESH },
+      { companionId: 'comp-b', updatedAt: STALE },
+    ];
+    const reply = await invokeRpc(agentB, 14, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'finishing this exchange',
+      companionId: 'comp-b',
+      replyToMessageId: opening.result.messageId,
+    });
+    expect(reply.result.deliveredTo).toEqual(['comp-a']);
+
+    const replay = await invokeRpc(agentB, 15, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'trying to continue while absent',
+      companionId: 'comp-b',
+      replyToMessageId: opening.result.messageId,
+    });
+    expect(replay.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+
+    const absentInitiation = await invokeRpc(agentB, 16, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'new topic while absent',
+      companionId: 'comp-b',
+    });
+    expect(absentInitiation.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+    await vi.waitFor(() => {
+      expect(auditedEvents(auditStore)).toContain('gateway.companion.companion_room_sender_not_present');
+    });
+  });
+
   it('fails closed on a room addressed at an unknown place', async () => {
     const auditStore = createMockAuditStore();
     const { connect } = await setupServer({

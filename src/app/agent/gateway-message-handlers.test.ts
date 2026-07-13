@@ -70,7 +70,12 @@ function createHarness(overrides?: {
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   discordSend?: (channelId: string, content: string) => Promise<void>;
   discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
-  companionSend?: (channelId: string, content: string, authorName?: string) => Promise<unknown>;
+  companionSend?: (
+    channelId: string,
+    content: string,
+    authorName?: string,
+    replyToMessageId?: string,
+  ) => Promise<unknown>;
   companionReportFailure?: (params: CompanionMessageFailureReportParams) => Promise<unknown>;
   outboundReplyGuard?: {
     noteDelivered: ReturnType<typeof vi.fn>;
@@ -805,6 +810,7 @@ describe('registerGatewayMessageHandlers', () => {
         'companion-room:living_room',
         'companion reply',
         'Selene',
+        'cmsg-1',
       );
     });
     // Timestamp deserialized before the turn pipeline sees it.

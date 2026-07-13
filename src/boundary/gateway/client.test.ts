@@ -337,6 +337,55 @@ describe('GatewayClient streaming', () => {
     expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
   });
 
+  it.each([
+    ['empty budget', { budget: {} }],
+    ['bogus reason', { reason: 'invented_budget_reason' }],
+    ['non-finite value', { estimatedRequestCostUsd: Number.POSITIVE_INFINITY }],
+    ['unknown field', { shadowBudget: true }],
+  ])('does not bridge malformed gateway budget telemetry with %s', async (_label, override) => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const validBudget = {
+      dayKey: '2025-07-14',
+      monthKey: '2025-07',
+      dailySpentUsd: 1,
+      dailyLimitUsd: 1,
+      monthlySpentUsd: 2,
+      monthlyLimitUsd: 10,
+      dailyUnknownCostAttempts: 0,
+      monthlyUnknownCostAttempts: 0,
+    };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: validBudget,
+      ...override,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).not.toHaveBeenCalled();
+  });
+
   it('routes model discovery calls through gateway RPC', async () => {
     const discoverPromise = client.getAvailableModels();
     const discoverReq = conn.sent[0] as { id: number; method: string };

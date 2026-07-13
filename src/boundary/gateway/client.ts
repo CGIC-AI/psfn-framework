@@ -141,7 +141,7 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -173,19 +173,11 @@ function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEve
   if (!(error instanceof JSONRPCErrorException) || error.code !== GatewayErrors.MODEL_BUDGET_BLOCKED) {
     return undefined;
   }
-  const event = error.data;
-  if (!isRecord(event) || !isRecord(event.budget)) return undefined;
-  if (
-    typeof event.timestampMs !== 'number'
-    || typeof event.reason !== 'string'
-    || typeof event.provider !== 'string'
-    || typeof event.model !== 'string'
-    || typeof event.purpose !== 'string'
-    || typeof event.service !== 'string'
-    || typeof event.process !== 'string'
-    || typeof event.estimatedRequestCostUsd !== 'number'
-  ) return undefined;
-  return event as unknown as ModelBudgetBlockedEvent;
+  try {
+    return parseModelBudgetBlockedEvent(error.data);
+  } catch {
+    return undefined;
+  }
 }
 
 interface VoiceStreamState {

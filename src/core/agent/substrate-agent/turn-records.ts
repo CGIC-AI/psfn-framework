@@ -96,6 +96,7 @@ export function recordAssistantMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
+  recoveryResponse?: AgentResponse;
 }): number | null {
   let metadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
@@ -104,7 +105,10 @@ export function recordAssistantMessage(input: {
     metadata = buildSessionMetadataWithIcpCorrelation(
       metadata,
       input.message.routing.icpCorrelation,
-      { deliveryStatus: 'pending' },
+      {
+        deliveryStatus: 'pending',
+        ...(input.recoveryResponse ? { recoveryResponse: input.recoveryResponse } : {}),
+      },
     );
   }
 

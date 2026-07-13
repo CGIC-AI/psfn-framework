@@ -452,6 +452,49 @@ export function readJournalTailEntries(
   };
 }
 
+export function readJournalMatchingEntriesBackward(
+  filePath: string,
+  options: import('./types.js').ReadJournalMatchingOptions,
+): import('./types.js').ReadJournalMatchingResult {
+  const limit = Math.max(0, Math.floor(options.limit));
+  if (!existsSync(filePath) || limit <= 0) return { matches: [], quarantined: [] };
+
+  const matches: import('./types.js').JournalBackwardMatch[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  const state: { awaitingBoundary: JournalEntry | null } = { awaitingBoundary: null };
+
+  scanJournalLinesBackward(filePath, (line) => {
+    if (line.trim().length === 0) return false;
+    let entry: JournalEntry;
+    try {
+      entry = parseJournalLine(line);
+    } catch (error) {
+      quarantined.push({ lineNumber: -1, error: toErrorMessage(error), raw: line });
+      if (state.awaitingBoundary) {
+        matches.push({ entry: state.awaitingBoundary, previousHmac: null });
+        state.awaitingBoundary = null;
+      }
+      return matches.length >= limit;
+    }
+
+    if (state.awaitingBoundary) {
+      matches.push({
+        entry: state.awaitingBoundary,
+        previousHmac: typeof entry._hmac === 'string' ? entry._hmac : null,
+      });
+      state.awaitingBoundary = null;
+      if (matches.length >= limit) return true;
+    }
+    if (options.matches(entry)) state.awaitingBoundary = entry;
+    return false;
+  });
+
+  if (state.awaitingBoundary && matches.length < limit) {
+    matches.push({ entry: state.awaitingBoundary, previousHmac: null });
+  }
+  return { matches, quarantined };
+}
+
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {
   appendJsonLine(filePath, entry);
 }

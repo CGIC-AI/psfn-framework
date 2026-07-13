@@ -31,6 +31,17 @@ const correlation = {
   costOriginStage: 'initiation' as const,
   fatigueDecision: 'not_evaluated' as const,
 };
+const recoveryResponse = {
+  content: 'Hey Nova, I was thinking about our garden plans.',
+  channelId: CHANNEL,
+  metadata: {
+    model: 'test/icp-recovery',
+    inputTokens: 1,
+    outputTokens: 1,
+    durationMs: 1,
+    icpCorrelation: correlation,
+  },
+};
 
 const roots: string[] = [];
 afterEach(() => {
@@ -81,7 +92,7 @@ describe('ICP L0 restart continuity', () => {
         metadata: buildSessionMetadataWithIcpCorrelation(
           undefined,
           correlation,
-          { deliveryStatus: 'pending' },
+          { deliveryStatus: 'pending', recoveryResponse },
         ),
       },
     );
@@ -112,6 +123,7 @@ describe('ICP L0 restart continuity', () => {
     expect(restartedSender.findRecordedIcpInitiation(CHANNEL, SOURCE_ID)).toEqual({
       content: assistantContent,
       correlation,
+      recoveryResponse,
     });
     expect(restartedSender.getRecentSessionEntries(CHANNEL, 10)).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -149,7 +161,7 @@ describe('ICP L0 restart continuity', () => {
         metadata: buildSessionMetadataWithIcpCorrelation(
           undefined,
           correlation,
-          { deliveryStatus: 'pending' },
+          { deliveryStatus: 'pending', recoveryResponse },
         ),
       },
     );
@@ -173,6 +185,59 @@ describe('ICP L0 restart continuity', () => {
       }),
     ]);
   });
+
+  it('recovers ICP initiation, observation, and source attribution beyond 5,000 later rows', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-session-deep-recovery-'));
+    roots.push(root);
+    const sender = manager(root, 'sender');
+    const recipientSourceId = 'companion-initiation-deep-source';
+
+    sender.recordAssistantMessage(
+      CHANNEL,
+      'Old pending initiation',
+      'contact-nova',
+      true,
+      'contact-nova',
+      {
+        turnId: correlation.turnId as TurnID,
+        requestId: SOURCE_ID,
+        sourceMessageId: SOURCE_ID,
+        metadata: buildSessionMetadataWithIcpCorrelation(
+          undefined,
+          correlation,
+          { deliveryStatus: 'pending', recoveryResponse },
+        ),
+      },
+    );
+    sender.recordIcpDeliveryObservation({
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      status: 'failed',
+      error: 'old failed delivery',
+    });
+    sender.recordUserMessage(CHANNEL, 'Old replayed recipient input', SENDER, 'Selene', true, undefined, {
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7083' as TurnID,
+      requestId: recipientSourceId,
+      sourceMessageId: recipientSourceId,
+    });
+    for (let index = 0; index < 5_001; index += 1) {
+      sender.appendContextSystemNote(CHANNEL, `Later row ${index}`, 'deep-recovery-test');
+    }
+
+    const restarted = manager(root, 'sender');
+    expect(restarted.findRecordedIcpInitiation(CHANNEL, SOURCE_ID)).toEqual({
+      content: 'Old pending initiation',
+      correlation,
+      recoveryResponse,
+    });
+    expect(restarted.findIcpDeliveryObservation(CHANNEL, SOURCE_ID)).toEqual({
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      status: 'failed',
+      error: 'old failed delivery',
+    });
+    expect(restarted.hasRecordedSourceMessage(CHANNEL, recipientSourceId)).toBe(true);
+  }, 60_000);
 
   it('keeps failed sender output out of real pre-compaction extraction and summary side effects', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-icp-sidework-quarantine-'));

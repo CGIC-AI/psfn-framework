@@ -2036,6 +2036,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'trusted',
       'contact-123',
       null,
+      undefined,
     );
     expect(buildContext.mock.calls[0]?.[4]).toBe('contact-123');
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({

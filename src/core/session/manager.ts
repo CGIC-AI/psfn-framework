@@ -77,7 +77,10 @@ import {
   resolveSessionEntryRoleEnvelopePreview,
   resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
-import { parseSessionIcpCorrelation } from './icp-correlation-metadata.js';
+import {
+  parseSessionIcpCorrelation,
+  parseSessionIcpRecoveryResponse,
+} from './icp-correlation-metadata.js';
 import {
   parseIcpConversationCorrelation,
   type IcpConversationCorrelation,
@@ -1167,10 +1170,14 @@ export class SessionManager {
   findRecordedIcpInitiation(
     channelId: string,
     sourceMessageId: string,
-  ): { content: string; correlation: IcpConversationCorrelation } | null {
-    const entries = this.getRecentSessionEntries(channelId, 5_000);
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
+  ): { content: string; correlation: IcpConversationCorrelation; recoveryResponse: AgentResponse } | null {
+    const entries = this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => entry.role === 'assistant'
+        && resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId,
+      1,
+    );
+    for (const entry of entries) {
       if (entry.role !== 'assistant') continue;
       const turn = resolveSessionEntryTurnContext(entry);
       if (turn.sourceMessageId !== sourceMessageId) continue;
@@ -1178,7 +1185,11 @@ export class SessionManager {
       if (!correlation) {
         throw new Error('Recorded ICP initiation assistant entry is missing correlation metadata');
       }
-      return { content: entry.content, correlation };
+      const recoveryResponse = parseSessionIcpRecoveryResponse(entry.metadata);
+      if (!recoveryResponse) {
+        throw new Error('Recorded ICP initiation assistant entry is missing recovery response metadata');
+      }
+      return { content: entry.content, correlation, recoveryResponse };
     }
     return null;
   }
@@ -1187,12 +1198,32 @@ export class SessionManager {
     channelId: string,
     sourceMessageId: string,
   ): {
-    status: 'delivered' | 'failed' | 'suppressed';
+    channelId: string;
+    sourceMessageId: string;
+    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
+    gatewayMessageId?: string;
+    deliveredTo?: readonly string[];
+    permitOutcome?: 'consumed' | 'replayed';
+    error?: string;
     recoveryResponse?: AgentResponse;
+    turnCompleted?: true;
   } | null {
-    const entries = this.getRecentSessionEntries(channelId, 5_000);
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
+    const entries = this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => {
+        if (entry.role !== 'system' || !entry.content.startsWith('{')) return false;
+        try {
+          const candidate: unknown = JSON.parse(entry.content);
+          return isRecord(candidate)
+            && candidate.kind === 'icp_delivery'
+            && candidate.sourceMessageId === sourceMessageId;
+        } catch {
+          return false;
+        }
+      },
+      1,
+    );
+    for (const entry of entries) {
       if (entry.role !== 'system' || !entry.content.startsWith('{')) continue;
       let parsed: unknown;
       try {
@@ -1203,9 +1234,20 @@ export class SessionManager {
       if (!isRecord(parsed) || parsed.kind !== 'icp_delivery') continue;
       if (parsed.schemaVersion !== 1
         || typeof parsed.sourceMessageId !== 'string'
+        || typeof parsed.channelId !== 'string'
         || (parsed.status !== 'delivered'
           && parsed.status !== 'failed'
-          && parsed.status !== 'suppressed')) {
+          && parsed.status !== 'suppressed'
+          && parsed.status !== 'prepared')
+        || (parsed.gatewayMessageId !== undefined && typeof parsed.gatewayMessageId !== 'string')
+        || (parsed.deliveredTo !== undefined
+          && (!Array.isArray(parsed.deliveredTo)
+            || parsed.deliveredTo.some(value => typeof value !== 'string')))
+        || (parsed.permitOutcome !== undefined
+          && parsed.permitOutcome !== 'consumed'
+          && parsed.permitOutcome !== 'replayed')
+        || (parsed.error !== undefined && typeof parsed.error !== 'string')
+        || (parsed.turnCompleted !== undefined && parsed.turnCompleted !== true)) {
         throw new Error('Recorded ICP delivery observation is malformed');
       }
       if (parsed.sourceMessageId === sourceMessageId) {
@@ -1233,8 +1275,19 @@ export class SessionManager {
           }) as AgentResponse;
         }
         return {
+          channelId: parsed.channelId,
+          sourceMessageId: parsed.sourceMessageId,
           status: parsed.status,
+          ...(typeof parsed.gatewayMessageId === 'string' ? { gatewayMessageId: parsed.gatewayMessageId } : {}),
+          ...(Array.isArray(parsed.deliveredTo)
+            ? { deliveredTo: parsed.deliveredTo as string[] }
+            : {}),
+          ...(parsed.permitOutcome === 'consumed' || parsed.permitOutcome === 'replayed'
+            ? { permitOutcome: parsed.permitOutcome }
+            : {}),
+          ...(typeof parsed.error === 'string' ? { error: parsed.error } : {}),
           ...(recoveryResponse ? { recoveryResponse } : {}),
+          ...(parsed.turnCompleted === true ? { turnCompleted: true as const } : {}),
         };
       }
     }
@@ -1242,22 +1295,27 @@ export class SessionManager {
   }
 
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
-    return this.getRecentSessionEntries(channelId, 5_000).some((entry) => {
-      if (entry.role !== 'user' && entry.role !== 'system') return false;
-      if (!entry.metadata?.includes(sourceMessageId)) return false;
-      return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
-    });
+    return this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => {
+        if (entry.role !== 'user' && entry.role !== 'system') return false;
+        if (!entry.metadata?.includes(sourceMessageId)) return false;
+        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
+      },
+      1,
+    ).length > 0;
   }
 
   recordIcpDeliveryObservation(observation: {
     channelId: string;
     sourceMessageId: string;
-    status: 'delivered' | 'failed' | 'suppressed';
+    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
     gatewayMessageId?: string;
     deliveredTo?: readonly string[];
     permitOutcome?: 'consumed' | 'replayed';
     error?: string;
     recoveryResponse?: AgentResponse;
+    turnCompleted?: true;
   }): void {
     this.appendSystemNote(
       observation.channelId,

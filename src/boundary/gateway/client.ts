@@ -149,9 +149,10 @@ import type {
   IcpInitiationPermitIssueResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
-import type {
-  IcpAvailabilityLease,
-  IcpConversationCorrelation,
+import {
+  deriveIcpTransportMessageId,
+  type IcpAvailabilityLease,
+  type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import { GatewayErrors } from './protocol.js';
 import {
@@ -571,11 +572,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     authorName?: string,
     correlation?: IcpConversationCorrelation,
   ): Promise<CompanionMessageSendResult> {
+    const messageId = correlation ? deriveIcpTransportMessageId(correlation) : undefined;
     return await this.rpcInstance.request('companion.message.send', {
       channelId,
       content,
       ...(authorName ? { authorName } : {}),
       ...(correlation ? { correlation } : {}),
+      ...(messageId ? { messageId } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
   }
@@ -590,6 +593,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   }): Promise<CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' }> {
+    const messageId = deriveIcpTransportMessageId(input.correlation);
     return await this.rpcInstance.request('companion.message.send', {
       channelId: input.channelId,
       content: input.content,
@@ -600,6 +604,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         recipientCompanionId: input.recipientCompanionId,
         correlation: input.correlation,
       },
+      messageId,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' };
   }

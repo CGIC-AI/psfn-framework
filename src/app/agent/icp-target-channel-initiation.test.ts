@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js';
+import type {
+  IcpConversationCorrelation,
+  IcpInitiationPermit,
+} from '../../shared/contracts/icp-autonomy.js';
 import {
   createIcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
@@ -31,6 +34,28 @@ function permit(): IcpInitiationPermit {
   };
 }
 
+function correlation(
+  turnId = '018f22a2-52b8-7a3a-8c16-25b7b14f7089',
+): IcpConversationCorrelation {
+  return {
+    conversationId: CONVERSATION,
+    rootInitiationId: ROOT,
+    initiatedByCompanionId: SENDER,
+    localCompanionId: SENDER,
+    peerCompanionId: RECIPIENT,
+    peerContactId: CONTACT_ID,
+    channelId: CHANNEL,
+    turnId,
+    messageId: `icp-initiation:${CANDIDATE}`,
+    requestId: `icp-initiation:${CANDIDATE}`,
+    chargeLane: 'companion_social',
+    surface: 'companion_dm',
+    costPurpose: 'conversation_turn',
+    costOriginStage: 'initiation',
+    fatigueDecision: 'not_evaluated',
+  };
+}
+
 function response(message: SubstrateMessage): AgentResponse {
   const correlation = message.routing?.icpCorrelation;
   if (!correlation) throw new Error('test expected ICP correlation');
@@ -52,9 +77,12 @@ function response(message: SubstrateMessage): AgentResponse {
 function createHarness(recorded: RecordedIcpInitiationTurn | null = null) {
   const handleMessage = vi.fn(async (
     message: SubstrateMessage,
-    deliveryLifecycle: { finalizeDelivery(response: AgentResponse): Promise<void> },
+    deliveryLifecycle: {
+      recoveredResponse?: AgentResponse;
+      finalizeDelivery(response: AgentResponse): Promise<void>;
+    },
   ) => {
-    const turnResponse = response(message);
+    const turnResponse = deliveryLifecycle.recoveredResponse ?? response(message);
     await deliveryLifecycle.finalizeDelivery(turnResponse);
     return turnResponse;
   });
@@ -149,7 +177,7 @@ describe('ICP target-channel initiation', () => {
       status: 'delivered',
       gatewayMessageId: `companion-initiation-${CANDIDATE}`,
     }));
-    expect(result.disposition).toBe('delivered');
+    expect(result.recoveredTurn).toBe(false);
   });
 
   it('recovers the recorded assistant turn after restart and retries without another model turn', async () => {
@@ -171,9 +199,9 @@ describe('ICP target-channel initiation', () => {
     const restartedHarness = createHarness({
       content: 'Hey Nova, I was thinking about our garden plans.',
       correlation: firstMessage.routing.icpCorrelation,
+      recoveryResponse: response(firstMessage),
     });
     const failedObservation = firstHarness.recordDeliveryObservation.mock.calls.at(-1)?.[0];
-    if (!failedObservation) throw new Error('test expected a failed delivery observation');
     restartedHarness.findIcpDeliveryObservation.mockResolvedValueOnce(failedObservation);
     restartedHarness.sendInitiation.mockResolvedValueOnce({
       channelId: CHANNEL,
@@ -199,6 +227,86 @@ describe('ICP target-channel initiation', () => {
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
   });
 
+  it('recovers from the assistant row when the process died before any delivery observation', async () => {
+    const durableCorrelation = correlation();
+    const durableResponse = response({
+      id: `icp-initiation:${CANDIDATE}`,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: durableCorrelation },
+    });
+    const restarted = createHarness({
+      content: durableResponse.content,
+      correlation: durableCorrelation,
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: {
+        ...permit(),
+        status: 'consumed',
+        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
+        revision: 2,
+      },
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).resolves.toMatchObject({ disposition: 'delivered', recoveredTurn: true });
+
+    expect(restarted.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restarted.handleMessage.mock.calls[0]?.[1]).toMatchObject({
+      recoveredResponse: durableResponse,
+    });
+    expect(restarted.sendInitiation).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes post-turn recovery without resending after durable delivery', async () => {
+    const durableCorrelation = correlation('018f22a2-52b8-7a3a-8c16-25b7b14f7090');
+    const recoveryResponse = response({
+      id: durableCorrelation.requestId,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: durableCorrelation },
+    });
+    const restarted = createHarness({
+      content: recoveryResponse.content,
+      correlation: durableCorrelation,
+      recoveryResponse,
+    });
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: durableCorrelation.messageId,
+      status: 'delivered',
+      gatewayMessageId: `companion-initiation-${CANDIDATE}`,
+      deliveredTo: [RECIPIENT],
+      recoveryResponse,
+    });
+
+    await restarted.initiator.initiate({
+      permit: {
+        ...permit(),
+        status: 'consumed',
+        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
+        revision: 2,
+      },
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    });
+
+    expect(restarted.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restarted.sendInitiation).not.toHaveBeenCalled();
+    expect(restarted.recordDeliveryObservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'delivered', turnCompleted: true }),
+    );
+  });
+
   it('coalesces concurrent delivery attempts into one sender turn and one send', async () => {
     const harness = createHarness();
     const request = {
@@ -215,7 +323,7 @@ describe('ICP target-channel initiation', () => {
     expect(first).toEqual(second);
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.sendInitiation).toHaveBeenCalledTimes(1);
-    expect(harness.recordDeliveryObservation).toHaveBeenCalledTimes(1);
+    expect(harness.recordDeliveryObservation).toHaveBeenCalledTimes(3);
   });
 
   it('atomically consumes and durably terminates a suppressed one-use permit', async () => {
@@ -244,7 +352,16 @@ describe('ICP target-channel initiation', () => {
       status: 'suppressed',
     }));
 
-    harness.findIcpDeliveryObservation.mockResolvedValueOnce({ status: 'suppressed' });
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      status: 'suppressed',
+      recoveryResponse: {
+        ...response(harness.handleMessage.mock.calls[0][0]),
+        content: '',
+      },
+      turnCompleted: true,
+    });
     await expect(harness.initiator.initiate({
       permit: permit(),
       rootInitiationId: ROOT,
@@ -268,7 +385,10 @@ describe('ICP target-channel initiation', () => {
       peerContactId: CONTACT_ID,
     })).resolves.toMatchObject({ disposition: 'suppressed', recoveredTurn: true });
 
-    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.handleMessage.mock.calls[0]?.[1]).toMatchObject({
+      recoveredResponse: expect.objectContaining({ content: '' }),
+    });
     expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
     expect(harness.sendInitiation).not.toHaveBeenCalled();
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({

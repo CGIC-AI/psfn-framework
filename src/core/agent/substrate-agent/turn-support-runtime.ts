@@ -630,6 +630,7 @@ export class TurnSupportRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
+    recoveryResponse?: AgentResponse,
   ): number | null {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
@@ -640,6 +641,7 @@ export class TurnSupportRuntime {
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      recoveryResponse,
     });
   }
 

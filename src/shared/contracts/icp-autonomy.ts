@@ -145,6 +145,31 @@ export interface IcpConversationCorrelation {
   fatigueReasonCode?: IcpAutonomyReasonCode;
 }
 
+/**
+ * Stable gateway envelope identity for one authored ICP turn. Transport
+ * retries and lost RPC acknowledgements must reuse this exact id.
+ */
+export function deriveIcpTransportMessageId(
+  value: IcpConversationCorrelation,
+): string {
+  const correlation = parseIcpConversationCorrelation(value);
+  if (correlation.costOriginStage === 'initiation') {
+    const prefix = 'icp-initiation:';
+    if (!correlation.messageId.startsWith(prefix)) {
+      throw new Error('ICP initiation correlation messageId is not candidate-bound');
+    }
+    const candidateId = correlation.messageId.slice(prefix.length).trim();
+    if (!candidateId) {
+      throw new Error('ICP initiation correlation is missing candidate identity');
+    }
+    return `companion-initiation-${candidateId}`;
+  }
+  if (correlation.costOriginStage !== 'reply') {
+    throw new Error('Only initiation and reply ICP correlations can be transported');
+  }
+  return `companion-reply-${correlation.localCompanionId}-${correlation.turnId}`;
+}
+
 export function derivePostTurnIcpConversationCorrelation(
   value: IcpConversationCorrelation,
   costPurpose: Extract<IcpConversationCorrelation['costPurpose'], 'summary' | 'extraction' | 'sidecar'>,

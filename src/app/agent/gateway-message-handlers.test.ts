@@ -97,14 +97,17 @@ function createHarness(overrides?: {
   ) => Promise<{
     content: string;
     correlation: IcpConversationCorrelation;
+    recoveryResponse: AgentResponse;
   } | null> | {
     content: string;
     correlation: IcpConversationCorrelation;
+    recoveryResponse: AgentResponse;
   } | null;
   findIcpDeliveryObservation?: (
     channelId: string,
     sourceMessageId: string,
   ) => Promise<any> | any;
+  recordIcpDeliveryObservation?: (observation: any) => Promise<void> | void;
   outboundReplyGuard?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
@@ -163,7 +166,9 @@ function createHarness(overrides?: {
     findRecordedIcpInitiation: vi.fn(overrides?.findRecordedIcpInitiation ?? (async () => null)),
     findIcpDeliveryObservation: vi.fn(overrides?.findIcpDeliveryObservation ?? (async () => null)),
     hasRecordedSourceMessage: vi.fn(overrides?.hasRecordedSourceMessage ?? (async () => false)),
-    recordIcpDeliveryObservation: vi.fn(async () => {}),
+    recordIcpDeliveryObservation: vi.fn(
+      overrides?.recordIcpDeliveryObservation ?? (async () => {}),
+    ),
   };
   const shardManager = {
     delegateSatelliteSession: vi.fn(
@@ -921,13 +926,14 @@ describe('registerGatewayMessageHandlers', () => {
       'Selene',
       replyIcpCorrelation,
     );
-    expect(harness.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith({
+    expect(harness.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
       channelId: ICP_CHANNEL,
       sourceMessageId: inboundIcpCorrelation.messageId,
       status: 'delivered',
       gatewayMessageId: 'companion-reply-delivered',
       deliveredTo: [ICP_A],
-    });
+      turnCompleted: true,
+    }));
   });
 
   it('recovers a failed correlated reply after restart without another generated turn', async () => {
@@ -977,6 +983,7 @@ describe('registerGatewayMessageHandlers', () => {
       findRecordedIcpInitiation: async () => ({
         content: reply.content,
         correlation: replyIcpCorrelation,
+        recoveryResponse: reply,
       }),
       findIcpDeliveryObservation: async () => failedObservation,
       handleMessage: async (_message, lifecycle) => {
@@ -1000,6 +1007,51 @@ describe('registerGatewayMessageHandlers', () => {
     expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
     expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'delivered' }),
+    );
+  });
+
+  it('recovers a pending reply from its assistant row when no delivery observation survived', async () => {
+    const reply = {
+      ...makeResponse('assistant-row reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    let recoveredPostTurnStarted = 0;
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      hasRecordedSourceMessage: async () => true,
+      findRecordedIcpInitiation: async () => ({
+        content: reply.content,
+        correlation: replyIcpCorrelation,
+        recoveryResponse: reply,
+      }),
+      findIcpDeliveryObservation: async () => null,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle?.recoveredResponse) throw new Error('test expected assistant-row recovery');
+        await lifecycle.finalizeDelivery(lifecycle.recoveredResponse);
+        recoveredPostTurnStarted += 1;
+        return lifecycle.recoveredResponse;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-reply-stable-recovery',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(recoveredPostTurnStarted).toBe(1);
+    expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
+    expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'delivered', turnCompleted: true }),
     );
   });
 

@@ -792,6 +792,32 @@ export class SessionStore implements TranscriptSearchPort {
     const entries = this.getRecent(channelId, 1);
     return entries[entries.length - 1];
   }
+  findLatestEntries(
+    channelId: string,
+    predicate: (entry: SessionEntry) => boolean,
+    limit = 1,
+  ): SessionEntry[] {
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedLimit <= 0) return [];
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded || (cached?.activeTurnTombstoneCount ?? 0) > 0) {
+      const full = cached?.fullyLoaded ? cached : this.ensureChannelFullyLoaded(channelId);
+      return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+    }
+    const resolved = cached
+      ? { channelId: cached.channelId, filePath: cached.resolvedPath }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const found = this.journalRuntime.findLatestEntries(
+      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
+      predicate,
+      normalizedLimit,
+    );
+    if (found) return found;
+    const full = this.ensureChannelFullyLoaded(channelId);
+    return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+  }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
     if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
     const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));

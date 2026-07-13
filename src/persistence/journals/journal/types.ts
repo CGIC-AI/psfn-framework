@@ -43,6 +43,21 @@ export interface ReadJournalTailResult {
   truncated: boolean;
 }
 
+export interface ReadJournalMatchingOptions {
+  limit: number;
+  matches: (entry: JournalEntry) => boolean;
+}
+
+export interface JournalBackwardMatch {
+  entry: JournalEntry;
+  previousHmac: string | null;
+}
+
+export interface ReadJournalMatchingResult {
+  matches: JournalBackwardMatch[];
+  quarantined: QuarantinedJournalEntry[];
+}
+
 export interface SessionHmacKeyring {
   activeVersion: string;
   keys: Record<string, string>;

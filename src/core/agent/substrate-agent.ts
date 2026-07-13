@@ -1333,14 +1333,28 @@ export class SubstrateAgent {
   findRecordedIcpInitiation(
     channelId: string,
     sourceMessageId: string,
-  ): { content: string; correlation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation } | null {
+  ): {
+    content: string;
+    correlation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation;
+    recoveryResponse: AgentResponse;
+  } | null {
     return this.sessionManager.findRecordedIcpInitiation(channelId, sourceMessageId);
   }
 
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): { status: 'delivered' | 'failed' | 'suppressed' } | null {
+  ): {
+    channelId: string;
+    sourceMessageId: string;
+    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
+    gatewayMessageId?: string;
+    deliveredTo?: readonly string[];
+    permitOutcome?: 'consumed' | 'replayed';
+    error?: string;
+    recoveryResponse?: AgentResponse;
+    turnCompleted?: true;
+  } | null {
     return this.sessionManager.findIcpDeliveryObservation(channelId, sourceMessageId);
   }
 
@@ -1357,11 +1371,13 @@ export class SubstrateAgent {
   recordIcpDeliveryObservation(observation: {
     channelId: string;
     sourceMessageId: string;
-    status: 'delivered' | 'failed' | 'suppressed';
+    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
     gatewayMessageId?: string;
     deliveredTo?: readonly string[];
     permitOutcome?: 'consumed' | 'replayed';
     error?: string;
+    recoveryResponse?: AgentResponse;
+    turnCompleted?: true;
   }): void {
     this.sessionManager.recordIcpDeliveryObservation(observation);
   }

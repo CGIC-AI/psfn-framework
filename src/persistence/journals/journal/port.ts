@@ -5,6 +5,8 @@ import { buildMessageJournalEntry } from './entries.js';
 import type {
   JournalFileMetadata,
   ReadJournalFileOptions,
+  ReadJournalMatchingOptions,
+  ReadJournalMatchingResult,
   ReadJournalResult,
   ReadJournalTailOptions,
   ReadJournalTailResult,
@@ -17,6 +19,7 @@ import {
   readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
+  readJournalMatchingEntriesBackward,
   scanJournalFileMetadata,
   writeJournalFileAtomic,
 } from './file-io.js';
@@ -31,6 +34,7 @@ export interface SessionJournalPort {
   readJournalFile(filePath: string, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(filePath: string): JournalEntry | null;
   readJournalTailEntries(filePath: string, options: ReadJournalTailOptions): ReadJournalTailResult;
+  readJournalMatchingEntriesBackward(filePath: string, options: ReadJournalMatchingOptions): ReadJournalMatchingResult;
   scanJournalFileMetadata(filePath: string, options?: ScanJournalMetadataOptions): JournalFileMetadata;
 }
 
@@ -82,6 +86,7 @@ export interface SessionArchivePort {
   readJournalFile(handle: SessionArchiveHandle, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(handle: SessionArchiveHandle): JournalEntry | null;
   readJournalTailEntries(handle: SessionArchiveHandle, options: ReadJournalTailOptions): ReadJournalTailResult;
+  readJournalMatchingEntriesBackward(handle: SessionArchiveHandle, options: ReadJournalMatchingOptions): ReadJournalMatchingResult;
   fingerprintArchive(handle: SessionArchiveHandle): string | null;
   scanJournalFileMetadata(
     handle: SessionArchiveHandle,
@@ -98,6 +103,7 @@ export function createFilesystemSessionJournalPort(): SessionJournalPort {
     readJournalFile,
     readJournalFirstEntry,
     readJournalTailEntries,
+    readJournalMatchingEntriesBackward,
     scanJournalFileMetadata,
   };
 }
@@ -144,6 +150,9 @@ export function createFilesystemSessionArchivePort(
     ),
     readJournalTailEntries: (handle, options) => (
       journalPort.readJournalTailEntries(requireFilesystemHandle(handle).filePath, options)
+    ),
+    readJournalMatchingEntriesBackward: (handle, options) => (
+      journalPort.readJournalMatchingEntriesBackward(requireFilesystemHandle(handle).filePath, options)
     ),
     fingerprintArchive: (handle) => {
       const { filePath } = requireFilesystemHandle(handle);

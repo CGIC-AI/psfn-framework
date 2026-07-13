@@ -86,6 +86,7 @@ import {
   registerGatewayIcpAutonomyRpc,
 } from './icp-autonomy-rpc.js';
 import {
+  deriveIcpTransportMessageId,
   parseIcpConversationCorrelation,
   type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -98,6 +99,7 @@ const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
 );
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 const FRAME_PREVIEW_LIMIT = 200;
+const ICP_DELIVERY_REPLAY_CACHE_TTL_MS = 15 * 60_000;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
 
@@ -290,8 +292,9 @@ export class GatewayServer {
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
-  private readonly deliveredIcpInitiations = new Map<string, {
+  private readonly deliveredIcpMessages = new Map<string, {
     content: string;
+    correlation: string;
     expiresAtMs: number;
     result: CompanionMessageSendResult;
   }>();
@@ -700,9 +703,15 @@ export class GatewayServer {
       throw new Error('companion.message.send requires an identified agent companion connection');
     }
 
-    const { channelId, content, authorName, initiation, correlation } = parseCompanionMessageSendParams(params);
+    const {
+      channelId,
+      content,
+      authorName,
+      messageId: requestedMessageId,
+      initiation,
+      correlation,
+    } = parseCompanionMessageSendParams(params);
     let initiationPermitOutcome: 'consumed' | 'replayed' | undefined;
-    let initiationCandidateId: string | undefined;
     let initiationPermitExpiresAtMs: number | undefined;
     let messageCorrelation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation | undefined;
     if (initiation) {
@@ -749,7 +758,6 @@ export class GatewayServer {
         throw new Error('ICP initiation delivery permit/correlation mismatch');
       }
       initiationPermitOutcome = consumption.outcome;
-      initiationCandidateId = consumption.permit.candidateId;
       initiationPermitExpiresAtMs = consumption.permit.expiresAtMs;
       messageCorrelation = {
         ...correlation,
@@ -768,26 +776,37 @@ export class GatewayServer {
       );
     }
 
-    const stableInitiationMessageId = initiationCandidateId
-      ? `companion-initiation-${initiationCandidateId}`
+    const stableIcpMessageId = messageCorrelation
+      ? deriveIcpTransportMessageId(messageCorrelation)
       : undefined;
-    if (stableInitiationMessageId) {
-      for (const [messageId, delivered] of this.deliveredIcpInitiations.entries()) {
-        if (delivered.expiresAtMs <= Date.now()) this.deliveredIcpInitiations.delete(messageId);
-      }
+    if (stableIcpMessageId !== requestedMessageId) {
+      this.alarmCompanionViolation(
+        'icp_delivery_message_id_mismatch',
+        'Correlated ICP send did not use its deterministic gateway-bound message id',
+        { senderCompanionId, channelId, requestedMessageId, stableIcpMessageId },
+      );
+      throw new Error('Correlated ICP transport message id mismatch');
     }
-    if (stableInitiationMessageId && initiationPermitOutcome === 'replayed') {
-      const delivered = this.deliveredIcpInitiations.get(stableInitiationMessageId);
+    const now = Date.now();
+    for (const [cachedMessageId, delivered] of this.deliveredIcpMessages.entries()) {
+      if (delivered.expiresAtMs <= now) this.deliveredIcpMessages.delete(cachedMessageId);
+    }
+    if (stableIcpMessageId) {
+      const delivered = this.deliveredIcpMessages.get(stableIcpMessageId);
       if (delivered) {
-        if (delivered.content !== content) {
+        if (delivered.content !== content
+          || delivered.correlation !== JSON.stringify(messageCorrelation)) {
           this.alarmCompanionViolation(
-            'icp_initiation_delivery_mismatch',
-            'Replayed ICP initiation changed the already-delivered content',
-            { senderCompanionId, channelId, messageId: stableInitiationMessageId },
+            'icp_delivery_replay_mismatch',
+            'Replayed ICP message changed its already-delivered content or correlation',
+            { senderCompanionId, channelId, messageId: stableIcpMessageId },
           );
-          throw new Error('Replayed ICP initiation content mismatch');
+          throw new Error('Replayed ICP delivery mismatch');
         }
-        return { ...delivered.result, permitOutcome: 'replayed' };
+        return {
+          ...delivered.result,
+          ...(initiationPermitOutcome ? { permitOutcome: 'replayed' as const } : {}),
+        };
       }
     }
 
@@ -824,8 +843,8 @@ export class GatewayServer {
     // relationship classes apply on the recipient with no trust in
     // sender-supplied metadata.
     const message = {
-      id: stableInitiationMessageId
-        ? stableInitiationMessageId
+      id: stableIcpMessageId
+        ? stableIcpMessageId
         : `companion-${randomUUID()}`,
       channelId,
       channelType: COMPANION_CHANNEL_TYPE,
@@ -912,10 +931,11 @@ export class GatewayServer {
       skippedOffline,
       ...(initiationPermitOutcome ? { permitOutcome: initiationPermitOutcome } : {}),
     };
-    if (stableInitiationMessageId && initiationPermitExpiresAtMs !== undefined) {
-      this.deliveredIcpInitiations.set(stableInitiationMessageId, {
+    if (stableIcpMessageId && messageCorrelation) {
+      this.deliveredIcpMessages.set(stableIcpMessageId, {
         content,
-        expiresAtMs: initiationPermitExpiresAtMs,
+        correlation: JSON.stringify(messageCorrelation),
+        expiresAtMs: initiationPermitExpiresAtMs ?? (now + ICP_DELIVERY_REPLAY_CACHE_TTL_MS),
         result,
       });
     }
@@ -2010,6 +2030,7 @@ function parseCompanionMessageSendParams(params: unknown): {
   channelId: string;
   content: string;
   authorName?: string;
+  messageId?: string;
   initiation?: {
     permitId: string;
     conversationId: string;
@@ -2045,6 +2066,13 @@ function parseCompanionMessageSendParams(params: unknown): {
         `companion.message.send authorName must be 1-${COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS} characters`,
       );
     }
+  }
+  let messageId: string | undefined;
+  if (params.messageId !== undefined) {
+    if (typeof params.messageId !== 'string' || !params.messageId.trim()) {
+      throw new Error('companion.message.send messageId must be a non-empty string when provided');
+    }
+    messageId = params.messageId.trim();
   }
   let initiation: {
     permitId: string;
@@ -2088,10 +2116,14 @@ function parseCompanionMessageSendParams(params: unknown): {
   const correlation = params.correlation === undefined
     ? undefined
     : parseIcpConversationCorrelation(params.correlation);
+  if ((initiation !== undefined || correlation !== undefined) !== (messageId !== undefined)) {
+    throw new Error('companion.message.send correlated transports require a deterministic messageId');
+  }
   return {
     channelId,
     content,
     ...(authorName ? { authorName } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(initiation ? { initiation } : {}),
     ...(correlation ? { correlation } : {}),
   };

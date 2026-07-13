@@ -672,6 +672,8 @@ export interface CompanionMessageSendParams {
   authorName?: string;
   /** Client-stamped companion identity; verified against the connection binding. */
   companionId?: string;
+  /** Deterministic and gateway-verified for every correlated ICP send. */
+  messageId?: string;
   /**
    * Optional autonomous-initiation binding. This still uses the ordinary
    * companion.message.send lane; the gateway consumes the permit before

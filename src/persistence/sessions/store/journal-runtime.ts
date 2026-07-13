@@ -450,4 +450,29 @@ export class SessionJournalRuntime {
     if (messages.length <= limit) return messages;
     return messages.slice(-limit);
   }
+
+  findLatestEntries(
+    archive: SessionArchiveHandle,
+    predicate: (entry: SessionEntry) => boolean,
+    limit: number,
+  ): SessionEntry[] | null {
+    const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+      limit,
+      matches: (entry) => {
+        const message = journalToSessionEntry(entry);
+        return message !== null && predicate(message);
+      },
+    });
+    if (result.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(archive.channelId, archive, result.quarantined.length, result.matches.length);
+    }
+    const found: SessionEntry[] = [];
+    for (const match of result.matches) {
+      const normalized = this.verifyAndNormalizeEntry(match.entry, [match.previousHmac]);
+      if (!normalized.verified) return null;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message && predicate(message)) found.push(message);
+    }
+    return found;
+  }
 }

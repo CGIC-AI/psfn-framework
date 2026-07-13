@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSessionMetadataWithIcpCorrelation,
   parseSessionIcpCorrelation,
+  parseSessionIcpRecoveryResponse,
 } from './icp-correlation-metadata.js';
 
 const correlation = {
@@ -22,6 +23,20 @@ const correlation = {
   fatigueDecision: 'not_evaluated' as const,
 };
 
+const recoveryResponse = {
+  content: 'A durable companion reply',
+  channelId: correlation.channelId,
+  metadata: {
+    model: 'deterministic-test-model',
+    inputTokens: 12,
+    outputTokens: 7,
+    durationMs: 5,
+    turnId: correlation.turnId,
+    requestId: correlation.requestId,
+    icpCorrelation: correlation,
+  },
+};
+
 describe('ICP session correlation metadata', () => {
   it('round-trips strict lineage alongside turn metadata and sender pending-delivery truth', () => {
     const metadata = buildSessionMetadataWithIcpCorrelation(
@@ -40,5 +55,30 @@ describe('ICP session correlation metadata', () => {
   it('fails closed on malformed stored correlation instead of dropping lineage', () => {
     expect(() => parseSessionIcpCorrelation('{"icpCorrelation":{"conversationId":"bad"}}'))
       .toThrow(/unknown fields|must be/i);
+  });
+
+  it('round-trips the complete response needed to resume ordinary post-turn work', () => {
+    const metadata = buildSessionMetadataWithIcpCorrelation(undefined, correlation, {
+      deliveryStatus: 'pending',
+      recoveryResponse,
+    });
+
+    expect(parseSessionIcpRecoveryResponse(metadata)).toEqual(recoveryResponse);
+  });
+
+  it('fails closed when durable recovery response lineage diverges from the assistant row', () => {
+    const mismatched = {
+      ...recoveryResponse,
+      metadata: {
+        ...recoveryResponse.metadata,
+        requestId: 'icp-initiation:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    };
+    const metadata = buildSessionMetadataWithIcpCorrelation(undefined, correlation, {
+      deliveryStatus: 'pending',
+      recoveryResponse: mismatched,
+    });
+
+    expect(() => parseSessionIcpRecoveryResponse(metadata)).toThrow(/does not match/i);
   });
 });

@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
 import type { NdjsonConnection } from './transport.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
@@ -747,6 +748,52 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
       reportingCompanionId: 'comp-b',
       reason: 'processing_failed',
     })]);
+  });
+
+  it('stamps correlated companion retries with a deterministic transport message id', async () => {
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'companion-initiation-source',
+      requestId: 'companion-initiation-source',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+    const sendPromise = client.companionSend(
+      correlation.channelId,
+      'durable reply',
+      'Selene',
+      correlation,
+    );
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(request).toMatchObject({
+      method: 'companion.message.send',
+      params: {
+        messageId: `companion-reply-${correlation.localCompanionId}-${correlation.turnId}`,
+        correlation,
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        channelId: correlation.channelId,
+        messageId: request.params.messageId,
+        deliveredTo: [correlation.peerCompanionId],
+        skippedOffline: [],
+      },
+    });
+    await expect(sendPromise).resolves.toMatchObject({ messageId: request.params.messageId });
   });
 
   it('sends structured companion failure reports through the gateway RPC', async () => {

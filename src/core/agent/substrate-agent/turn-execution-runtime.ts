@@ -373,6 +373,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
+    recoveryResponse?: AgentResponse,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {
@@ -1209,18 +1210,6 @@ export async function handleMessageForTurn(
       }
     }
 
-    if (!recoveredResponse && !broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
-      assistantSessionEntryId = runtime.recordAssistantMessage(
-        message,
-        turnId,
-        requestId,
-        safeResponseText,
-        trustLevel,
-        continuitySubjectKey,
-        preTurnState.emotionSnapshot,
-      );
-    }
-
     const completedAt = Date.now();
     const responseDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> = {};
     if (fallbackDiagnostics?.fallback) {
@@ -1230,6 +1219,47 @@ export async function handleMessageForTurn(
       responseDiagnostics.runtimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
     }
     let responseFatigueMetadata = recoveredResponse?.metadata.fatigue ?? fatigueDecision?.metadata;
+    const buildGeneratedResponse = (): AgentResponse => ({
+      content: safeResponseText,
+      channelId: message.channelId,
+      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
+      metadata: {
+        model: responseModel,
+        inputTokens: turnUsage.inputTokens,
+        outputTokens: turnUsage.outputTokens,
+        durationMs: completedAt - startTime,
+        turnId,
+        requestId,
+        ...(message.routing?.icpCorrelation
+          ? { icpCorrelation: message.routing.icpCorrelation }
+          : {}),
+        internalState: cloneComputedInternalStateForResponse(internalState),
+        internalStateSnapshotRef,
+        metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
+        ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
+        ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
+        ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
+        ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
+        ...(honorNoReply ? { noReply: noReplyDecision } : {}),
+      },
+    });
+
+    if (!recoveredResponse && !broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
+      const durableRecoveryResponse = message.routing?.icpCorrelation
+        ? buildGeneratedResponse()
+        : undefined;
+      assistantSessionEntryId = runtime.recordAssistantMessage(
+        message,
+        turnId,
+        requestId,
+        safeResponseText,
+        trustLevel,
+        continuitySubjectKey,
+        preTurnState.emotionSnapshot,
+        durableRecoveryResponse,
+      );
+    }
+
     if (fatigueDecision?.shouldRecordSpend) {
       if (!runtime.fatigueBudget) {
         throw new Error('Fatigue spend recording requires fatigueBudget');
@@ -1264,30 +1294,7 @@ export async function handleMessageForTurn(
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.recorded'),
       });
     }
-    const agentResponse: AgentResponse = recoveredResponse ?? {
-      content: safeResponseText,
-      channelId: message.channelId,
-      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
-      metadata: {
-        model: responseModel,
-        inputTokens: turnUsage.inputTokens,
-        outputTokens: turnUsage.outputTokens,
-        durationMs: completedAt - startTime,
-        turnId,
-        requestId,
-        ...(message.routing?.icpCorrelation
-          ? { icpCorrelation: message.routing.icpCorrelation }
-          : {}),
-        internalState: cloneComputedInternalStateForResponse(internalState),
-        internalStateSnapshotRef,
-        metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
-        ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
-        ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
-        ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
-        ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
-        ...(honorNoReply ? { noReply: noReplyDecision } : {}),
-      },
-    };
+    const agentResponse: AgentResponse = recoveredResponse ?? buildGeneratedResponse();
     await deliveryLifecycle?.finalizeDelivery(agentResponse);
 
     if (runtime.skillsRuntime) {

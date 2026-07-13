@@ -113,8 +113,8 @@ export interface GatewayMessageAgentLoop {
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): Promise<Pick<IcpDeliveryObservation, 'status' | 'recoveryResponse'> | null>
-    | Pick<IcpDeliveryObservation, 'status' | 'recoveryResponse'>
+  ): Promise<IcpDeliveryObservation | null>
+    | IcpDeliveryObservation
     | null;
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): Promise<boolean> | boolean;
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
@@ -686,58 +686,101 @@ export function registerGatewayMessageHandlers(
   const buildCompanionReplyDeliveryLifecycle = (
     message: SubstrateMessage,
     recoveredResponse?: AgentResponse,
-  ) => ({
-    ...(recoveredResponse ? { recoveredResponse } : {}),
-    async finalizeDelivery(response: AgentResponse): Promise<void> {
-      const correlation = response.metadata.icpCorrelation;
-      if (!correlation) {
-        throw new Error('Correlated companion reply is missing response ICP correlation');
-      }
-      if (!response.content.trim()) {
-        await agentLoop.recordIcpDeliveryObservation({
+    previousObservation?: IcpDeliveryObservation | null,
+  ) => {
+    let deliveryObservation = previousObservation ?? null;
+    let recoveryResponse = recoveredResponse;
+    return {
+      ...(recoveredResponse ? { recoveredResponse } : {}),
+      async finalizeDelivery(response: AgentResponse): Promise<void> {
+        recoveryResponse = response;
+        const correlation = response.metadata.icpCorrelation;
+        if (!correlation) {
+          throw new Error('Correlated companion reply is missing response ICP correlation');
+        }
+        if (!response.content.trim()) {
+          if (deliveryObservation?.status !== 'suppressed') {
+            await agentLoop.recordIcpDeliveryObservation({
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              status: 'prepared',
+              recoveryResponse: response,
+            });
+            deliveryObservation = {
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              status: 'suppressed',
+              recoveryResponse: response,
+            };
+            await agentLoop.recordIcpDeliveryObservation(deliveryObservation);
+          }
+          return;
+        }
+
+        if (deliveryObservation?.status === 'delivered') return;
+
+        let delivery: Awaited<ReturnType<GatewayMessageGateway['companionSend']>>;
+        try {
+          if (deliveryObservation?.status !== 'prepared'
+            && deliveryObservation?.status !== 'failed') {
+            deliveryObservation = {
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              status: 'prepared',
+              recoveryResponse: response,
+            };
+            await agentLoop.recordIcpDeliveryObservation(deliveryObservation);
+          }
+          delivery = await gateway.companionSend(
+            message.channelId,
+            response.content,
+            companionAuthorName,
+            correlation,
+          );
+        } catch (error) {
+          try {
+            deliveryObservation = {
+              channelId: message.channelId,
+              sourceMessageId: message.id,
+              status: 'failed',
+              error: toErrorMessage(error),
+              recoveryResponse: response,
+            };
+            await agentLoop.recordIcpDeliveryObservation(deliveryObservation);
+          } catch (observationError) {
+            log.error('Failed to persist companion reply delivery failure', {
+              channelId: message.channelId,
+              messageId: message.id,
+              deliveryError: toErrorMessage(error),
+              observationError: toErrorMessage(observationError),
+            });
+          }
+          throw new CompanionReplyDeliveryError(error);
+        }
+        deliveryObservation = {
           channelId: message.channelId,
           sourceMessageId: message.id,
-          status: 'suppressed',
-        });
-        return;
-      }
-
-      let delivery: Awaited<ReturnType<GatewayMessageGateway['companionSend']>>;
-      try {
-        delivery = await gateway.companionSend(
-          message.channelId,
-          response.content,
-          companionAuthorName,
-          correlation,
-        );
-      } catch (error) {
-        try {
-          await agentLoop.recordIcpDeliveryObservation({
-            channelId: message.channelId,
-            sourceMessageId: message.id,
-            status: 'failed',
-            error: toErrorMessage(error),
-            recoveryResponse: response,
-          });
-        } catch (observationError) {
-          log.error('Failed to persist companion reply delivery failure', {
-            channelId: message.channelId,
-            messageId: message.id,
-            deliveryError: toErrorMessage(error),
-            observationError: toErrorMessage(observationError),
-          });
+          status: 'delivered',
+          gatewayMessageId: delivery.messageId,
+          deliveredTo: delivery.deliveredTo,
+          recoveryResponse: response,
+        };
+        await agentLoop.recordIcpDeliveryObservation(deliveryObservation);
+      },
+      async markTurnCompleted(): Promise<void> {
+        if (!deliveryObservation || !recoveryResponse) {
+          throw new Error('Companion reply turn completed without durable delivery state');
         }
-        throw new CompanionReplyDeliveryError(error);
-      }
-      await agentLoop.recordIcpDeliveryObservation({
-        channelId: message.channelId,
-        sourceMessageId: message.id,
-        status: 'delivered',
-        gatewayMessageId: delivery.messageId,
-        deliveredTo: delivery.deliveredTo,
-      });
-    },
-  });
+        const completedObservation: IcpDeliveryObservation = {
+          ...deliveryObservation,
+          recoveryResponse,
+          turnCompleted: true,
+        };
+        await agentLoop.recordIcpDeliveryObservation(completedObservation);
+        deliveryObservation = completedObservation;
+      },
+    };
+  };
 
   const pumpCompanionQueue = async (): Promise<void> => {
     if (companionPumpActive) return;
@@ -753,6 +796,7 @@ export function registerGatewayMessageHandlers(
             ? buildCompanionReplyDeliveryLifecycle(message)
             : undefined;
           const response = await promptWhenIdle(message, correlatedDeliveryLifecycle);
+          await correlatedDeliveryLifecycle?.markTurnCompleted();
           if (response.attachments?.length) {
             // The companion lane carries text only for now; surface the drop
             // loudly instead of silently losing media.
@@ -869,18 +913,23 @@ export function registerGatewayMessageHandlers(
           message.channelId,
           message.id,
         );
-        if (recordedReply && deliveryObservation?.status === 'failed') {
-          if (!deliveryObservation.recoveryResponse) {
-            throw new Error('Failed companion reply is missing its durable recovery response');
-          }
+        if (deliveryObservation?.turnCompleted) {
+          // The same source id already completed its ordinary delivery-gated
+          // turn; fall through to the durable duplicate audit below.
+        } else if (recordedReply) {
+          const recoveryResponse = deliveryObservation?.recoveryResponse
+            ?? recordedReply.recoveryResponse;
           message.routing = {
             ...message.routing,
             icpCorrelation: recordedReply.correlation,
           };
-          await promptWhenIdle(
+          const lifecycle = buildCompanionReplyDeliveryLifecycle(
             message,
-            buildCompanionReplyDeliveryLifecycle(message, deliveryObservation.recoveryResponse),
+            recoveryResponse,
+            deliveryObservation,
           );
+          await promptWhenIdle(message, lifecycle);
+          await lifecycle.markTurnCompleted();
           return;
         }
       }

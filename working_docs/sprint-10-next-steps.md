@@ -4,6 +4,21 @@ Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — d
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
+## 2026-07-13 branch handoff — orphan/stub/bugfix lane
+
+- Branch `fix/orphans-stubs-bugfixes`, implementation commit `a81cdd49`.
+- Closed `psfn-framework-jcic` and canonical identity-hygiene bead
+  `psfn-framework-rbqo`; closed `psfn-framework-3d9r` as an exact duplicate of
+  `rbqo`. The current orphan set was audited one bead at a time; `mihm`,
+  `vinz.19`, `vinz.20`, `vinz.21`, `vinz.29`, `i698`, and `7ang` remain open
+  with evidence comments because their acceptance is incomplete or still
+  requires operator/live validation. Active ICP work was excluded.
+- Validation: 69 focused tests passed; `npm run lint`, `npm run build`,
+  `npm run verify:shared-type-guards`, `npm run verify:identity-literals`,
+  `npm run verify:repository-hygiene`, and `git diff --check` passed. Separate
+  standards and spec reviews both passed with no findings. No live host was
+  contacted.
+
 ## 0. 2026-07-12 update — decided priority order
 
 Outcome of the 2026-07-12 triage + grilling session. Tracker was reconciled the

@@ -725,7 +725,21 @@ export class SessionStore implements TranscriptSearchPort {
    * source-channel decision to the whole logical session.
    */
   getRecentSourceTurnRecords(sourceChannelId: string, limit: number): TurnRecord[] {
-    return this.turnRecordStore.readRecentTurnRecords(sourceChannelId, limit);
+    const sessionId = this.resolveSessionId(sourceChannelId) ?? sourceChannelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(sourceChannelId);
+    const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
+    const records = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
+    );
+    if (!hasTombstones) return records;
+
+    const loaded = this.ensureChannelFullyLoaded(sourceChannelId);
+    if (!loaded || loaded.turnTombstones.size === 0) {
+      return records.length <= limit ? records : records.slice(-limit);
+    }
+    const filtered = records.filter(record => !loaded.turnTombstones.has(record.turnId));
+    return filtered.length <= limit ? filtered : filtered.slice(-limit);
   }
   async searchByKeywords(
     query: string,

@@ -550,12 +550,17 @@ describe('SessionStore', () => {
       reason: 'privacy request',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
 
     store.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'undo',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
+      firstTurnId,
+      secondTurnId,
+    ]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
       firstTurnId,
       secondTurnId,
     ]);

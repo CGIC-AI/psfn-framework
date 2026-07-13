@@ -88,6 +88,22 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
+### 0.4 2026-07-13 ICP implementation-wave status
+
+The first four ICP workstreams are complete on the isolated
+`feat/icp-autonomy` feature branch through `43453c61`: W1 contracts and durable
+state (`s10mc.6.1`), W2 availability and the permit broker (`s10mc.6.2`), W3
+target-channel initiation continuity (`s10mc.6.3`), and W4 semantic
+contact/availability/notify tooling (`s10mc.6.4`). Each closed workstream was
+validated locally and independently reviewed; the W4 fixed point passed 713
+test files / 8,217 tests, build, lint, settings-contract, repository-hygiene,
+and two independent reviews with no findings.
+
+This is an implementation-wave checkpoint, not completion of the ICP epic or
+release validation. W5-W9 (`s10mc.6.5` through `.6.9`) remain open, the parent
+`s10mc.6` remains open, and the feature branch has not been merged into the
+release branch or exercised against live infrastructure.
+
 ## 1. Where things stand
 
 | Merge (→ `feat/multi-companion`) | Delivered | Status |

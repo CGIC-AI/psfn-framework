@@ -2,6 +2,8 @@ import type { Pool, QueryResultRow } from 'pg';
 
 import type {
   GatewayIcpInitiationPolicyAuthority,
+  IcpInitiationHandoffPolicyDecision,
+  IcpInitiationHandoffPolicyInput,
   IcpInitiationCapacityPolicyAuthority,
   IcpInitiationCausalityAuthority,
   IcpInitiationPolicyAuthorityInput,
@@ -188,6 +190,60 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       recursiveMiOnlyRoot: !independentRoot,
       ...capacity,
     };
+  }
+
+  async authorizeHandoff(
+    input: IcpInitiationHandoffPolicyInput,
+  ): Promise<IcpInitiationHandoffPolicyDecision> {
+    const sender = this.requireOwner(input.senderCompanionId);
+    const peer = this.requireOwner(input.permit.recipientCompanionId);
+    const candidateResult = await this.pool.query<CandidatePolicyRow>(`
+      SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
+        peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
+        expires_at_ms, status, reason_code, revision
+      FROM ${quoteSchema(sender.postgresSchema)}.icp_initiation_candidates
+      WHERE candidate_id = $1
+    `, [input.permit.candidateId]);
+    const candidate = candidateResult.rows.at(0);
+    if (!candidate
+      || candidate.candidate_id !== input.permit.candidateId
+      || candidate.local_companion_id !== input.senderCompanionId
+      || candidate.peer_companion_id !== input.permit.recipientCompanionId
+      || candidate.peer_contact_id !== input.peerContactId
+      || candidate.provenance_ref !== input.permit.provenanceRef) {
+      return { eligible: false, reasonCode: 'invalid_identity' };
+    }
+    const candidateExpiresAtMs = safeInteger(candidate.expires_at_ms);
+    if (candidate.status !== 'pending'
+      || candidateExpiresAtMs === null
+      || (input.permit.status === 'issued' && candidateExpiresAtMs <= input.nowMs)) {
+      return { eligible: false, reasonCode: 'stale_provenance' };
+    }
+
+    const [senderContact, peerContact] = await Promise.all([
+      this.resolveContact(sender, input.peerContactId, input.permit.recipientCompanionId),
+      this.resolveContact(peer, null, input.senderCompanionId),
+    ]);
+    if (!senderContact || !peerContact) {
+      return { eligible: false, reasonCode: 'invalid_identity' };
+    }
+    if (!trustAtLeast(senderContact.trustLevel, 'regular')
+      || !trustAtLeast(peerContact.trustLevel, 'regular')) {
+      return { eligible: false, reasonCode: 'policy_denied' };
+    }
+    const isDirectMessage = input.permit.channelId.startsWith('companion-dm:');
+    if (this.isBlocked(
+      input.senderCompanionId,
+      input.permit.recipientCompanionId,
+      isDirectMessage,
+    ) || this.isBlocked(
+      input.permit.recipientCompanionId,
+      input.senderCompanionId,
+      isDirectMessage,
+    )) {
+      return { eligible: false, reasonCode: 'peer_blocked' };
+    }
+    return { eligible: true };
   }
 
   async close(): Promise<void> {

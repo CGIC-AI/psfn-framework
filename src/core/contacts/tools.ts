@@ -26,6 +26,11 @@ import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-noti
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
+import type {
+  AgentFacingIcpAutonomyRuntime,
+  KnownCompanionPeerAvailability,
+} from '../icp/agent-facing-autonomy.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 const CONTACT_ACTION_NAMES = [
   'list',
@@ -518,6 +523,7 @@ async function lookupContact(contactStore: ContactStorePort, id: string): Promis
 async function executeContactLookup(
   contactStore: ContactStorePort,
   params: { contactId?: string },
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const id = params.contactId?.trim();
   if (!id) {
@@ -538,6 +544,12 @@ async function executeContactLookup(
     ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
     .join(', ');
   const contactName = resolvePreferredContactName(contact) ?? contact.displayName;
+  let peer: KnownCompanionPeerAvailability | null = null;
+  const icpCorrelation = getRequestContext()?.icpCorrelation;
+  const mayReadPeerAvailability = !icpCorrelation || icpCorrelation.peerContactId === contact.id;
+  if (peerAvailability && mayReadPeerAvailability) {
+    peer = await peerAvailability.readKnownPeerAvailability(contact);
+  }
 
   return textResult(
     `Canonical ID: ${contact.id}\n`
@@ -545,6 +557,15 @@ async function executeContactLookup(
     + `Trust: ${contact.trustLevel}\n`
     + `Relationship: ${contact.relationshipType}\n`
     + (contact.isMachineIntelligence ? 'Machine intelligence: yes (peer companion/agent)\n' : '')
+    + (peer
+      ? `Companion peer ID: ${peer.peerCompanionId}\n`
+        + `Peer connection: ${peer.availability.connectionState}\n`
+        + `Peer availability eligible: ${peer.availability.eligible ? 'yes' : 'no'}\n`
+        + (peer.availability.reasonCode ? `Peer availability reason: ${peer.availability.reasonCode}\n` : '')
+        + (peer.availability.lease
+          ? `Peer availability: ${peer.availability.lease.state} (source=${peer.availability.lease.source}, expiresAtMs=${peer.availability.lease.expiresAtMs}, revision=${peer.availability.lease.revision})\n`
+          : '')
+      : '')
     + (identities ? `Identities: ${identities}\n` : '')
     + (channels ? `Channels: ${channels}\n` : '')
     + `First seen: ${contact.firstSeen}\n`
@@ -710,6 +731,7 @@ async function executeUnifiedContactAction(
   blockList?: ContactBlockListStore,
   permitInvalidation?: ContactBlockPermitInvalidationPort,
   getIntakeSinkGate?: () => IntakeSinkGate | null,
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
@@ -719,7 +741,7 @@ async function executeUnifiedContactAction(
     case 'search':
       return await executeContactSearch(contactStore, params);
     case 'lookup':
-      return await executeContactLookup(contactStore, params);
+      return await executeContactLookup(contactStore, params, peerAvailability);
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
@@ -982,6 +1004,8 @@ export interface CreateContactToolOptions {
    * action=set_trust applies. Null/absent = firewall off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Coarse availability for canonical, already-known MI contacts only. */
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>;
 }
 
 export function createContactTool(
@@ -992,6 +1016,7 @@ export function createContactTool(
   const blockList = options.blockList;
   const permitInvalidation = options.permitInvalidation;
   const getIntakeSinkGate = options.getIntakeSinkGate;
+  const peerAvailability = options.peerAvailability;
   const tool: SubstrateAgentTool = {
     name: 'contact',
     label: 'contact',
@@ -1101,6 +1126,7 @@ export function createContactTool(
           blockList,
           permitInvalidation,
           getIntakeSinkGate,
+          peerAvailability,
         );
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';

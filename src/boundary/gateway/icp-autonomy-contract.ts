@@ -59,6 +59,25 @@ export interface IcpPeerAvailabilityResult {
   lease?: IcpAvailabilityLease;
 }
 
+export interface IcpOwnAvailabilityResult {
+  eligible: boolean;
+  reasonCode?: IcpAutonomyReasonCode;
+  lease?: IcpAvailabilityLease;
+  control: 'missing' | 'expired' | 'companion' | 'runtime' | 'operator_override';
+  mutableByCompanion: boolean;
+}
+
+export type IcpInitiationHandoffPrepareResult =
+  | {
+      authorized: true;
+      permit: IcpInitiationPermit;
+      rootInitiationId: string;
+    }
+  | {
+      authorized: false;
+      reasonCode: IcpAutonomyReasonCode;
+    };
+
 export interface IcpPermitConsumeResult {
   outcome: IcpPermitConsumptionOutcome;
   reasonCode?: IcpAutonomyReasonCode;
@@ -186,6 +205,22 @@ export function parseIcpPeerAvailabilityReadParams(value: unknown): { peerCompan
   if (!isRecord(value)) throw new Error('ICP peer availability params must be an object');
   assertNoUnknownKeys(value, ['peerCompanionId', 'companionId'], 'ICP peer availability params');
   return { peerCompanionId: requireUuid(value.peerCompanionId, 'peerCompanionId') };
+}
+
+export function parseIcpInitiationHandoffPrepareParams(value: unknown): {
+  permitId: string;
+  peerContactId: string;
+} {
+  if (!isRecord(value)) throw new Error('ICP initiation handoff params must be an object');
+  assertNoUnknownKeys(
+    value,
+    ['permitId', 'peerContactId', 'companionId'],
+    'ICP initiation handoff params',
+  );
+  return {
+    permitId: requireUuid(value.permitId, 'permitId'),
+    peerContactId: requireTrimmedString(value.peerContactId, 'peerContactId'),
+  };
 }
 
 export function parseIcpPermitConsumeParams(value: unknown): {

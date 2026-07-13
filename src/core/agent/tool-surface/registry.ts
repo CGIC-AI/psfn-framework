@@ -301,7 +301,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'contacts',
     exposure: 'core',
     description: 'Canonical contact, trust, note, identity-link, channel-privacy, and blocking surface.',
-    actions: ['list', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
+    actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('contact_list', 'contact', 'retired', 'list', 'Contact reads belong on contact.'),
@@ -338,8 +338,8 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'system',
     exposure: 'core',
     description: 'Canonical companion-facing safe runtime self-status surface.',
-    actions: ['snapshot', 'diagnose', 'logs', 'conformance'],
-    capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
+    actions: ['snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },
   {

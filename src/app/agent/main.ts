@@ -792,6 +792,10 @@ async function main(): Promise<void> {
     capabilityRuntime,
     lifecycleRuntimeContract,
     shutdownTargets,
+    postTurnActions,
+    ...(coreRuntime.icpAutonomyRuntime
+      ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
+      : {}),
   });
   const { lifecycleNotifier } = controlPlane;
   let apiBackendDisposed = false;

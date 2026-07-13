@@ -505,7 +505,10 @@ async function setup(
     multiCompanion: multiCompanion(),
     companionChannels: lane,
     icpAutonomyStore: store,
-    icpInitiationPolicyAuthority: { resolve: async () => policy },
+    icpInitiationPolicyAuthority: {
+      resolve: async () => policy,
+      authorizeHandoff: async () => ({ eligible: true }),
+    },
     eventBus,
     ...overrides,
   };
@@ -890,6 +893,13 @@ describe('GatewayServer ICP autonomy RPC', () => {
       revision: 1,
     });
     expect(published.result).toMatchObject({ companionId: B, state: 'open_to_chat', source: 'companion' });
+    const own = await invoke(b, 31, 'companion.availability.read_self', { companionId: B });
+    expect(own.result).toMatchObject({
+      eligible: true,
+      control: 'companion',
+      mutableByCompanion: true,
+      lease: { companionId: B, state: 'open_to_chat' },
+    });
 
     const gates: unknown[] = [];
     eventBus.on('icp.initiation.gate', event => { gates.push(event); });
@@ -930,6 +940,26 @@ describe('GatewayServer ICP autonomy RPC', () => {
       permitExpiresAtMs: Date.now() + 60_000,
     });
     const permit = issue.result.permit as IcpInitiationPermit;
+    const prepared = await invoke(a, 204, 'companion.initiation.permit.prepare_handoff', {
+      companionId: A,
+      permitId: permit.permitId,
+      peerContactId: 'sender-contact-b',
+    });
+    expect(prepared.result).toMatchObject({
+      authorized: true,
+      rootInitiationId: ROOT,
+      permit: {
+        permitId: permit.permitId,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+      },
+    });
+    const wrongSender = await invoke(b, 205, 'companion.initiation.permit.prepare_handoff', {
+      companionId: B,
+      permitId: permit.permitId,
+      peerContactId: 'recipient-contact-a',
+    });
+    expect(wrongSender.result).toEqual({ authorized: false, reasonCode: 'permit_mismatch' });
     const correlation: IcpConversationCorrelation = {
       conversationId: permit.conversationId,
       rootInitiationId: ROOT,
@@ -960,7 +990,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       },
     };
 
-    const forgedRoot = await invoke(a, 204, 'companion.message.send', {
+    const forgedRoot = await invoke(a, 206, 'companion.message.send', {
       ...sendParams,
       initiation: {
         ...sendParams.initiation,
@@ -973,7 +1003,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
     expect(forgedRoot.error?.message).toContain('permit_mismatch');
     expect(store.permits.get(permit.permitId)).toMatchObject({ status: 'issued', revision: 1 });
 
-    const first = await invoke(a, 205, 'companion.message.send', sendParams);
+    const first = await invoke(a, 207, 'companion.message.send', sendParams);
     expect(first.result).toMatchObject({
       channelId: CHANNEL,
       messageId: `companion-initiation-${candidateId}`,
@@ -991,7 +1021,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       routing: { source: 'companion', icpCorrelation: correlation },
     });
 
-    const replay = await invoke(a, 206, 'companion.message.send', sendParams);
+    const replay = await invoke(a, 208, 'companion.message.send', sendParams);
     expect(replay.result).toMatchObject({
       messageId: `companion-initiation-${candidateId}`,
       permitOutcome: 'replayed',

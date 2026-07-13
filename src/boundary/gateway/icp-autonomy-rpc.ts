@@ -8,6 +8,7 @@ import {
 import {
   parseIcpAvailabilityClearParams,
   parseIcpAvailabilityPublishParams,
+  parseIcpInitiationHandoffPrepareParams,
   parseIcpInitiationPermitIssueInput,
   parseIcpInitiationPreflightInput,
   parseIcpPeerAvailabilityReadParams,
@@ -23,7 +24,7 @@ interface GatewayIcpAutonomyRpcOptions {
   fleetCompanionIds: ReadonlySet<string>;
   companionChannels?: GatewayCompanionChannelLane;
   isCompanionReady(companionId: string): boolean;
-  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
+  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
 }
@@ -103,6 +104,22 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
     },
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),
   ));
+  input.target.addMethod('companion.availability.read_self', input.audited(
+    'companion.availability.read_self',
+    async (params: unknown) => {
+      if (params !== undefined) {
+        if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+          throw new Error('ICP own availability params must be an object');
+        }
+        const keys = Object.keys(params as Record<string, unknown>);
+        if (keys.some(key => key !== 'companionId')) {
+          throw new Error(`ICP own availability params contains unknown key "${keys.find(key => key !== 'companionId')}"`);
+        }
+      }
+      return await requireBroker().readOwnAvailability(input.requireAuthenticatedCompanionId());
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
   input.target.addMethod('companion.initiation.preflight', input.audited(
     'companion.initiation.preflight',
     async (params: unknown) => {
@@ -121,6 +138,17 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
       return await requireBroker().issuePermit(
         companionId,
         parseIcpInitiationPermitIssueInput(params, Date.now()),
+      );
+    },
+    () => ({ companionId: input.requireAuthenticatedCompanionId() }),
+  ));
+  input.target.addMethod('companion.initiation.permit.prepare_handoff', input.audited(
+    'companion.initiation.permit.prepare_handoff',
+    async (params: unknown) => {
+      const companionId = input.requireAuthenticatedCompanionId();
+      return await requireBroker().prepareInitiationHandoff(
+        companionId,
+        parseIcpInitiationHandoffPrepareParams(params),
       );
     },
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),

@@ -25,6 +25,9 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ApiServer } from '../../channels/api/server.js';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
+import { registerDeferredCompanionOutreachRuntime } from '../../core/tools/notify-companion-handoff.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -55,6 +58,8 @@ export interface BuildAgentControlPlaneOptions {
   capabilityRuntime: CapabilityRuntime;
   lifecycleRuntimeContract: RuntimeModeContract;
   shutdownTargets: AgentControlPlaneShutdownTargets;
+  postTurnActions: PostTurnActionRuntime;
+  icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
 }
 
 export interface AgentControlPlaneRuntime {
@@ -85,8 +90,17 @@ export function buildAgentControlPlane(
     capabilityRuntime,
     lifecycleRuntimeContract,
     shutdownTargets,
+    postTurnActions,
+    icpAutonomyRuntime,
   } = options;
   let stopPromise: Promise<void> | null = null;
+  const unregisterDeferredCompanionOutreach = icpAutonomyRuntime
+    ? registerDeferredCompanionOutreachRuntime({
+        agentLoop,
+        postTurnActions,
+        runtime: icpAutonomyRuntime,
+      })
+    : () => undefined;
 
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
@@ -110,6 +124,7 @@ export function buildAgentControlPlane(
         DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
       );
       await runShutdownSequence([
+        { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
         { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
         { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
         { step: 'stop debug observer', action: () => stopDebugObserver() },
@@ -176,6 +191,7 @@ export function buildAgentControlPlane(
     defaultBudgetChannel: 'discord',
   }), {
     gatewayMode: true,
+    ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
   }), 'extended');
 
   return { lifecycleNotifier, stopFn };

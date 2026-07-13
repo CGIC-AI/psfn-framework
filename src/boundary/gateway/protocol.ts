@@ -52,9 +52,11 @@ import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/ty
 import type { NotificationSenderMetadata } from './notification-sender.js';
 import type {
   IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
   IcpInitiationPermitIssueInput,
   IcpInitiationPermitIssueResult,
   IcpInitiationPreflightInput,
+  IcpOwnAvailabilityResult,
   IcpPermitConsumeResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
@@ -750,6 +752,12 @@ export interface IcpPeerAvailabilityReadParams {
   companionId?: string;
 }
 
+export interface IcpInitiationHandoffPrepareParams {
+  permitId: string;
+  peerContactId: string;
+  companionId?: string;
+}
+
 export type IcpInitiationPreflightParams = IcpInitiationPreflightInput & {
   companionId?: string;
 };
@@ -800,8 +808,10 @@ export interface GatewayMethods {
   'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
   'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
   'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
+  'companion.availability.read_self': [Record<string, never>, IcpOwnAvailabilityResult];
   'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];
   'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
+  'companion.initiation.permit.prepare_handoff': [IcpInitiationHandoffPrepareParams, IcpInitiationHandoffPrepareResult];
   'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
   'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
   'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];

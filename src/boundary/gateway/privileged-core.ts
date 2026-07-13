@@ -55,7 +55,7 @@ export interface GatewayPrivilegedCore {
     companionChannels?: GatewayCompanionChannelLane;
     /** Shared durable authority for the ICP autonomy broker. */
     icpAutonomyStore?: IcpSharedAutonomyStorePort;
-    icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
+    icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
   }): GatewayServer;
 }
 

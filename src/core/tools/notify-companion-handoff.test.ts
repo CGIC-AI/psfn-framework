@@ -1,0 +1,160 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import type { PostTurnActionHandler } from '../agent/post-turn-action-runtime.js';
+import { createNotifyTool, type NotifyDispatcher } from './ntfy.js';
+import {
+  COMPANION_NOTIFY_QUEUED_TEXT,
+  DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+  inferDeferredCompanionOutreachActions,
+  registerDeferredCompanionOutreachRuntime,
+} from './notify-companion-handoff.js';
+
+const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+
+function text(result: { content: Array<{ text: string }> }): string {
+  return result.content.map(part => part.text).join('');
+}
+
+function runtime(): AgentFacingIcpAutonomyRuntime {
+  return {
+    resolveKnownPeer: vi.fn(),
+    readKnownPeerAvailability: vi.fn(),
+    listKnownPeerAvailability: vi.fn(),
+    readOwnAvailability: vi.fn(),
+    publishOwnAvailability: vi.fn(),
+    clearOwnAvailability: vi.fn(),
+    prepareCompanionOutreach: vi.fn().mockResolvedValue(undefined),
+    executeCompanionOutreach: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function tool(owner: AgentFacingIcpAutonomyRuntime) {
+  const dispatcher: NotifyDispatcher = { dispatch: vi.fn() };
+  return createNotifyTool(dispatcher, { companionOutreach: owner });
+}
+
+function ordinaryContext<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithRequestContext({
+    channelId: 'discord:owner',
+  }, fn);
+}
+
+describe('permit-governed notify companion handoff', () => {
+  it('queues a content-free exact contact/permit handoff and redacts the permit from output', async () => {
+    const owner = runtime();
+    const result = await ordinaryContext(async () => await tool(owner).execute('call-1', {
+      action: 'send',
+      target_kind: 'companion',
+      contact_id: 'peer-contact-b',
+      initiation_permit: PERMIT_ID,
+    }));
+    expect(text(result)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
+    expect(text(result)).not.toContain(PERMIT_ID);
+    expect(owner.prepareCompanionOutreach).toHaveBeenCalledWith('peer-contact-b', PERMIT_ID);
+  });
+
+  it.each([
+    { message: 'raw content is forbidden' },
+    { delivery_channel: 'discord' },
+    { delivery_target: 'guessed-peer' },
+    { extra: true },
+  ])('strictly rejects mixed/raw companion send fields: %j', async extra => {
+    const owner = runtime();
+    const result = await ordinaryContext(async () => await tool(owner).execute('call-2', {
+      action: 'send',
+      target_kind: 'companion',
+      contact_id: 'peer-contact-b',
+      initiation_permit: PERMIT_ID,
+      ...extra,
+    } as never));
+    expect(result.details?.isError).toBe(true);
+    expect(text(result)).toMatch(/unknown key/i);
+    expect(owner.prepareCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('blocks recursive outreach from an ICP-correlated turn before prepare or command', async () => {
+    const owner = runtime();
+    const result = await runWithRequestContext({
+      channelId: 'companion-dm:a:b',
+      requesterProvenance: 'human',
+      icpCorrelation: {} as never,
+    }, async () => await tool(owner).execute('call-3', {
+      action: 'send',
+      target_kind: 'companion',
+      contact_id: 'peer-contact-b',
+      initiation_permit: PERMIT_ID,
+    }));
+    expect(result.details?.isError).toBe(true);
+    expect(text(result)).toMatch(/blocked during an ICP-correlated turn/i);
+    expect(owner.prepareCompanionOutreach).not.toHaveBeenCalled();
+    expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('infers one redacted-dedupe durable action only from the successful tool result', () => {
+    const actions = inferDeferredCompanionOutreachActions({
+      message: { id: 'source-1', channelId: 'discord:owner' } as never,
+      response: {} as never,
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'call-outreach',
+            name: 'notify',
+            arguments: {
+              action: 'send',
+              target_kind: 'companion',
+              contact_id: 'peer-contact-b',
+              initiation_permit: PERMIT_ID,
+            },
+          }],
+        } as never,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-outreach',
+          toolName: 'notify',
+          isError: false,
+          content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }],
+        } as never,
+      ],
+      turnId: 'turn-1' as never,
+      completedAt: 1_000,
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
+      maxRetries: 2,
+    });
+    expect(actions[0]?.dedupeKey).not.toContain(PERMIT_ID);
+  });
+
+  it('registers a background post-turn handler that revalidates before W3 execution', async () => {
+    const owner = runtime();
+    let handler: PostTurnActionHandler | undefined;
+    const unregisterHandler = vi.fn();
+    const unregisterInferer = vi.fn();
+    const dispose = registerDeferredCompanionOutreachRuntime({
+      agentLoop: { registerPostTurnActionInferer: vi.fn(() => unregisterInferer) },
+      postTurnActions: {
+        registerHandler: vi.fn((_kind, callback, options) => {
+          handler = callback;
+          expect(options).toEqual({ executionMode: 'background' });
+          return unregisterHandler;
+        }),
+      } as never,
+      runtime: owner,
+    });
+    await handler?.({
+      id: 'action-1',
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
+    } as InferredPostTurnAction);
+    expect(owner.executeCompanionOutreach).toHaveBeenCalledWith('peer-contact-b', PERMIT_ID);
+    dispose();
+    expect(unregisterHandler).toHaveBeenCalledOnce();
+    expect(unregisterInferer).toHaveBeenCalledOnce();
+  });
+});

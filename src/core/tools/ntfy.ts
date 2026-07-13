@@ -21,6 +21,11 @@ import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import {
+  COMPANION_NOTIFY_TARGET_KIND,
+  executeCompanionNotify,
+} from './notify-companion-handoff.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -117,7 +122,10 @@ export interface NotifyDispatcherOptions {
 }
 
 interface NotifyToolParams {
-  action: NotifyAction | 'notify_operator';
+  action: NotifyAction;
+  target_kind?: 'external' | 'companion';
+  contact_id?: string;
+  initiation_permit?: string;
   message?: string;
   title?: string;
   priority?: number;
@@ -384,7 +392,6 @@ function buildContextBlockReason(): string | null {
 function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
   switch (params.action) {
     case 'brief':
-    case 'notify_operator':
       return {
         action: 'brief',
         message: params.message ?? '',
@@ -438,7 +445,6 @@ function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
 function normalizeAction(value: string): NotifyAction {
   switch (value.trim()) {
     case 'brief':
-    case 'notify_operator':
       return 'brief';
     case 'send':
     case 'approval_request':
@@ -622,6 +628,7 @@ export function createHttpNotificationPortFromEnv(
 
 export interface NotifyToolOptions {
   gatewayMode?: boolean;
+  companionOutreach?: AgentFacingIcpAutonomyRuntime;
 }
 
 export function createNotifyTool(
@@ -632,17 +639,29 @@ export function createNotifyTool(
     name: 'notify',
     label: 'notify',
     description:
-      'Unified notification surface for operator briefs, lightweight outbound sends, and approval escalation. '
-      + 'Use action="brief" to replace the legacy notify_operator behavior.',
+      'Unified notification surface for operator briefs, lightweight outbound sends, approval escalation, and permit-governed companion outreach. '
+      + 'For a known companion peer, use exactly {"action":"send","target_kind":"companion","contact_id":"<exact contactId from contact lookup>","initiation_permit":"<broker-issued UUID>"}. '
+      + 'Companion outreach never accepts message content; the ordinary target-channel turn authors it.',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('brief'),
-        Type.Literal('notify_operator'),
         Type.Literal('send'),
         Type.Literal('approval_request'),
       ], {
-        description: 'Notification action: brief, send, or approval_request. Legacy notify_operator maps to brief.',
+        description: 'Notification action: brief, send, or approval_request.',
       }),
+      target_kind: Type.Optional(Type.Union([
+        Type.Literal('external'),
+        Type.Literal('companion'),
+      ], { description: 'For send: external (default) or permit-governed companion.' })),
+      contact_id: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required only for target_kind=companion. Exact canonical contact ID from contact lookup.',
+      })),
+      initiation_permit: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required only for target_kind=companion. Broker-issued one-use permit UUID.',
+      })),
       message: Type.Optional(
         Type.String({
           description: 'Required for brief/send. Body text for the notification.',
@@ -742,6 +761,16 @@ export function createNotifyTool(
         }
       }
 
+      if (action === 'send' && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+        if (!options.companionOutreach) {
+          return textResultWithError('notify: companion outreach is not wired in this runtime.', true);
+        }
+        return await executeCompanionNotify({
+          runtime: options.companionOutreach,
+          params: rawParams,
+        });
+      }
+
       try {
         const result = await dispatcher.dispatch(buildNotifyToolRequest({
           ...rawParams,
@@ -756,7 +785,15 @@ export function createNotifyTool(
 
   const wirable = tool as WirableTool;
   wirable.wiringMeta = {
-    ...(options.gatewayMode ? { requiredGatewayMethods: ['discord.send', 'notify.ntfy'] } : {}),
+    ...(options.gatewayMode
+      ? {
+          requiredGatewayMethods: [
+            'discord.send',
+            'notify.ntfy',
+            'companion.initiation.permit.prepare_handoff',
+          ],
+        }
+      : {}),
     requiredServices: ['ntfy'],
   };
 
@@ -764,9 +801,11 @@ export function createNotifyTool(
     const action = typeof params.action === 'string' ? params.action.trim() : '';
     switch (action) {
       case 'brief':
-      case 'notify_operator':
         return 'external.web';
       case 'send': {
+        if (params.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+          return 'external.companion';
+        }
         const channel = typeof params.delivery_channel === 'string'
           ? params.delivery_channel.trim()
           : '';

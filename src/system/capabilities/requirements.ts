@@ -41,7 +41,7 @@ const GIT_READ_WRITE = ['git.read', 'git.write'] as const;
 const ISSUE_REQUIREMENTS = ['issue.read', 'issue.write', 'issue.close'] as const;
 const LIFECYCLE_REQUIREMENTS = ['internal.read', 'lifecycle.restart', 'lifecycle.rebuild'] as const;
 const MEMORY_REQUIREMENTS = ['identity.read', 'memory.write', 'memory.delete'] as const;
-const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email'] as const;
+const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email', 'external.companion'] as const;
 
 function actionIn(action: string | null, actions: ReadonlySet<string>): boolean {
   return action !== null && actions.has(action);
@@ -252,12 +252,30 @@ function resolveNotifyRequirement(
   }
   if (action !== 'send') return NOTIFY_REQUIREMENTS;
 
+  if (params.target_kind === 'companion') return 'external.companion';
+
   const channel = typeof params.delivery_channel === 'string'
     ? params.delivery_channel.trim()
     : '';
   if (channel === 'discord') return 'external.discord';
   if (channel === 'email') return 'external.email';
   return ['external.discord', 'external.email'];
+}
+
+const SELF_STATUS_READ_ACTIONS = new Set([
+  'snapshot',
+  'diagnose',
+  'logs',
+  'conformance',
+  'availability_read',
+  'availability_list_peers',
+]);
+const SELF_STATUS_WRITE_ACTIONS = new Set(['availability_publish', 'availability_clear']);
+
+function resolveSelfStatusRequirement(action: string | null): CapabilityRequirement {
+  if (action === null || actionIn(action, SELF_STATUS_READ_ACTIONS)) return 'internal.read';
+  if (actionIn(action, SELF_STATUS_WRITE_ACTIONS)) return 'external.companion';
+  return ['internal.read', 'external.companion'];
 }
 
 const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, UnifiedToolRequirementResolver>>> = {
@@ -281,6 +299,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   beads: (action) => resolveBeadsRequirement(action),
   world: (action) => resolveWorldRequirement(action),
   notify: resolveNotifyRequirement,
+  self_status: (action) => resolveSelfStatusRequirement(action),
   journal: (action) => resolveJournalRequirement(action),
 };
 
@@ -307,7 +326,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_close: 'issue.close',
   issue_sync: 'issue.close',
   settings_get: 'internal.read',
-  self_status: 'internal.read',
   response_control: 'identity.read',
   analysis_workbench: 'repl.execute',
   web: NO_CAPABILITY_REQUIREMENT,

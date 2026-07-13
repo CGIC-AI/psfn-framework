@@ -104,6 +104,11 @@ import { createPerceptionNoteDeliverer } from '../../core/agent/perception/prese
 import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
+import {
+  createAgentFacingIcpAutonomyRuntime,
+  type AgentFacingIcpAutonomyRuntime,
+} from '../../core/icp/agent-facing-autonomy.js';
+import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -163,6 +168,7 @@ export interface AgentCoreRuntime {
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   toolConformanceRunner: ToolConformanceRunner;
+  icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -185,6 +191,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionProviders,
   } = options;
   const contactTrackingGate = options.contactTrackingGate ?? null;
+  const icpAutonomyRuntime = config.multiCompanion === true && options.contactStore
+    ? createAgentFacingIcpAutonomyRuntime({
+        contactStore: options.contactStore,
+        gateway,
+        command: icpTargetChannelInitiationCommand,
+      })
+    : undefined;
   const episodicStore = options.episodicStore ?? (() => {
     throw new Error('PostgreSQL core runtime requires an injected episodic store');
   })();
@@ -334,6 +347,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       getModelUsageQuery,
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
+    ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
@@ -409,6 +423,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       resolveContactBlockListPath(pathSnapshot.companionDataDir),
     ),
     ...(config.multiCompanion === true ? { permitInvalidation: gateway } : {}),
+    ...(icpAutonomyRuntime ? { peerAvailability: icpAutonomyRuntime } : {}),
     getIntakeSinkGate: () => intakeSinkGate,
     ...(primaryTelegramUserId
       ? {
@@ -545,5 +560,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     toolConformanceRunner,
+    ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
   };
 }

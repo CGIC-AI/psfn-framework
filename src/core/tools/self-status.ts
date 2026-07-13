@@ -24,6 +24,12 @@ import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/type
 import { buildSelfDiagnosisReport, type SelfDiagnosisDeps } from './self-diagnosis.js';
 import type { ToolConformanceRunResult } from '../agent/tool-conformance/types.js';
 import { textResult, textResultWithError } from './results.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import {
+  executeSelfAvailabilityAction,
+  SELF_AVAILABILITY_ACTIONS,
+  type SelfAvailabilityAction,
+} from './self-availability.js';
 
 const DEFAULT_RECENT_CHANNEL_LIMIT = 8;
 
@@ -69,10 +75,15 @@ export interface SelfStatusToolRuntime {
    * and never writes tool observations into a conversational session store.
    */
   runConformance?: (trigger: 'manual') => Promise<ToolConformanceRunResult>;
+  availability?: AgentFacingIcpAutonomyRuntime;
 }
 
 interface SelfStatusParams {
-  action?: 'snapshot' | 'diagnose' | 'logs' | 'conformance';
+  action?: 'snapshot' | 'diagnose' | 'logs' | 'conformance' | SelfAvailabilityAction;
+  state?: Parameters<AgentFacingIcpAutonomyRuntime['publishOwnAvailability']>[0]['state'];
+  expires_at_ms?: number;
+  revision?: number;
+  expected_revision?: number;
   recentChannelLimit?: number;
   windowMs?: number;
   sinceMs?: number;
@@ -524,10 +535,17 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
       'Read a safe structured snapshot of current runtime state: capability tier, active tools, charge lanes, channels, heartbeat, uptime, memory counts, and coarse substrate health. '
       + 'Use action="diagnose" for a live Kubernetes self-diagnosis (deployment identity and shipped fixes, repository state, tooling availability, storage, model-routing health, policy flags, and tool-surface conformance). '
       + 'Use action="logs" for bounded, redacted recent warnings/errors, tool validation counts, lifecycle events, and backup status. '
-      + 'Use action="conformance" to run a safe, LLM-free tool-surface conformance sweep and return its aggregated result (no session transcript is written).',
+      + 'Use action="conformance" to run a safe, LLM-free tool-surface conformance sweep and return its aggregated result (no session transcript is written). '
+      + 'Availability actions read/publish/clear this companion\'s bounded coarse presence lease and list only already-known canonical peer contacts.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
-        [Type.Literal('snapshot'), Type.Literal('diagnose'), Type.Literal('logs'), Type.Literal('conformance')],
+        [
+          Type.Literal('snapshot'),
+          Type.Literal('diagnose'),
+          Type.Literal('logs'),
+          Type.Literal('conformance'),
+          ...SELF_AVAILABILITY_ACTIONS.map(action => Type.Literal(action)),
+        ],
         {
           description: 'snapshot (default) returns the runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics; conformance runs the tool-surface sweep.',
         },
@@ -554,11 +572,43 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
       includeFileLogs: Type.Optional(Type.Boolean({
         description: 'Whether diagnostics should include bounded reads from the runtime log directory when present.',
       })),
+      state: Type.Optional(Type.Union([
+        Type.Literal('available'),
+        Type.Literal('open_to_chat'),
+        Type.Literal('busy'),
+        Type.Literal('resting'),
+        Type.Literal('do_not_disturb'),
+      ], { description: 'Required for availability_publish.' })),
+      expires_at_ms: Type.Optional(Type.Integer({
+        minimum: 1,
+        description: 'Required for availability_publish. Expiring epoch-millisecond lease bound.',
+      })),
+      revision: Type.Optional(Type.Integer({
+        minimum: 1,
+        description: 'Required optimistic revision for availability_publish.',
+      })),
+      expected_revision: Type.Optional(Type.Integer({
+        minimum: 1,
+        description: 'Required current revision for availability_clear.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
       params: SelfStatusParams = {},
     ): Promise<AgentToolResult<unknown>> => {
+      if (params.action && SELF_AVAILABILITY_ACTIONS.includes(params.action as SelfAvailabilityAction)) {
+        if (!runtime.availability) {
+          return textResultWithError(
+            `self_status action="${params.action}" is unavailable: ICP availability runtime is not wired.`,
+            true,
+          );
+        }
+        return await executeSelfAvailabilityAction({
+          runtime: runtime.availability,
+          params: params as Parameters<typeof executeSelfAvailabilityAction>[0]['params'],
+          nowMs: runtime.now?.(),
+        });
+      }
       if (params.action === 'conformance') {
         if (!runtime.runConformance) {
           return textResultWithError('self_status action="conformance" is unavailable: conformance runner is not wired.', true);

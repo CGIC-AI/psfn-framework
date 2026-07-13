@@ -101,6 +101,7 @@ export const INTAKE_EGRESS_CAPABILITY_TOKENS: readonly CapabilityToken[] = [
   'external.discord',
   'external.email',
   'external.web',
+  'external.companion',
   'git.write',
   'repl.execute',
   'world.control',

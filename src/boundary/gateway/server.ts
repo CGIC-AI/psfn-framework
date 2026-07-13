@@ -244,7 +244,7 @@ export interface GatewayServerOptions {
   /** Durable shared-schema authority for the content-free ICP autonomy broker. */
   icpAutonomyStore?: IcpSharedAutonomyStorePort;
   /** Canonical gateway-owned deterministic policy authority for ICP initiation. */
-  icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
+  icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
   /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke

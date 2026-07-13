@@ -138,6 +138,7 @@ import type {
   IcpPeerAvailabilityReadParams,
   IcpInitiationPreflightParams,
   IcpInitiationPermitIssueParams,
+  IcpInitiationHandoffPrepareParams,
   IcpPermitConsumeParams,
   IcpPermitConsumeResult,
   IcpPermitRevokeParams,
@@ -146,7 +147,9 @@ import type {
 } from './protocol.js';
 import type {
   IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
   IcpInitiationPermitIssueResult,
+  IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
 import {
@@ -648,6 +651,12 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }) as IcpPeerAvailabilityResult;
   }
 
+  async companionReadOwnAvailability(): Promise<IcpOwnAvailabilityResult> {
+    return await this.rpcInstance.request('companion.availability.read_self', {
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpOwnAvailabilityResult;
+  }
+
   async companionInitiationPreflight(
     params: Omit<IcpInitiationPreflightParams, 'companionId'>,
   ): Promise<IcpInitiationGateDecision> {
@@ -664,6 +673,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as IcpInitiationPermitIssueResult;
+  }
+
+  async companionPrepareInitiationHandoff(
+    params: Omit<IcpInitiationHandoffPrepareParams, 'companionId'>,
+  ): Promise<IcpInitiationHandoffPrepareResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.prepare_handoff', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationHandoffPrepareResult;
   }
 
   async companionConsumeInitiationPermit(

@@ -398,6 +398,31 @@ describe('ICP autonomy Postgres persistence', () => {
         fatigueAllows: true,
         costAllows: true,
       });
+      const handoffPermit = {
+        permitId: PERMIT_ID,
+        candidateId: CANDIDATE_ID,
+        conversationId: CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        provenanceRef: PROVENANCE_HANDLE,
+        issuedAtMs: nowMs,
+        expiresAtMs: nowMs + 30_000,
+        status: 'issued' as const,
+        revision: 1,
+      };
+      await expect(authority.authorizeHandoff({
+        senderCompanionId: A,
+        peerContactId: peerForA.id,
+        permit: handoffPermit,
+        nowMs,
+      })).resolves.toEqual({ eligible: true });
+      await expect(authority.authorizeHandoff({
+        senderCompanionId: A,
+        peerContactId: peerForB.id,
+        permit: handoffPermit,
+        nowMs,
+      })).resolves.toEqual({ eligible: false, reasonCode: 'invalid_identity' });
 
       new ContactBlockListStore(resolveContactBlockListPath(companionBDataDir)).block({
         channelType: 'companion',
@@ -412,6 +437,12 @@ describe('ICP autonomy Postgres persistence', () => {
         channelId: CHANNEL,
         nowMs,
       })).resolves.toMatchObject({ peerBlocksSender: true });
+      await expect(authority.authorizeHandoff({
+        senderCompanionId: A,
+        peerContactId: peerForA.id,
+        permit: handoffPermit,
+        nowMs,
+      })).resolves.toEqual({ eligible: false, reasonCode: 'peer_blocked' });
 
       const denyMissingOwners = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
         fleet: [

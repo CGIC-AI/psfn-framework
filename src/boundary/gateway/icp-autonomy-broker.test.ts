@@ -386,6 +386,19 @@ function makeBroker(input: {
       : { ok: true },
     policyAuthority: {
       resolve: async () => input.policy ?? OPEN_POLICY,
+      authorizeHandoff: async () => ({
+        eligible: input.policy?.canonicalPeerContact !== false
+          && input.policy?.trustAllows !== false
+          && input.policy?.senderBlocksPeer !== true
+          && input.policy?.peerBlocksSender !== true,
+        ...(input.policy?.canonicalPeerContact === false
+          ? { reasonCode: 'invalid_identity' as const }
+          : input.policy?.senderBlocksPeer === true || input.policy?.peerBlocksSender === true
+            ? { reasonCode: 'peer_blocked' as const }
+            : input.policy?.trustAllows === false
+              ? { reasonCode: 'policy_denied' as const }
+              : {}),
+      }),
     },
     eventBus,
     alarm,
@@ -528,6 +541,142 @@ describe('GatewayIcpAutonomyBroker', () => {
     store.availability.set(B, { ...store.availability.get(B)!, state: 'do_not_disturb' });
     await expect(broker.readPeerAvailability(A, B)).resolves.toMatchObject({
       reasonCode: 'peer_do_not_disturb',
+    });
+  });
+
+  it('reads own effective availability and explains operator control without peer lookup', async () => {
+    const { broker, store } = makeBroker();
+    await expect(broker.readOwnAvailability(A)).resolves.toEqual({
+      eligible: false,
+      reasonCode: 'availability_missing',
+      control: 'missing',
+      mutableByCompanion: true,
+    });
+    store.availability.set(A, {
+      companionId: A,
+      state: 'do_not_disturb',
+      issuedAtMs: NOW - 1_000,
+      expiresAtMs: NOW + 60_000,
+      source: 'operator',
+      revision: 4,
+    });
+    await expect(broker.readOwnAvailability(A)).resolves.toMatchObject({
+      eligible: false,
+      reasonCode: 'peer_do_not_disturb',
+      control: 'operator_override',
+      mutableByCompanion: false,
+      lease: { source: 'operator', revision: 4 },
+    });
+  });
+
+  it('prepares only an exact current permit handoff and returns no candidate text', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    const issued = await broker.issuePermit(A, {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    });
+    expect(issued.permit).toBeDefined();
+
+    const result = await broker.prepareInitiationHandoff(A, {
+      permitId: issued.permit!.permitId,
+      peerContactId: 'peer-contact-b',
+    });
+    expect(result).toMatchObject({
+      authorized: true,
+      rootInitiationId: ROOT_ID,
+      permit: {
+        permitId: PERMIT_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('reasonSummary');
+
+    await expect(broker.prepareInitiationHandoff(B, {
+      permitId: issued.permit!.permitId,
+      peerContactId: 'peer-contact-a',
+    })).resolves.toEqual({ authorized: false, reasonCode: 'permit_mismatch' });
+  });
+
+  it.each([
+    ['revoked', 'permit_revoked'],
+    ['expired', 'permit_expired'],
+  ] as const)('rejects %s permits before target-channel handoff', async (status, reasonCode) => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    store.episodes.set(CONVERSATION_ID, {
+      conversationId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      initiationSource: 'foreground',
+      provenanceRef: PROVENANCE_HANDLE,
+      openedAtMs: NOW - 1_000,
+      lastActivityAtMs: NOW - 1_000,
+      status: 'invited',
+      revision: 1,
+    });
+    store.permits.set(PERMIT_ID, {
+      permitId: PERMIT_ID,
+      candidateId: CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: A,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      provenanceRef: PROVENANCE_HANDLE,
+      issuedAtMs: NOW - 2_000,
+      expiresAtMs: status === 'expired' ? NOW - 1 : NOW + 10_000,
+      status,
+      ...(status === 'revoked' ? { revokedAtMs: NOW - 1_000 } : {}),
+      reasonCode,
+      revision: 2,
+    });
+    await expect(broker.prepareInitiationHandoff(A, {
+      permitId: PERMIT_ID,
+      peerContactId: 'peer-contact-b',
+    })).resolves.toEqual({ authorized: false, reasonCode });
+  });
+
+  it('admits only exact W3 recovery for an already-consumed permit without a current lease', async () => {
+    const { broker, store } = makeBroker({ ready: false });
+    store.episodes.set(CONVERSATION_ID, {
+      conversationId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      initiationSource: 'foreground',
+      provenanceRef: PROVENANCE_HANDLE,
+      openedAtMs: NOW - 10_000,
+      lastActivityAtMs: NOW - 10_000,
+      status: 'invited',
+      revision: 1,
+    });
+    store.permits.set(PERMIT_ID, {
+      permitId: PERMIT_ID,
+      candidateId: CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: A,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      provenanceRef: PROVENANCE_HANDLE,
+      issuedAtMs: NOW - 20_000,
+      expiresAtMs: NOW - 1,
+      status: 'consumed',
+      consumedAtMs: NOW - 5_000,
+      revision: 2,
+    });
+    await expect(broker.prepareInitiationHandoff(A, {
+      permitId: PERMIT_ID,
+      peerContactId: 'peer-contact-b',
+    })).resolves.toMatchObject({
+      authorized: true,
+      rootInitiationId: ROOT_ID,
+      permit: { status: 'consumed', permitId: PERMIT_ID },
     });
   });
 

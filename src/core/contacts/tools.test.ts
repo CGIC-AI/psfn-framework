@@ -62,6 +62,50 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('Notes: Works in design');
     });
 
+    it('enriches exact MI lookup with coarse broker availability without private candidate data', async () => {
+      const contact = store.upsert({
+        displayName: 'Peer Companion',
+        isMachineIntelligence: true,
+        channelIdentities: [{
+          channel: 'companion',
+          userId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        }],
+      });
+      const peerAvailability = {
+        readKnownPeerAvailability: vi.fn().mockResolvedValue({
+          contactId: contact.id,
+          displayName: contact.displayName,
+          peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          availability: {
+            peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            connectionState: 'online',
+            eligible: false,
+            reasonCode: 'peer_busy',
+            lease: {
+              companionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              state: 'busy',
+              issuedAtMs: 1_000,
+              expiresAtMs: 2_000,
+              source: 'runtime',
+              revision: 2,
+            },
+          },
+        }),
+      };
+      const tool = createContactTool(store, { peerAvailability });
+
+      const result = await tool.execute('contact-peer-availability', {
+        action: 'lookup',
+        contactId: contact.id,
+      });
+
+      expect(resultText(result)).toContain('Companion peer ID: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+      expect(resultText(result)).toContain('Peer availability eligible: no');
+      expect(resultText(result)).toContain('Peer availability reason: peer_busy');
+      expect(resultText(result)).toContain('source=runtime');
+      expect(resultText(result)).not.toContain('reasonSummary');
+    });
+
     it('updates trust through action=set_trust while preserving guardrails', async () => {
       const contact = store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
       const tool = createContactTool(store);

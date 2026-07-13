@@ -1,4 +1,8 @@
 import type { IcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
+import type {
+  IcpAutonomyReasonCode,
+  IcpInitiationPermit,
+} from '../../shared/contracts/icp-autonomy.js';
 import type { IcpInitiationPolicySnapshot } from './icp-autonomy-contract.js';
 
 export interface IcpInitiationPolicyAuthorityInput {
@@ -8,9 +12,24 @@ export interface IcpInitiationPolicyAuthorityInput {
   nowMs: number;
 }
 
+export interface IcpInitiationHandoffPolicyInput {
+  senderCompanionId: string;
+  peerContactId: string;
+  permit: IcpInitiationPermit;
+  nowMs: number;
+}
+
+export interface IcpInitiationHandoffPolicyDecision {
+  eligible: boolean;
+  reasonCode?: IcpAutonomyReasonCode;
+}
+
 /** Trusted gateway-owned resolver for every deterministic pre-LLM policy fact. */
 export interface GatewayIcpInitiationPolicyAuthority {
   resolve(input: IcpInitiationPolicyAuthorityInput): Promise<IcpInitiationPolicySnapshot>;
+  authorizeHandoff(
+    input: IcpInitiationHandoffPolicyInput,
+  ): Promise<IcpInitiationHandoffPolicyDecision>;
   close(): Promise<void>;
 }
 

@@ -22,6 +22,8 @@ import type {
   IcpInitiationPermitIssueInput,
   IcpInitiationPermitIssueResult,
   IcpInitiationPreflightInput,
+  IcpInitiationHandoffPrepareResult,
+  IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
@@ -40,7 +42,7 @@ export interface GatewayIcpAutonomyBrokerOptions {
     peerCompanionId: string,
     channelId: string,
   ): Promise<IcpInitiationChannelResolution>;
-  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve'>;
+  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
   now?: () => number;
@@ -153,6 +155,134 @@ export class GatewayIcpAutonomyBroker {
       eligible: reasonCode === undefined,
       ...(reasonCode ? { reasonCode } : {}),
       lease,
+    };
+  }
+
+  async readOwnAvailability(companionId: string): Promise<IcpOwnAvailabilityResult> {
+    this.requireFleetCompanion(companionId, 'availability owner');
+    const lease = await this.options.store.getAvailability(companionId);
+    if (!lease) {
+      return {
+        eligible: false,
+        reasonCode: 'availability_missing',
+        control: 'missing',
+        mutableByCompanion: true,
+      };
+    }
+    if (lease.expiresAtMs <= this.now()) {
+      return {
+        eligible: false,
+        reasonCode: 'availability_expired',
+        lease,
+        control: 'expired',
+        mutableByCompanion: true,
+      };
+    }
+    const reasonCode = availabilityReason(lease.state);
+    return {
+      eligible: reasonCode === undefined,
+      ...(reasonCode ? { reasonCode } : {}),
+      lease,
+      control: lease.source === 'operator' ? 'operator_override' : lease.source,
+      mutableByCompanion: lease.source !== 'operator',
+    };
+  }
+
+  async prepareInitiationHandoff(
+    senderCompanionId: string,
+    input: { permitId: string; peerContactId: string },
+  ): Promise<IcpInitiationHandoffPrepareResult> {
+    this.requireFleetCompanion(senderCompanionId, 'handoff sender');
+    const permit = await this.options.store.getPermit(input.permitId);
+    if (!permit || permit.senderCompanionId !== senderCompanionId) {
+      this.options.alarm('icp_handoff_permit_denied', 'ICP handoff permit ownership mismatch', {
+        senderCompanionId,
+      });
+      return { authorized: false, reasonCode: 'permit_mismatch' };
+    }
+    this.requireDistinctFleetPair(senderCompanionId, permit.recipientCompanionId);
+    if (permit.status === 'revoked') {
+      return { authorized: false, reasonCode: 'permit_revoked' };
+    }
+    if (permit.status === 'expired'
+      || (permit.status === 'issued' && permit.expiresAtMs <= this.now())) {
+      return { authorized: false, reasonCode: 'permit_expired' };
+    }
+    if (permit.status === 'consumed') {
+      // A consumed permit is intentionally left to W3's durable recovery path.
+      // The exact binding below prevents it from opening a different turn.
+    } else if (permit.status !== 'issued') {
+      return { authorized: false, reasonCode: 'permit_mismatch' };
+    }
+
+    const episode = await this.options.store.getEpisode(permit.conversationId);
+    const episodeMatches = episode !== null
+      && episode.status === 'invited'
+      && episode.channelId === permit.channelId
+      && episode.initiatedByCompanionId === senderCompanionId
+      && episode.participantCompanionIds.length === 2
+      && episode.participantCompanionIds.includes(senderCompanionId)
+      && episode.participantCompanionIds.includes(permit.recipientCompanionId)
+      && episode.provenanceRef === permit.provenanceRef;
+    if (!episodeMatches) {
+      this.options.alarm('icp_handoff_episode_denied', 'ICP handoff episode binding mismatch', {
+        senderCompanionId,
+        conversationId: permit.conversationId,
+        channelId: permit.channelId,
+      });
+      return { authorized: false, reasonCode: 'permit_mismatch' };
+    }
+
+    const channel = await this.options.resolveInitiationChannel(
+      senderCompanionId,
+      permit.recipientCompanionId,
+      permit.channelId,
+    );
+    if (!channel.ok) {
+      return {
+        authorized: false,
+        reasonCode: channel.reasonCode ?? 'channel_mismatch',
+      };
+    }
+    const policy = await this.options.policyAuthority.authorizeHandoff({
+      senderCompanionId,
+      peerContactId: input.peerContactId,
+      permit,
+      nowMs: this.now(),
+    });
+    if (!policy.eligible) {
+      return {
+        authorized: false,
+        reasonCode: policy.reasonCode ?? 'policy_denied',
+      };
+    }
+    if (permit.status === 'consumed') {
+      // Only W3 can decide whether this exact durable candidate turn needs
+      // recovery. Do not require a now-current lease for a no-op recovery.
+      return {
+        authorized: true,
+        permit,
+        rootInitiationId: episode.rootInitiationId,
+      };
+    }
+    if (!this.options.isCompanionReady(senderCompanionId)
+      || !this.options.isCompanionReady(permit.recipientCompanionId)) {
+      return { authorized: false, reasonCode: 'peer_offline' };
+    }
+    const availability = await this.readPeerAvailability(
+      senderCompanionId,
+      permit.recipientCompanionId,
+    );
+    if (!availability.eligible) {
+      return {
+        authorized: false,
+        reasonCode: availability.reasonCode ?? 'availability_missing',
+      };
+    }
+    return {
+      authorized: true,
+      permit,
+      rootInitiationId: episode.rootInitiationId,
     };
   }
 

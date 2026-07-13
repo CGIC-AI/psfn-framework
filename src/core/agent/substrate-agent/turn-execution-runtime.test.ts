@@ -58,6 +58,12 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
+import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
+import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
+import {
+  DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+  inferDeferredCompanionOutreachActions,
+} from '../../tools/notify-companion-handoff.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -3280,6 +3286,107 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(runtime.inferPostTurnActions).toHaveBeenCalledWith(expect.objectContaining({
       taskKind,
     }));
+  });
+
+  it('schedules typed outreach from a real non-recursive private candidate origin', async () => {
+    const eventBus = new EventBus();
+    const inferredActions: EventMap['agent.post_turn.actions.inferred']['actions'] = [];
+    eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
+      inferredActions.push(...actions);
+    });
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => null),
+      recordSystemMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        resolvedUserName: 'Companion',
+        subjectIdentityKey: DEFAULT_COMPANION_ID,
+        continuityFallbackKeys: [],
+      })),
+    });
+    runtime.resolveTaskKind = vi.fn(message => resolveChannelTaskKind(message, {
+      get: () => undefined,
+    }));
+    runtime.inferPostTurnActions = vi.fn(async context => (
+      inferDeferredCompanionOutreachActions(context, 'extended_loaded')
+    ));
+    runtime.agent.prompt = vi.fn(async (message) => {
+      runtime.agent.state.messages.push({ role: 'user', content: message.content });
+      runtime.agent.state.messages.push({
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-candidate-outreach',
+          name: 'notify',
+          arguments: {
+            action: 'send',
+            target_kind: 'companion',
+            contact_id: 'peer-contact-b',
+            initiation_permit: '44444444-4444-4444-8444-444444444444',
+          },
+        }],
+      });
+      runtime.agent.state.messages.push({
+        role: 'toolResult',
+        toolCallId: 'call-candidate-outreach',
+        toolName: 'notify',
+        isError: false,
+        content: [{
+          type: 'text',
+          text: 'notify: companion outreach queued for the target-channel turn.',
+        }],
+      });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
+    });
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '11111111-1111-4111-8111-111111111111',
+      rootInitiationId: '22222222-2222-4222-8222-222222222222',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'peer-contact-b',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+      reasonSummary: 'Continue the approved private research task.',
+      continuationTaskKind: 'research',
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+      status: 'permitted',
+      revision: 2,
+    };
+    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+
+    await handleMessageForTurn(runtime, message);
+
+    expect(runtime.inferPostTurnActions).toHaveBeenCalledWith(expect.objectContaining({
+      message,
+      taskKind: 'research',
+    }));
+    expect(inferredActions).toEqual([
+      expect.objectContaining({
+        kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+        payload: expect.objectContaining({
+          candidateOrigin: {
+            candidateId: candidate.candidateId,
+            rootInitiationId: candidate.rootInitiationId,
+            source: candidate.source,
+            provenanceRef: candidate.provenanceRef,
+            continuationTaskKind: 'research',
+          },
+        }),
+      }),
+    ]);
   });
 
   it('routes runtime-authored repair guidance through system session + prompt lanes', async () => {

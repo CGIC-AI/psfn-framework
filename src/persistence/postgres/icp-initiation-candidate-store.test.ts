@@ -14,6 +14,7 @@ const CANDIDATE_ROW = {
   preferred_channel: 'dm',
   source: 'weighted_thought',
   provenance_ref: 'icp-prov:11111111-1111-4111-8111-111111111111',
+  continuation_task_kind: 'research',
   reason_summary: 'Follow up on the research question.',
   created_at_ms: '10000',
   expires_at_ms: '70000',
@@ -80,6 +81,7 @@ describe('PostgresIcpInitiationCandidateStore', () => {
       preferredChannel: 'dm',
       source: 'weighted_thought',
       provenanceRef: CANDIDATE_ROW.provenance_ref,
+      continuationTaskKind: 'research',
       reasonSummary: CANDIDATE_ROW.reason_summary,
       createdAtMs: 10_000,
       expiresAtMs: 70_000,
@@ -89,7 +91,9 @@ describe('PostgresIcpInitiationCandidateStore', () => {
     const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
     expect(sql).toContain('INSERT INTO icp_initiation_candidates');
     expect(sql).toContain('reason_summary');
+    expect(sql).toContain('continuation_task_kind');
     expect(saved.reasonSummary).toContain('research');
+    expect(saved.continuationTaskKind).toBe('research');
   });
 
   it('uses expected status and revision for transitions', async () => {

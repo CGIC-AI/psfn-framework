@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ChannelPromptRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { resolveTaskKind } from './channel-routing-runtime.js';
+import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
+import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 
 const LOCAL = '11111111-1111-4111-8111-111111111111';
 const PEER = '22222222-2222-4222-8222-222222222222';
@@ -62,5 +64,57 @@ describe('channel routing ICP continuation evidence', () => {
     if (!message.routing) throw new Error('test routing missing');
     message.routing.icpContinuationTaskKind = 'chat' as 'work';
     expect(() => resolveTaskKind(message, registry)).toThrow('task kind is invalid');
+  });
+
+  it('accepts a typed task kind from the canonical non-recursive candidate scheduler origin', () => {
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '55555555-5555-4555-8555-555555555555',
+      localCompanionId: LOCAL,
+      peerContactId: 'peer-contact',
+      peerCompanionId: PEER,
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:33333333-3333-4333-8333-333333333333',
+      reasonSummary: 'Continue the approved private research task.',
+      continuationTaskKind: 'research',
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+      status: 'permitted',
+      revision: 1,
+    };
+    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+
+    expect(message.routing?.icpAutonomyCandidate).toMatchObject({
+      candidateId: candidate.candidateId,
+      rootInitiationId: candidate.rootInitiationId,
+      provenanceRef: candidate.provenanceRef,
+      continuationTaskKind: 'research',
+    });
+    expect(message.routing?.icpCorrelation).toBeUndefined();
+    expect(resolveTaskKind(message, registry)).toBe('research');
+  });
+
+  it('rejects candidate metadata outside the canonical scheduler envelope', () => {
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '55555555-5555-4555-8555-555555555555',
+      localCompanionId: LOCAL,
+      peerContactId: 'peer-contact',
+      peerCompanionId: PEER,
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:33333333-3333-4333-8333-333333333333',
+      reasonSummary: 'Continue the approved private research task.',
+      continuationTaskKind: 'research',
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+      status: 'permitted',
+      revision: 2,
+    };
+    const message = createIcpAutonomyCandidateSchedulerMessage(candidate, new Date(2_000));
+    message.authorId = 'scheduler';
+
+    expect(() => resolveTaskKind(message, registry)).toThrow(/canonical non-recursive scheduler turn/i);
   });
 });

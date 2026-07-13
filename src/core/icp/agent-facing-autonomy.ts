@@ -11,8 +11,12 @@ import type {
   IcpAvailabilityState,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
-import type { IcpContinuationTaskKind } from '../../shared/contracts/runtime.js';
+import type {
+  IcpAutonomyCandidateOrigin,
+  IcpContinuationTaskKind,
+} from '../../shared/contracts/runtime.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import { parseIcpAutonomyCandidateOrigin } from './candidate-scheduler-origin.js';
 
 export interface KnownCompanionPeer {
   contactId: string;
@@ -75,7 +79,7 @@ export interface AgentFacingIcpAutonomyRuntime {
   executeCompanionOutreach(
     contactId: string,
     permitId: string,
-    continuationTaskKind?: IcpContinuationTaskKind,
+    candidateOrigin?: IcpAutonomyCandidateOrigin,
     isExecutionAuthorized?: () => boolean,
   ): Promise<void>;
 }
@@ -214,10 +218,19 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
     async executeCompanionOutreach(
       contactId,
       permitId,
-      continuationTaskKind,
+      candidateOrigin,
       isExecutionAuthorized,
     ) {
       const { peer, handoff } = await prepare(contactId, permitId);
+      const parsedOrigin = candidateOrigin === undefined
+        ? undefined
+        : parseIcpAutonomyCandidateOrigin(candidateOrigin);
+      if (parsedOrigin
+        && (handoff.permit.candidateId !== parsedOrigin.candidateId
+          || handoff.rootInitiationId !== parsedOrigin.rootInitiationId
+          || handoff.permit.provenanceRef !== parsedOrigin.provenanceRef)) {
+        throw new Error('companion outreach candidate origin does not match its permit episode');
+      }
       if (isExecutionAuthorized && !isExecutionAuthorized()) {
         throw new Error('companion outreach authorization changed during broker preparation');
       }
@@ -225,7 +238,9 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
         permit: handoff.permit,
         rootInitiationId: handoff.rootInitiationId,
         peerContactId: peer.contactId,
-        ...(continuationTaskKind ? { continuationTaskKind } : {}),
+        ...(parsedOrigin?.continuationTaskKind
+          ? { continuationTaskKind: parsedOrigin.continuationTaskKind }
+          : {}),
       });
     },
   };

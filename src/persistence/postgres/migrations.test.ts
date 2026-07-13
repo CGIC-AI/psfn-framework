@@ -133,9 +133,11 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain('idx_icp_initiation_permits_outstanding_pair');
     expect(sharedSql).toContain("WHERE status = 'issued'");
     expect(sharedSql).not.toContain('reason_summary');
+    expect(sharedSql).not.toContain('continuation_task_kind');
 
     expect(localSql).toContain('CREATE TABLE IF NOT EXISTS icp_initiation_candidates');
     expect(localSql).toContain('reason_summary TEXT NOT NULL');
+    expect(localSql).toContain('continuation_task_kind TEXT');
     expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
   });
 

@@ -32,6 +32,7 @@ interface CandidateRow extends QueryResultRow {
   source: string;
   provenance_ref: string;
   reason_summary: string;
+  continuation_task_kind: string | null;
   created_at_ms: string | number;
   expires_at_ms: string | number;
   status: string;
@@ -42,7 +43,7 @@ interface CandidateRow extends QueryResultRow {
 const CANDIDATE_COLUMNS = `
   candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
   peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
-  created_at_ms, expires_at_ms, status, reason_code, revision
+  continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, revision
 `;
 
 function safeInteger(value: string | number, field: string): number {
@@ -72,6 +73,9 @@ function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
     source: row.source,
     provenanceRef: row.provenance_ref,
     reasonSummary: row.reason_summary,
+    ...(row.continuation_task_kind !== null
+      ? { continuationTaskKind: row.continuation_task_kind }
+      : {}),
     createdAtMs: safeInteger(row.created_at_ms, 'candidate.createdAtMs'),
     expiresAtMs: safeInteger(row.expires_at_ms, 'candidate.expiresAtMs'),
     status: row.status,
@@ -114,8 +118,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       INSERT INTO icp_initiation_candidates (
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
-        created_at_ms, expires_at_ms, status, reason_code, revision
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, revision
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
       candidate.candidateId,
@@ -127,6 +131,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.source,
       candidate.provenanceRef,
       candidate.reasonSummary,
+      candidate.continuationTaskKind ?? null,
       candidate.createdAtMs,
       candidate.expiresAtMs,
       candidate.status,

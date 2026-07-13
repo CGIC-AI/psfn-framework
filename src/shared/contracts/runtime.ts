@@ -18,7 +18,10 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
-import type { IcpConversationCorrelation } from './icp-autonomy.js';
+import type {
+  IcpConversationCorrelation,
+  IcpInitiationSource,
+} from './icp-autonomy.js';
 
 // ── Channel-agnostic message types ──
 
@@ -254,7 +257,32 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 /** Trusted, process-local ICP continuation intent. Never inferred from peer prose. */
-export type IcpContinuationTaskKind = 'work' | 'research' | 'problem_solving';
+export const ICP_CONTINUATION_TASK_KINDS = [
+  'work',
+  'research',
+  'problem_solving',
+] as const;
+export type IcpContinuationTaskKind = typeof ICP_CONTINUATION_TASK_KINDS[number];
+
+export function isIcpContinuationTaskKind(
+  value: unknown,
+): value is IcpContinuationTaskKind {
+  return typeof value === 'string'
+    && ICP_CONTINUATION_TASK_KINDS.includes(value as IcpContinuationTaskKind);
+}
+
+/**
+ * Private, scheduler-authored origin for a local autonomy candidate turn.
+ * This never crosses the gateway candidate projection and is never inferred
+ * from candidate motivation or model prose.
+ */
+export interface IcpAutonomyCandidateOrigin {
+  candidateId: string;
+  rootInitiationId: string;
+  source: IcpInitiationSource;
+  provenanceRef: string;
+  continuationTaskKind?: IcpContinuationTaskKind;
+}
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
@@ -314,6 +342,8 @@ export interface MessageRoutingMetadata {
    * valid only with `privateTurnTrigger` and a bound ICP correlation.
    */
   icpContinuationTaskKind?: IcpContinuationTaskKind;
+  /** Exact private candidate lineage for a non-recursive local autonomy turn. */
+  icpAutonomyCandidate?: IcpAutonomyCandidateOrigin;
   workerExecution?: {
     lane: string;
     profileClass: string;

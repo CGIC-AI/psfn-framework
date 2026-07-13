@@ -21,6 +21,7 @@ describe('private ICP initiation candidate contract', () => {
     preferredChannel: 'dm',
     source: 'weighted_thought',
     provenanceRef: PROVENANCE_HANDLE,
+    continuationTaskKind: 'research',
     reasonSummary: 'I want to follow up on our shared research question.',
     createdAtMs: 10_000,
     expiresAtMs: 70_000,
@@ -34,6 +35,7 @@ describe('private ICP initiation candidate contract', () => {
       requireCurrent: true,
     });
     expect(candidate.reasonSummary).toContain('shared research');
+    expect(candidate.continuationTaskKind).toBe('research');
     expect(() => parseIcpInitiationCandidate({ ...rawCandidate, chainOfThought: 'secret' }))
       .toThrow('unknown keys');
     expect(() => parseIcpInitiationCandidate({
@@ -60,7 +62,9 @@ describe('private ICP initiation candidate contract', () => {
     );
     expect(shared).not.toHaveProperty('reasonSummary');
     expect(shared).not.toHaveProperty('peerContactId');
+    expect(shared).not.toHaveProperty('continuationTaskKind');
     expect(JSON.stringify(shared)).not.toContain('shared research');
+    expect(JSON.stringify(shared)).not.toContain('research');
     expect(shared.candidateId).toBe(rawCandidate.candidateId);
 
     const hostile = {

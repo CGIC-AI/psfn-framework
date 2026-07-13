@@ -1006,7 +1006,13 @@ describe('wirePostTurnActionRuntime', () => {
           payload: {
             contactId: 'contact-b',
             permitId: COMPANION_OUTREACH_PERMIT_ID,
-            continuationTaskKind: 'research',
+            candidateOrigin: {
+              candidateId: '11111111-1111-4111-8111-111111111111',
+              rootInitiationId: '22222222-2222-4222-8222-222222222222',
+              source: 'intention',
+              provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+              continuationTaskKind: 'research',
+            },
             authorization: COMPANION_OUTREACH_AUTHORIZATION,
           },
           dedupeKey: `${actionKind}:fingerprint`,
@@ -1059,7 +1065,10 @@ describe('wirePostTurnActionRuntime', () => {
       expect(executeCompanionOutreach).toHaveBeenCalledWith(
         'contact-b',
         COMPANION_OUTREACH_PERMIT_ID,
-        'research',
+        expect.objectContaining({
+          candidateId: '11111111-1111-4111-8111-111111111111',
+          continuationTaskKind: 'research',
+        }),
         expect.any(Function),
       );
       expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);

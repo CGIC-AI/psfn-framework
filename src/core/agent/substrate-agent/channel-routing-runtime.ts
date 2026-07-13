@@ -1,8 +1,12 @@
 import type { ChannelPromptRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { ChannelPromptDock } from '../../../channels/backplane/types.js';
-import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import {
+  isIcpContinuationTaskKind,
+  type SubstrateMessage,
+} from '../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
+import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../../icp/candidate-scheduler-origin.js';
 import {
   normalizeTurnModelOverride,
   resolveTurnModelPurpose,
@@ -50,6 +54,8 @@ export function resolveTaskKind(
   message: SubstrateMessage,
   channelRegistry: ChannelPromptRegistryPort,
 ): string | undefined {
+  const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
+  if (candidateOrigin) return candidateOrigin.continuationTaskKind;
   if (message.routing?.icpContinuationTaskKind) {
     if (message.routing.privateTurnTrigger !== true
       || !message.routing.icpCorrelation
@@ -58,7 +64,7 @@ export function resolveTaskKind(
       throw new Error('ICP continuation task kind requires a bound private target turn');
     }
     const taskKind: unknown = message.routing.icpContinuationTaskKind;
-    if (taskKind !== 'work' && taskKind !== 'research' && taskKind !== 'problem_solving') {
+    if (!isIcpContinuationTaskKind(taskKind)) {
       throw new Error('ICP continuation task kind is invalid');
     }
     return taskKind;

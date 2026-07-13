@@ -641,6 +641,7 @@ describe('ICP autonomy Postgres persistence', () => {
         source: 'weighted_thought',
         provenanceRef: PROVENANCE_HANDLE,
         reasonSummary: 'Private motivation that must never enter shared state.',
+        continuationTaskKind: 'research',
         createdAtMs: 10_000,
         expiresAtMs: 70_000,
         status: 'pending',
@@ -656,8 +657,10 @@ describe('ICP autonomy Postgres persistence', () => {
       schema: 'companion_a',
     });
     try {
-      expect((await restarted.getCandidate(CANDIDATE_ID))?.reasonSummary)
-        .toContain('Private motivation');
+      await expect(restarted.getCandidate(CANDIDATE_ID)).resolves.toMatchObject({
+        reasonSummary: expect.stringContaining('Private motivation'),
+        continuationTaskKind: 'research',
+      });
     } finally {
       await restarted.close();
     }
@@ -672,13 +675,17 @@ describe('ICP autonomy Postgres persistence', () => {
           )
       `);
       expect(sharedColumns.rows.map(row => row.column_name)).not.toContain('reason_summary');
+      expect(sharedColumns.rows.map(row => row.column_name)).not.toContain('continuation_task_kind');
       const privateColumn = await pool.query<{ column_name: string }>(`
         SELECT column_name FROM information_schema.columns
         WHERE table_schema = 'companion_a'
           AND table_name = 'icp_initiation_candidates'
-          AND column_name = 'reason_summary'
+          AND column_name IN ('reason_summary', 'continuation_task_kind')
       `);
-      expect(privateColumn.rows).toHaveLength(1);
+      expect(privateColumn.rows.map(row => row.column_name).sort()).toEqual([
+        'continuation_task_kind',
+        'reason_summary',
+      ]);
     } finally {
       await pool.end();
     }

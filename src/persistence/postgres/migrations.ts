@@ -855,6 +855,10 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     source TEXT NOT NULL CHECK (source IN ('free_time', 'weighted_thought', 'intention', 'foreground')),
     provenance_ref TEXT NOT NULL,
     reason_summary TEXT NOT NULL,
+    continuation_task_kind TEXT CHECK (
+      continuation_task_kind IS NULL
+      OR continuation_task_kind IN ('work', 'research', 'problem_solving')
+    ),
     created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
     expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > created_at_ms),
     status TEXT NOT NULL CHECK (status IN (
@@ -866,6 +870,12 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     CHECK (local_companion_id <> peer_companion_id)
   );
   `,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS continuation_task_kind TEXT
+    CHECK (
+      continuation_task_kind IS NULL
+      OR continuation_task_kind IN ('work', 'research', 'problem_solving')
+    );`,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_status
     ON icp_initiation_candidates (status, expires_at_ms, created_at_ms, candidate_id);`,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_peer

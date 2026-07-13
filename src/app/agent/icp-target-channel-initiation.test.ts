@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
@@ -8,6 +11,13 @@ import {
   createIcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-initiation.js';
+import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import {
+  chargeSurfaceDurably,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
+import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
 
 const SENDER = '11111111-1111-4111-8111-111111111111';
 const RECIPIENT = '22222222-2222-4222-8222-222222222222';
@@ -264,6 +274,78 @@ describe('ICP target-channel initiation', () => {
     });
     expect(restartedHarness.sendInitiation).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
+  });
+
+  it('reconstructs one stable social-charge identity after a pre-response process crash', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-icp-pre-response-charge-'));
+    const ledgerPath = join(tempDir, 'charge-ledger.jsonl');
+    const observedTurnIds: string[] = [];
+    try {
+      const firstLedger = new RunChargeLedger(ledgerPath);
+      const first = createHarness();
+      first.handleMessage.mockImplementationOnce(async (message) => {
+        const turnId = message.routing?.icpCorrelation?.turnId;
+        if (!turnId) throw new Error('test requires target-turn correlation');
+        observedTurnIds.push(turnId);
+        await runWithChargeContext({
+          chargePolicy: makeTestChargePolicyConfig(),
+          lane: 'companion_social',
+          runId: `${turnId}:companion-social`,
+        }, async () => {
+          await chargeSurfaceDurably('companionSocialContinuation', {
+            eventId: `${turnId}:companion-social`,
+            probeChargeEvent: event => firstLedger.probeChargeEvent(event),
+            recordChargeEvent: event => firstLedger.commitChargeEvent(event).outcome,
+          });
+        });
+        throw new Error('process crashed before assistant persistence');
+      });
+
+      await expect(first.initiator.initiate({
+        permit: permit(),
+        rootInitiationId: ROOT,
+        peerContactId: CONTACT_ID,
+      })).rejects.toThrow('process crashed before assistant persistence');
+      firstLedger.close();
+      expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+
+      resetRunChargeRollingWindowForTests();
+      const restartedLedger = new RunChargeLedger(ledgerPath);
+      const restarted = createHarness();
+      restarted.handleMessage.mockImplementationOnce(async (message, deliveryLifecycle) => {
+        const turnId = message.routing?.icpCorrelation?.turnId;
+        if (!turnId) throw new Error('test requires target-turn correlation');
+        observedTurnIds.push(turnId);
+        await runWithChargeContext({
+          chargePolicy: makeTestChargePolicyConfig(),
+          lane: 'companion_social',
+          runId: `${turnId}:companion-social`,
+        }, async () => {
+          await chargeSurfaceDurably('companionSocialContinuation', {
+            eventId: `${turnId}:companion-social`,
+            probeChargeEvent: event => restartedLedger.probeChargeEvent(event),
+            recordChargeEvent: event => restartedLedger.commitChargeEvent(event).outcome,
+          });
+        });
+        const turnResponse = response(message);
+        await deliveryLifecycle.finalizeDelivery(turnResponse);
+        return turnResponse;
+      });
+
+      await expect(restarted.initiator.initiate({
+        permit: permit(),
+        rootInitiationId: ROOT,
+        peerContactId: CONTACT_ID,
+      })).resolves.toMatchObject({ disposition: 'delivered' });
+      restartedLedger.close();
+
+      expect(observedTurnIds).toHaveLength(2);
+      expect(observedTurnIds[1]).toBe(observedTurnIds[0]);
+      expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+    } finally {
+      resetRunChargeRollingWindowForTests();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('recovers an expired consumed permit only from exact durable delivery evidence', async () => {
@@ -558,6 +640,43 @@ describe('ICP target-channel initiation', () => {
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     })).rejects.toThrow(/suppressed recovery contains a deliverable response/i);
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.recordDeliveryObservation).not.toHaveBeenCalled();
+  });
+
+  it('rejects contradictory assistant and terminal suppression records before any side effect', async () => {
+    const durableCorrelation = correlation();
+    const deliverableResponse = response({
+      id: durableCorrelation.requestId,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: durableCorrelation },
+    });
+    const harness = createHarness({
+      content: deliverableResponse.content,
+      correlation: durableCorrelation,
+      recoveryResponse: deliverableResponse,
+    });
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: durableCorrelation.messageId,
+      status: 'suppressed',
+      recoveryResponse: { ...deliverableResponse, content: '' },
+      turnCompleted: true,
+    });
+
+    await expect(harness.initiator.initiate({
+      permit: consumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/durable assistant and delivery observation do not match/i);
 
     expect(harness.handleMessage).not.toHaveBeenCalled();
     expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();

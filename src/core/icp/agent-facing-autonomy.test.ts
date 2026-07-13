@@ -7,6 +7,13 @@ import { createAgentFacingIcpAutonomyRuntime } from './agent-facing-autonomy.js'
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const CANDIDATE_ORIGIN = {
+  candidateId: '11111111-1111-4111-8111-111111111111',
+  rootInitiationId: '22222222-2222-4222-8222-222222222222',
+  source: 'intention',
+  provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+  continuationTaskKind: 'research',
+} as const;
 
 function contact(overrides: Partial<Contact> = {}): Contact {
   return {
@@ -122,7 +129,7 @@ describe('agent-facing ICP autonomy runtime', () => {
 
   it('prepares and executes the exact permit/contact binding through the target command', async () => {
     const { runtime, gateway, command } = setup();
-    await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, 'research');
+    await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, CANDIDATE_ORIGIN);
     expect(gateway.companionPrepareInitiationHandoff).toHaveBeenCalledWith({
       permitId: PERMIT_ID,
       peerContactId: 'peer-contact-b',
@@ -133,6 +140,35 @@ describe('agent-facing ICP autonomy runtime', () => {
       peerContactId: 'peer-contact-b',
       continuationTaskKind: 'research',
     });
+  });
+
+  it.each([
+    {
+      field: 'candidate',
+      origin: {
+        ...CANDIDATE_ORIGIN,
+        candidateId: '99999999-9999-4999-8999-999999999999',
+      },
+    },
+    {
+      field: 'root episode',
+      origin: {
+        ...CANDIDATE_ORIGIN,
+        rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      },
+    },
+    {
+      field: 'provenance',
+      origin: {
+        ...CANDIDATE_ORIGIN,
+        provenanceRef: 'icp-prov:99999999-9999-4999-8999-999999999999',
+      },
+    },
+  ])('rejects $field substitution before the target-channel command', async ({ origin }) => {
+    const { runtime, command } = setup();
+    await expect(runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, origin))
+      .rejects.toThrow(/candidate origin does not match/i);
+    expect(command.execute).not.toHaveBeenCalled();
   });
 
   it('rejects recipient substitution before the target-channel command', async () => {

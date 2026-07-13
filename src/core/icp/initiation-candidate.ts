@@ -10,6 +10,10 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import {
+  isIcpContinuationTaskKind,
+  type IcpContinuationTaskKind,
+} from '../../shared/contracts/runtime.js';
 
 /** Private companion-local motivation. Never serialize this object to shared state. */
 export interface IcpInitiationCandidate {
@@ -23,6 +27,8 @@ export interface IcpInitiationCandidate {
   provenanceRef: string;
   /** Bounded private motivation; prohibited from shared schema and gateway payloads. */
   reasonSummary: string;
+  /** Private scheduler-owned intent. Never included in shared arbitration. */
+  continuationTaskKind?: IcpContinuationTaskKind;
   createdAtMs: number;
   expiresAtMs: number;
   status: IcpInitiationCandidateStatus;
@@ -45,7 +51,7 @@ export type IcpInitiationCandidateStatus = typeof ICP_INITIATION_CANDIDATE_STATU
 /** The only candidate projection allowed to cross into shared arbitration state. */
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
-  'peerContactId' | 'reasonSummary'
+  'peerContactId' | 'reasonSummary' | 'continuationTaskKind'
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -54,7 +60,7 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
-  'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'revision',
+  'continuationTaskKind', 'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'revision',
 ] as const;
 const SHARED_CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
@@ -129,6 +135,10 @@ export function parseIcpInitiationCandidate(
   const reasonCode = value.reasonCode === undefined
     ? undefined
     : requireEnum(value.reasonCode, ICP_AUTONOMY_REASON_CODES, 'ICP candidate.reasonCode');
+  if (value.continuationTaskKind !== undefined
+    && !isIcpContinuationTaskKind(value.continuationTaskKind)) {
+    throw new Error('ICP candidate.continuationTaskKind is invalid');
+  }
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
     throw new Error('ICP candidate.revision must be a positive safe integer');
@@ -151,6 +161,9 @@ export function parseIcpInitiationCandidate(
       'ICP candidate.reasonSummary',
       MAX_ICP_CANDIDATE_REASON_CHARS,
     ),
+    ...(value.continuationTaskKind !== undefined
+      ? { continuationTaskKind: value.continuationTaskKind }
+      : {}),
     createdAtMs,
     expiresAtMs,
     status: requireEnum(

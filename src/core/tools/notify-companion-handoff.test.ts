@@ -4,6 +4,8 @@ import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import type { PostTurnActionHandler } from '../agent/post-turn-action-runtime.js';
+import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
+import type { IcpInitiationCandidate } from '../icp/initiation-candidate.js';
 import { createNotifyTool, type NotifyDispatcher } from './ntfy.js';
 import {
   COMPANION_NOTIFY_QUEUED_TEXT,
@@ -16,6 +18,13 @@ import {
 } from './notify-companion-handoff.js';
 
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const CANDIDATE_ORIGIN = {
+  candidateId: '11111111-1111-4111-8111-111111111111',
+  rootInitiationId: '22222222-2222-4222-8222-222222222222',
+  source: 'intention',
+  provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+  continuationTaskKind: 'research',
+} as const;
 const ORIGIN_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
   version: 1,
   toolName: 'notify',
@@ -52,6 +61,21 @@ function ordinaryContext<T>(fn: () => Promise<T>): Promise<T> {
   return runWithRequestContext({
     channelId: 'discord:owner',
   }, fn);
+}
+
+function candidateSchedulerMessage() {
+  return createIcpAutonomyCandidateSchedulerMessage({
+    ...CANDIDATE_ORIGIN,
+    localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    peerContactId: 'peer-contact-b',
+    peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    preferredChannel: 'dm',
+    reasonSummary: 'Continue the approved private research task.',
+    createdAtMs: 1_000,
+    expiresAtMs: 10_000,
+    status: 'permitted',
+    revision: 1,
+  } satisfies IcpInitiationCandidate, new Date(2_000));
 }
 
 describe('permit-governed notify companion handoff', () => {
@@ -121,7 +145,7 @@ describe('permit-governed notify companion handoff', () => {
 
   it('infers one redacted-dedupe durable action only from the successful tool result', () => {
     const actions = inferDeferredCompanionOutreachActions({
-      message: { id: 'source-1', channelId: 'discord:owner' } as never,
+      message: candidateSchedulerMessage(),
       response: {} as never,
       turnMessages: [
         {
@@ -156,7 +180,7 @@ describe('permit-governed notify companion handoff', () => {
       payload: {
         contactId: 'peer-contact-b',
         permitId: PERMIT_ID,
-        continuationTaskKind: 'research',
+        candidateOrigin: CANDIDATE_ORIGIN,
         authorization: ORIGIN_AUTHORIZATION,
       },
       maxRetries: 2,
@@ -229,6 +253,7 @@ describe('permit-governed notify companion handoff', () => {
     }, 'extended_loaded');
 
     expect(actions[0]?.payload).not.toHaveProperty('continuationTaskKind');
+    expect(actions[0]?.payload).not.toHaveProperty('candidateOrigin');
   });
 
   it('registers a background post-turn handler that revalidates before W3 execution', async () => {
@@ -255,14 +280,14 @@ describe('permit-governed notify companion handoff', () => {
       payload: {
         contactId: 'peer-contact-b',
         permitId: PERMIT_ID,
-        continuationTaskKind: 'research',
+        candidateOrigin: CANDIDATE_ORIGIN,
         authorization: ORIGIN_AUTHORIZATION,
       },
     } as InferredPostTurnAction);
     expect(owner.executeCompanionOutreach).toHaveBeenCalledWith(
       'peer-contact-b',
       PERMIT_ID,
-      'research',
+      CANDIDATE_ORIGIN,
       expect.any(Function),
     );
     dispose();

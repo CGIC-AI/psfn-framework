@@ -2,13 +2,17 @@ import { createHash } from 'node:crypto';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type {
-  IcpContinuationTaskKind,
+  IcpAutonomyCandidateOrigin,
   PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import {
+  parseIcpAutonomyCandidateOrigin,
+  resolveIcpAutonomyCandidateSchedulerOrigin,
+} from '../icp/candidate-scheduler-origin.js';
 import type { AdaptiveToolActivationSource } from '../agent/adaptive-tools-telemetry.js';
 import { textResult, textResultWithError } from './results.js';
 
@@ -48,7 +52,7 @@ export interface DeferredCompanionOutreachAuthorizationRuntime {
 interface DeferredCompanionOutreachPayload {
   contactId: string;
   permitId: string;
-  continuationTaskKind?: IcpContinuationTaskKind;
+  candidateOrigin?: IcpAutonomyCandidateOrigin;
   authorization: DeferredCompanionOutreachAuthorizationEvidence;
 }
 
@@ -61,14 +65,6 @@ const COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES: ReadonlySet<string> = new Set
 
 function isExactNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
-}
-
-function parseContinuationTaskKind(value: unknown): IcpContinuationTaskKind | undefined | null {
-  if (value === undefined) return undefined;
-  if (value === 'work' || value === 'research' || value === 'problem_solving') {
-    return value;
-  }
-  return null;
 }
 
 function parseDeferredAuthorizationEvidence(
@@ -167,7 +163,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   try {
     assertNoUnknownKeys(
       value,
-      ['contactId', 'permitId', 'continuationTaskKind', 'authorization'],
+      ['contactId', 'permitId', 'candidateOrigin', 'authorization'],
       'deferred companion outreach payload',
     );
   } catch {
@@ -175,16 +171,22 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   }
   const contactId = value.contactId;
   const permitId = value.permitId;
-  const continuationTaskKind = parseContinuationTaskKind(value.continuationTaskKind);
+  let candidateOrigin: IcpAutonomyCandidateOrigin | undefined;
+  try {
+    candidateOrigin = value.candidateOrigin === undefined
+      ? undefined
+      : parseIcpAutonomyCandidateOrigin(value.candidateOrigin);
+  } catch {
+    return null;
+  }
   const authorization = parseDeferredAuthorizationEvidence(value.authorization);
   if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
   if (!isRfc4122Uuid(permitId)) return null;
-  if (continuationTaskKind === null) return null;
   if (!authorization) return null;
   return {
     contactId,
     permitId,
-    ...(continuationTaskKind ? { continuationTaskKind } : {}),
+    ...(candidateOrigin ? { candidateOrigin } : {}),
     authorization,
   };
 }
@@ -229,7 +231,10 @@ export function inferDeferredCompanionOutreachActions(
   originActivationSource: CompanionNotifyOverlayActivationSource | null = null,
 ): PostTurnActionCandidate[] {
   if (!originActivationSource) return [];
-  const continuationTaskKind = parseContinuationTaskKind(context.taskKind);
+  const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(context.message);
+  if (candidateOrigin && candidateOrigin.continuationTaskKind !== context.taskKind) {
+    throw new Error('ICP candidate scheduler task kind lost its typed origin binding');
+  }
   const requestedByToolCallId = new Map<string, DeferredCompanionOutreachPayload>();
   for (const message of context.turnMessages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
@@ -242,7 +247,7 @@ export function inferDeferredCompanionOutreachActions(
         requestedByToolCallId.set(content.id, {
           contactId: params.contact_id,
           permitId: params.initiation_permit,
-          ...(continuationTaskKind ? { continuationTaskKind } : {}),
+          ...(candidateOrigin ? { candidateOrigin } : {}),
           authorization: {
             version: 1,
             toolName: 'notify',
@@ -301,7 +306,7 @@ export function registerDeferredCompanionOutreachRuntime(input: {
       await input.runtime.executeCompanionOutreach(
         payload.contactId,
         payload.permitId,
-        payload.continuationTaskKind,
+        payload.candidateOrigin,
         revalidate,
       );
     },

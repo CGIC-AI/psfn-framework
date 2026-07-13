@@ -1,4 +1,3 @@
-import { createTurnId } from '../../core/turns/id.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import {
   parseIcpConversationCorrelation,
@@ -6,27 +5,30 @@ import {
   type IcpConversationCorrelation,
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
-import type {
-  AgentResponse,
-  IcpContinuationTaskKind,
-  SubstrateMessage,
+import {
+  isIcpContinuationTaskKind,
+  type AgentResponse,
+  type IcpContinuationTaskKind,
+  type SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   assertIcpRecoveryStatusBinding,
   type IcpDeliveryObservation,
 } from '../../core/session/icp-delivery-recovery.js';
+import {
+  deriveStableIcpTargetTurnId,
+  validateIcpTargetCorrelationBinding,
+  validateRecordedIcpTargetRecovery,
+  type IcpTargetRecoveryBinding,
+  type RecordedIcpInitiationTurn,
+} from './icp-target-channel-recovery.js';
 
 export type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
+export type { RecordedIcpInitiationTurn } from './icp-target-channel-recovery.js';
 
 export const ICP_TARGET_TURN_PROMPT =
   'Initiate one natural message to the peer in this channel, using the ordinary channel context.';
-
-export interface RecordedIcpInitiationTurn {
-  content: string;
-  correlation: IcpConversationCorrelation;
-  recoveryResponse: AgentResponse;
-}
 
 export interface IcpTargetChannelAgentPort {
   /** The one ordinary SubstrateAgent channel-turn entrypoint. */
@@ -119,9 +121,7 @@ function requireContinuationTaskKind(
   value: unknown,
 ): IcpContinuationTaskKind | undefined {
   if (value === undefined) return undefined;
-  if (value === 'work' || value === 'research' || value === 'problem_solving') {
-    return value;
-  }
+  if (isIcpContinuationTaskKind(value)) return value;
   throw new Error('ICP target-channel continuationTaskKind is invalid');
 }
 
@@ -145,7 +145,13 @@ function buildCorrelation(input: {
     peerCompanionId: permit.recipientCompanionId,
     peerContactId: input.peerContactId,
     channelId: permit.channelId,
-    turnId: createTurnId(),
+    turnId: deriveStableIcpTargetTurnId({
+      permit,
+      localCompanionId: input.localCompanionId,
+      peerContactId: input.peerContactId,
+      rootInitiationId: input.rootInitiationId,
+      sourceMessageId: requestId,
+    }),
     messageId: requestId,
     requestId,
     chargeLane: 'companion_social',
@@ -220,20 +226,19 @@ export function createIcpTargetChannelInitiator(input: {
     let correlation: IcpConversationCorrelation;
     let turnResponse: AgentResponse | undefined;
     let lastDeliveryObservation: IcpDeliveryObservation | null = previousObservation;
-
-    const validateRecordedCorrelation = (value: IcpConversationCorrelation): IcpConversationCorrelation => {
-      const parsed = parseIcpConversationCorrelation(value);
-      if (parsed.localCompanionId !== localCompanionId
-        || parsed.peerCompanionId !== permit.recipientCompanionId
-        || parsed.peerContactId !== peerContactId
-        || parsed.channelId !== permit.channelId
-        || parsed.conversationId !== permit.conversationId
-        || parsed.rootInitiationId !== request.rootInitiationId
-        || parsed.requestId !== sourceMessageId) {
-        throw new Error('Recorded ICP initiation turn does not match the permit binding');
-      }
-      return parsed;
+    const recoveryBinding: IcpTargetRecoveryBinding = {
+      permit,
+      localCompanionId,
+      peerContactId,
+      rootInitiationId: request.rootInitiationId,
+      sourceMessageId,
     };
+    const validateRecordedCorrelation = (
+      value: IcpConversationCorrelation,
+    ): IcpConversationCorrelation => validateIcpTargetCorrelationBinding(
+      value,
+      recoveryBinding,
+    );
 
     if (!recorded
       && previousObservation?.turnCompleted
@@ -400,9 +405,14 @@ export function createIcpTargetChannelInitiator(input: {
     };
 
     if (recorded) {
-      correlation = validateRecordedCorrelation(recorded.correlation);
+      const recordedRecovery = validateRecordedIcpTargetRecovery({
+        recorded,
+        observation: previousObservation,
+        binding: recoveryBinding,
+      });
+      correlation = recordedRecovery.correlation;
       content = recorded.content;
-      const recoveryResponse = previousObservation?.recoveryResponse ?? recorded.recoveryResponse;
+      const recoveryResponse = recordedRecovery.recoveryResponse;
       turnResponse = {
           ...recoveryResponse,
           content,
@@ -416,6 +426,11 @@ export function createIcpTargetChannelInitiator(input: {
       };
       if (previousObservation?.turnCompleted) {
         if (previousObservation.status === 'suppressed') {
+          assertIcpRecoveryStatusBinding(
+            'suppressed',
+            turnResponse,
+            'ICP target-channel recovery',
+          );
           return { disposition: 'suppressed', recoveredTurn: true, correlation };
         }
         if (previousObservation.status === 'delivered') {

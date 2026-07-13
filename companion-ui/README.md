@@ -95,6 +95,9 @@ source commit; local builds fall back to a deterministic bundle hash.
 Updates activate without navigating an open client. The current page keeps its
 draft, selected attachments, connection fields, and live session state, and
 shows an update-ready notice so the operator can reload at a safe point.
+The client checks for a new worker at startup, once per minute, and when the app
+returns online or to the foreground, so a deployed build is ready before that
+operator-chosen reload.
 
 ## In-Cluster Test Deployment
 

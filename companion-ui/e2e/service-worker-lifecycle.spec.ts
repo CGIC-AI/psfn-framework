@@ -104,6 +104,9 @@ async function buildFixture(
     await build({
       root: COMPANION_UI_ROOT,
       configFile: resolve(COMPANION_UI_ROOT, 'vite.config.ts'),
+      define: {
+        __PSFN_COMPANION_UI_SW_UPDATE_INTERVAL_MS__: JSON.stringify(100),
+      },
       logLevel: 'silent',
       build: {
         emptyOutDir: true,
@@ -141,27 +144,6 @@ async function waitForWorkerRevision(
   }, { expectedRevision: revision, staleName: staleCacheName })).toBe(true);
 }
 
-async function activateNextWorker(page: import('@playwright/test').Page): Promise<void> {
-  await page.evaluate(async () => {
-    const registration = await navigator.serviceWorker.getRegistration();
-    if (!registration) throw new Error('Missing companion-ui service-worker registration');
-    const previousController = navigator.serviceWorker.controller;
-    const controllerChanged = new Promise<void>((resolveChanged, reject) => {
-      const timeout = window.setTimeout(
-        () => reject(new Error('Timed out waiting for the updated service worker to activate')),
-        15_000,
-      );
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        window.clearTimeout(timeout);
-        resolveChanged();
-      }, { once: true });
-    });
-    await registration.update();
-    if (navigator.serviceWorker.controller !== previousController) return;
-    await controllerChanged;
-  });
-}
-
 test('migrates the legacy worker without destroying active state and one reload reaches B', async ({
   context,
   page,
@@ -188,7 +170,6 @@ test('migrates the legacy worker without destroying active state and one reload 
     });
 
     server.use(current.directory);
-    await activateNextWorker(page);
     await waitForWorkerRevision(page, current.revision, 'psfn-satellite-mobile-chat-app-v1');
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
@@ -196,6 +177,7 @@ test('migrates the legacy worker without destroying active state and one reload 
     await expect(channel).toHaveValue('operator-channel-in-progress');
     await expect(credential).toHaveValue('operator-credential-in-progress');
     await expect(page.getByText('unfinished-notes.txt')).toBeVisible();
+    await expect(page.getByText('Update ready')).toBeVisible();
 
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-test-build', current.marker);
@@ -212,7 +194,8 @@ test('migrates the legacy worker without destroying active state and one reload 
   }
 });
 
-test('announces a generated-worker update without navigating or clearing live UI state', async ({
+test('generated A to B keeps active state, reaches B in one reload, and remains available offline', async ({
+  context,
   page,
 }) => {
   const buildA = await buildFixture('generated-A', 'generated-a');
@@ -238,7 +221,6 @@ test('announces a generated-worker update without navigating or clearing live UI
     });
 
     server.use(buildB.directory);
-    await activateNextWorker(page);
     await waitForWorkerRevision(page, buildB.revision);
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
@@ -248,7 +230,15 @@ test('announces a generated-worker update without navigating or clearing live UI
     await expect(page.getByText('active-draft.txt')).toBeVisible();
     await expect(page.getByText('Update ready')).toBeVisible();
     await expect(page.getByText(/reload this page when your draft and live work are safe/i)).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-test-build', buildB.marker);
+
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-test-build', buildB.marker);
   } finally {
+    await context.setOffline(false);
     await server.stop();
     await Promise.all([buildA, buildB].map((fixture) => (
       rm(fixture.directory, { force: true, recursive: true })

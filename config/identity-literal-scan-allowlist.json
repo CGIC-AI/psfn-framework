@@ -869,6 +869,348 @@
       "contains": "See bead psfn-framework-vinz.10",
       "reason": "Beads issue-ID reference in a code comment (Sprint 10 world tool follow-up).",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/lib/api/endpoints/enrollment.ts",
+      "contains": "PSFN-00yo.1",
+      "reason": "Implementation comment cites the bead that owns canonical admin-view type reuse.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/lib/api/endpoints/places.ts",
+      "contains": "PSFN-00yo.1",
+      "reason": "Implementation comment cites the bead that owns canonical admin-view type reuse.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/routes/chat/+page.svelte",
+      "contains": "psfn:model-room:",
+      "reason": "Chat participant-prompt and operator-name localStorage keys preserve the established project namespace so operator browser state survives upgrades.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-kubernetes-helm-recovery-chart.ts",
+      "contains": "deploy/helm/psfn",
+      "reason": "Recovery-chart verification targets the repo-owned Helm chart directory.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/agent/core-runtime.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Implementation comment cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/agent/main.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Implementation comment cites the bead that owns presence-windowed private-room delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/cert-manager/config.ts",
+      "contains": "DEFAULT_CA_COMMON_NAME = 'PSFN Private CA'",
+      "reason": "Private PKI uses an installation-level project CA common name, not a companion identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/cert-manager/pki.ts",
+      "contains": "PSFN private CA sidecar",
+      "reason": "PKI module documentation names the project-level private CA sidecar.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/gateway/api-surface.ts",
+      "contains": "X-PSFN-Client-Cert-",
+      "reason": "Gateway sanitization names the stable project-scoped client-certificate header protocol.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/maintenance/import-wiki.ts",
+      "contains": "psfn-framework-vinz.27",
+      "reason": "Maintenance CLI comment cites the bead that owns bulk wiki import.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/publish-places-wiki.ts",
+      "contains": "psfn-framework-vinz.4",
+      "reason": "Maintenance CLI comment cites the bead that owns places-to-world-wiki publication.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/bootstrap-input.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Implementation comment cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/companion-channels.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Implementation comments cite the bead that owns presence-windowed private-room delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/fleet-status.ts",
+      "contains": "PSFN Fleet Status",
+      "reason": "Operator-only fleet diagnostics identify the project runtime, not a companion persona.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/gateway/methods/openrouter-web.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Implementation comment cites the bead that owns the OpenRouter web backend.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/methods/web.ts",
+      "contains": "psfn-framework-htm9.2",
+      "reason": "Implementation comment cites the bead that owns cognition-intake wrapping for web results.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/methods/web.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Implementation comments cite the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/policy.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Policy documentation cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/server.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Implementation comments cite the bead that owns presence-windowed private-room delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/git/runtime-wiring.ts",
+      "contains": "psfn img2 audit",
+      "reason": "Audit comment identifies the project image-tool review that classified this boundary surface.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/shell/runtime-wiring.ts",
+      "contains": "psfn img2 audit",
+      "reason": "Audit comment identifies the project image-tool review that classified this boundary surface.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/web/ops.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Contract comment cites the bead that owns the gateway web backend.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/web/runtime-wiring.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Runtime-wiring comment cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/web/tools.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Tool documentation cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/pi-agent/agent-loop-patch.ts",
+      "contains": "for PSFN's scheduled loop",
+      "reason": "Boundary-adapter documentation names the project-specific scheduled-loop extension to the upstream agent API.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/pi-agent/agent-loop-patch.ts",
+      "contains": "PSFN extension: index into messages",
+      "reason": "Boundary-adapter documentation names the project extension carried beside the upstream agent API.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/pi-agent/substrate-agent-tool.ts",
+      "contains": "PSFN's tool-call scheduler",
+      "reason": "Boundary-adapter documentation distinguishes the project scheduler from the upstream tool type.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "X-PSFN-",
+      "reason": "Client-certificate handling documents the stable project-scoped trusted-proxy header protocol.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "Every PSFN listener",
+      "reason": "Security contract applies stripping to every listener in the project runtime, not to a companion identity.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/http/client-cert.ts",
+      "contains": "x-psfn-",
+      "reason": "Client-certificate handling preserves stable project-scoped trusted-proxy header names.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/places-mermaid.ts",
+      "contains": "PSFN world map",
+      "reason": "Generated Mermaid provenance labels the project-owned world-map format, not the companion persona.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/backplane/places-registry.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Contract comment cites the bead that owns room privacy classification.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/companion-presence-store-port.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Port comments cite the bead that owns presence-window clock semantics.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/companion-room-window.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Module comment cites the bead that owns presence-windowed private-room delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/extended-tool-autoload-policy.ts",
+      "contains": "psfn img2 audit",
+      "reason": "Audit comment identifies the project review that demoted risky tools from the core default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/tool-runtime-facade.ts",
+      "contains": "psfn img2 audit",
+      "reason": "Audit comment identifies the project review that classified maintenance-restricted tool loading.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-surface/registry.ts",
+      "contains": "psfn img2 audit",
+      "reason": "Audit comment identifies the project review that fixed first-party tool preference.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/cogsec/intake-firewall-notice-templates.ts",
+      "contains": "psfn-framework-htm9.12",
+      "reason": "Notice-template contract cites the bead that owns fixed companion-facing wording.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/contacts/postgres-adapter/factory.ts",
+      "contains": "applicationName: options.applicationName ?? 'psfn-contacts'",
+      "reason": "Contacts persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/context-manifest.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Context-manifest contract cites the bead that owns presence-window timestamps.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/manager.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Session-manager comments cite the bead that owns presence-windowed room content.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/manager/context-builder.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Context-builder comments cite the bead that owns presence-windowed room content.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/room-content-window.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Module comment cites the bead that owns presence-windowed room content.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/room-entry-note.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Privacy-invariant comment cites the bead that owns presence-windowed delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/turns/snapshot.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Turn-snapshot contract cites the bead that owns presence-window timestamps.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction/location-tags.ts",
+      "contains": "psfn-framework-vinz.16",
+      "reason": "Module comment cites the bead that owns memory location tagging.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/shared-pgvector-projection.ts",
+      "contains": "applicationName: 'psfn-shared-wiki-projection'",
+      "reason": "Shared-world wiki projection uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/kubernetes-helm-chart.ts",
+      "contains": "include \"psfn.",
+      "reason": "Backup verification preserves exact project-owned Helm helper names from the rendered chart contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/companion-presence-store.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Store comment cites the bead that owns presence-window arrival semantics.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/shared-schema.ts",
+      "contains": "applicationName: 'psfn-shared-schema'",
+      "reason": "Shared-schema provisioning uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/runtime-factory.ts",
+      "contains": "applicationName: 'psfn-schema-bootstrap'",
+      "reason": "Schema bootstrap uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/companion-relay.ts",
+      "contains": "PSFN pushes REDACTED operational events",
+      "reason": "Relay contract names the project-side producer in the cross-repository Satellite Hub protocol.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/shared/contracts/companion-relay.ts",
+      "contains": "psfn-framework-w9hj.1",
+      "reason": "Relay contract comment cites the bead that owns the companion event protocol.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/places-registry.ts",
+      "contains": "psfn-framework-s10rm",
+      "reason": "Places contract comments cite the bead that owns room privacy and presence-windowing.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/satellite-registry.ts",
+      "contains": "X-PSFN-Client-Cert-",
+      "reason": "Satellite trust-mode contract names the stable project-scoped client-certificate header protocol.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/system/config/providers-config.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Provider contract comment cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/runtime-config-contracts.ts",
+      "contains": "psfn-framework-htm9.10",
+      "reason": "Runtime-config contract comment cites the bead that owns explicit web-backend selection.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

@@ -81,7 +81,7 @@ function normalizeCurrency(value: string | undefined, field: string): string {
   return 'USD';
 }
 
-function roundUsd(value: number): number {
+export function roundModelUsageUsd(value: number): number {
   return Math.round((value + Number.EPSILON) * 1_000_000_000_000) / 1_000_000_000_000;
 }
 
@@ -154,13 +154,13 @@ function estimateCost(
       allBillableBucketsKnown = false;
       continue;
     }
-    const component = roundUsd((tokens / 1_000_000) * rate);
+    const component = roundModelUsageUsd((tokens / 1_000_000) * rate);
     estimated[bucket.cost] = component;
     total += component;
   }
 
   if (allBillableBucketsKnown) {
-    estimated.total = roundUsd(total);
+    estimated.total = roundModelUsageUsd(total);
   }
   return estimated;
 }
@@ -187,14 +187,14 @@ function reconcileCompleteCostTotal(
     }
     completed[bucket.cost] = 0;
   }
-  const componentTotal = roundUsd(total);
-  if (!allBillableBucketsKnown && cost.total !== undefined && componentTotal > roundUsd(cost.total)) {
+  const componentTotal = roundModelUsageUsd(total);
+  if (!allBillableBucketsKnown && cost.total !== undefined && componentTotal > roundModelUsageUsd(cost.total)) {
     throw new Error(
-      `${field} known component total (${componentTotal}) must not exceed ${field}.total (${roundUsd(cost.total)})`,
+      `${field} known component total (${componentTotal}) must not exceed ${field}.total (${roundModelUsageUsd(cost.total)})`,
     );
   }
   if (!allBillableBucketsKnown) return completed;
-  if (cost.total !== undefined && roundUsd(cost.total) !== componentTotal) {
+  if (cost.total !== undefined && roundModelUsageUsd(cost.total) !== componentTotal) {
     throw new Error(`${field}.total must equal the fully allocated component total (${componentTotal})`);
   }
   completed.total = cost.total ?? componentTotal;

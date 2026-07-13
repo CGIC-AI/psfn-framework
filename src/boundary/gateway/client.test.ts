@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
+import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
@@ -292,6 +293,48 @@ describe('GatewayClient streaming', () => {
     // After error, handler should be cleaned up
     conn._emit({ method: 'llm.chunk', params: { requestId, text: 'after-error' } });
     expect(chunks).toEqual(['before-error']);
+  });
+
+  it('bridges gateway budget-block telemetry before rejecting the model call', async () => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: {
+        dayKey: '2025-07-14',
+        monthKey: '2025-07',
+        dailySpentUsd: 1,
+        dailyLimitUsd: 1,
+        monthlySpentUsd: 2,
+        monthlyLimitUsd: 10,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
   });
 
   it('routes model discovery calls through gateway RPC', async () => {

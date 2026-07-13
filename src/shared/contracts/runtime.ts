@@ -730,6 +730,7 @@ export interface LLMUsageDetails {
   cacheWrite: number;
   totalTokens: number;
   cost?: LLMUsageCostDetails;
+  costEvidenceConflict?: { fields: string[] };
   raw?: Record<string, unknown>;
 }
 
@@ -1035,24 +1036,6 @@ export interface CanonicalModelRegistry {
   promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
-export interface ModelUsageLedgerRecord {
-  id: string;
-  timestampMs: number;
-  dayKey: string;
-  monthKey: string;
-  provider: string;
-  model: string;
-  slotKey?: string;
-  purpose: string;
-  service: string;
-  process: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  estimatedCostUsd: number;
-}
-
 export interface ModelBudgetWindowSnapshot {
   dayKey: string;
   monthKey: string;
@@ -1060,12 +1043,16 @@ export interface ModelBudgetWindowSnapshot {
   dailyLimitUsd: number;
   monthlySpentUsd: number;
   monthlyLimitUsd: number;
+  dailyUnknownCostAttempts: number;
+  monthlyUnknownCostAttempts: number;
 }
 
 export type ModelBudgetBlockReason =
   | 'daily_budget_exceeded'
   | 'monthly_budget_exceeded'
-  | 'missing_cost_metadata';
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable'
+  | 'unknown_historical_cost';
 
 export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   timestampMs: number;

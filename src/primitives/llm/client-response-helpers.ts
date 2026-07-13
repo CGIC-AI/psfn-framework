@@ -91,6 +91,35 @@ export function normalizeLLMUsageCostDetails(value: unknown): LLMUsageCostDetail
   };
 }
 
+function findMalformedUsageCostFields(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (typeof value === 'number') {
+    return normalizeUsageCost(value) === undefined ? ['responseUsage.cost'] : [];
+  }
+  if (!isRecord(value)) return ['responseUsage.cost'];
+
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
+  const malformed: string[] = [];
+  let validMoneyFields = 0;
+  for (const field of fields) {
+    if (!Object.hasOwn(value, field)) continue;
+    if (normalizeUsageCost(value[field]) === undefined) {
+      malformed.push(`responseUsage.cost.${field}`);
+    } else {
+      validMoneyFields += 1;
+    }
+  }
+  if (Object.hasOwn(value, 'currency')) {
+    if (typeof value.currency !== 'string' || value.currency.trim().length === 0) {
+      malformed.push('responseUsage.cost.currency');
+    }
+  }
+  if (validMoneyFields === 0 && malformed.length === 0) {
+    malformed.push('responseUsage.cost');
+  }
+  return malformed;
+}
+
 export function normalizeLLMUsageDetails(
   value: unknown,
   fallbackInputTokens: number,
@@ -213,6 +242,9 @@ export function normalizeLLMUsageDetails(
   }
   const totalTokens = reportedTotalTokens ?? reconciledTotalTokens;
   const cost = normalizeLLMUsageCostDetails(record.cost);
+  const malformedCostFields = Object.hasOwn(record, 'cost')
+    ? findMalformedUsageCostFields(record.cost)
+    : [];
   return {
     input,
     output,
@@ -220,6 +252,9 @@ export function normalizeLLMUsageDetails(
     cacheWrite,
     totalTokens,
     ...(cost ? { cost } : {}),
+    ...(malformedCostFields.length > 0
+      ? { costEvidenceConflict: { fields: malformedCostFields } }
+      : {}),
     ...(isRecord(value) ? { raw: { ...value } } : {}),
   };
 }

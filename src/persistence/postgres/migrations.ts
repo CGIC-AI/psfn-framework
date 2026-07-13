@@ -1043,7 +1043,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     estimated_output_cost_usd DOUBLE PRECISION,
     estimated_cache_read_cost_usd DOUBLE PRECISION,
     estimated_cache_write_cost_usd DOUBLE PRECISION,
-    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION,
     effective_input_cost_usd DOUBLE PRECISION,
     effective_output_cost_usd DOUBLE PRECISION,
     effective_cache_read_cost_usd DOUBLE PRECISION,
@@ -1056,10 +1056,12 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     error_message TEXT,
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     event_fingerprint TEXT NOT NULL,
+    accounting_schema_version INTEGER NOT NULL DEFAULT 2,
     CHECK (status IN ('success', 'failure')),
     CHECK (settlement IN ('complete', 'partial', 'unknown')),
     CHECK (call_kind IN ('chat', 'completion', 'embedding', 'image_create', 'image_edit')),
     CHECK (cost_source IN ('provider', 'estimate', 'none')),
+    CHECK (accounting_schema_version = 2),
     CONSTRAINT model_usage_events_usd_currency_check CHECK (currency IS NULL OR currency = 'USD'),
     CONSTRAINT model_usage_events_token_accounting_check CHECK (
       attempt >= 0
@@ -1088,20 +1090,42 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS effective_cache_read_cost_usd DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS effective_cache_write_cost_usd DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS effective_cost_usd DOUBLE PRECISION,
-    ADD COLUMN IF NOT EXISTS event_fingerprint TEXT;
+    ADD COLUMN IF NOT EXISTS event_fingerprint TEXT,
+    ADD COLUMN IF NOT EXISTS accounting_schema_version INTEGER;
+  `,
+  `ALTER TABLE model_usage_events ALTER COLUMN estimated_cost_usd DROP DEFAULT;`,
+  `ALTER TABLE model_usage_events ALTER COLUMN estimated_cost_usd DROP NOT NULL;`,
+  `UPDATE model_usage_events SET accounting_schema_version = 1 WHERE accounting_schema_version IS NULL;`,
+  `
+  UPDATE model_usage_events
+  SET
+    estimated_cost_usd = NULL,
+    effective_cost_usd = NULL
+  WHERE accounting_schema_version = 1
+    AND cost_source = 'none'
+    AND provider_cost_usd IS NULL
+    AND estimated_input_cost_usd IS NULL
+    AND estimated_output_cost_usd IS NULL
+    AND estimated_cache_read_cost_usd IS NULL
+    AND estimated_cache_write_cost_usd IS NULL
+    AND estimated_cost_usd = 0;
   `,
   `
   UPDATE model_usage_events
   SET
     settlement = CASE WHEN status = 'success' THEN 'complete' ELSE 'unknown' END,
     effective_cost_usd = COALESCE(effective_cost_usd, provider_cost_usd, estimated_cost_usd),
-    event_fingerprint = COALESCE(event_fingerprint, 'legacy:' || id)
-  WHERE event_fingerprint IS NULL OR effective_cost_usd IS NULL;
+    event_fingerprint = COALESCE(event_fingerprint, 'legacy:' || id),
+    accounting_schema_version = 1
+  WHERE accounting_schema_version = 1
+    AND (event_fingerprint IS NULL OR event_fingerprint LIKE 'legacy:%');
   `,
   `
   UPDATE model_usage_events
   SET currency = 'USD'
-  WHERE currency IS NOT NULL
+  WHERE accounting_schema_version = 1
+    AND event_fingerprint LIKE 'legacy:%'
+    AND currency IS NOT NULL
     AND UPPER(BTRIM(currency)) = 'USD'
     AND currency <> 'USD';
   `,
@@ -1148,7 +1172,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     estimated_output_cost_usd = NULL,
     estimated_cache_read_cost_usd = NULL,
     estimated_cache_write_cost_usd = NULL,
-    estimated_cost_usd = 0,
+    estimated_cost_usd = NULL,
     effective_input_cost_usd = NULL,
     effective_output_cost_usd = NULL,
     effective_cache_read_cost_usd = NULL,
@@ -1156,7 +1180,9 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     effective_cost_usd = NULL,
     cost_source = 'none',
     currency = NULL
-  WHERE currency IS NOT NULL
+  WHERE accounting_schema_version = 1
+    AND event_fingerprint LIKE 'legacy:%'
+    AND currency IS NOT NULL
     AND UPPER(BTRIM(currency)) <> 'USD';
   `,
   `
@@ -1173,8 +1199,28 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
       TRUE
     ),
     total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
-  WHERE total_tokens <> input_tokens + output_tokens + cache_read_tokens + cache_write_tokens;
+  WHERE accounting_schema_version = 1
+    AND event_fingerprint LIKE 'legacy:%'
+    AND total_tokens <> input_tokens + output_tokens + cache_read_tokens + cache_write_tokens;
   `,
+  `UPDATE model_usage_events SET accounting_schema_version = 2 WHERE accounting_schema_version IS NULL OR accounting_schema_version = 1;`,
+  `ALTER TABLE model_usage_events ALTER COLUMN accounting_schema_version SET DEFAULT 2;`,
+  `ALTER TABLE model_usage_events ALTER COLUMN accounting_schema_version SET NOT NULL;`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_accounting_schema_version_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_accounting_schema_version_check
+        CHECK (accounting_schema_version = 2) NOT VALID;
+    END IF;
+  END $$;
+  `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_accounting_schema_version_check;`,
   `ALTER TABLE model_usage_events ALTER COLUMN event_fingerprint SET NOT NULL;`,
   `
   DO $$

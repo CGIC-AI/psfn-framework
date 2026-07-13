@@ -13,7 +13,7 @@ const EXCLUDED_PREFIXES = [
 function sourceFiles() {
   return execFileSync(
     'git',
-    ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'src/**/*.ts'],
+    ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'src/**/*.ts', 'scripts/**/*.ts'],
     { encoding: 'utf8' },
   )
     .split('\0')
@@ -55,9 +55,61 @@ allowOnly(
   'LLMClient construction bypasses canonical provider composition',
 );
 allowOnly(
+  /\bcreateEmbeddingProviderFrom(?:Config|Env)\s*\(/g,
+  new Set([
+    'src/faculties/memory/embedding.ts',
+    'src/system/config/provider-runtime-factory.ts',
+  ]),
+  'raw embedding provider factory bypasses canonical provider composition',
+);
+allowOnly(
+  /new\s+(?:ApiEmbeddingProvider|OllamaEmbeddingProvider|TransformersEmbeddingProvider)\s*\(/g,
+  new Set([
+    'src/faculties/memory/embedding.ts',
+    'scripts/prefetch-hf-models.ts',
+  ]),
+  'embedding provider construction bypasses the canonical embedding factory',
+);
+allowOnly(
+  /\bwithEmbeddingUsageAccounting\s*\(/g,
+  new Set([
+    'src/faculties/memory/embedding-accounting.ts',
+    'src/system/config/provider-runtime-factory.ts',
+  ]),
+  'embedding accounting wrapper is constructed outside canonical provider composition',
+);
+allowOnly(
   /new\s+ImageService\s*\(/g,
   new Set(['src/boundary/gateway/methods/image.ts']),
   'ImageService construction bypasses gateway attempt accounting',
+);
+allowOnly(
+  /new\s+(?:FalImageClient|ComfyUiImageClient)\s*\(/g,
+  new Set(['src/primitives/images/service.ts']),
+  'raw image provider construction bypasses the gateway-accounted image service',
+);
+allowOnly(
+  /new\s+GatewayImageOps\s*\(/g,
+  new Set(['src/app/agent/core-runtime.ts']),
+  'image gateway operations are constructed outside the accounted agent entrypoint',
+);
+allowOnly(
+  /\bcreate(?:OpenAICompatibleEndpointModel|LiteLLMModel|Model)\s*\(/g,
+  new Set([
+    'src/primitives/llm/client.ts',
+    'src/primitives/llm/models.ts',
+    'src/core/agent/stream-adapter.ts',
+  ]),
+  'provider model construction is outside the canonical LLM routing stack',
+);
+allowOnly(
+  /\bresolveRegisteredModel\s*\(/g,
+  new Set([
+    'src/primitives/llm/client.ts',
+    'src/primitives/llm/models.ts',
+    'src/core/agent/stream-adapter.ts',
+  ]),
+  'registered provider model resolution is outside the canonical LLM routing stack',
 );
 allowOnly(
   /new\s+DefaultImageVisionReviewer\s*\(/g,
@@ -70,6 +122,7 @@ const requiredWiring = [
     file: 'src/system/config/provider-runtime-factory.ts',
     patterns: [
       /usageRecorder:\s*options\.llmOptions\?\.usageRecorder\s*\?\?\s*modelUsageStore/,
+      /usageBudgetQuery:\s*options\.llmOptions\?\.usageBudgetQuery\s*\?\?\s*modelUsageStore/,
       /withEmbeddingUsageAccounting\(embeddingProvider,\s*modelUsageStore,\s*\{\s*estimatedRates:\s*embeddingRates,?\s*\}\)/,
     ],
   },
@@ -83,7 +136,18 @@ const requiredWiring = [
   },
   {
     file: 'src/app/agent/core-runtime.ts',
-    patterns: [/new\s+DefaultImageVisionReviewer[\s\S]{0,300}\bllmProvider\b/],
+    patterns: [
+      /const\s+llmProvider\s*=\s*createLLMProviderPort\(gateway\)/,
+      /composeSubstrateAgent\([\s\S]{0,800}\bllmProvider\b/,
+      /new\s+DefaultImageVisionReviewer[\s\S]{0,300}\bllmProvider\b/,
+    ],
+  },
+  {
+    file: 'src/app/agent/main.ts',
+    patterns: [
+      /GatewayClient\.connectEndpoint\(/,
+      /bootstrapAgentCoreRuntime\([\s\S]{0,800}\bgateway\b/,
+    ],
   },
 ];
 

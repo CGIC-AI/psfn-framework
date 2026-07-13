@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,7 +39,6 @@ import {
   LLMClient,
   SensitiveImportRoutePolicyError,
 } from './client.js';
-import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
 import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
@@ -2070,7 +2069,11 @@ describe('LLMClient correlation metadata', () => {
         ],
       },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'memory ok' }],
       model: 'openrouter:memory/model',
@@ -2096,17 +2099,13 @@ describe('LLMClient correlation metadata', () => {
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1536);
 
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
-    expect(parsed.schemaVersion).toBe(1);
-    expect(parsed.records).toHaveLength(1);
-    expect(parsed.records[0]).toMatchObject({
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       purpose: 'memory',
       service: 'memory',
       process: 'memory',
       inputTokens: 8,
       outputTokens: 5,
-    });
+    }));
   });
 
   it('preserves image input when a background completion is hinted through litellm to a vision-capable routed model', async () => {
@@ -2947,6 +2946,45 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
+  it('quarantines malformed direct-provider response cost instead of settling a complete estimate', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        input: 20,
+        output: 4,
+        totalTokens: 24,
+        cost: { total: 'not-money', currency: 'USD' },
+      },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        rawUsage: expect.objectContaining({
+          cost: { total: 'not-money', currency: 'USD' },
+        }),
+        providerCostEvidenceConflict: { fields: ['responseUsage.cost.total'] },
+      }),
+    }));
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event.providerCostUsd).toBeUndefined();
+    expect(event.effectiveCostUsd).toBeUndefined();
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;
@@ -2997,6 +3035,18 @@ describe('LLMClient model budget gates and usage metering', () => {
     const client = new LLMClient(config, {
       litellmBaseUrl: 'http://litellm.test/v1',
       onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
+      usageBudgetQuery: {
+        async getModelBudgetSpend() {
+          return {
+            dayKey: '2026-07-13',
+            monthKey: '2026-07',
+            dailyEstimatedCostUsd: 0,
+            monthlyEstimatedCostUsd: 0,
+            dailyUnknownCostAttempts: 0,
+            monthlyUnknownCostAttempts: 0,
+          };
+        },
+      },
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamOk() {
@@ -3053,6 +3103,50 @@ describe('LLMClient model budget gates and usage metering', () => {
       estimatedRequestCostUsd: expect.any(Number),
     });
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('stops all fallback candidates when canonical budget accounting is unavailable', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      budgetPolicy: {
+        enabled: true,
+        dailyUsdLimit: 10,
+        monthlyUsdLimit: 100,
+        currency: 'USD',
+      },
+      models: [
+        ...baseRegistry.models,
+        {
+          id: 'chat-fallback-accounting-unavailable',
+          rank: 500,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-4.1-mini',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+          cost: { inputPer1MUsd: 0.01, outputPer1MUsd: 0.01, currency: 'USD' },
+        },
+      ],
+    };
+    const blockedEvents: Array<Record<string, unknown>> = [];
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      onBudgetBlocked: event => blockedEvents.push(event as unknown as Record<string, unknown>),
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Do not call a provider' }],
+    })).rejects.toThrow('accounting_unavailable');
+
+    expect(mocks.streamSimple).not.toHaveBeenCalled();
+    expect(blockedEvents).toHaveLength(1);
+    expect(blockedEvents[0]).toMatchObject({ reason: 'accounting_unavailable' });
   });
 
   it('falls back to a secondary chat candidate when the primary stream returns no text', async () => {
@@ -3483,9 +3577,13 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(streamedText.join('')).toBe(content);
   });
 
-  it('persists usage ledger records after successful completion call', async () => {
+  it('records successful completion only through the canonical usage recorder', async () => {
     const config = makeConfig();
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
       model: 'deepseek/deepseek-v3.2',
@@ -3502,18 +3600,15 @@ describe('LLMClient model budget gates and usage metering', () => {
       { disableRetry: true },
     );
 
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
-    expect(parsed.schemaVersion).toBe(1);
-    expect(parsed.records).toHaveLength(1);
-    expect(parsed.records[0]).toMatchObject({
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'openrouter',
       model: 'deepseek/deepseek-v3.2',
       purpose: 'background',
       service: 'background',
       inputTokens: 13,
       outputTokens: 7,
-    });
+    }));
   });
 
   it('skips preflight token estimation when model budget policy is disabled', async () => {
@@ -3528,7 +3623,11 @@ describe('LLMClient model budget gates and usage metering', () => {
         currency: 'USD',
       },
     };
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     const estimateSpy = vi.spyOn(client as any, 'estimateBudgetInputTokens');
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
@@ -3547,12 +3646,10 @@ describe('LLMClient model budget gates and usage metering', () => {
     );
 
     expect(estimateSpy).not.toHaveBeenCalled();
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
-    expect(parsed.records[0]).toMatchObject({
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       inputTokens: 13,
       outputTokens: 7,
-    });
+    }));
   });
 
   it('routes completion through injected transport without calling direct provider transport', async () => {

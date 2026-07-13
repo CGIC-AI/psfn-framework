@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { LLMResponse, LLMUsageCostDetails } from '../../shared/contracts/runtime.js';
 import {
+  combineProviderCostEvidenceObservations,
   mergeProviderCostEvidenceConflicts,
   reconcileProviderCostEvidence,
   type ReconciledProviderCostEvidence,
@@ -163,11 +164,42 @@ function recordProviderCostEvidence(
   capture: GatewayCapturedLLMCost,
   observation: ReconciledProviderCostEvidence,
 ): void {
+  const priorObservedCount = capture.providerCostEvidenceSummary?.observedSourceCount
+    ?? Object.keys(capture.providerCostEvidence).length;
+  const observationCount = observation.providerCostEvidenceSummary?.observedSourceCount
+    ?? Object.keys(observation.providerCostEvidence).length;
+  const combinedSources: Record<string, LLMUsageCostDetails> = {
+    ...capture.providerCostEvidence,
+  };
+  const sourceCounts: Record<string, number> = {
+    ...(capture.providerCostEvidenceSummary?.sourceCounts
+      ?? Object.fromEntries(Object.keys(capture.providerCostEvidence).map(source => [source, 1]))),
+  };
+  const sourceFamily = (source: string): string => source.replace(/sse\[\d+\]/gu, 'sse[*]');
+  const sameCost = (left: LLMUsageCostDetails, right: LLMUsageCostDetails): boolean => (
+    left.input === right.input
+    && left.output === right.output
+    && left.cacheRead === right.cacheRead
+    && left.cacheWrite === right.cacheWrite
+    && left.total === right.total
+    && left.currency === right.currency
+  );
+  const observationCounts = observation.providerCostEvidenceSummary?.sourceCounts
+    ?? Object.fromEntries(Object.keys(observation.providerCostEvidence).map(source => [source, 1]));
+  for (const [source, cost] of Object.entries(observation.providerCostEvidence)) {
+    const equivalentSource = Object.entries(combinedSources).find(([existingSource, existingCost]) => (
+      sourceFamily(existingSource) === sourceFamily(source) && sameCost(existingCost, cost)
+    ))?.[0];
+    if (equivalentSource) {
+      sourceCounts[equivalentSource] = (sourceCounts[equivalentSource] ?? 1)
+        + (observationCounts[source] ?? 1);
+    } else {
+      combinedSources[source] = cost;
+      sourceCounts[source] = observationCounts[source] ?? 1;
+    }
+  }
   const reconciliation = mergeProviderCostEvidenceConflicts(
-    reconcileProviderCostEvidence({
-      ...capture.providerCostEvidence,
-      ...observation.providerCostEvidence,
-    }),
+    reconcileProviderCostEvidence(combinedSources),
     capture.providerCostEvidenceConflict,
     observation.providerCostEvidenceConflict,
   );
@@ -181,6 +213,22 @@ function recordProviderCostEvidence(
     capture.providerCostEvidenceConflict = reconciliation.providerCostEvidenceConflict;
   } else {
     delete capture.providerCostEvidenceConflict;
+  }
+  const observedSourceCount = priorObservedCount + observationCount;
+  const retainedCounts = Object.fromEntries(
+    Object.keys(reconciliation.providerCostEvidence).map(source => [source, sourceCounts[source] ?? 1]),
+  );
+  const retainedObservationCount = Object.values(retainedCounts)
+    .reduce((total, count) => total + count, 0);
+  if (observedSourceCount > Object.keys(reconciliation.providerCostEvidence).length) {
+    capture.providerCostEvidenceSummary = {
+      observedSourceCount,
+      retainedSourceCount: Object.keys(reconciliation.providerCostEvidence).length,
+      truncatedSourceCount: Math.max(0, observedSourceCount - retainedObservationCount),
+      sourceCounts: retainedCounts,
+    };
+  } else {
+    delete capture.providerCostEvidenceSummary;
   }
 }
 
@@ -316,11 +364,9 @@ function latestGatewayCapturedProviderCostEvidence(
   for (let index = captures.length - 1; index >= 0; index -= 1) {
     const capture = captures[index];
     if (
-      capture
-      && (
-        Object.keys(capture.providerCostEvidence).length > 0
-        || capture.providerCostEvidenceConflict !== undefined
-      )
+      Object.keys(capture.providerCostEvidence).length > 0
+      || capture.providerCostEvidenceConflict !== undefined
+      || capture.providerCostEvidenceSummary !== undefined
     ) return capture;
   }
   return undefined;
@@ -348,17 +394,29 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
     cacheWrite: 0,
     totalTokens: response.inputTokens + response.outputTokens,
   };
+  const responseUsageEvidence = usageDetails.cost
+    ? { responseUsage: usageDetails.cost }
+    : {};
   const reconciliation = mergeProviderCostEvidenceConflicts(
     reconcileProviderCostEvidence({
-      responseUsage: usageDetails.cost,
+      ...responseUsageEvidence,
       ...capturedCost.providerCostEvidence,
     }, {
       input: usageDetails.input,
       output: usageDetails.output,
       cacheRead: usageDetails.cacheRead,
       cacheWrite: usageDetails.cacheWrite,
-    }),
+    }, combineProviderCostEvidenceObservations(
+      { providerCostEvidence: responseUsageEvidence },
+      {
+        providerCostEvidence: capturedCost.providerCostEvidence,
+        ...(capturedCost.providerCostEvidenceSummary
+          ? { providerCostEvidenceSummary: capturedCost.providerCostEvidenceSummary }
+          : {}),
+      },
+    )),
     capturedCost.providerCostEvidenceConflict,
+    usageDetails.costEvidenceConflict,
   );
   const { cost: _quarantinedCost, raw, ...usageWithoutCost } = usageDetails;
   return {
@@ -371,6 +429,9 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
         providerCostEvidence: reconciliation.providerCostEvidence,
         ...(reconciliation.providerCostEvidenceConflict
           ? { providerCostEvidenceConflict: reconciliation.providerCostEvidenceConflict }
+          : {}),
+        ...(reconciliation.providerCostEvidenceSummary
+          ? { providerCostEvidenceSummary: reconciliation.providerCostEvidenceSummary }
           : {}),
       },
     },

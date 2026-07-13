@@ -36,7 +36,7 @@ import {
   mergeSystemContextIntoSystemPrompt,
 } from './message-conversion.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { FallbackRunner } from './fallback.js';
+import { FallbackRunner, NonRecoverableFallbackError } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import {
   evaluateImportPolicy,
@@ -55,6 +55,7 @@ import {
   type ResolvedCorrelationMetadata,
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
+  toCorrelationLogFields,
 } from './correlation.js';
 import {
   ModelBudgetController,
@@ -77,7 +78,10 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
 import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
-import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import type {
+  ModelUsageBudgetQueryPort,
+  ModelUsageRecorder,
+} from '../../shared/telemetry/model-usage.js';
 import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 import {
@@ -106,6 +110,7 @@ import {
 } from './empty-tool-argument-retry.js';
 import { normalizeLLMCallAccountingContext } from './accounting-context.js';
 import {
+  combineProviderCostEvidenceObservations,
   mergeProviderCostEvidenceConflicts,
   reconcileProviderCostEvidence,
   type ReconciledProviderCostEvidence,
@@ -151,6 +156,7 @@ export interface LLMClientRuntimeOptions {
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   usageRecorder?: ModelUsageRecorder;
+  usageBudgetQuery?: ModelUsageBudgetQueryPort;
   providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
@@ -196,7 +202,7 @@ export class LLMClient {
     this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
     this.litellmApiKeyRef = resolveConfiguredLiteLLMApiKeyReference(config);
     this.fallbackRunner = new FallbackRunner();
-    this.budgetController = new ModelBudgetController(config);
+    this.budgetController = new ModelBudgetController(config, runtimeOptions.usageBudgetQuery);
     this.transport = runtimeOptions.transport;
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
@@ -608,15 +614,15 @@ export class LLMClient {
     }, execute);
   }
 
-  private evaluateBudgetPreflight(
+  private async evaluateBudgetPreflight(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
     estimatedInputTokens: number,
     correlation: ResolvedCorrelationMetadata | undefined,
-  ): void {
+  ): Promise<void> {
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
-    const preflight = this.budgetController.evaluatePreflight({
+    const preflight = await this.budgetController.evaluatePreflight({
       candidate,
       purpose,
       estimatedInputTokens,
@@ -625,9 +631,28 @@ export class LLMClient {
       correlation,
     });
     if (preflight.allowed) return;
+    if (preflight.accountingError) {
+      log.error('Canonical model budget accounting query failed', {
+        error: preflight.accountingError.message,
+        provider: candidate.provider,
+        model: candidate.model,
+        purpose,
+        ...toCorrelationLogFields(correlation, purpose),
+      });
+    }
     if (preflight.blockedEvent) {
       this.onBudgetBlocked?.(preflight.blockedEvent);
-      throw markErrorAsNonRetryable(new ModelBudgetExceededError(preflight.blockedEvent));
+      const error = markErrorAsNonRetryable(new ModelBudgetExceededError(
+        preflight.blockedEvent,
+        preflight.accountingError,
+      ));
+      if (
+        preflight.blockedEvent.reason === 'accounting_unavailable'
+        || preflight.blockedEvent.reason === 'unknown_historical_cost'
+      ) {
+        throw new NonRecoverableFallbackError(error);
+      }
+      throw error;
     }
   }
 
@@ -672,38 +697,31 @@ export class LLMClient {
   ): Promise<void> {
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
-    if (
-      options.status === 'success'
-      || inputTokens > 0
-      || outputTokens > 0
-      || (usageDetails?.cacheRead ?? 0) > 0
-      || (usageDetails?.cacheWrite ?? 0) > 0
-    ) {
-      this.budgetController.recordUsage({
-        candidate,
-        purpose,
-        service,
-        process,
-        inputTokens,
-        outputTokens,
-        cacheReadTokens: usageDetails?.cacheRead ?? 0,
-        cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
-        correlation,
-      });
-    }
     const chargeSnapshot = getRunChargeSnapshot();
     const capturedProviderCost = this.providerCostResolver?.();
+    const responseUsageEvidence = usageDetails?.cost
+      ? { responseUsage: usageDetails.cost }
+      : {};
     const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
       reconcileProviderCostEvidence({
-        responseUsage: usageDetails?.cost,
+        ...responseUsageEvidence,
         ...(capturedProviderCost?.providerCostEvidence ?? {}),
       }, {
         input: usageDetails?.input ?? inputTokens,
         output: usageDetails?.output ?? outputTokens,
         cacheRead: usageDetails?.cacheRead ?? 0,
         cacheWrite: usageDetails?.cacheWrite ?? 0,
-      }),
+      }, combineProviderCostEvidenceObservations(
+        { providerCostEvidence: responseUsageEvidence },
+        {
+          providerCostEvidence: capturedProviderCost?.providerCostEvidence ?? {},
+          ...(capturedProviderCost?.providerCostEvidenceSummary
+            ? { providerCostEvidenceSummary: capturedProviderCost.providerCostEvidenceSummary }
+            : {}),
+        },
+      )),
       capturedProviderCost?.providerCostEvidenceConflict,
+      usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
     const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
@@ -739,6 +757,9 @@ export class LLMClient {
         : {}),
       ...(providerCostReconciliation.providerCostEvidenceConflict
         ? { providerCostEvidenceConflict: providerCostReconciliation.providerCostEvidenceConflict }
+        : {}),
+      ...(providerCostReconciliation.providerCostEvidenceSummary
+        ? { providerCostEvidenceSummary: providerCostReconciliation.providerCostEvidenceSummary }
         : {}),
       ...(providerCost ? { providerCost } : {}),
     };
@@ -1663,7 +1684,7 @@ export class LLMClient {
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
       const effectiveCandidate = this.applyPurposeOutputLimits(purpose, candidate);
       options.onCandidateSelected?.(effectiveCandidate);
-      this.evaluateBudgetPreflight(
+      await this.evaluateBudgetPreflight(
         purpose,
         effectiveCandidate,
         options.estimatedInputTokens ?? 0,

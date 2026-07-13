@@ -5,7 +5,7 @@
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import {
   createSocketClient,
@@ -141,6 +141,7 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -165,6 +166,26 @@ export interface GatewayClientOptions {
   companionAuthToken?: string;
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
   sessionIntegrityAuthToken?: string;
+  onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+}
+
+function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEvent | undefined {
+  if (!(error instanceof JSONRPCErrorException) || error.code !== GatewayErrors.MODEL_BUDGET_BLOCKED) {
+    return undefined;
+  }
+  const event = error.data;
+  if (!isRecord(event) || !isRecord(event.budget)) return undefined;
+  if (
+    typeof event.timestampMs !== 'number'
+    || typeof event.reason !== 'string'
+    || typeof event.provider !== 'string'
+    || typeof event.model !== 'string'
+    || typeof event.purpose !== 'string'
+    || typeof event.service !== 'string'
+    || typeof event.process !== 'string'
+    || typeof event.estimatedRequestCostUsd !== 'number'
+  ) return undefined;
+  return event as unknown as ModelBudgetBlockedEvent;
 }
 
 interface VoiceStreamState {
@@ -213,6 +234,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly companionId?: string;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
+  private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -246,6 +268,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         : null);
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
+    this.onModelBudgetBlocked = options.onModelBudgetBlocked;
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -408,6 +431,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const budgetBlock = modelBudgetBlockedEventFromError(error);
+      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       const err = error instanceof Error ? error : new Error(String(error));
       callbacks?.onError?.(err);
       throw err;
@@ -436,9 +461,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
-    const result = await this.requestWithAbortSignal<LLMCompleteResult>(
-      'llm.complete',
-      {
+    let result: LLMCompleteResult;
+    try {
+      result = await this.requestWithAbortSignal<LLMCompleteResult>(
+        'llm.complete',
+        {
         model,
         provider,
         ...(this.companionId ? { companionId: this.companionId } : {}),
@@ -465,8 +492,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(correlation.originType ? { originType: correlation.originType } : {}),
         ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
       },
-      options.signal,
-    );
+        options.signal,
+      );
+    } catch (error) {
+      const budgetBlock = modelBudgetBlockedEventFromError(error);
+      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
+      throw error;
+    }
 
     return {
       content: result.content,

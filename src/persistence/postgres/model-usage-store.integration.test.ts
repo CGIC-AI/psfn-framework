@@ -130,6 +130,211 @@ describe('PostgresModelUsageStore reconciliation', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('projects UTC daily and monthly budgets from canonical chat and completion attempts', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const firstPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-budget-projection-first',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const nowMs = Date.parse('2026-03-06T12:00:00.000Z');
+    const event = (
+      logicalCallId: string,
+      recordedAtMs: number,
+      callKind: ModelUsageEventInput['callKind'],
+      estimatedCostUsd?: number,
+    ): ModelUsageEventInput => ({
+      logicalCallId,
+      attempt: 1,
+      recordedAtMs,
+      startedAtMs: recordedAtMs - 10,
+      completedAtMs: recordedAtMs,
+      status: logicalCallId.includes('unknown') ? 'failure' : 'success',
+      settlement: estimatedCostUsd === undefined ? 'unknown' : 'complete',
+      callKind,
+      callType: callKind === 'chat' ? 'chat' : 'background',
+      purpose: callKind,
+      provider: 'test-provider',
+      model: 'test-model',
+      inputTokens: 1,
+      totalTokens: 1,
+      ...(estimatedCostUsd !== undefined
+        ? { estimatedCostUsd, costSource: 'estimate' as const, currency: 'USD' }
+        : { costSource: 'none' as const }),
+    });
+
+    try {
+      const store = new PostgresModelUsageStore(firstPool);
+      await store.recordUsageEvent(event(
+        'today-chat', Date.parse('2026-03-06T08:00:00.000Z'), 'chat', 0.1,
+      ));
+      await store.recordUsageEvent(event(
+        'month-completion', Date.parse('2026-03-02T08:00:00.000Z'), 'completion', 0.2,
+      ));
+      await store.recordUsageEvent(event(
+        'previous-month-chat', Date.parse('2026-02-28T23:59:59.000Z'), 'chat', 0.4,
+      ));
+      await store.recordUsageEvent(event(
+        'today-embedding-unknown', Date.parse('2026-03-06T09:00:00.000Z'), 'embedding', undefined,
+      ));
+      await store.recordUsageEvent(event(
+        'today-chat-unknown', Date.parse('2026-03-06T10:00:00.000Z'), 'chat', undefined,
+      ));
+      await store.recordUsageEvent(event(
+        'future-chat', Date.parse('2026-03-06T13:00:00.000Z'), 'chat', 0.9,
+      ));
+      expect(await store.getModelBudgetSpend(nowMs)).toEqual({
+        dayKey: '2026-03-06',
+        monthKey: '2026-03',
+        dailyEstimatedCostUsd: 0.1,
+        monthlyEstimatedCostUsd: 0.3,
+        dailyUnknownCostAttempts: 1,
+        monthlyUnknownCostAttempts: 1,
+      });
+    } finally {
+      await firstPool.end();
+    }
+
+    const restartedPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-budget-projection-restart',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      const restartedStore = new PostgresModelUsageStore(restartedPool);
+      expect(await restartedStore.getModelBudgetSpend(nowMs)).toEqual({
+        dayKey: '2026-03-06',
+        monthKey: '2026-03',
+        dailyEstimatedCostUsd: 0.1,
+        monthlyEstimatedCostUsd: 0.3,
+        dailyUnknownCostAttempts: 1,
+        monthlyUnknownCostAttempts: 1,
+      });
+    } finally {
+      await restartedPool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('preserves valid partial and unknown economics exactly across store restart', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const firstPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-usage-partial-first',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      const firstStore = new PostgresModelUsageStore(firstPool);
+      await firstStore.recordUsageEvent({
+        logicalCallId: 'valid-partial-call',
+        attempt: 1,
+        recordedAtMs: 1_752_400_100_000,
+        startedAtMs: 1_752_400_099_900,
+        completedAtMs: 1_752_400_100_000,
+        status: 'success',
+        settlement: 'partial',
+        callKind: 'chat',
+        callType: 'chat',
+        purpose: 'chat',
+        provider: 'openrouter',
+        model: 'unknown-price-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+        costSource: 'none',
+        metadata: {
+          providerCostEvidenceConflict: { fields: ['responseUsage.cost.total'] },
+        },
+      });
+      await firstStore.recordUsageEvent({
+        logicalCallId: 'valid-unknown-call',
+        attempt: 1,
+        recordedAtMs: 1_752_400_200_000,
+        startedAtMs: 1_752_400_199_900,
+        completedAtMs: 1_752_400_200_000,
+        status: 'failure',
+        settlement: 'unknown',
+        callKind: 'embedding',
+        callType: 'background',
+        purpose: 'memory',
+        provider: 'api',
+        model: 'unknown-price-embedding',
+        inputTokens: 3,
+        totalTokens: 3,
+        costSource: 'none',
+      });
+      await firstStore.getUsageData();
+    } finally {
+      await firstPool.end();
+    }
+
+    const restartedPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-usage-partial-restart',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      const restartedStore = new PostgresModelUsageStore(restartedPool);
+      const usage = await restartedStore.getUsageData();
+      const partial = usage.recentEvents.find(event => event.logicalCallId === 'valid-partial-call');
+      const unknown = usage.recentEvents.find(event => event.logicalCallId === 'valid-unknown-call');
+
+      expect(partial).toMatchObject({
+        settlement: 'partial',
+        providerCost: {},
+        estimatedCost: {},
+        effectiveCost: {},
+        costSource: 'none',
+        metadata: {
+          providerCostEvidenceConflict: { fields: ['responseUsage.cost.total'] },
+        },
+      });
+      expect(partial?.estimatedCostUsd).toBeUndefined();
+      expect(partial?.effectiveCostUsd).toBeUndefined();
+      expect(unknown).toMatchObject({
+        settlement: 'unknown',
+        providerCost: {},
+        estimatedCost: {},
+        effectiveCost: {},
+        costSource: 'none',
+      });
+      expect(unknown?.estimatedCostUsd).toBeUndefined();
+      expect(unknown?.effectiveCostUsd).toBeUndefined();
+
+      const rows = await restartedPool.query<{
+        logical_call_id: string;
+        settlement: string;
+        estimated_cost_usd: number | null;
+        effective_cost_usd: number | null;
+        accounting_schema_version: number;
+      }>(`
+        SELECT logical_call_id, settlement, estimated_cost_usd, effective_cost_usd,
+               accounting_schema_version
+        FROM model_usage_events
+        ORDER BY logical_call_id
+      `);
+      expect(rows.rows).toEqual([
+        {
+          logical_call_id: 'valid-partial-call',
+          settlement: 'partial',
+          estimated_cost_usd: null,
+          effective_cost_usd: null,
+          accounting_schema_version: 2,
+        },
+        {
+          logical_call_id: 'valid-unknown-call',
+          settlement: 'unknown',
+          estimated_cost_usd: null,
+          effective_cost_usd: null,
+          accounting_schema_version: 2,
+        },
+      ]);
+    } finally {
+      await restartedPool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('repairs legacy token totals and quarantines non-USD costs before validating constraints', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
@@ -187,6 +392,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
           error_code TEXT,
           error_message TEXT,
           metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+          event_fingerprint TEXT NOT NULL,
           UNIQUE (logical_call_id, attempt)
         )
       `);
@@ -197,13 +403,48 @@ describe('PostgresModelUsageStore reconciliation', () => {
           purpose, provider, model, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, total_tokens,
           provider_cost_usd, estimated_cost_usd, cost_source, currency,
-          metadata_json
+          metadata_json, event_fingerprint
+        ) VALUES (
+          'legacy-unknown-event', 'legacy-unknown-call', 0,
+          1752300000000, 1752299999900, 1752300000000,
+          '2025-07-12', '2025-07', 'failure', 'completion', 'background',
+          'background', 'legacy-provider', 'legacy-unknown-model', 3, 0, 0, 0, 3,
+          NULL, 0, 'none', 'USD', '{"legacyUnknown":true}'::jsonb,
+          'legacy:legacy-unknown-event'
+        )
+      `);
+      await legacyPool.query(`
+        INSERT INTO model_usage_events (
+          id, logical_call_id, attempt, recorded_at_ms, started_at_ms,
+          completed_at_ms, day_key, month_key, status, call_kind, call_type,
+          purpose, provider, model, input_tokens, output_tokens,
+          cache_read_tokens, cache_write_tokens, total_tokens,
+          provider_cost_usd, estimated_cost_usd, cost_source, currency,
+          metadata_json, event_fingerprint
         ) VALUES (
           'legacy-accounting-event', 'legacy-accounting-call', 0,
           1752400000000, 1752399999900, 1752400000000,
           '2025-07-13', '2025-07', 'success', 'chat', 'chat',
           'chat', 'legacy-provider', 'legacy-model', 10, 5, 3, 2, 25,
-          1.25, 0.5, 'provider', 'EUR', '{"legacyMarker":true}'::jsonb
+          1.25, 0.5, 'provider', 'EUR', '{"legacyMarker":true}'::jsonb,
+          'legacy:legacy-accounting-event'
+        )
+      `);
+      await legacyPool.query(`
+        INSERT INTO model_usage_events (
+          id, logical_call_id, attempt, recorded_at_ms, started_at_ms,
+          completed_at_ms, day_key, month_key, status, call_kind, call_type,
+          purpose, provider, model, input_tokens, output_tokens,
+          cache_read_tokens, cache_write_tokens, total_tokens,
+          provider_cost_usd, estimated_cost_usd, cost_source, currency,
+          metadata_json, event_fingerprint
+        ) VALUES (
+          'current-unknown-event', 'current-unknown-call', 0,
+          1752500000000, 1752499999900, 1752500000000,
+          '2025-07-14', '2025-07', 'success', 'chat', 'chat',
+          'chat', 'current-provider', 'current-unknown-model', 0, 0, 0, 0, 0,
+          NULL, 0, 'none', 'USD', '{"currentUnknown":true}'::jsonb,
+          repeat('a', 64)
         )
       `);
     } finally {
@@ -219,18 +460,27 @@ describe('PostgresModelUsageStore reconciliation', () => {
       const migratedStore = new PostgresModelUsageStore(migratedPool);
       const usage = await migratedStore.getUsageData();
       expect(usage.totals).toMatchObject({
-        calls: 1,
-        totalTokens: 20,
+        calls: 3,
+        totalTokens: 23,
         providerCostUsd: 0,
         estimatedCostUsd: 0,
         totalCostUsd: 0,
       });
-      expect(usage.recentEvents).toHaveLength(1);
-      expect(usage.recentEvents[0]).toMatchObject({
+      expect(usage.recentEvents).toHaveLength(3);
+      const migratedLegacy = usage.recentEvents.find(
+        event => event.logicalCallId === 'legacy-accounting-call',
+      );
+      const migratedUnknown = usage.recentEvents.find(
+        event => event.logicalCallId === 'legacy-unknown-call',
+      );
+      const currentUnknown = usage.recentEvents.find(
+        event => event.logicalCallId === 'current-unknown-call',
+      );
+      expect(migratedLegacy).toMatchObject({
         logicalCallId: 'legacy-accounting-call',
         totalTokens: 20,
         providerCost: {},
-        estimatedCost: { total: 0 },
+        estimatedCost: {},
         effectiveCost: {},
         costSource: 'none',
         metadata: {
@@ -246,9 +496,39 @@ describe('PostgresModelUsageStore reconciliation', () => {
           },
         },
       });
-      expect(usage.recentEvents[0]?.currency).toBeUndefined();
-      expect(usage.recentEvents[0]?.providerCostUsd).toBeUndefined();
-      expect(usage.recentEvents[0]?.effectiveCostUsd).toBeUndefined();
+      expect(migratedLegacy?.currency).toBeUndefined();
+      expect(migratedLegacy?.providerCostUsd).toBeUndefined();
+      expect(migratedLegacy?.estimatedCostUsd).toBeUndefined();
+      expect(migratedLegacy?.effectiveCostUsd).toBeUndefined();
+      expect(migratedUnknown).toMatchObject({
+        settlement: 'unknown',
+        providerCost: {},
+        estimatedCost: {},
+        effectiveCost: {},
+        costSource: 'none',
+        metadata: { legacyUnknown: true },
+      });
+      expect(migratedUnknown?.estimatedCostUsd).toBeUndefined();
+      expect(migratedUnknown?.effectiveCostUsd).toBeUndefined();
+      expect(currentUnknown).toMatchObject({
+        settlement: 'unknown',
+        providerCost: {},
+        estimatedCost: {},
+        effectiveCost: {},
+        costSource: 'none',
+        metadata: { currentUnknown: true },
+      });
+      expect(currentUnknown?.estimatedCostUsd).toBeUndefined();
+      expect(currentUnknown?.effectiveCostUsd).toBeUndefined();
+
+      const version = await migratedPool.query<{
+        accounting_schema_version: number;
+      }>(`
+        SELECT accounting_schema_version
+        FROM model_usage_events
+        WHERE id = 'legacy-accounting-event'
+      `);
+      expect(version.rows).toEqual([{ accounting_schema_version: 2 }]);
 
       const constraints = await migratedPool.query<{
         conname: string;
@@ -258,12 +538,14 @@ describe('PostgresModelUsageStore reconciliation', () => {
         FROM pg_constraint
         WHERE conrelid = 'model_usage_events'::regclass
           AND conname IN (
+            'model_usage_events_accounting_schema_version_check',
             'model_usage_events_token_accounting_check',
             'model_usage_events_usd_currency_check'
           )
         ORDER BY conname
       `);
       expect(constraints.rows).toEqual([
+        { conname: 'model_usage_events_accounting_schema_version_check', convalidated: true },
         { conname: 'model_usage_events_token_accounting_check', convalidated: true },
         { conname: 'model_usage_events_usd_currency_check', convalidated: true },
       ]);
@@ -294,9 +576,12 @@ describe('PostgresModelUsageStore reconciliation', () => {
     try {
       const restartedStore = new PostgresModelUsageStore(restartedPool);
       const usage = await restartedStore.getUsageData();
-      expect(usage.totals.totalTokens).toBe(20);
+      expect(usage.totals.totalTokens).toBe(23);
       expect(usage.totals.totalCostUsd).toBe(0);
-      expect(usage.recentEvents[0]?.metadata).toMatchObject({
+      const migratedLegacy = usage.recentEvents.find(
+        event => event.logicalCallId === 'legacy-accounting-call',
+      );
+      expect(migratedLegacy?.metadata).toMatchObject({
         _accountingMigration: {
           nonUsdCostQuarantined: true,
           legacyTotalTokens: 25,

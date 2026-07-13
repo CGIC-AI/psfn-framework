@@ -153,7 +153,9 @@ function estimateEventCostUsd(event: ModelUsageEvent, rates: ModelPricingRates):
 
 function hasPositiveCost(event: ModelUsageEvent): boolean {
   return (typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd) && event.providerCostUsd > 0)
-    || (Number.isFinite(event.estimatedCostUsd) && event.estimatedCostUsd > 0);
+    || (typeof event.estimatedCostUsd === 'number'
+      && Number.isFinite(event.estimatedCostUsd)
+      && event.estimatedCostUsd > 0);
 }
 
 function hydrateEvent(
@@ -192,7 +194,11 @@ function eventCost(event: ModelUsageEvent): number {
   if (typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd) && event.providerCostUsd > 0) {
     return event.providerCostUsd;
   }
-  if (Number.isFinite(event.estimatedCostUsd) && event.estimatedCostUsd > 0) {
+  if (
+    typeof event.estimatedCostUsd === 'number'
+    && Number.isFinite(event.estimatedCostUsd)
+    && event.estimatedCostUsd > 0
+  ) {
     return event.estimatedCostUsd;
   }
   return 0;

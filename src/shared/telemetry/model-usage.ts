@@ -97,7 +97,6 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'cacheReadTokens'
   | 'cacheWriteTokens'
   | 'totalTokens'
-  | 'estimatedCostUsd'
   | 'costSource'
   | 'providerCost'
   | 'estimatedCost'
@@ -126,6 +125,7 @@ export interface ModelUsageEvent extends Required<Pick<
   requestedProvider?: string;
   requestedModel?: string;
   providerCostUsd?: number;
+  estimatedCostUsd?: number;
   effectiveCostUsd?: number;
   currency?: string;
   stopReason?: string;
@@ -187,4 +187,18 @@ export interface ModelUsageRecorder {
 
 export interface ModelUsageQueryPort {
   getUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
+}
+
+export interface ModelUsageBudgetSpendSnapshot {
+  dayKey: string;
+  monthKey: string;
+  dailyEstimatedCostUsd: number;
+  monthlyEstimatedCostUsd: number;
+  dailyUnknownCostAttempts: number;
+  monthlyUnknownCostAttempts: number;
+}
+
+/** Canonical budget projection over immutable PostgreSQL model attempts. */
+export interface ModelUsageBudgetQueryPort {
+  getModelBudgetSpend(nowMs?: number): Promise<ModelUsageBudgetSpendSnapshot>;
 }

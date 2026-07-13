@@ -10,6 +10,8 @@ import { POSTGRES_MODEL_USAGE_MIGRATIONS } from './migrations.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ModelUsageBreakdown,
+  ModelUsageBudgetQueryPort,
+  ModelUsageBudgetSpendSnapshot,
   ModelUsageCallKind,
   ModelUsageCostSource,
   ModelUsageCostBreakdown,
@@ -23,7 +25,10 @@ import type {
   ModelUsageSettlement,
   ModelUsageTotals,
 } from '../../shared/telemetry/model-usage.js';
-import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
+import {
+  reconcileModelUsageAccounting,
+  roundModelUsageUsd,
+} from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
@@ -79,7 +84,7 @@ interface ModelUsageEventRow {
   estimated_output_cost_usd: number | string | null;
   estimated_cache_read_cost_usd: number | string | null;
   estimated_cache_write_cost_usd: number | string | null;
-  estimated_cost_usd: number | string;
+  estimated_cost_usd: number | string | null;
   effective_input_cost_usd: number | string | null;
   effective_output_cost_usd: number | string | null;
   effective_cache_read_cost_usd: number | string | null;
@@ -117,6 +122,13 @@ interface BreakdownRow {
   output_tokens: number | string | null;
   total_tokens: number | string | null;
   total_cost_usd: number | string | null;
+}
+
+interface BudgetSpendRow {
+  daily_estimated_cost_usd: number | string | null;
+  monthly_estimated_cost_usd: number | string | null;
+  daily_unknown_cost_attempts: number | string;
+  monthly_unknown_cost_attempts: number | string;
 }
 
 interface SqlWhere {
@@ -275,7 +287,7 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     ...(input.costSource ? { costSource: input.costSource } : {}),
   });
   const providerCostUsd = accounting.providerCost.total;
-  const estimatedCostUsd = accounting.estimatedCost.total ?? 0;
+  const estimatedCostUsd = accounting.estimatedCost.total;
   const effectiveCostUsd = accounting.effectiveCost.total;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
   const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
@@ -321,7 +333,7 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     cacheWriteTokens,
     totalTokens: accounting.usage.totalTokens,
     ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
-    estimatedCostUsd,
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
     ...(effectiveCostUsd !== undefined ? { effectiveCostUsd } : {}),
     providerCost: accounting.providerCost,
     estimatedCost: accounting.estimatedCost,
@@ -358,7 +370,6 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     cacheReadTokens: nonNegativeInteger(row.cache_read_tokens),
     cacheWriteTokens: nonNegativeInteger(row.cache_write_tokens),
     totalTokens: nonNegativeInteger(row.total_tokens),
-    estimatedCostUsd: nonNegativeCost(row.estimated_cost_usd) ?? 0,
     providerCost: mapCostBreakdown(row, 'provider'),
     estimatedCost: mapCostBreakdown(row, 'estimated'),
     effectiveCost: mapCostBreakdown(row, 'effective'),
@@ -390,6 +401,10 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     if (providerCostUsd !== undefined) {
       event.providerCostUsd = providerCostUsd;
     }
+  }
+  if (row.estimated_cost_usd !== null) {
+    const estimatedCostUsd = nonNegativeCost(row.estimated_cost_usd);
+    if (estimatedCostUsd !== undefined) event.estimatedCostUsd = estimatedCostUsd;
   }
   if (row.effective_cost_usd !== null) {
     const effectiveCostUsd = nonNegativeCost(row.effective_cost_usd);
@@ -472,7 +487,7 @@ function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort {
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageBudgetQueryPort {
   private readonly ready: Promise<void>;
 
   constructor(private readonly pool: Pool) {
@@ -575,7 +590,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.estimatedCost.output ?? null,
       event.estimatedCost.cacheRead ?? null,
       event.estimatedCost.cacheWrite ?? null,
-      event.estimatedCostUsd,
+      event.estimatedCostUsd ?? null,
       event.effectiveCost.input ?? null,
       event.effectiveCost.output ?? null,
       event.effectiveCost.cacheRead ?? null,
@@ -618,6 +633,41 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       byCallKind,
       recentEvents,
       expensiveEvents,
+    };
+  }
+
+  async getModelBudgetSpend(nowMs = Date.now()): Promise<ModelUsageBudgetSpendSnapshot> {
+    await this.ready;
+    const now = inputNonNegativeInteger(nowMs, 'nowMs');
+    const nowDate = new Date(now);
+    const day = dayKey(now);
+    const month = monthKey(now);
+    const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
+    const monthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const row = await queryOne<BudgetSpendRow>(this.pool, `
+      SELECT
+        COALESCE(SUM(estimated_cost_usd) FILTER (
+          WHERE recorded_at_ms >= $1
+        ), 0) AS daily_estimated_cost_usd,
+        COALESCE(SUM(estimated_cost_usd), 0) AS monthly_estimated_cost_usd,
+        COUNT(*) FILTER (
+          WHERE recorded_at_ms >= $1 AND estimated_cost_usd IS NULL
+        ) AS daily_unknown_cost_attempts,
+        COUNT(*) FILTER (
+          WHERE estimated_cost_usd IS NULL
+        ) AS monthly_unknown_cost_attempts
+      FROM model_usage_events
+      WHERE recorded_at_ms >= $2
+        AND recorded_at_ms <= $3
+        AND call_kind IN ('chat', 'completion')
+    `, [dayStartMs, monthStartMs, now]);
+    return {
+      dayKey: day,
+      monthKey: month,
+      dailyEstimatedCostUsd: roundModelUsageUsd(nonNegativeCost(row?.daily_estimated_cost_usd) ?? 0),
+      monthlyEstimatedCostUsd: roundModelUsageUsd(nonNegativeCost(row?.monthly_estimated_cost_usd) ?? 0),
+      dailyUnknownCostAttempts: nonNegativeInteger(row?.daily_unknown_cost_attempts),
+      monthlyUnknownCostAttempts: nonNegativeInteger(row?.monthly_unknown_cost_attempts),
     };
   }
 

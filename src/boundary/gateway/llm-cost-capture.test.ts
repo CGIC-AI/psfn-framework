@@ -168,6 +168,67 @@ describe('extractGatewayProviderCost', () => {
     }]);
   });
 
+  it('coalesces 129 SSE cost observations without aborting the provider response', async () => {
+    const eventCount = 129;
+    const content = Array.from({ length: eventCount }, (_, index) => [
+      `data: {"choices":[{"delta":{"content":"${index}"}}],"usage":{"cost":0.1}}`,
+      '',
+    ].join('\n')).join('\n');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(content, {
+      headers: { 'content-type': 'text/event-stream' },
+    })));
+
+    const captured = await withGatewayLLMCostCapture(async () => {
+      const response = await fetch('https://provider.test/long-sse-cost');
+      return await response.text();
+    });
+
+    expect(captured.result).toBe(content);
+    expect(captured.captures[0]?.providerCost).toEqual({ total: 0.1, currency: 'USD' });
+    expect(captured.captures[0]?.providerCostEvidence).toEqual({
+      'sse[0].usage.cost': { total: 0.1, currency: 'USD' },
+    });
+    expect(captured.captures[0]?.providerCostEvidenceSummary).toEqual({
+      observedSourceCount: eventCount,
+      retainedSourceCount: 1,
+      truncatedSourceCount: 0,
+      sourceCounts: { 'sse[0].usage.cost': eventCount },
+    });
+  });
+
+  it('retains final reconciliation truncation metadata beyond 128 distinct sources', () => {
+    const providerCostEvidence = Object.fromEntries(
+      Array.from({ length: 128 }, (_, index) => [
+        `sse[${index}].usage.cost`,
+        { total: 0.1, currency: 'USD' },
+      ]),
+    );
+    const response = applyGatewayCapturedProviderCost({
+      content: 'ok',
+      toolCalls: [],
+      model: 'test-model',
+      inputTokens: 3,
+      outputTokens: 2,
+      usageDetails: {
+        input: 3,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 5,
+        cost: { total: 0.1, currency: 'USD' },
+      },
+      stopReason: 'stop',
+    }, { providerCostEvidence });
+
+    expect(response.usageDetails.raw).toMatchObject({
+      providerCostEvidenceSummary: {
+        observedSourceCount: 129,
+        retainedSourceCount: 128,
+        truncatedSourceCount: 1,
+      },
+    });
+  });
+
   it('quarantines contradictory response and gateway-captured cost evidence', () => {
     const response = applyGatewayCapturedProviderCost({
       content: 'ok',
@@ -191,8 +252,8 @@ describe('extractGatewayProviderCost', () => {
       providerCost: { total: 0.2, currency: 'USD' },
     });
 
-    expect(response.usageDetails?.cost).toBeUndefined();
-    expect(response.usageDetails?.raw).toMatchObject({
+    expect(response.usageDetails.cost).toBeUndefined();
+    expect(response.usageDetails.raw).toMatchObject({
       providerCostEvidence: {
         responseUsage: { total: 0.1, currency: 'USD' },
         gatewayCapture: { total: 0.2, currency: 'USD' },
@@ -234,8 +295,8 @@ describe('extractGatewayProviderCost', () => {
       },
     });
 
-    expect(response.usageDetails?.cost).toBeUndefined();
-    expect(response.usageDetails?.raw).toMatchObject({
+    expect(response.usageDetails.cost).toBeUndefined();
+    expect(response.usageDetails.raw).toMatchObject({
       providerCostEvidenceConflict: { fields: ['total'] },
     });
   });

@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
-import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
+import type { LLMContext, LLMResponse, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
@@ -27,14 +27,11 @@ import {
 import {
   findRegistryEntryByModelId,
   findRegistryEntryByProviderModel,
-  ModelBudgetController,
-  ModelBudgetExceededError,
   normalizeModelIdForProvider,
 } from '../../primitives/llm/model-budget.js';
 import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
-import { countMessageTokens } from '../../primitives/llm/tokens.js';
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -57,7 +54,6 @@ export interface SubstrateStreamTransport {
 }
 
 export interface SubstrateStreamRuntimeOptions {
-  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
   transport: SubstrateStreamTransport;
 }
@@ -78,7 +74,6 @@ export function createSubstrateStreamFn(
     );
   }
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  const budgetController = new ModelBudgetController(config);
   const fallbackRunner = new FallbackRunner();
 
   const wrappedStreamFn: StreamFn = async (model, context, options) => {
@@ -87,7 +82,6 @@ export function createSubstrateStreamFn(
     const purpose = resolveStreamBudgetPurpose(requestContext);
     const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
-    const estimatedInputTokens = resolveEstimatedBudgetInputTokens(budgetController, context);
     const callerMaxTokens = resolveCallerMaxTokens(options?.maxTokens);
     const candidates = resolveStreamCandidates(
       config,
@@ -120,10 +114,7 @@ export function createSubstrateStreamFn(
           purpose,
           service,
           processName,
-          estimatedInputTokens,
           requestContext,
-          budgetController,
-          onBudgetBlocked: runtimeOptions.onBudgetBlocked,
           correlationFields,
           logicalCallId,
           nextPhysicalAttempt: () => {
@@ -180,10 +171,7 @@ interface ExecuteStreamCandidateParams {
   purpose: RoutingPurpose;
   service: string;
   processName: string;
-  estimatedInputTokens?: number;
   requestContext: Partial<CorrelationMetadata> | undefined;
-  budgetController: ModelBudgetController;
-  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   correlationFields: ReturnType<typeof toCorrelationLogFields>;
   logicalCallId: string;
   nextPhysicalAttempt: () => number;
@@ -191,19 +179,6 @@ interface ExecuteStreamCandidateParams {
 
 function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGenerator<AssistantMessageEvent, void, unknown> {
   const { candidate } = params;
-  const preflight = params.budgetController.evaluatePreflight({
-    candidate,
-    purpose: params.purpose,
-    service: params.service,
-    process: params.processName,
-    estimatedInputTokens: params.estimatedInputTokens ?? 0,
-    correlation: params.requestContext,
-  });
-  if (!preflight.allowed && preflight.blockedEvent) {
-    params.onBudgetBlocked?.(preflight.blockedEvent);
-    throw new ModelBudgetExceededError(preflight.blockedEvent);
-  }
-
   const requestOptions = buildStreamRequestOptions(
     candidate,
     params.options,
@@ -257,18 +232,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
                 yield bufferedEvent;
               }
             }
-
-            params.budgetController.recordUsage({
-              candidate,
-              purpose: params.purpose,
-              service: params.service,
-              process: params.processName,
-              inputTokens: toUsageCount(event.message.usage.input),
-              outputTokens: toUsageCount(event.message.usage.output),
-              cacheReadTokens: toUsageCount(event.message.usage.cacheRead),
-              cacheWriteTokens: toUsageCount(event.message.usage.cacheWrite),
-              correlation: params.requestContext,
-            });
 
             yield event;
             return;
@@ -815,41 +778,6 @@ function resolveStreamBudgetPurpose(context: Partial<CorrelationMetadata> | unde
   if (raw.includes('context')) return 'context';
   if (raw.includes('longcontext') || raw.includes('long_context')) return 'context';
   return 'chat';
-}
-
-function resolveEstimatedBudgetInputTokens(
-  budgetController: ModelBudgetController,
-  context: unknown,
-): number | undefined {
-  if (!budgetController.requiresPreflightEstimate()) {
-    return undefined;
-  }
-  return estimateContextInputTokens(context);
-}
-
-function estimateContextInputTokens(context: unknown): number {
-  const llmContext = context as Partial<LLMContext>;
-  const budgetMessages: Array<{ role: string; content: string }> = [];
-
-  if (typeof llmContext.systemPrompt === 'string' && llmContext.systemPrompt) {
-    budgetMessages.push({
-      role: 'system',
-      content: llmContext.systemPrompt,
-    });
-  }
-
-  if (Array.isArray(llmContext.messages)) {
-    for (const message of llmContext.messages) {
-      budgetMessages.push({
-        role: message.role,
-        content: typeof message.content === 'string'
-          ? message.content
-          : JSON.stringify(message.content),
-      });
-    }
-  }
-
-  return Math.max(1, countMessageTokens(budgetMessages));
 }
 
 function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {

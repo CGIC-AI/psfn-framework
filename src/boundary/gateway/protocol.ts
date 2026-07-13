@@ -877,4 +877,5 @@ export const GatewayErrors = {
   // leaked into egress (prompt leak / hijack tripwire). The error message is
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
+  MODEL_BUDGET_BLOCKED: -32015,
 } as const;

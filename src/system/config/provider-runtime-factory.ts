@@ -37,6 +37,7 @@ export function createProviderRuntimeServices(
     ? {
         ...(options.llmOptions ?? {}),
         usageRecorder: options.llmOptions?.usageRecorder ?? modelUsageStore,
+        usageBudgetQuery: options.llmOptions?.usageBudgetQuery ?? modelUsageStore,
       }
     : options.llmOptions;
   return {

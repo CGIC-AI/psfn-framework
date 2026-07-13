@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
+import { GatewayErrors } from '../protocol.js';
 import type {
   LLMChatParams,
   LLMCompleteParams,
@@ -29,6 +31,22 @@ import {
 import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accounting-context.js';
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
+import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+
+async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ModelBudgetExceededError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.MODEL_BUDGET_BLOCKED,
+        error.event,
+      );
+    }
+    throw error;
+  }
+}
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -52,7 +70,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         purpose,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await runtime.llmProvider.stream(
+        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.stream(
           {
             systemPrompt: params.systemPrompt,
             messages: params.messages,
@@ -67,7 +85,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
               runtime.notifyRequester('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
             },
           } : undefined,
-        ),
+        )),
       );
       const response = applyGatewayCapturedProviderCost(
         captured.result,
@@ -124,7 +142,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         purpose: params.purpose,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await runtime.llmProvider.complete(
+        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.complete(
           {
             systemPrompt: params.systemPrompt,
             messages: params.messages,
@@ -133,7 +151,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             correlation,
           },
           params.purpose,
-        ),
+        )),
       );
       const response = applyGatewayCapturedProviderCost(
         captured.result,

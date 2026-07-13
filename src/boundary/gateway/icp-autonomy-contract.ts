@@ -193,11 +193,19 @@ export function parseIcpPermitConsumeParams(value: unknown): {
   conversationId: string;
   recipientCompanionId: string;
   channelId: string;
+  rootInitiationId: string;
 } {
   if (!isRecord(value)) throw new Error('ICP permit consume params must be an object');
   assertNoUnknownKeys(
     value,
-    ['permitId', 'conversationId', 'recipientCompanionId', 'channelId', 'companionId'],
+    [
+      'permitId',
+      'conversationId',
+      'recipientCompanionId',
+      'channelId',
+      'rootInitiationId',
+      'companionId',
+    ],
     'ICP permit consume params',
   );
   return {
@@ -205,6 +213,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
     conversationId: requireUuid(value.conversationId, 'conversationId'),
     recipientCompanionId: requireUuid(value.recipientCompanionId, 'recipientCompanionId'),
     channelId: requireTrimmedString(value.channelId, 'channelId'),
+    rootInitiationId: requireUuid(value.rootInitiationId, 'rootInitiationId'),
   };
 }
 

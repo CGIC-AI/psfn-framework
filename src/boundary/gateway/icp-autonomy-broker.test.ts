@@ -553,7 +553,11 @@ describe('GatewayIcpAutonomyBroker', () => {
       conversationId: CONVERSATION_ID,
       recipientCompanionId: B,
       channelId: CHANNEL,
+      rootInitiationId: ROOT_ID,
     };
+    await expect(broker.consumePermit(A, { ...consumeInput, rootInitiationId: C }))
+      .resolves.toMatchObject({ outcome: 'mismatch' });
+    expect(store.permits.get(PERMIT_ID)).toMatchObject({ status: 'issued', revision: 1 });
     await expect(broker.consumePermit(A, consumeInput)).resolves.toMatchObject({ outcome: 'consumed' });
     await expect(broker.consumePermit(A, consumeInput)).resolves.toMatchObject({ outcome: 'replayed' });
     await expect(broker.consumePermit(A, { ...consumeInput, conversationId: ROOT_ID }))
@@ -647,6 +651,7 @@ describe('GatewayIcpAutonomyBroker', () => {
         conversationId: CONVERSATION_ID,
         recipientCompanionId: B,
         channelId: CHANNEL,
+        rootInitiationId: ROOT_ID,
       });
       await gate.reached;
       await triggerInvalidationRace(broker, kind);

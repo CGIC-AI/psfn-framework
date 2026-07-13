@@ -74,6 +74,7 @@ import { rehydratePersistedInternalState } from '../../core/self-model/internal-
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
@@ -1163,7 +1164,7 @@ async function main(): Promise<void> {
 
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
-  registerGatewayMessageHandlers({
+  const registeredGatewayMessageHandlers = registerGatewayMessageHandlers({
     gateway,
     agentLoop,
     shardManager,
@@ -1176,6 +1177,14 @@ async function main(): Promise<void> {
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });
+  const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
+    registeredGatewayMessageHandlers.icpTargetChannelInitiator,
+  );
+  const stopRegisteredRuntime = stopFn;
+  stopFn = async () => {
+    unregisterIcpTargetChannelInitiationCommand();
+    await stopRegisteredRuntime();
+  };
 
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});

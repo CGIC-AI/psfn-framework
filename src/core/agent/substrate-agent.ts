@@ -157,6 +157,7 @@ import {
 } from './substrate-agent/background-continuation-runtime.js';
 import {
   handleMessageForTurn,
+  type TurnDeliveryLifecycle,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
@@ -1098,7 +1099,10 @@ export class SubstrateAgent {
     this.agent.abort();
   }
 
-  async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
+  async handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle?: TurnDeliveryLifecycle,
+  ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
@@ -1299,7 +1303,7 @@ export class SubstrateAgent {
           this.getUserFacingBoundaryIndex(),
         ),
       },
-    }), message);
+    }), message, deliveryLifecycle);
 
     // htm9.3: expose the message's intake envelopes to the egress tool guard
     // for the duration of this turn (cleared in finally — never leaks into
@@ -1331,6 +1335,13 @@ export class SubstrateAgent {
     sourceMessageId: string,
   ): { content: string; correlation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation } | null {
     return this.sessionManager.findRecordedIcpInitiation(channelId, sourceMessageId);
+  }
+
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): { status: 'delivered' | 'failed' | 'suppressed' } | null {
+    return this.sessionManager.findIcpDeliveryObservation(channelId, sourceMessageId);
   }
 
   /** Durable recipient-side source-id check; survives agent process restart. */

@@ -206,7 +206,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
-  private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
+  private notificationHandlers = new Map<
+    string,
+    Array<(params: unknown) => void | Promise<void>>
+  >();
   private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
   private chunkHandlers = new Map<string, (text: string) => void>();
   private requestCounter = 0;
@@ -1062,10 +1065,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   }
 
   /** Inbound peer-companion messages (gateway `companion.message` lane, W6). */
-  onCompanionMessage(handler: (message: SubstrateMessage) => void): () => void {
+  onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): () => void {
     return this.onNotification('companion.message', (params) => {
       const notification = params as CompanionMessageNotification;
-      handler(notification.message);
+      return handler(notification.message);
     });
   }
 
@@ -1125,7 +1128,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
-  private onNotification(method: string, handler: (params: unknown) => void): () => void {
+  private onNotification(
+    method: string,
+    handler: (params: unknown) => void | Promise<void>,
+  ): () => void {
     const handlers = this.notificationHandlers.get(method) ?? [];
     handlers.push(handler);
     this.notificationHandlers.set(method, handlers);
@@ -1463,7 +1469,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     if (handlers) {
       for (const handler of handlers) {
         try {
-          handler(params);
+          const lifecycle = handler(params);
+          if (lifecycle) {
+            void lifecycle.catch((err: unknown) => {
+              log.error(`Async notification handler error for ${method}`, {
+                error: String(err),
+              });
+            });
+          }
         } catch (err) {
           log.error(`Notification handler error for ${method}`, { error: String(err) });
         }

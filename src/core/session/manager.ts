@@ -51,6 +51,7 @@ import {
   shouldPersistSessionChannel,
   createCompactionBoundaryStore,
 } from './manager/compaction-boundary-store.js';
+import { createIcpDeliveryProjectionStore } from './manager/icp-delivery-projection-store.js';
 import {
   collectRecentEntriesWithinTokenBudget,
   isNonConversationalSessionEntry,
@@ -95,6 +96,7 @@ import { buildSessionMetadataWithIntakeScreening } from './intake-screening-meta
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   applyFocusCompactionRanges,
   FocusKnowledgeStore,
@@ -181,11 +183,13 @@ export interface AutoCompactionBetweenTurnsParams {
   channelMeta?: ChannelMeta;
   compactionPromptText?: string;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export class SessionManager {
   private store: SessionStore;
   private transcriptSearch: TranscriptSearchPort;
+  private deliveryProjectionStore: SessionStore;
   private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
@@ -241,7 +245,8 @@ export class SessionManager {
   ) {
     this.store = store;
     this.transcriptSearch = transcriptSearch ?? store;
-    this.compactionBoundaryStore = createCompactionBoundaryStore(store);
+    this.deliveryProjectionStore = createIcpDeliveryProjectionStore(store);
+    this.compactionBoundaryStore = createCompactionBoundaryStore(this.deliveryProjectionStore);
     this.config = config;
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
@@ -788,6 +793,7 @@ export class SessionManager {
           llmProvider: params.llmProvider,
           store: this.compactionBoundaryStore,
           config: this.config,
+          ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
           eventBus: this.eventBus,
           promptRegistry: this.promptRegistry,
           preCompactionExtractionHandler: this.preCompactionExtractionHandler,
@@ -1162,7 +1168,7 @@ export class SessionManager {
     const entries = this.getRecentSessionEntries(channelId, 5_000);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
-      if (!entry || entry.role !== 'assistant') continue;
+      if (entry.role !== 'assistant') continue;
       const turn = resolveSessionEntryTurnContext(entry);
       if (turn.sourceMessageId !== sourceMessageId) continue;
       const correlation = parseSessionIcpCorrelation(entry.metadata);
@@ -1170,6 +1176,35 @@ export class SessionManager {
         throw new Error('Recorded ICP initiation assistant entry is missing correlation metadata');
       }
       return { content: entry.content, correlation };
+    }
+    return null;
+  }
+
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): { status: 'delivered' | 'failed' | 'suppressed' } | null {
+    const entries = this.getRecentSessionEntries(channelId, 5_000);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry.role !== 'system' || !entry.content.startsWith('{')) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(entry.content);
+      } catch {
+        continue;
+      }
+      if (!isRecord(parsed) || parsed.kind !== 'icp_delivery') continue;
+      if (parsed.schemaVersion !== 1
+        || typeof parsed.sourceMessageId !== 'string'
+        || (parsed.status !== 'delivered'
+          && parsed.status !== 'failed'
+          && parsed.status !== 'suppressed')) {
+        throw new Error('Recorded ICP delivery observation is malformed');
+      }
+      if (parsed.sourceMessageId === sourceMessageId) {
+        return { status: parsed.status };
+      }
     }
     return null;
   }
@@ -1444,13 +1479,13 @@ export class SessionManager {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (limit !== undefined) {
-      return this.store.getRecent(resolvedChannelId, limit)
+      return this.deliveryProjectionStore.getRecent(resolvedChannelId, limit)
         .filter(entry => !isNonConversationalSessionEntry(entry));
     }
 
     const historyBudget = resolveSessionHistoryBudget(this.config);
     return collectRecentEntriesWithinTokenBudget({
-      store: this.store,
+      store: this.deliveryProjectionStore,
       channelId: resolvedChannelId,
       estimatedCount: historyBudget.estimatedCount,
       tokenBudget: historyBudget.tokenBudget,

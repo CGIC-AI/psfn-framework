@@ -30,6 +30,10 @@ import { withRetry } from '../../../primitives/llm/retry.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import {
+  derivePostTurnIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../../shared/contracts/icp-autonomy.js';
 
 const log = createComponentLogger('CompactionService');
 
@@ -52,6 +56,7 @@ export interface CompactionParams {
     capturedAt: number;
   }) => void;
   userId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface CompactionResult {
@@ -92,6 +97,7 @@ export interface SessionSummaryCompletionParams {
   maxRetries: number;
   baseDelayMs: number;
   onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 function stripGeneratedSummaryToolResultLines(content: string): string {
@@ -152,6 +158,14 @@ export async function completeSessionSummary(params: SessionSummaryCompletionPar
           originStage: params.originStage,
           ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
           ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+          ...(params.icpCorrelation
+            ? {
+                icpCorrelation: derivePostTurnIcpConversationCorrelation(
+                  params.icpCorrelation,
+                  'summary',
+                ),
+              }
+            : {}),
         },
       },
       'background',
@@ -319,6 +333,7 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
       originStage: 'session.compaction.summary',
       maxRetries: retryMaxRetries,
       baseDelayMs: 250,
+      ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
       onRetry: async ({ attempt, delayMs, error }) => {
         sawRetry = true;
         lastRetryAttempt = attempt + 1;

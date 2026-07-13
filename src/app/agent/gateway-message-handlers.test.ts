@@ -117,6 +117,7 @@ function createHarness(overrides?: {
       skippedOffline: [],
       permitOutcome: 'consumed',
     }))),
+    companionConsumeInitiationPermit: vi.fn(async () => ({ outcome: 'consumed' })),
     companionReportFailure: vi.fn(overrides?.companionReportFailure ?? (async () => ({}))),
   };
   const agentLoop = {
@@ -124,6 +125,7 @@ function createHarness(overrides?: {
     observeMessage: vi.fn(overrides?.observeMessage ?? (async () => {})),
     waitForIdle: vi.fn(overrides?.waitForIdle ?? (async () => {})),
     findRecordedIcpInitiation: vi.fn(async () => null),
+    findIcpDeliveryObservation: vi.fn(async () => null),
     hasRecordedSourceMessage: vi.fn(overrides?.hasRecordedSourceMessage ?? (async () => false)),
     recordIcpDeliveryObservation: vi.fn(async () => {}),
   };
@@ -893,6 +895,33 @@ describe('registerGatewayMessageHandlers', () => {
       messageId: 'companion-initiation-restart-safe',
       disposition: 'durable',
     });
+  });
+
+  it('reports a deterministic failure when durable companion dedupe cannot be read', async () => {
+    const harness = createHarness({
+      hasRecordedSourceMessage: async () => {
+        throw new Error('journal unavailable');
+      },
+    });
+    const message = makeCompanionMessage({ id: 'companion-dedupe-read-failure' });
+
+    await harness.onCompanionMessage(message);
+
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-dedupe-read-failure',
+      reason: 'processing_failed',
+    });
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'companion.message.durable_dedupe_error',
+      {
+        channelId: 'companion-room:living_room',
+        messageId: 'companion-dedupe-read-failure',
+        error: 'journal unavailable',
+      },
+    );
   });
 
   it('reports companion turn failures and keeps the source message retryable', async () => {

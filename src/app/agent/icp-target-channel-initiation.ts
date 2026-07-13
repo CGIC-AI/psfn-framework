@@ -29,12 +29,23 @@ export interface IcpDeliveryObservation {
 
 export interface IcpTargetChannelAgentPort {
   /** The one ordinary SubstrateAgent channel-turn entrypoint. */
-  handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
+  handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle: {
+      finalizeDelivery(response: AgentResponse): Promise<void>;
+    },
+  ): Promise<AgentResponse>;
   /** Restart-safe lookup in the canonical channel journal. */
   findRecordedIcpInitiation(
     channelId: string,
     sourceMessageId: string,
   ): Promise<RecordedIcpInitiationTurn | null> | RecordedIcpInitiationTurn | null;
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<Pick<IcpDeliveryObservation, 'status'> | null>
+    | Pick<IcpDeliveryObservation, 'status'>
+    | null;
   /** Durable local delivery fact; never asserted as peer-shared transcript speech. */
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
 }
@@ -58,6 +69,13 @@ export interface IcpTargetChannelGatewayPort {
     recipientCompanionId: string;
     correlation: IcpConversationCorrelation;
   }): Promise<IcpInitiationSendResult>;
+  consumeInitiationPermit(input: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    rootInitiationId: string;
+  }): Promise<{ outcome: 'consumed' | 'replayed' | string }>;
 }
 
 export interface IcpTargetChannelInitiationRequest {
@@ -160,10 +178,76 @@ export function createIcpTargetChannelInitiator(input: {
   ): Promise<IcpTargetChannelInitiationResult> => {
     const peerContactId = requirePeerContactId(request.peerContactId);
     const sourceMessageId = `icp-initiation:${permit.candidateId}`;
+    const previousObservation = await input.agent.findIcpDeliveryObservation(
+      permit.channelId,
+      sourceMessageId,
+    );
+    if (previousObservation?.status === 'suppressed') {
+      throw new Error('ICP target-channel initiation was already durably suppressed');
+    }
     const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
+    if (!recorded && permit.status === 'consumed') {
+      throw new Error('Consumed ICP permit has no recoverable delivered assistant turn');
+    }
     let recoveredTurn = recorded !== null;
     let content: string;
     let correlation: IcpConversationCorrelation;
+
+    const finalizeDelivery = async (): Promise<IcpTargetChannelInitiationResult> => {
+      if (!content.trim()) {
+        const consumption = await input.gateway.consumeInitiationPermit({
+          permitId: permit.permitId,
+          conversationId: permit.conversationId,
+          recipientCompanionId: permit.recipientCompanionId,
+          channelId: permit.channelId,
+          rootInitiationId: request.rootInitiationId,
+        });
+        if (consumption.outcome !== 'consumed') {
+          throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);
+        }
+        await input.agent.recordIcpDeliveryObservation({
+          channelId: permit.channelId,
+          sourceMessageId,
+          status: 'suppressed',
+        });
+        return { disposition: 'suppressed', recoveredTurn, correlation };
+      }
+
+      try {
+        const delivery = await input.gateway.sendInitiation({
+          channelId: permit.channelId,
+          content,
+          ...(input.authorName?.trim() ? { authorName: input.authorName.trim() } : {}),
+          permitId: permit.permitId,
+          conversationId: permit.conversationId,
+          recipientCompanionId: permit.recipientCompanionId,
+          correlation,
+        });
+        await input.agent.recordIcpDeliveryObservation({
+          channelId: permit.channelId,
+          sourceMessageId,
+          status: 'delivered',
+          gatewayMessageId: delivery.messageId,
+          deliveredTo: delivery.deliveredTo,
+          permitOutcome: delivery.permitOutcome,
+        });
+        return {
+          disposition: 'delivered',
+          recoveredTurn,
+          correlation,
+          gatewayMessageId: delivery.messageId,
+          deliveredTo: delivery.deliveredTo,
+        };
+      } catch (error) {
+        await input.agent.recordIcpDeliveryObservation({
+          channelId: permit.channelId,
+          sourceMessageId,
+          status: 'failed',
+          error: toErrorMessage(error),
+        });
+        throw error;
+      }
+    };
 
     if (recorded) {
       correlation = parseIcpConversationCorrelation(recorded.correlation);
@@ -185,56 +269,24 @@ export function createIcpTargetChannelInitiator(input: {
         peerContactId,
         rootInitiationId: request.rootInitiationId,
       });
-      const response = await input.agent.handleMessage(buildPrivateTurnMessage(correlation));
-      content = response.content;
-      if (response.metadata.icpCorrelation) {
-        correlation = parseIcpConversationCorrelation(response.metadata.icpCorrelation);
+      content = '';
+      const finalization: { result?: IcpTargetChannelInitiationResult } = {};
+      await input.agent.handleMessage(buildPrivateTurnMessage(correlation), {
+        finalizeDelivery: async (response) => {
+          content = response.content;
+          if (response.metadata.icpCorrelation) {
+            correlation = parseIcpConversationCorrelation(response.metadata.icpCorrelation);
+          }
+          finalization.result = await finalizeDelivery();
+        },
+      });
+      if (!finalization.result) {
+        throw new Error('ICP target-channel turn completed without delivery finalization');
       }
+      return finalization.result;
     }
 
-    if (!content.trim()) {
-      await input.agent.recordIcpDeliveryObservation({
-        channelId: permit.channelId,
-        sourceMessageId,
-        status: 'suppressed',
-      });
-      return { disposition: 'suppressed', recoveredTurn, correlation };
-    }
-
-    try {
-      const delivery = await input.gateway.sendInitiation({
-        channelId: permit.channelId,
-        content,
-        ...(input.authorName?.trim() ? { authorName: input.authorName.trim() } : {}),
-        permitId: permit.permitId,
-        conversationId: permit.conversationId,
-        recipientCompanionId: permit.recipientCompanionId,
-        correlation,
-      });
-      await input.agent.recordIcpDeliveryObservation({
-        channelId: permit.channelId,
-        sourceMessageId,
-        status: 'delivered',
-        gatewayMessageId: delivery.messageId,
-        deliveredTo: delivery.deliveredTo,
-        permitOutcome: delivery.permitOutcome,
-      });
-      return {
-        disposition: 'delivered',
-        recoveredTurn,
-        correlation,
-        gatewayMessageId: delivery.messageId,
-        deliveredTo: delivery.deliveredTo,
-      };
-    } catch (error) {
-      await input.agent.recordIcpDeliveryObservation({
-        channelId: permit.channelId,
-        sourceMessageId,
-        status: 'failed',
-        error: toErrorMessage(error),
-      });
-      throw error;
-    }
+    return await finalizeDelivery();
   };
 
   return {

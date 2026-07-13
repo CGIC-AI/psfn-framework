@@ -254,9 +254,32 @@ export class GatewayIcpAutonomyBroker {
       conversationId: string;
       recipientCompanionId: string;
       channelId: string;
+      rootInitiationId: string;
     },
   ) {
     this.requireDistinctFleetPair(senderCompanionId, input.recipientCompanionId);
+    const episode = await this.options.store.getEpisode(input.conversationId);
+    const episodeBindingMatches = episode !== null
+      && episode.channelId === input.channelId
+      && episode.initiatedByCompanionId === senderCompanionId
+      && episode.rootInitiationId === input.rootInitiationId
+      && episode.participantCompanionIds.length === 2
+      && episode.participantCompanionIds.includes(senderCompanionId)
+      && episode.participantCompanionIds.includes(input.recipientCompanionId);
+    if (!episodeBindingMatches) {
+      this.options.alarm('icp_permit_binding_mismatch', 'ICP permit episode binding mismatch', {
+        conversationId: input.conversationId,
+        senderCompanionId,
+        recipientCompanionId: input.recipientCompanionId,
+        channelId: input.channelId,
+      });
+      return {
+        outcome: 'mismatch' as const,
+        permit: null,
+        reasonCode: 'permit_mismatch' as const,
+        episode,
+      };
+    }
     const expectedInvalidationFence = await this.options.store.captureInvalidationFence(
       senderCompanionId,
       input.recipientCompanionId,
@@ -293,7 +316,7 @@ export class GatewayIcpAutonomyBroker {
         channelId: input.channelId,
       });
     }
-    return result;
+    return { ...result, episode };
   }
 
   async revokePermit(

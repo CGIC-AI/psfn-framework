@@ -9,6 +9,7 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -248,6 +249,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     turnId?: TurnID,
     placeId?: string,
+    icpCorrelation?: IcpConversationCorrelation,
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -276,7 +278,16 @@ export class MemoryExtractor {
       });
     }
 
-    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId, undefined, turnId, undefined, placeId);
+    await this.trackExtraction(
+      channelId,
+      trigger.triggerReason,
+      canonicalContactId,
+      undefined,
+      turnId,
+      undefined,
+      placeId,
+      icpCorrelation,
+    );
   }
 
   async extract(
@@ -415,6 +426,7 @@ export class MemoryExtractor {
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
+    icpCorrelation?: IcpConversationCorrelation,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
@@ -432,6 +444,7 @@ export class MemoryExtractor {
       turnId,
       groupOptions,
       placeId,
+      icpCorrelation,
     );
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(logicalSessionId, promise);
@@ -463,6 +476,7 @@ export class MemoryExtractor {
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
+    icpCorrelation?: IcpConversationCorrelation,
   ): Promise<void> {
     if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
       log.debug('Skipping stale extraction after session route changed', {
@@ -498,6 +512,7 @@ export class MemoryExtractor {
       turnId,
       sourceSessionId: logicalSessionId,
       recoveredEntries,
+      icpCorrelation,
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
         entries: recentEntries,
         canonicalContactName: extractionCanonicalContactId ? canonicalContactName : undefined,

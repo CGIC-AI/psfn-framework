@@ -699,6 +699,34 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect((messages[0] as any).content).toBe('test notification');
   });
 
+  it('owns rejected async companion notification handlers without an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      client.onCompanionMessage(async () => {
+        throw new Error('durable dedupe lookup failed');
+      });
+
+      conn._emit({
+        method: 'companion.message',
+        params: {
+          message: {
+            id: 'companion-async-rejection',
+            channelId: 'companion-dm:comp-a:comp-b',
+            content: 'test notification',
+          },
+        },
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('routes companion delivery failure notifications to their observe-only handler', () => {
     const failures: unknown[] = [];
     client.onCompanionDeliveryFailure((failure) => failures.push(failure));

@@ -2260,6 +2260,7 @@ describe('SubstrateAgent.handleMessage', () => {
       fatigueDecision: 'not_evaluated' as const,
     };
 
+    const finalizeDelivery = vi.fn(async () => undefined);
     const result = await agent.handleMessage(makeMessage({
       id: correlation.requestId,
       channelId: correlation.channelId,
@@ -2275,11 +2276,18 @@ describe('SubstrateAgent.handleMessage', () => {
         privateTurnTrigger: true,
         icpCorrelation: correlation,
       },
-    }));
+    }), { finalizeDelivery });
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(finalizeDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      content: TEST_ASSISTANT_RESPONSE,
+      metadata: expect.objectContaining({ icpCorrelation: correlation }),
+    }));
+    expect(finalizeDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+      sessionManager.scheduleAutoCompactionBetweenTurns.mock.invocationCallOrder[0]!,
+    );
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       correlation.channelId,
       TEST_ASSISTANT_RESPONSE,
@@ -2303,6 +2311,67 @@ describe('SubstrateAgent.handleMessage', () => {
       requestId: correlation.requestId,
       icpCorrelation: correlation,
     });
+  });
+
+  it('does not start private ICP post-turn work when delivery finalization fails', async () => {
+    const config = makeConfig({ companionId: '11111111-1111-4111-8111-111111111111' });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.contactStore = {
+      getById: vi.fn(async () => ({
+        id: 'contact-nova',
+        displayName: 'Nova',
+        trustLevel: 'trusted',
+        relationshipType: 'ai_companion',
+        isMachineIntelligence: true,
+        firstSeen: '2026-07-01T00:00:00.000Z',
+        lastSeen: '2026-07-13T00:00:00.000Z',
+      })),
+      getEmotionalSnapshot: vi.fn(async () => undefined),
+    } as unknown as ContactStore;
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '33333333-3333-4333-8333-333333333333',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerContactId: 'contact-nova',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+
+    await expect(agent.handleMessage(makeMessage({
+      id: correlation.requestId,
+      channelId: correlation.channelId,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private target turn trigger',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        canonicalContactId: correlation.peerContactId,
+        authorIsMachineIntelligence: true,
+        privateTurnTrigger: true,
+        icpCorrelation: correlation,
+      },
+    }), {
+      finalizeDelivery: async () => {
+        throw new Error('peer route unavailable');
+      },
+    })).rejects.toThrow('peer route unavailable');
+
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
   });
 
   it('records assistant message in session after LLM call', async () => {

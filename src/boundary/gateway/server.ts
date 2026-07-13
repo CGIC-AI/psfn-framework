@@ -704,6 +704,7 @@ export class GatewayServer {
     let initiationPermitOutcome: 'consumed' | 'replayed' | undefined;
     let initiationCandidateId: string | undefined;
     let initiationPermitExpiresAtMs: number | undefined;
+    let initiationCorrelation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation | undefined;
     if (initiation) {
       if (!this.icpAutonomyBroker) {
         throw new JSONRPCErrorException(
@@ -729,6 +730,7 @@ export class GatewayServer {
         conversationId: initiation.conversationId,
         recipientCompanionId: initiation.recipientCompanionId,
         channelId,
+        rootInitiationId: correlation.rootInitiationId,
       });
       if ((consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed')
         || !consumption.permit) {
@@ -749,6 +751,10 @@ export class GatewayServer {
       initiationPermitOutcome = consumption.outcome;
       initiationCandidateId = consumption.permit.candidateId;
       initiationPermitExpiresAtMs = consumption.permit.expiresAtMs;
+      initiationCorrelation = {
+        ...correlation,
+        rootInitiationId: consumption.episode.rootInitiationId,
+      };
     }
 
     const stableInitiationMessageId = initiationCandidateId
@@ -820,7 +826,7 @@ export class GatewayServer {
       routing: {
         source: 'companion',
         authorIsMachineIntelligence: true,
-        ...(initiation ? { icpCorrelation: initiation.correlation } : {}),
+        ...(initiationCorrelation ? { icpCorrelation: initiationCorrelation } : {}),
       },
     };
 

@@ -1667,6 +1667,73 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
 });
 
 describe('handleMessageForTurn compaction scheduling', () => {
+  it('threads ICP lineage into extraction, intention, emotion, and compaction side work', async () => {
+    const eventBus = new EventBus();
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({ systemPrompt: 'System prompt', messages: [] })),
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => null),
+      recordAssistantMessage: vi.fn(() => 2),
+      configOverrides: { companionId: '11111111-1111-4111-8111-111111111111' },
+    });
+    const maybeExtract = vi.fn(async () => undefined);
+    runtime.memoryExtractor = { maybeExtract };
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerContactId: 'contact-nova',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+    const message = createMessage(correlation.requestId, {
+      channelId: correlation.channelId,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        canonicalContactId: correlation.peerContactId,
+        authorIsMachineIntelligence: true,
+        privateTurnTrigger: true,
+        icpCorrelation: correlation,
+      },
+    });
+
+    await handleMessageForTurn(runtime, message, { finalizeDelivery: async () => undefined });
+
+    expect(maybeExtract).toHaveBeenCalledWith(
+      correlation.channelId,
+      'contact-1',
+      correlation.turnId,
+      undefined,
+      correlation,
+    );
+    expect(runtime.runIntentionPostTurnHooks).toHaveBeenCalledWith(
+      expect.objectContaining({ icpCorrelation: correlation }),
+    );
+    expect(runtime.emotionSelfModelRuntime.triggerEmotionAppraisal).toHaveBeenCalledWith(
+      expect.objectContaining({ icpCorrelation: correlation }),
+    );
+    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(
+      expect.objectContaining({ icpCorrelation: correlation }),
+    );
+  });
+
   it('awaits the post-turn drain gate before starting pre-turn identity work', async () => {
     const eventBus = new EventBus();
     const postTurnDrain = createDeferred<void>();

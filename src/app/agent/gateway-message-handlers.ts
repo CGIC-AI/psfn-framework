@@ -72,6 +72,13 @@ export interface GatewayMessageGateway {
     skippedOffline: string[];
     permitOutcome: 'consumed' | 'replayed';
   }>;
+  companionConsumeInitiationPermit(input: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    rootInitiationId: string;
+  }): Promise<{ outcome: string }>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
@@ -79,7 +86,10 @@ export interface GatewayMessageGateway {
 }
 
 export interface GatewayMessageAgentLoop {
-  handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
+  handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle?: { finalizeDelivery(response: AgentResponse): Promise<void> },
+  ): Promise<AgentResponse>;
   observeMessage(message: SubstrateMessage): Promise<void>;
   /** Resolves when the agent has finished all in-flight work (prompt + steering + follow-ups). */
   waitForIdle(): Promise<void>;
@@ -87,6 +97,12 @@ export interface GatewayMessageAgentLoop {
     channelId: string,
     sourceMessageId: string,
   ): Promise<RecordedIcpInitiationTurn | null> | RecordedIcpInitiationTurn | null;
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<Pick<IcpDeliveryObservation, 'status'> | null>
+    | Pick<IcpDeliveryObservation, 'status'>
+    | null;
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): Promise<boolean> | boolean;
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
 }
@@ -719,7 +735,44 @@ export function registerGatewayMessageHandlers(
     const dedupeKey = buildMessageDedupKey('companion', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
-    if (await agentLoop.hasRecordedSourceMessage(message.channelId, message.id)) {
+    let alreadyRecorded: boolean;
+    try {
+      alreadyRecorded = await agentLoop.hasRecordedSourceMessage(message.channelId, message.id);
+    } catch (error) {
+      const errorText = toErrorMessage(error);
+      log.error('Failed to read durable companion message dedupe state', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('companion.message.durable_dedupe_error', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: errorText,
+      });
+      try {
+        await gateway.companionReportFailure({
+          channelId: message.channelId,
+          messageId: message.id,
+          reason: 'processing_failed',
+        });
+      } catch (reportError) {
+        const reportErrorText = toErrorMessage(reportError);
+        log.error('Failed to report durable companion dedupe lookup failure', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: reportErrorText,
+        });
+        safeguardAuditTrail.append('companion.message.failure_report_error', {
+          channelId: message.channelId,
+          messageId: message.id,
+          reason: 'processing_failed',
+          error: reportErrorText,
+        });
+      }
+      return;
+    }
+    if (alreadyRecorded) {
       log.warn('Dropping restart-replayed companion notification already present in L0', {
         channelId: message.channelId,
         messageId: message.id,
@@ -817,6 +870,7 @@ export function registerGatewayMessageHandlers(
       agent: agentLoop,
       gateway: {
         sendInitiation: (input) => gateway.companionSendInitiation(input),
+        consumeInitiationPermit: (input) => gateway.companionConsumeInitiationPermit(input),
       },
       ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
     }),

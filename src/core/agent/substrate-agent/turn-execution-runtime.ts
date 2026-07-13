@@ -429,7 +429,17 @@ export interface TurnExecutionRuntime {
     turnId: TurnID;
     completedAt: number;
     canonicalContactKey?: string;
+    icpCorrelation?: import('../../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation;
   }) => Promise<void>;
+}
+
+/**
+ * Delivery barrier for a private ICP target turn. The finalizer owns transport
+ * and durable delivery-state recording. Post-turn work cannot begin until it
+ * resolves successfully.
+ */
+export interface TurnDeliveryLifecycle {
+  finalizeDelivery(response: AgentResponse): Promise<void>;
 }
 
 function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, unknown> {
@@ -599,11 +609,18 @@ function buildSuppressedFatigueResponse(input: {
 export async function handleMessageForTurn(
   runtime: TurnExecutionRuntime,
   message: SubstrateMessage,
+  deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
   const requestId = message.id;
   const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
+  if (privateIcpCorrelation && !deliveryLifecycle) {
+    throw new Error('Private ICP target turn requires a delivery finalizer');
+  }
+  if (!privateIcpCorrelation && deliveryLifecycle) {
+    throw new Error('Delivery finalization is restricted to private ICP target turns');
+  }
   if (privateIcpCorrelation) {
     if (message.channelType !== 'companion'
       || message.authorId !== 'system:icp-initiation'
@@ -796,6 +813,7 @@ export async function handleMessageForTurn(
         model: responseModel,
         fatigue: fatigueDecision.metadata,
       });
+      await deliveryLifecycle?.finalizeDelivery(suppressedResponse);
       observability.emitObservedTurnStage('end', {
         durationMs: completedAt - startTime,
         ttftMs: 0,
@@ -1139,14 +1157,6 @@ export async function handleMessageForTurn(
       );
     }
 
-    if (runtime.skillsRuntime) {
-      const toolSummary = runtime.buildTurnToolSummary(turnMessages);
-      const nudge = runtime.evaluateReflectionNudge(toolSummary);
-      if (nudge) {
-        runtime.sessionManager.appendSystemNote(message.channelId, nudge);
-      }
-    }
-
     const completedAt = Date.now();
     const responseDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> = {};
     if (fallbackDiagnostics?.fallback) {
@@ -1214,6 +1224,16 @@ export async function handleMessageForTurn(
         ...(honorNoReply ? { noReply: noReplyDecision } : {}),
       },
     };
+    await deliveryLifecycle?.finalizeDelivery(agentResponse);
+
+    if (runtime.skillsRuntime) {
+      const toolSummary = runtime.buildTurnToolSummary(turnMessages);
+      const nudge = runtime.evaluateReflectionNudge(toolSummary);
+      if (nudge) {
+        runtime.sessionManager.appendSystemNote(message.channelId, nudge);
+      }
+    }
+
     await schedulePostTurnWork({
       runtime,
       message,

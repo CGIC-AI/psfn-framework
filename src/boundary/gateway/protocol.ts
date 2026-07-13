@@ -759,6 +759,7 @@ export interface IcpPermitConsumeParams {
   conversationId: string;
   recipientCompanionId: string;
   channelId: string;
+  rootInitiationId: string;
   companionId?: string;
 }
 

@@ -34,6 +34,13 @@ import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import type { GatewayRpcConnection } from './transport.js';
+import { GatewayClient } from './client.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
+import { SessionManager } from '../../core/session/manager.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../../core/session/icp-correlation-metadata.js';
+import type { AgentResponse, SubstrateMessage, TurnID } from '../../shared/contracts/runtime.js';
+import { createIcpTargetChannelInitiator } from '../../app/agent/icp-target-channel-initiation.js';
 
 vi.mock('./transport.js', () => ({
   createSocketServer: vi.fn(),
@@ -512,10 +519,299 @@ async function setup(
     onConnection!(conn.conn);
     return conn;
   };
-  return { server, connect, store, llmProvider, eventBus };
+  const connectClient = async (companionId: string): Promise<GatewayClient> => {
+    const clientEmitter = new EventEmitter();
+    const serverEmitter = new EventEmitter();
+    let destroyed = false;
+    const clientConnection = {
+      send(message: unknown): boolean {
+        queueMicrotask(() => serverEmitter.emit('message', message));
+        return true;
+      },
+      onMessage(handler: (message: unknown) => void): void {
+        clientEmitter.on('message', handler);
+      },
+      on(event: string, handler: (...args: unknown[]) => void): void {
+        clientEmitter.on(event, handler);
+      },
+      destroy(): void {
+        destroyed = true;
+        queueMicrotask(() => serverEmitter.emit('close'));
+      },
+      get destroyed(): boolean {
+        return destroyed;
+      },
+    } as GatewayRpcConnection;
+    const serverConnection = {
+      send(message: unknown): boolean {
+        queueMicrotask(() => clientEmitter.emit('message', message));
+        return true;
+      },
+      onMessage(handler: (message: unknown) => void): void {
+        serverEmitter.on('message', handler);
+      },
+      on(event: string, handler: (...args: unknown[]) => void): void {
+        serverEmitter.on(event, handler);
+      },
+      destroy(): void {
+        destroyed = true;
+      },
+      get destroyed(): boolean {
+        return destroyed;
+      },
+    } as GatewayRpcConnection;
+    onConnection!(serverConnection);
+    const client = new GatewayClient(clientConnection, 16, {
+      companionId,
+      companionAuthToken: deriveCompanionAuthToken(companionId, 'agent', KEYRING),
+    });
+    await client.identifyAsAgent();
+    return client;
+  };
+  return { server, connect, connectClient, store, llmProvider, eventBus };
 }
 
 describe('GatewayServer ICP autonomy RPC', () => {
+  it('runs initiator → gateway → concrete client → recipient with durable restart truth', async () => {
+    const { connectClient } = await setup();
+    const clientA = await connectClient(A);
+    const clientB = await connectClient(B);
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-production-shape-'));
+    const config = (dataDir: string): SubstrateConfig => ({
+      dataDir,
+      companionDataDir: dataDir,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 5,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 128_000,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 70,
+    } as SubstrateConfig);
+    const senderStorePath = join(root, 'sender', 'sessions');
+    const recipientStorePath = join(root, 'recipient', 'sessions');
+    const senderManager = new SessionManager(
+      new SessionStore(senderStorePath),
+      config(join(root, 'sender')),
+    );
+    const recipientManager = new SessionManager(
+      new SessionStore(recipientStorePath),
+      config(join(root, 'recipient')),
+    );
+    const candidateId = '25252525-2525-4525-8525-252525252525';
+    let postTurnStarted = 0;
+    let receivedMessage: SubstrateMessage | null = null;
+
+    try {
+      clientB.onCompanionMessage(async (message) => {
+        receivedMessage = message;
+        const correlation = message.routing?.icpCorrelation;
+        if (!correlation) throw new Error('recipient expected gateway-stamped ICP correlation');
+        recipientManager.recordUserMessage(
+          message.channelId,
+          message.content,
+          message.authorId,
+          message.authorName,
+          message.isDirectMessage,
+          'recipient-contact-a',
+          {
+            turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082' as TurnID,
+            requestId: message.id,
+            sourceMessageId: message.id,
+            metadata: buildSessionMetadataWithIcpCorrelation(undefined, correlation),
+          },
+        );
+      });
+      await clientB.companionPublishAvailability({
+        state: 'open_to_chat',
+        expiresAtMs: Date.now() + 120_000,
+        revision: 1,
+      });
+      const issue = await clientA.companionIssueInitiationPermit({
+        candidate: candidate(candidateId),
+        channelId: CHANNEL,
+        permitExpiresAtMs: Date.now() + 60_000,
+      });
+      if (!issue.permit) throw new Error('test expected issued permit');
+
+      const initiator = createIcpTargetChannelInitiator({
+        localCompanionId: A,
+        agent: {
+          async handleMessage(message, deliveryLifecycle): Promise<AgentResponse> {
+            const correlation = message.routing?.icpCorrelation;
+            if (!correlation) throw new Error('sender expected ICP correlation');
+            senderManager.recordAssistantMessage(
+              message.channelId,
+              'A production-shape hello from A to B.',
+              message.authorId,
+              message.isDirectMessage,
+              correlation.peerContactId,
+              {
+                turnId: correlation.turnId as TurnID,
+                requestId: correlation.requestId,
+                sourceMessageId: correlation.messageId,
+                metadata: buildSessionMetadataWithIcpCorrelation(
+                  undefined,
+                  correlation,
+                  { deliveryStatus: 'pending' },
+                ),
+              },
+            );
+            const response: AgentResponse = {
+              content: 'A production-shape hello from A to B.',
+              channelId: message.channelId,
+              metadata: {
+                model: 'production-shape-test',
+                inputTokens: 1,
+                outputTokens: 1,
+                durationMs: 1,
+                turnId: correlation.turnId as TurnID,
+                requestId: correlation.requestId,
+                icpCorrelation: correlation,
+              },
+            };
+            await deliveryLifecycle.finalizeDelivery(response);
+            postTurnStarted += 1;
+            return response;
+          },
+          findRecordedIcpInitiation: (channelId, sourceMessageId) => (
+            senderManager.findRecordedIcpInitiation(channelId, sourceMessageId)
+          ),
+          findIcpDeliveryObservation: (channelId, sourceMessageId) => (
+            senderManager.findIcpDeliveryObservation(channelId, sourceMessageId)
+          ),
+          recordIcpDeliveryObservation: observation => (
+            senderManager.recordIcpDeliveryObservation(observation)
+          ),
+        },
+        gateway: {
+          sendInitiation: input => clientA.companionSendInitiation(input),
+          consumeInitiationPermit: input => clientA.companionConsumeInitiationPermit(input),
+        },
+        authorName: 'Alpha',
+      });
+
+      const result = await initiator.initiate({
+        permit: issue.permit,
+        rootInitiationId: ROOT,
+        peerContactId: 'sender-contact-b',
+      });
+      expect(result.disposition).toBe('delivered');
+      await vi.waitFor(() => {
+        expect(receivedMessage).toMatchObject({
+          authorId: A,
+          content: 'A production-shape hello from A to B.',
+        });
+      });
+      expect(postTurnStarted).toBe(1);
+      expect(senderManager.getRecentMessages(CHANNEL, 10)).toEqual([
+        expect.objectContaining({
+          role: 'assistant',
+          content: 'A production-shape hello from A to B.',
+        }),
+      ]);
+      expect(recipientManager.hasRecordedSourceMessage(
+        CHANNEL,
+        `companion-initiation-${candidateId}`,
+      )).toBe(true);
+
+      const restartedSender = new SessionManager(
+        new SessionStore(senderStorePath),
+        config(join(root, 'sender')),
+      );
+      expect(restartedSender.findRecordedIcpInitiation(
+        CHANNEL,
+        `icp-initiation:${candidateId}`,
+      )).toMatchObject({ content: 'A production-shape hello from A to B.' });
+      expect(restartedSender.findIcpDeliveryObservation(
+        CHANNEL,
+        `icp-initiation:${candidateId}`,
+      )).toEqual({ status: 'delivered' });
+    } finally {
+      clientA.destroy();
+      clientB.destroy();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('quarantines a concrete-client delivery failure before sender post-turn work', async () => {
+    const { connectClient, store } = await setup();
+    const clientA = await connectClient(A);
+    const clientB = await connectClient(B);
+    const candidateId = '26262626-2626-4626-8626-262626262626';
+    const observations: Array<{ status: string; error?: string }> = [];
+    let postTurnStarted = 0;
+
+    try {
+      await clientB.companionPublishAvailability({
+        state: 'open_to_chat',
+        expiresAtMs: Date.now() + 120_000,
+        revision: 1,
+      });
+      const issue = await clientA.companionIssueInitiationPermit({
+        candidate: candidate(candidateId),
+        channelId: CHANNEL,
+        permitExpiresAtMs: Date.now() + 60_000,
+      });
+      if (!issue.permit) throw new Error('test expected issued permit');
+      clientB.destroy();
+      await vi.waitFor(() => {
+        expect(store.permits.get(issue.permit!.permitId)?.status).toBe('revoked');
+      });
+
+      const initiator = createIcpTargetChannelInitiator({
+        localCompanionId: A,
+        agent: {
+          async handleMessage(message, deliveryLifecycle): Promise<AgentResponse> {
+            const correlation = message.routing?.icpCorrelation;
+            if (!correlation) throw new Error('test expected ICP correlation');
+            const response: AgentResponse = {
+              content: 'This failed delivery must stay quarantined.',
+              channelId: message.channelId,
+              metadata: {
+                model: 'production-shape-test',
+                inputTokens: 1,
+                outputTokens: 1,
+                durationMs: 1,
+                turnId: correlation.turnId as TurnID,
+                requestId: correlation.requestId,
+                icpCorrelation: correlation,
+              },
+            };
+            await deliveryLifecycle.finalizeDelivery(response);
+            postTurnStarted += 1;
+            return response;
+          },
+          findRecordedIcpInitiation: async () => null,
+          findIcpDeliveryObservation: async () => null,
+          recordIcpDeliveryObservation: async observation => {
+            observations.push({
+              status: observation.status,
+              ...(observation.error ? { error: observation.error } : {}),
+            });
+          },
+        },
+        gateway: {
+          sendInitiation: input => clientA.companionSendInitiation(input),
+          consumeInitiationPermit: input => clientA.companionConsumeInitiationPermit(input),
+        },
+      });
+
+      await expect(initiator.initiate({
+        permit: issue.permit,
+        rootInitiationId: ROOT,
+        peerContactId: 'sender-contact-b',
+      })).rejects.toThrow();
+      expect(postTurnStarted).toBe(0);
+      expect(observations).toEqual([
+        expect.objectContaining({ status: 'failed' }),
+      ]);
+    } finally {
+      clientA.destroy();
+      clientB.destroy();
+    }
+  });
+
   it('authenticates coarse availability and closes deterministic gates with zero LLM calls', async () => {
     const { connect, llmProvider, eventBus } = await setup({ ...OPEN_POLICY, quietHours: true });
     const a = connect();
@@ -598,7 +894,20 @@ describe('GatewayServer ICP autonomy RPC', () => {
       },
     };
 
-    const first = await invoke(a, 204, 'companion.message.send', sendParams);
+    const forgedRoot = await invoke(a, 204, 'companion.message.send', {
+      ...sendParams,
+      initiation: {
+        ...sendParams.initiation,
+        correlation: {
+          ...correlation,
+          rootInitiationId: '30303030-3030-4030-8030-303030303030',
+        },
+      },
+    });
+    expect(forgedRoot.error?.message).toContain('permit_mismatch');
+    expect(store.permits.get(permit.permitId)).toMatchObject({ status: 'issued', revision: 1 });
+
+    const first = await invoke(a, 205, 'companion.message.send', sendParams);
     expect(first.result).toMatchObject({
       channelId: CHANNEL,
       messageId: `companion-initiation-${candidateId}`,
@@ -616,7 +925,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
       routing: { source: 'companion', icpCorrelation: correlation },
     });
 
-    const replay = await invoke(a, 205, 'companion.message.send', sendParams);
+    const replay = await invoke(a, 206, 'companion.message.send', sendParams);
     expect(replay.result).toMatchObject({
       messageId: `companion-initiation-${candidateId}`,
       permitOutcome: 'replayed',
@@ -763,6 +1072,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
         conversationId: permit.conversationId,
         recipientCompanionId: B,
         channelId: CHANNEL,
+        rootInitiationId: ROOT,
       });
       await consumeGate.reached;
 

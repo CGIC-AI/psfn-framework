@@ -145,6 +145,18 @@ export interface IcpConversationCorrelation {
   fatigueReasonCode?: IcpAutonomyReasonCode;
 }
 
+export function derivePostTurnIcpConversationCorrelation(
+  value: IcpConversationCorrelation,
+  costPurpose: Extract<IcpConversationCorrelation['costPurpose'], 'summary' | 'extraction' | 'sidecar'>,
+): IcpConversationCorrelation {
+  const correlation = parseIcpConversationCorrelation(value);
+  return parseIcpConversationCorrelation({
+    ...correlation,
+    costPurpose,
+    costOriginStage: 'post_turn',
+  });
+}
+
 export type RedactedIcpInitiationPermit = Omit<IcpInitiationPermit, 'permitId'> & {
   permitId: '[redacted]';
 };

@@ -402,6 +402,7 @@ export async function schedulePostTurnWork(input: {
         // threaded into memory formation so memories gain a `location:<placeId>`
         // tag. Absent (non-satellite turn) → no location tag (fail-closed).
         message.routing?.satellite?.placeId,
+        message.routing?.icpCorrelation,
       ),
       onError: (error) => {
         log.error('Memory extraction error', { error: String(error) });
@@ -418,6 +419,9 @@ export async function schedulePostTurnWork(input: {
       turnId,
       completedAt,
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Intention post-turn hook dispatch error', {
@@ -438,6 +442,9 @@ export async function schedulePostTurnWork(input: {
       internalState,
       templateVariables,
       conversationScope,
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Emotion appraisal error', {
@@ -458,6 +465,9 @@ export async function schedulePostTurnWork(input: {
       userId: continuitySubjectKey,
       compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
       turnBudgetCharacteristics,
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Auto-compaction dispatch error', {

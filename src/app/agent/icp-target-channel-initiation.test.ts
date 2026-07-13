@@ -50,9 +50,17 @@ function response(message: SubstrateMessage): AgentResponse {
 }
 
 function createHarness(recorded: RecordedIcpInitiationTurn | null = null) {
-  const handleMessage = vi.fn(async (message: SubstrateMessage) => response(message));
+  const handleMessage = vi.fn(async (
+    message: SubstrateMessage,
+    deliveryLifecycle: { finalizeDelivery(response: AgentResponse): Promise<void> },
+  ) => {
+    const turnResponse = response(message);
+    await deliveryLifecycle.finalizeDelivery(turnResponse);
+    return turnResponse;
+  });
   const findRecordedInitiation = vi.fn(async () => recorded);
   const recordDeliveryObservation = vi.fn(async () => {});
+  const findIcpDeliveryObservation = vi.fn(async () => null);
   const sendInitiation = vi.fn(async () => ({
     channelId: CHANNEL,
     messageId: `companion-initiation-${CANDIDATE}`,
@@ -60,22 +68,26 @@ function createHarness(recorded: RecordedIcpInitiationTurn | null = null) {
     skippedOffline: [],
     permitOutcome: 'consumed' as const,
   }));
+  const consumeInitiationPermit = vi.fn(async () => ({ outcome: 'consumed' as const }));
   const initiator = createIcpTargetChannelInitiator({
     localCompanionId: SENDER,
     agent: {
       handleMessage,
       findRecordedIcpInitiation: findRecordedInitiation,
+      findIcpDeliveryObservation,
       recordIcpDeliveryObservation: recordDeliveryObservation,
     },
-    gateway: { sendInitiation },
+    gateway: { sendInitiation, consumeInitiationPermit },
     authorName: 'Selene',
   });
   return {
     initiator,
     handleMessage,
     findRecordedInitiation,
+    findIcpDeliveryObservation,
     recordDeliveryObservation,
     sendInitiation,
+    consumeInitiationPermit,
   };
 }
 
@@ -90,7 +102,7 @@ describe('ICP target-channel initiation', () => {
     });
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
-    const message = harness.handleMessage.mock.calls[0]?.[0];
+    const message = harness.handleMessage.mock.calls[0][0];
     expect(message).toMatchObject({
       id: `icp-initiation:${CANDIDATE}`,
       channelId: CHANNEL,
@@ -119,7 +131,7 @@ describe('ICP target-channel initiation', () => {
         },
       },
     });
-    expect(message?.content).toBe(
+    expect(message.content).toBe(
       'Initiate one natural message to the peer in this channel, using the ordinary channel context.',
     );
     expect(harness.sendInitiation).toHaveBeenCalledWith({
@@ -154,8 +166,8 @@ describe('ICP target-channel initiation', () => {
       error: 'peer route unavailable',
     }));
 
-    const firstMessage = firstHarness.handleMessage.mock.calls[0]?.[0];
-    if (!firstMessage?.routing?.icpCorrelation) throw new Error('missing test correlation');
+    const firstMessage = firstHarness.handleMessage.mock.calls[0][0];
+    if (!firstMessage.routing?.icpCorrelation) throw new Error('missing test correlation');
     const restartedHarness = createHarness({
       content: 'Hey Nova, I was thinking about our garden plans.',
       correlation: firstMessage.routing.icpCorrelation,
@@ -196,6 +208,42 @@ describe('ICP target-channel initiation', () => {
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.sendInitiation).toHaveBeenCalledTimes(1);
     expect(harness.recordDeliveryObservation).toHaveBeenCalledTimes(1);
+  });
+
+  it('atomically consumes and durably terminates a suppressed one-use permit', async () => {
+    const harness = createHarness();
+    harness.handleMessage.mockImplementationOnce(async (message, deliveryLifecycle) => {
+      const turnResponse = { ...response(message), content: '' };
+      await deliveryLifecycle.finalizeDelivery(turnResponse);
+      return turnResponse;
+    });
+
+    await expect(harness.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).resolves.toMatchObject({ disposition: 'suppressed' });
+
+    expect(harness.consumeInitiationPermit).toHaveBeenCalledWith({
+      permitId: PERMIT_ID,
+      conversationId: CONVERSATION,
+      recipientCompanionId: RECIPIENT,
+      channelId: CHANNEL,
+      rootInitiationId: ROOT,
+    });
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'suppressed',
+    }));
+
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({ status: 'suppressed' });
+    await expect(harness.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow('already durably suppressed');
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.consumeInitiationPermit).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when a permit is not bound to the local companion', async () => {

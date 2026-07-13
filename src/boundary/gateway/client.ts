@@ -141,6 +141,7 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -160,7 +161,7 @@ export interface GatewayClientOptions {
    * (COMPANION_ID via load-config). Stamped on gateway.client.identify and on
    * LLM correlation params so the gateway can verify companion identity.
    */
-  companionId?: string;
+  companionId?: CompanionId;
   /** Fleet-scoped proof paired with companionId during gateway identification. */
   companionAuthToken?: string;
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
@@ -210,7 +211,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
-  private readonly companionId?: string;
+  private readonly companionId?: CompanionId;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
 
@@ -218,11 +219,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.conn = conn;
     this.embeddingDims = embeddingDims;
     if (options.companionId !== undefined) {
-      const trimmed = options.companionId.trim();
-      if (!trimmed) {
-        throw new Error('GatewayClient companionId must be a non-empty string when provided');
-      }
-      this.companionId = trimmed;
+      this.companionId = createCompanionId(options.companionId, 'GatewayClient companionId');
     }
     if (options.companionAuthToken !== undefined) {
       const trimmed = options.companionAuthToken.trim();

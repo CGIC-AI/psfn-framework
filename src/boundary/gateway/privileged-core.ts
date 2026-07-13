@@ -12,6 +12,7 @@ import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   composeGatewayIntakeScreening,
   resolveIntakeScreenerBackend,
@@ -48,7 +49,7 @@ export interface GatewayPrivilegedCore {
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
-    discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
+    discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
   }): GatewayServer;

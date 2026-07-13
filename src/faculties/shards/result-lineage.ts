@@ -1,6 +1,7 @@
 import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import { normalizePresenceMetadata } from '../../core/agent/presence-metadata.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import type {
   ShardResultLineageEnvelope,
   ShardResultLineageSatelliteRouting,
@@ -24,8 +25,14 @@ function normalizeNonEmptyString(value: string, fieldName: string): string {
   return normalized;
 }
 
-export function deriveShardCompanionId(coreCompanionId: string, shardId: string): string {
-  return `${normalizeNonEmptyString(coreCompanionId, 'core companion id')}::${normalizeNonEmptyString(shardId, 'shard id')}`;
+export function deriveShardCompanionId(
+  coreCompanionId: CompanionId,
+  shardId: string,
+): CompanionId {
+  return createCompanionId(
+    `${coreCompanionId}::${normalizeNonEmptyString(shardId, 'shard id')}`,
+    'Shard lineage shard companion id',
+  );
 }
 
 function normalizeChannelType(value: SubstrateMessage['channelType']): ChannelType {
@@ -107,7 +114,7 @@ export function buildShardLineageEnvelope(input: {
 }): ShardResultLineageEnvelope {
   const sourceContext = normalizeSourceContext(input.sourceContext);
   const satelliteRouting = normalizeSatelliteRouting(input.satelliteRouting);
-  const coreCompanionId = normalizeNonEmptyString(input.coreCompanionId, 'core companion id');
+  const coreCompanionId = createCompanionId(input.coreCompanionId, 'Shard lineage core companion id');
   const shardId = normalizeNonEmptyString(input.shardId, 'shard id');
   const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
 

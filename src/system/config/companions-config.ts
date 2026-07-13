@@ -6,6 +6,7 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { isStrictSubpath } from '../../persistence/layout.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
@@ -52,7 +53,7 @@ const COMPANIONS_ROOT_KEYS = ['companions'] as const;
 
 export interface CompanionFleetEntry {
   /** RFC-4122 UUID identifying the companion across the fleet. */
-  companionId: string;
+  companionId: CompanionId;
   /** Relative path (under the persistence root) holding the companion's data. */
   companionDataDir: string;
   /** Relative path to the companion's character card. */
@@ -115,14 +116,14 @@ function requireNonEmptyString(value: unknown, field: string): string {
   return trimmed;
 }
 
-function requireCompanionId(value: unknown, field: string): string {
+function requireCompanionId(value: unknown, field: string): CompanionId {
   const id = requireNonEmptyString(value, field);
   if (!COMPANION_ID_PATTERN.test(id)) {
     throw new Error(
       `${COMPANIONS_ERROR_PREFIX}: ${field} must be a lowercase RFC-4122 UUID, got ${JSON.stringify(value)}`,
     );
   }
-  return id;
+  return createCompanionId(id, field);
 }
 
 function requirePostgresSchema(value: unknown, field: string): string {
@@ -472,7 +473,7 @@ function assertRuntimeIdentityValue(
 /** Bind one process to exactly one resolved fleet entry or fail startup. */
 export function resolveCompanionRuntimeIdentity(input: {
   fleet: ResolvedCompanionsFleetConfig;
-  companionId: string;
+  companionId: CompanionId;
   companionDataDir?: string;
   characterCardPath?: string;
   postgresSchema?: string;

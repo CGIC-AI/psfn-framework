@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createCompanionId,
   createGatewayRoutingEnvelope,
   createShardLineage,
   deriveShardRoutingEnvelope,
 } from './envelope.js';
 
+const COMPANION_ALPHA = createCompanionId('companion-alpha');
+
 describe('routing envelope', () => {
   it('derives shard companion ids from the tenancy companion id and shard id', () => {
     const lineage = createShardLineage({
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA,
       shardId: 'shard-42',
     });
 
@@ -22,9 +25,9 @@ describe('routing envelope', () => {
 
   it('keeps shard lineage separate from subagent addressing inside the gateway envelope', () => {
     const envelope = createGatewayRoutingEnvelope({
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA,
       shard: createShardLineage({
-        companionId: 'companion-alpha',
+        companionId: COMPANION_ALPHA,
         shardId: 'shard-99',
         parentShardId: 'shard-root',
       }),
@@ -55,7 +58,7 @@ describe('routing envelope', () => {
 
   it('derives nested shard routing envelopes without changing the tenancy boundary', () => {
     const envelope = deriveShardRoutingEnvelope({
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA,
       shardId: 'shard-child',
       parentShardId: 'shard-parent',
     });
@@ -72,7 +75,7 @@ describe('routing envelope', () => {
 
   it('marks forked shard lineage explicitly without collapsing subagent semantics into shard routing', () => {
     const envelope = deriveShardRoutingEnvelope({
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA,
       shardId: 'shard-forked',
       creationMode: 'forked',
       parentShardId: 'shard-parent',

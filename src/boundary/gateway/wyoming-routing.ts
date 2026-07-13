@@ -1,6 +1,7 @@
 import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { VoiceStreamMetadata } from './protocol.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 
 interface WyomingStreamMetadataFields {
   source?: string;
@@ -20,7 +21,7 @@ export function applyWyomingRoutingPolicy(
   message: SubstrateMessage,
   metadata: VoiceStreamMetadata | undefined,
   config: WyomingShardRoutingConfig,
-  companionId: string,
+  companionId: CompanionId,
 ): SubstrateMessage {
   const evaluation = resolveWyomingRoutingMetadata(message, metadata);
   if (!evaluation.isWyoming) {

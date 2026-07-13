@@ -37,6 +37,8 @@
 // context, not a triggered turn. No auto-greeting is dispatched on arrival;
 // a free-time/outreach lane choosing to speak into a room is future work.
 
+import { createCompanionId, type CompanionId } from '../routing/companion-id.js';
+
 export const COMPANION_CHANNEL_TYPE = 'companion';
 
 export const COMPANION_ROOM_CHANNEL_PREFIX = 'companion-room:';
@@ -44,7 +46,7 @@ export const COMPANION_DM_CHANNEL_PREFIX = 'companion-dm:';
 
 export type ParsedCompanionChannel =
   | { kind: 'room'; placeId: string }
-  | { kind: 'dm'; participants: [string, string] };
+  | { kind: 'dm'; participants: [CompanionId, CompanionId] };
 
 function isValidIdSegment(value: string): boolean {
   // Companion ids are UUIDs and place ids follow the places-registry token
@@ -67,9 +69,12 @@ export function composeCompanionRoomChannelId(placeId: string): string {
  * normalized (lexicographic sort) so both sides derive the same channelId —
  * one channel, one fatigue budget, regardless of who addresses whom.
  */
-export function composeCompanionDmChannelId(companionA: string, companionB: string): string {
-  const a = companionA.trim();
-  const b = companionB.trim();
+export function composeCompanionDmChannelId(
+  companionA: CompanionId,
+  companionB: CompanionId,
+): string {
+  const a = createCompanionId(companionA, 'companion DM participant A');
+  const b = createCompanionId(companionB, 'companion DM participant B');
   if (!isValidIdSegment(a) || !isValidIdSegment(b)) {
     throw new Error(
       `Invalid companion DM participant ids: ${JSON.stringify(companionA)}, ${JSON.stringify(companionB)}`,
@@ -102,7 +107,13 @@ export function parseCompanionChannelId(channelId: string): ParsedCompanionChann
     const [a, b] = parts;
     if (!isValidIdSegment(a) || !isValidIdSegment(b)) return null;
     if (a === b || a > b) return null;
-    return { kind: 'dm', participants: [a, b] };
+    return {
+      kind: 'dm',
+      participants: [
+        createCompanionId(a, 'companion DM participant A'),
+        createCompanionId(b, 'companion DM participant B'),
+      ],
+    };
   }
   return null;
 }

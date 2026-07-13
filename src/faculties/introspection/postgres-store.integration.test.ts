@@ -212,6 +212,7 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
             getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
               ? records
               : [],
+            isSessionRetiredOrQuarantined: () => false,
           });
           const contexts: LLMContext[] = [];
           const completions = [

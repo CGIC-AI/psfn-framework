@@ -1,6 +1,46 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SessionManager } from '../../core/session/manager.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createTurnRecordIntrospectionSource } from './source.js';
+
+function makeConfig(dataDir: string): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir,
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16_384,
+    extractionMaxTokens: 8_192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: {
+        model: 'test-model',
+        provider: 'test',
+        maxTokens: 16_384,
+        contextWindow: 1_000,
+      },
+    },
+  };
+}
 
 function record(overrides: Partial<TurnRecord> = {}): TurnRecord {
   const turnId = overrides.turnId ?? '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
@@ -72,6 +112,7 @@ describe('turn-record introspection source', () => {
           },
           userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
         })],
+      isSessionRetiredOrQuarantined: () => false,
     });
 
     const candidates = source.listCandidates({
@@ -89,6 +130,7 @@ describe('turn-record introspection source', () => {
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [{ sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' }],
       getRecentTurnRecords: () => [record({ auditPrivacy: undefined })],
+      isSessionRetiredOrQuarantined: () => false,
     });
     expect(source.listCandidates({
       allowedPublicChannelIds: ['discord:public-room'],
@@ -107,6 +149,7 @@ describe('turn-record introspection source', () => {
       getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
         ? [record({ sessionId: 'session:logical-after-reset' })]
         : [],
+      isSessionRetiredOrQuarantined: () => false,
     });
     const input = {
       recentSessionLimit: 10,
@@ -127,6 +170,94 @@ describe('turn-record introspection source', () => {
     })]);
   });
 
+  it.each(['break_glass_quarantine', 'fresh_split'] as const)(
+    'excludes retired and ownerless source records after a %s route reload',
+    (mode) => {
+      const root = mkdtempSync(join(tmpdir(), 'introspection-route-reload-'));
+      try {
+        const sessionsDir = join(root, 'sessions');
+        const config = makeConfig(root);
+        const store = new SessionStore(sessionsDir);
+        const manager = new SessionManager(store, config);
+        const sourceChannelId = 'discord:guild:public-room';
+        const oldPoisonedSentinel = 'OLD_POISONED_TRANSCRIPT_SENTINEL';
+        const missingOwnerSentinel = 'MISSING_OWNER_TRANSCRIPT_SENTINEL';
+        const freshSentinel = 'FRESH_ROUTED_TRANSCRIPT_SENTINEL';
+
+        manager.recordUserMessage(sourceChannelId, 'old source owner', 'user-1', 'User', false);
+        const oldTurn = record({
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e40',
+          requestId: 'request-old',
+          sessionId: sourceChannelId,
+          channelId: sourceChannelId,
+          userMessage: { role: 'user', content: oldPoisonedSentinel, timestamp: 1_700_000_000_000 },
+          completedAt: 1_700_000_000_100,
+        });
+        store.appendTurnRecord(oldTurn);
+
+        const reset = manager.resetSourceChannelSession({
+          sourceChannelId,
+          actor: 'operator:test',
+          reason: 'quarantine poisoned transcript',
+          mode,
+        });
+        manager.recordUserMessage(sourceChannelId, 'fresh logical owner', 'user-1', 'User', false);
+        const freshTurn = record({
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e41',
+          requestId: 'request-fresh',
+          sessionId: reset.newLogicalSessionId,
+          channelId: sourceChannelId,
+          userMessage: { role: 'user', content: freshSentinel, timestamp: 1_700_000_000_200 },
+          completedAt: 1_700_000_000_300,
+        });
+        store.appendTurnRecord(freshTurn);
+        store.appendTurnRecord(record({
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e42',
+          requestId: 'request-missing-owner',
+          sessionId: 'session:missing-owner',
+          channelId: sourceChannelId,
+          userMessage: { role: 'user', content: missingOwnerSentinel, timestamp: 1_700_000_000_400 },
+          completedAt: 1_700_000_000_500,
+        }));
+
+        const reloadedStore = new SessionStore(sessionsDir);
+        const reloadedManager = new SessionManager(reloadedStore, config);
+        expect(reloadedStore.getRecentSourceTurnRecords(sourceChannelId, 10).map(entry => entry.turnId))
+          .toEqual([oldTurn.turnId, freshTurn.turnId]);
+
+        const source = createTurnRecordIntrospectionSource({
+          listRecentSessions: (limit, offset) => (
+            reloadedManager.listRecentSessions(limit, offset).map(session => ({
+              sessionId: session.sessionId,
+              sourceChannelId: reloadedManager
+                .getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
+                ?? session.channelId,
+            }))
+          ),
+          getRecentTurnRecords: (channelId, limit, offset) => (
+            reloadedStore.getRecentSourceTurnRecords(channelId, limit, offset)
+          ),
+          isSessionRetiredOrQuarantined: sessionId => (
+            reloadedManager.isSessionRetiredOrQuarantined(sessionId)
+          ),
+        });
+        const candidates = source.listCandidates({
+          allowedPublicChannelIds: [sourceChannelId],
+          recentSessionLimit: 10,
+          recentTurnLimit: 10,
+          maxSourceChars: 1_000,
+        });
+
+        expect(candidates.map(candidate => candidate.turnId)).toEqual([freshTurn.turnId]);
+        expect(JSON.stringify(candidates)).not.toContain(oldPoisonedSentinel);
+        expect(JSON.stringify(candidates)).not.toContain(missingOwnerSentinel);
+        expect(JSON.stringify(candidates)).toContain(freshSentinel);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('advances a bounded cursor through older sessions and turns across repeated runs', () => {
     const sessions = [
       { sessionId: 'discord:newer-room', sourceChannelId: 'discord:newer-room' },
@@ -144,6 +275,7 @@ describe('turn-record introspection source', () => {
         const end = Math.max(0, turns.length - offset);
         return turns.slice(Math.max(0, end - limit), end);
       },
+      isSessionRetiredOrQuarantined: () => false,
     });
 
     const input = {

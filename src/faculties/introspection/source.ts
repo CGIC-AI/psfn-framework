@@ -12,6 +12,7 @@ interface RecentSessionSummary {
 export interface IntrospectionTurnRecordReader {
   listRecentSessions(limit?: number, offset?: number): RecentSessionSummary[];
   getRecentTurnRecords(channelId: string, limit: number, offset?: number): TurnRecord[];
+  isSessionRetiredOrQuarantined(sessionId: string): boolean;
 }
 
 function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionAuditCandidate | null {
@@ -90,6 +91,8 @@ export function createTurnRecordIntrospectionSource(
         if (!allowed.has(session.sourceChannelId)) continue;
         for (const record of readTurnPage(session.sourceChannelId, input.recentTurnLimit)) {
           if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
+          const ownerSessionId = record.sessionId ?? session.sourceChannelId;
+          if (reader.isSessionRetiredOrQuarantined(ownerSessionId)) continue;
           const candidate = toCandidate(record, input.maxSourceChars);
           if (candidate) candidates.push(candidate);
         }

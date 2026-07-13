@@ -733,7 +733,8 @@ export class SessionStore implements TranscriptSearchPort {
     const filtered = records.filter((record) => {
       const ownerSessionId = record.sessionId ?? sourceChannelId;
       const owner = this.ensureChannelFullyLoaded(ownerSessionId);
-      return !owner?.turnTombstones.has(record.turnId);
+      if (!owner) return false;
+      return !owner.turnTombstones.has(record.turnId);
     });
     const end = Math.max(0, filtered.length - offset);
     const start = Math.max(0, end - limit);

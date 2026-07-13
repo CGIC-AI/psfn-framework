@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_ENROLLMENT_MIGRATIONS,
+  POSTGRES_INTROSPECTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
@@ -17,6 +18,27 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('creates append-only introspection landmark and audit-decision ledgers', () => {
+    const sql = migrationSql(POSTGRES_INTROSPECTION_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS introspection_landmarks');
+    expect(sql).toContain('UNIQUE (id, source_ref)');
+    expect(sql).toContain("CHECK (divergence_type IN ('affective', 'substantive'))");
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS introspection_audit_decisions');
+    expect(sql).toContain('source_ref TEXT PRIMARY KEY');
+    expect(sql).toContain("CHECK (outcome IN ('no_divergence', 'below_confidence', 'landmark_created'))");
+    expect(sql).toContain('FOREIGN KEY (landmark_id, source_ref)');
+    expect(sql).toContain('REFERENCES introspection_landmarks(id, source_ref)');
+    expect(sql).toContain("CHECK (provenance_json <> '{}'::jsonb)");
+    expect(sql).toContain('CHECK (octet_length(provenance_json::text) <= 65536)');
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION reject_introspection_ledger_mutation()');
+    expect(sql).toContain("IF TG_OP IN ('UPDATE', 'DELETE', 'TRUNCATE')");
+    expect(sql).toContain('CREATE TRIGGER introspection_landmarks_append_only');
+    expect(sql).toContain('CREATE TRIGGER introspection_landmarks_no_truncate');
+    expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_append_only');
+    expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_no_truncate');
+  });
+
   it('upgrades existing l2 memory tables with scoped memory columns before indexed use', () => {
     const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
 

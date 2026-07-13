@@ -1058,6 +1058,162 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
 ];
 
+export const POSTGRES_INTROSPECTION_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS introspection_landmarks (
+    id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    source_ref TEXT NOT NULL UNIQUE,
+    channel_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    divergence_type TEXT NOT NULL,
+    observation TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    companion_reflection TEXT NOT NULL,
+    consent_revision INTEGER NOT NULL,
+    consent_hash TEXT NOT NULL,
+    stable_estimator_model TEXT NOT NULL,
+    divergence_auditor_model TEXT NOT NULL,
+    companion_reflector_model TEXT NOT NULL,
+    provenance_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (id, source_ref),
+    CHECK (schema_version = 1),
+    CHECK (char_length(id) BETWEEN 1 AND 256),
+    CHECK (char_length(source_ref) BETWEEN 1 AND 1024),
+    CHECK (char_length(channel_id) BETWEEN 1 AND 512),
+    CHECK (char_length(turn_id) BETWEEN 1 AND 512),
+    CHECK (divergence_type IN ('affective', 'substantive')),
+    CHECK (char_length(observation) BETWEEN 1 AND 32768),
+    CHECK (confidence >= 0 AND confidence <= 1 AND confidence <> 'NaN'::double precision),
+    CHECK (char_length(companion_reflection) BETWEEN 1 AND 32768),
+    CHECK (consent_revision >= 1),
+    CHECK (consent_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (char_length(stable_estimator_model) BETWEEN 1 AND 512),
+    CHECK (char_length(divergence_auditor_model) BETWEEN 1 AND 512),
+    CHECK (char_length(companion_reflector_model) BETWEEN 1 AND 512),
+    CHECK (jsonb_typeof(provenance_json) = 'object'),
+    CHECK (provenance_json <> '{}'::jsonb),
+    CHECK (octet_length(provenance_json::text) <= 65536)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS introspection_audit_decisions (
+    source_ref TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    outcome TEXT NOT NULL,
+    confidence DOUBLE PRECISION,
+    landmark_id TEXT,
+    consent_revision INTEGER NOT NULL,
+    consent_hash TEXT NOT NULL,
+    provenance_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    CHECK (schema_version = 1),
+    CHECK (char_length(source_ref) BETWEEN 1 AND 1024),
+    CHECK (outcome IN ('no_divergence', 'below_confidence', 'landmark_created')),
+    CHECK (confidence IS NULL OR (
+      confidence >= 0 AND confidence <= 1 AND confidence <> 'NaN'::double precision
+    )),
+    CHECK (
+      (outcome = 'landmark_created' AND landmark_id IS NOT NULL AND confidence IS NOT NULL)
+      OR (outcome = 'below_confidence' AND landmark_id IS NULL AND confidence IS NOT NULL)
+      OR (outcome = 'no_divergence' AND landmark_id IS NULL)
+    ),
+    CHECK (consent_revision >= 1),
+    CHECK (consent_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (jsonb_typeof(provenance_json) = 'object'),
+    CHECK (provenance_json <> '{}'::jsonb),
+    CHECK (octet_length(provenance_json::text) <= 65536),
+    FOREIGN KEY (landmark_id, source_ref)
+      REFERENCES introspection_landmarks(id, source_ref)
+      ON UPDATE RESTRICT
+      ON DELETE RESTRICT
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_introspection_landmarks_created_at ON introspection_landmarks(created_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_introspection_landmarks_consent_revision ON introspection_landmarks(consent_revision, created_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_introspection_audit_decisions_created_at ON introspection_audit_decisions(created_at DESC, source_ref);`,
+  `
+  CREATE OR REPLACE FUNCTION reject_introspection_ledger_mutation()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF TG_OP IN ('UPDATE', 'DELETE', 'TRUNCATE') THEN
+      RAISE EXCEPTION '% is append-only: % is forbidden', TG_TABLE_NAME, TG_OP
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN NULL;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'introspection_landmarks_append_only'
+        AND tgrelid = 'introspection_landmarks'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER introspection_landmarks_append_only
+      BEFORE UPDATE OR DELETE ON introspection_landmarks
+      FOR EACH ROW EXECUTE FUNCTION reject_introspection_ledger_mutation();
+    END IF;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'introspection_landmarks_no_truncate'
+        AND tgrelid = 'introspection_landmarks'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER introspection_landmarks_no_truncate
+      BEFORE TRUNCATE ON introspection_landmarks
+      FOR EACH STATEMENT EXECUTE FUNCTION reject_introspection_ledger_mutation();
+    END IF;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'introspection_audit_decisions_append_only'
+        AND tgrelid = 'introspection_audit_decisions'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER introspection_audit_decisions_append_only
+      BEFORE UPDATE OR DELETE ON introspection_audit_decisions
+      FOR EACH ROW EXECUTE FUNCTION reject_introspection_ledger_mutation();
+    END IF;
+  END;
+  $$;
+  `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+      WHERE tgname = 'introspection_audit_decisions_no_truncate'
+        AND tgrelid = 'introspection_audit_decisions'::regclass
+        AND NOT tgisinternal
+    ) THEN
+      CREATE TRIGGER introspection_audit_decisions_no_truncate
+      BEFORE TRUNCATE ON introspection_audit_decisions
+      FOR EACH STATEMENT EXECUTE FUNCTION reject_introspection_ledger_mutation();
+    END IF;
+  END;
+  $$;
+  `,
+];
+
 export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS observer_eval_sidecar_runs (

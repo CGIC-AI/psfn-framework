@@ -78,6 +78,14 @@ export interface TurnSessionContextSnapshot {
   /** Entries collected from the store before windowing/summarization. */
   sourceEntryCount?: number;
   /**
+   * Highest entry id the store served in the raw capture window, before
+   * exclusion/windowing/summarization. A turn that just recorded entry N must
+   * see storeWindowMaxEntryId >= N here; anything lower means the store served
+   * a stale cache and the window is missing the latest turn(s)
+   * (psfn-framework-hgw3.1). Undefined when the store returned no entries.
+   */
+  storeWindowMaxEntryId?: number;
+  /**
    * Presence-window serve floor applied to this capture (private rooms,
    * psfn-framework-s10rm). Absent when the channel is unwindowed.
    */

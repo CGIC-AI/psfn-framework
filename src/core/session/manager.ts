@@ -996,6 +996,17 @@ export class SessionManager {
   }
 
   /**
+   * Force the session store to drop and reload the channel's in-memory view
+   * from disk. Heal hook for a captured session window that is missing entries
+   * the write path already assigned ids past (psfn-framework-hgw3.1).
+   */
+  reconcileSessionChannelFromDisk(
+    channelId: string,
+  ): { maxEntryId: number; lastMessageEntryId: number | null } | null {
+    return this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
+  }
+
+  /**
    * Capture the turn's session-context snapshot through the single derivation
    * path (context-builder captureTurnSessionContext). The turn pipeline calls
    * this once pre-turn (feeding the retrieval query and the persisted

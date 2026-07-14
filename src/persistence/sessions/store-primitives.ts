@@ -38,6 +38,14 @@ export interface ChannelCache {
   lastMessageAuthorName?: string;
   lastMessagePreview: string;
   fullyLoaded: boolean;
+  /**
+   * Archive file fingerprint (dev/ino/size/mtime/ctime) captured when a
+   * fullyLoaded cache last read or wrote the journal file. Multiple processes
+   * mount the same sessions dir, so every read served from a fullyLoaded cache
+   * must verify this against the file on disk and reload when it moved
+   * (fail closed: `null` on a non-empty archive never matches).
+   */
+  archiveFingerprint: string | null;
   recentEntriesByLimit: Map<number, CachedRecentEntries>;
 }
 

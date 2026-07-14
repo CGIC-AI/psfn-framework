@@ -398,10 +398,23 @@ export class SessionStore implements TranscriptSearchPort {
     this.channels.set(resolved.sessionId, cache);
     return cache;
   }
+  /**
+   * A fullyLoaded cache may only be served while the journal file on disk is
+   * byte-identical to what the cache loaded or last wrote. Other processes
+   * (gateway, garden) append through their own SessionStore instances over the
+   * same sessions dir, so an unverified fullyLoaded cache silently serves a
+   * stale window (psfn-framework-hgw3.1: duplicate replies from a context
+   * missing the previous turn's assistant entry). `null === null` only holds
+   * while the archive file does not exist yet (empty new channel).
+   */
+  private fullyLoadedCacheIsCurrent(cache: ChannelCache): boolean {
+    if (!cache.fullyLoaded) return false;
+    return cache.archiveFingerprint === this.fingerprintArchive(cache);
+  }
   private ensureChannelFullyLoaded(channelId: string): ChannelCache | null {
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
     const existing = this.channels.get(resolvedSessionId);
-    if (existing?.fullyLoaded) return existing;
+    if (existing?.fullyLoaded && this.fullyLoadedCacheIsCurrent(existing)) return existing;
     const resolved = existing
       ? {
         sessionId: resolvedSessionId,
@@ -451,6 +464,7 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: this.journalRuntime.fingerprintArchive(archive),
       recentEntriesByLimit: new Map(),
     };
     this.channels.set(channelId, cache);
@@ -742,8 +756,12 @@ export class SessionStore implements TranscriptSearchPort {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     if (cached?.fullyLoaded) {
-      if (cached.entries.length <= limit) return [...cached.entries];
-      return cached.entries.slice(-limit);
+      const current = this.fullyLoadedCacheIsCurrent(cached)
+        ? cached
+        : this.ensureChannelFullyLoaded(channelId);
+      if (!current) return [];
+      if (current.entries.length <= limit) return [...current.entries];
+      return current.entries.slice(-limit);
     }
     if (cached && cached.activeTurnTombstoneCount > 0) {
       const full = this.ensureChannelFullyLoaded(channelId);
@@ -787,6 +805,25 @@ export class SessionStore implements TranscriptSearchPort {
       this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
     return recentEntries;
+  }
+  /**
+   * Drop every in-memory view of the channel and reload it from the archive
+   * on disk. Detect-and-heal hook for readers that observe a session window
+   * missing an entry the write path already assigned an id past
+   * (psfn-framework-hgw3.1). Returns null when no archive exists.
+   */
+  reloadChannelFromDisk(channelId: string): { maxEntryId: number; lastMessageEntryId: number | null } | null {
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    this.channels.delete(sessionId);
+    if (sessionId !== channelId) {
+      this.channels.delete(channelId);
+    }
+    const loaded = this.ensureChannelFullyLoaded(channelId);
+    if (!loaded) return null;
+    return {
+      maxEntryId: loaded.nextId - 1,
+      lastMessageEntryId: loaded.entries.at(-1)?.id ?? null,
+    };
   }
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);

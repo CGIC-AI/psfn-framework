@@ -281,7 +281,7 @@ describe('ICP certification real process harness', () => {
     expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
   }, TIMEOUT_MS);
 
-  it('enforces private-room windows, schema-local extraction, and messaging after both restarts', async () => {
+  it('enforces private-room windows and schema-local extraction across restarts', async () => {
     if (!postgres) throw new Error('Postgres certification harness is unavailable');
     const { databaseUrl } = await postgres.createDatabase();
     fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
@@ -436,29 +436,90 @@ describe('ICP certification real process harness', () => {
 
     [agentA, agentB] = await processes.restartAgents();
     await Promise.all([agentA.enterPrivateRoom(), agentB.enterPrivateRoom()]);
-    await agentB.publishAvailability('open_to_chat');
-    const restartedBefore = await agentB.channelSnapshot(
-      CERTIFICATION_PRIVATE_ROOM,
-    ) as unknown as ChannelSnapshot;
-    expect(restartedBefore.summaries.length).toBeGreaterThan(0);
-    const restartedCandidate = await agentA.runRoomWeightedThoughtScheduler();
-    if (restartedCandidate.status !== 'consumed') {
-      throw new Error(`Restarted room candidate was not consumed: ${JSON.stringify(restartedCandidate)}`);
+    const [restartedA, restartedB] = await Promise.all([
+      agentA.channelSnapshot(CERTIFICATION_PRIVATE_ROOM) as Promise<unknown> as Promise<ChannelSnapshot>,
+      agentB.channelSnapshot(CERTIFICATION_PRIVATE_ROOM) as Promise<unknown> as Promise<ChannelSnapshot>,
+    ]);
+    expect(restartedA.summaries.length).toBeGreaterThan(0);
+    expect(restartedB.summaries.length).toBeGreaterThan(0);
+    expect(restartedA.memories.some(memory => (
+      memory.text.includes('Certification A extraction marker')
+    ))).toBe(true);
+    expect(restartedB.memories.some(memory => (
+      memory.text.includes('Certification B extraction marker')
+    ))).toBe(true);
+    expect(JSON.stringify({ restartedA, restartedB })).not.toContain('pre-entry room probe');
+    expect(JSON.stringify({ restartedA, restartedB })).not.toContain('post-exit room probe');
+  }, TIMEOUT_MS);
+
+  it('continues an ordinary ICP exchange after compaction and both-agent restart', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    let [agentA, agentB] = processes.agents;
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.all([
+        agentA.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+        agentB.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+      ]);
     }
-    expect(restartedCandidate).toMatchObject({
-      preferredChannel: 'current_room',
+    const compactions = await Promise.all([
+      agentA.forceCompaction(CERTIFICATION_DM_CHANNEL),
+      agentB.forceCompaction(CERTIFICATION_DM_CHANNEL),
+    ]);
+    expect(compactions).toEqual([
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+    ]);
+
+    [agentA, agentB] = await processes.restartAgents();
+    const [senderBefore, recipientBefore] = await Promise.all([
+      agentA.channelSnapshot(CERTIFICATION_DM_CHANNEL) as Promise<unknown> as Promise<ChannelSnapshot>,
+      agentB.channelSnapshot(CERTIFICATION_DM_CHANNEL) as Promise<unknown> as Promise<ChannelSnapshot>,
+    ]);
+    expect(senderBefore.summaries.length).toBeGreaterThan(0);
+    expect(recipientBefore.summaries.length).toBeGreaterThan(0);
+
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
       status: 'consumed',
       deliveryDisposition: 'delivered',
+      postTurnStatus: 'succeeded',
     });
-    const restartedAfter = await waitForChannelEntries(
-      agentB,
-      restartedBefore.entries.length + 2,
-      CERTIFICATION_PRIVATE_ROOM,
-    );
-    expect(restartedAfter.entries.some(entry => (
+    const [senderAfter, recipientAfter] = await Promise.all([
+      waitForChannelEntries(agentA, senderBefore.entries.length + 1),
+      waitForChannelEntries(agentB, recipientBefore.entries.length + 2),
+    ]);
+    const senderNewEntries = senderAfter.entries.slice(senderBefore.entries.length);
+    const recipientNewEntries = recipientAfter.entries.slice(recipientBefore.entries.length);
+    const persistedSenderMessage = senderNewEntries.find(entry => entry.role === 'assistant');
+    const deliveredRecipientMessage = recipientNewEntries.find(entry => (
       entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
-    ))).toBe(true);
-    expect(restartedAfter.entries.some(entry => entry.role === 'assistant')).toBe(true);
+    ));
+    const recipientReply = recipientNewEntries.find(entry => entry.role === 'assistant');
+    expect(persistedSenderMessage?.timestamp).toEqual(expect.any(Number));
+    expect(deliveredRecipientMessage?.timestamp).toEqual(expect.any(Number));
+    expect(persistedSenderMessage!.timestamp!).toBeLessThanOrEqual(
+      deliveredRecipientMessage!.timestamp!,
+    );
+    expect(recipientReply?.timestamp).toEqual(expect.any(Number));
+
+    const recipientTurns = await agentB.turnRecordsSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as TurnRecordsSnapshot;
+    expect(recipientTurns.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'completed',
+        hasAssistantMessage: true,
+        correlation: expect.objectContaining({
+          channelId: CERTIFICATION_DM_CHANNEL,
+          localCompanionId: CERTIFICATION_COMPANION_B,
+          peerCompanionId: CERTIFICATION_COMPANION_A,
+        }),
+      }),
+    ]));
   }, TIMEOUT_MS);
 
   it.each([

@@ -23,6 +23,11 @@ export interface AgentLoopPromptCacheHooks {
    * were computed for — stale boundaries are worse than none.
    */
   resolvePromptCacheBoundaries?: (systemPrompt: string) => LLMSystemPromptCacheBoundaries | undefined;
+  /**
+   * Resolves the tool array owned by the current async turn. This must not
+   * fall back to another concurrent turn's mutable Agent state.
+   */
+  resolveTurnTools?: () => readonly AgentTool<any>[] | undefined;
 }
 
 type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
@@ -103,11 +108,14 @@ export function installAgentToolSchedulerPatch(
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
+    const initialTurnTools = promptCacheHooks?.resolveTurnTools?.() ?? this._state.tools;
     const context = {
       systemPrompt: this._state.systemPrompt,
       messages: this._state.messages.slice(),
-      tools: this._state.tools,
-      getTools: () => this._state.tools,
+      tools: [...initialTurnTools],
+      getTools: () => [
+        ...(promptCacheHooks?.resolveTurnTools?.() ?? initialTurnTools),
+      ],
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
     const config = this.createLoopConfig(options);

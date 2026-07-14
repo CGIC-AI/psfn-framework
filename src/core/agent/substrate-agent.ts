@@ -572,6 +572,7 @@ export class SubstrateAgent {
       },
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
+      resolveTurnTools: () => this.toolRuntimeFacade.getActiveTurnTools(),
     });
 
     this.installRuntimeHooks();
@@ -810,6 +811,10 @@ export class SubstrateAgent {
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     return this.toolRuntimeFacade.getAdaptiveToolRuntimeState();
+  }
+
+  getActiveTurnTools(): readonly AgentTool<any>[] {
+    return this.toolRuntimeFacade.getActiveTurnTools();
   }
 
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
@@ -1334,28 +1339,30 @@ export class SubstrateAgent {
       },
     }), message, deliveryLifecycle);
 
-    // htm9.3: expose the message's intake envelopes to the egress tool guard
-    // for the duration of this turn (cleared in finally — never leaks into
-    // the next turn).
-    this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
-    try {
-      if (!this.config.chargePolicy || getRunChargeContext()) {
-        return await run();
-      }
+    return this.toolRuntimeFacade.runWithTurnToolContext(message, async () => {
+      // htm9.3: expose the message's intake envelopes to the egress tool guard
+      // for the duration of this turn (cleared in finally — never leaks into
+      // the next turn).
+      this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+      try {
+        if (!this.config.chargePolicy || getRunChargeContext()) {
+          return await run();
+        }
 
-      return await runWithChargeContext({
-        chargePolicy: this.config.chargePolicy,
-        eventBus: this.eventBus,
-        lane: 'interactive',
-        runId: message.id,
-        correlation: {
-          requestId: message.id,
-          channelId: message.channelId,
-        },
-      }, run);
-    } finally {
-      this.currentTurnIntakeEnvelopes = [];
-    }
+        return await runWithChargeContext({
+          chargePolicy: this.config.chargePolicy,
+          eventBus: this.eventBus,
+          lane: 'interactive',
+          runId: message.id,
+          correlation: {
+            requestId: message.id,
+            channelId: message.channelId,
+          },
+        }, run);
+      } finally {
+        this.currentTurnIntakeEnvelopes = [];
+      }
+    });
   }
 
   async handleIcpAutonomyCandidateTurn(message: SubstrateMessage): Promise<AgentResponse> {
@@ -1363,17 +1370,10 @@ export class SubstrateAgent {
     if (!candidateOrigin) {
       throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');
     }
-    await this.agent.waitForIdle();
-    const scope = this.toolRuntimeFacade.beginIcpAutonomyCandidateNotifyScope({
-      source: 'autoload',
-      taskKind: candidateOrigin.continuationTaskKind,
-      intent: 'ops',
-    });
-    try {
+    return this.toolRuntimeFacade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      await this.agent.waitForIdle();
       return await this.handleMessage(message);
-    } finally {
-      this.toolRuntimeFacade.endIcpAutonomyCandidateNotifyScope(scope);
-    }
+    });
   }
 
   /** Restart-safe recovery for a sender-side target-channel initiation turn. */

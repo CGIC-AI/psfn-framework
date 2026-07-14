@@ -700,6 +700,7 @@ function createRuntime(params: {
       activeTools: [],
       lastSnapshot: null,
     })),
+    getActiveTurnTools: vi.fn(() => agentState.tools),
     applyActiveToolsToAgentForTurn: vi.fn(),
     setActiveTurnContext: vi.fn(),
     clearActiveTurnContext: vi.fn(),

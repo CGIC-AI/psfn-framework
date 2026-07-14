@@ -141,6 +141,32 @@ function mockAssistantResponse(text: string): void {
   });
 }
 
+function captureActiveTurnToolsOnNextPrompt(
+  substrateAgent: SubstrateAgent,
+  captured: string[][],
+): void {
+  promptSpy.mockImplementationOnce(async function (this: Agent) {
+    captured.push(substrateAgent.getActiveTurnTools().map(tool => tool.name));
+    this.state.messages.push({
+      role: 'assistant',
+      content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
+      api: '' as any,
+      provider: '' as any,
+      model: '',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop' as any,
+      timestamp: Date.now(),
+    });
+  });
+}
+
 function mockAssistantErrorResponse(errorMessage: string): void {
   promptSpy.mockImplementationOnce(async function (this: Agent) {
     this.state.messages.push({
@@ -947,19 +973,57 @@ describe('production ICP candidate control-plane reachability', () => {
           result: async () => structuredClone(message),
         } as never;
       });
+      let candidateWaitEntered!: () => void;
+      let releaseCandidateWait!: () => void;
+      const candidateWaiting = new Promise<void>((resolve) => { candidateWaitEntered = resolve; });
+      const candidateWaitRelease = new Promise<void>((resolve) => { releaseCandidateWait = resolve; });
+      vi.spyOn(Agent.prototype, 'waitForIdle').mockImplementationOnce(async () => {
+        candidateWaitEntered();
+        await candidateWaitRelease;
+      });
+      const ordinaryTurnToolNames: string[][] = [];
+      captureActiveTurnToolsOnNextPrompt(agent, ordinaryTurnToolNames);
+      const candidateDispatch = controlPlane.icpAutonomyCandidateDispatcher!.dispatch({
+        candidate,
+        permit,
+      });
+      await candidateWaiting;
+      await agent.handleMessage(makeMessage({
+        id: 'ordinary-overlap-during-candidate-pre-turn',
+        channelId: 'discord:ordinary-overlap',
+        channelType: 'discord',
+        authorId: 'operator-1',
+        authorName: 'Operator',
+        content: 'ordinary overlap while candidate is waiting',
+      }));
+      expect(ordinaryTurnToolNames).toHaveLength(1);
+      expect(ordinaryTurnToolNames[0]).not.toContain('notify');
+      expect(((agent as any).agent as Agent).state.tools.map(tool => tool.name))
+        .not.toContain('notify');
+
       promptSpy.mockImplementationOnce(async function (this: Agent, promptMessage) {
         notifyActivationDuringTurn = agent.getAdaptiveToolRuntimeState().activeTools.find(
           tool => tool.toolName === 'notify',
         );
-        if (!this.state.tools.some(tool => tool.name === 'notify')) {
+        const activeTurnTools = agent.getActiveTurnTools();
+        if (!activeTurnTools.some(tool => tool.name === 'notify')) {
           throw new Error('production candidate turn did not activate notify');
         }
+        const candidateNotifySchema = activeTurnTools.find(tool => tool.name === 'notify')?.parameters as {
+          properties?: Record<string, unknown>;
+        };
+        expect(Object.keys(candidateNotifySchema.properties ?? {}).sort()).toEqual([
+          'action',
+          'contact_id',
+          'initiation_permit',
+          'target_kind',
+        ]);
         const stream = agentLoopWithScheduler(
           [promptMessage],
           {
             systemPrompt: 'System prompt',
             messages: [],
-            tools: this.state.tools,
+            tools: [...activeTurnTools],
           } as never,
           {
             model: { id: 'test-model', api: 'chat', provider: 'test' },
@@ -982,11 +1046,9 @@ describe('production ICP candidate control-plane reachability', () => {
         );
         this.state.messages.push(...turnMessages);
       });
+      releaseCandidateWait();
 
-      await expect(controlPlane.icpAutonomyCandidateDispatcher?.dispatch({
-        candidate,
-        permit,
-      })).resolves.toMatchObject({ content: 'Candidate handoff queued.' });
+      await expect(candidateDispatch).resolves.toMatchObject({ content: 'Candidate handoff queued.' });
 
       expect(notifyActivationDuringTurn).toEqual({
         toolName: 'notify',
@@ -4509,16 +4571,15 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolset).toBeDefined();
     await (toolset as any).execute('load-1', { action: 'activate', tools: ['extended_probe_tool'] });
 
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-2' }));
 
-    const setToolNamesByCall = setToolsSpy.mock.calls.map(
-      (call) => (call[0] as Array<{ name: string }>).map((tool) => tool.name),
-    );
-    expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
-    expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
-    expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+    expect(activeToolNamesByTurn).toHaveLength(2);
+    expect(activeToolNamesByTurn[0]).toContain('extended_probe_tool');
+    expect(activeToolNamesByTurn[1]).toContain('extended_probe_tool');
   });
 
   it('captures deferred tool-handoff intent details from toolset activate', async () => {
@@ -4636,16 +4697,15 @@ describe('SubstrateAgent.handleMessage', () => {
     const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-1' }));
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-2' }));
 
-    const setToolNamesByCall = setToolsSpy.mock.calls.map(
-      (call) => (call[0] as Array<{ name: string }>).map((tool) => tool.name),
-    );
-    expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
-    expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
-    expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+    expect(activeToolNamesByTurn).toHaveLength(2);
+    expect(activeToolNamesByTurn[0]).toContain('extended_probe_tool');
+    expect(activeToolNamesByTurn[1]).toContain('extended_probe_tool');
   });
 
   it('autoloads bounded dev tools before prompt in deterministic candidate order', async () => {
@@ -4662,7 +4722,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
 
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-order',
@@ -4670,8 +4731,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'Please open and update an issue for this bug',
     }));
 
-    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    const toolNames = configuredTools.map(tool => tool.name);
+    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
     expect(toolNames).toContain('beads');
   });
 
@@ -4689,7 +4749,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const autoloadSummaries: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
 
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-fallback',
@@ -4697,8 +4758,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'Please open and update the issue for this bug',
     }));
 
-    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    const toolNames = configuredTools.map(tool => tool.name);
+    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
     expect(toolNames).toEqual(['tool_search', 'toolset', 'response_control']);
 
     expect(autoloadSummaries).toEqual([]);
@@ -4724,7 +4784,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const autoloadSkips: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
     (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-ops-overlay',
@@ -4733,8 +4794,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'tick',
     }));
 
-    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    const toolNames = configuredTools.map(tool => tool.name);
+    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
     const registeredOverlayNames = ['heartbeat_update_policy', 'heartbeat_run_template', 'schedule_task', 'beads'];
     expect(toolNames.some(name => registeredOverlayNames.includes(name))).toBe(true);
 

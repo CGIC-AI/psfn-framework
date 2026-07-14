@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage } from '../../../boundary/pi-agent/index.js';
+import type { Agent, AgentMessage, AgentTool } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
@@ -363,6 +363,7 @@ export interface TurnExecutionRuntime {
     correlation: CorrelationMetadata,
   ) => AutoloadTurnOutcome;
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  getActiveTurnTools: () => readonly AgentTool<any>[];
   applyActiveToolsToAgentForTurn: (
     message: SubstrateMessage,
     taskKind: string | undefined,

@@ -233,6 +233,22 @@ describe('capability tool gating', () => {
       action: 'send',
       target_kind: 'companion',
     })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send',
+      target_kind: 'external',
+      delivery_channel: 'discord',
+    })).toEqual(['external.discord']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send',
+      target_kind: 'external',
+      delivery_channel: 'email',
+    })).toEqual(['external.email']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'brief',
+    })).toEqual(['external.web']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'approval_request',
+    })).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('response_control').tool, { action: 'no_reply' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
@@ -252,6 +268,25 @@ describe('capability tool gating', () => {
     expect(resolveTierCapabilityTokens('autonomous')).toContain('external.companion');
     expect(resolveTierCapabilityTokens('custom', ['external.companion']))
       .toContain('external.companion');
+  });
+
+  it.each([
+    ['Discord send', { action: 'send', target_kind: 'external', delivery_channel: 'discord' }, 'external.discord'],
+    ['email send', { action: 'send', target_kind: 'external', delivery_channel: 'email' }, 'external.email'],
+    ['operator brief', { action: 'brief' }, 'external.web'],
+    ['approval request', { action: 'approval_request' }, 'external.web'],
+  ])('does not let external.companion authorize notify %s', async (_label, params, missingToken) => {
+    const notify = createTool('notify');
+    const gated = gateToolWithCapabilities(
+      notify.tool,
+      () => accessForTier('custom', ['external.companion']),
+    );
+
+    const denied = await gated.execute('notify-lane-escape', params);
+
+    expect(notify.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain(missingToken);
   });
 
   it('fails closed when an executable tool has no capability policy', () => {

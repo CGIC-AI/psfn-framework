@@ -373,6 +373,7 @@ export function createTurnExecutionRuntimeAdapter(
     preloadExtendedToolsForTurn: (message, taskKind, correlation) => options.toolRuntimeFacade
       .preloadExtendedToolsForTurn(message, taskKind, correlation),
     getAdaptiveToolRuntimeState: () => options.toolRuntimeFacade.getAdaptiveToolRuntimeState(),
+    getActiveTurnTools: () => options.toolRuntimeFacade.getActiveTurnTools(),
     applyActiveToolsToAgentForTurn: (
       message,
       taskKind,

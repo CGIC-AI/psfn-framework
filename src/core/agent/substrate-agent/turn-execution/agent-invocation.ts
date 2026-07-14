@@ -524,7 +524,9 @@ export async function invokeAgentForTurn(input: {
   const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );
-  const activeTools = readActiveTurnToolSchemas(runtime.agent);
+  const activeTools = readActiveTurnToolSchemas({
+    state: { tools: runtime.getActiveTurnTools() },
+  });
   if (turnSnapshot.plan) {
     // Bind resolved tool definitions to the assembled context plan before the
     // snapshot is (re-)emitted and persisted. The current message is supplied

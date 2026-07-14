@@ -6,7 +6,10 @@ import {
   queryOne,
   queryRows,
 } from '../postgres.js';
-import { POSTGRES_MODEL_USAGE_MIGRATIONS } from './migrations.js';
+import {
+  POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+  POSTGRES_MODEL_USAGE_MIGRATIONS,
+} from './migrations.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ModelUsageBreakdown,
@@ -75,7 +78,6 @@ const DEFAULT_BREAKDOWN_LIMIT = 20;
 const DEFAULT_TOP_N = 20;
 const MAX_TOP_N = 100;
 const MAX_EXPORT_ROWS = 50_000;
-const MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [1_297_431_347, 1_431_521_607] as const;
 
 interface ModelUsageEventRow {
   id: string;
@@ -983,7 +985,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     this.ready = ensurePostgresSchemaWithAdvisoryLock(
       pool,
       POSTGRES_MODEL_USAGE_MIGRATIONS,
-      MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+      POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
     );
   }
 

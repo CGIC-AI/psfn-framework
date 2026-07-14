@@ -992,6 +992,11 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
   `,
 ];
 
+export const POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [
+  1_297_431_347,
+  1_431_521_607,
+] as const;
+
 export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS model_usage_events (

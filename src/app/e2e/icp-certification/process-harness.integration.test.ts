@@ -43,6 +43,56 @@ interface ChannelSnapshot {
   summaries: Array<{ summary: string }>;
 }
 
+interface ProviderDispatchCount {
+  companionId: string;
+  conversationId: string | null;
+  count: number;
+}
+
+interface TurnRecordsSnapshot {
+  records: Array<{
+    correlation?: {
+      channelId: string;
+      conversationId: string;
+      fatigueDecision: string;
+      fatigueReasonCode?: string;
+      localCompanionId: string;
+      peerCompanionId: string;
+      rootInitiationId: string;
+    };
+    hasAssistantMessage: boolean;
+    status: string;
+    turnId: string;
+  }>;
+}
+
+async function readProviderDispatchCounts(databaseUrl: string): Promise<ProviderDispatchCount[]> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'psfn-icp-certification-provider-dispatch-assertions',
+    max: 1,
+  });
+  try {
+    const result = await pool.query<{
+      companion_id: string;
+      conversation_id: string | null;
+      dispatch_count: string;
+    }>(`
+      SELECT companion_id::text, conversation_id::text, COUNT(*)::text AS dispatch_count
+      FROM model_usage_events
+      WHERE status = 'success' AND call_kind IN ('chat', 'completion')
+      GROUP BY companion_id, conversation_id
+      ORDER BY companion_id, conversation_id NULLS FIRST
+    `);
+    return result.rows.map(row => ({
+      companionId: row.companion_id,
+      conversationId: row.conversation_id,
+      count: Number(row.dispatch_count),
+    }));
+  } finally {
+    await pool.end();
+  }
+}
+
 async function waitForBlockedCostDecision(
   harness: IcpCertificationProcessHarness,
   reason: string,
@@ -434,7 +484,21 @@ describe('ICP certification real process harness', () => {
         decision.localCompanionId === CERTIFICATION_COMPANION_B
         && (decision.outcome === 'reserved' || decision.outcome === 'warning')
       ))).toBe(false);
-      expect(processes.modelRequestCount).toBeGreaterThanOrEqual(2);
+      const providerRequestCount = await waitForModelRequestQuiescence(processes);
+      const dispatchCounts = await readProviderDispatchCounts(databaseUrl);
+      expect(dispatchCounts.reduce((sum, row) => sum + row.count, 0)).toBe(providerRequestCount);
+      expect(dispatchCounts.some(row => row.companionId === CERTIFICATION_COMPANION_B)).toBe(false);
+      expect(dispatchCounts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          companionId: CERTIFICATION_COMPANION_A,
+          conversationId: blocked.conversationId,
+          count: expect.any(Number),
+        }),
+      ]));
+      expect(dispatchCounts.find(row => (
+        row.companionId === CERTIFICATION_COMPANION_A
+        && row.conversationId === blocked.conversationId
+      ))!.count).toBeGreaterThan(0);
     },
     TIMEOUT_MS,
   );
@@ -447,15 +511,22 @@ describe('ICP certification real process harness', () => {
 
     const [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.runFreeTimeNotification()).rejects
-      .toThrow(/missing_cost_metadata|cost breaker/i);
+    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
+      status: 'permitted',
+      postTurnStatus: 'retry_scheduled',
+    });
     const blocked = await waitForBlockedCostDecision(processes, 'missing_cost_metadata');
     expect(blocked).toMatchObject({
       localCompanionId: CERTIFICATION_COMPANION_A,
       outcome: 'blocked',
       reason: 'missing_cost_metadata',
     });
-    expect(processes.modelRequestCount).toBe(1);
+    const providerRequestCount = await waitForModelRequestQuiescence(processes);
+    const dispatchCounts = await readProviderDispatchCounts(databaseUrl);
+    expect(dispatchCounts.reduce((sum, row) => sum + row.count, 0)).toBe(providerRequestCount);
+    expect(dispatchCounts.some(row => row.companionId === CERTIFICATION_COMPANION_B)).toBe(false);
+    expect(dispatchCounts.some(row => row.conversationId === blocked.conversationId)).toBe(false);
+    expect(providerRequestCount).toBe(1);
   }, TIMEOUT_MS);
 
   it('closes deterministic gates before the LLM and resists replay after weighted-thought consent', async () => {
@@ -495,7 +566,49 @@ describe('ICP certification real process harness', () => {
       status: 'consumed',
       deliveryDisposition: 'delivered',
     });
-    await waitForModelRequestQuiescence(processes);
+    const providerRequestsAfterConversation = await waitForModelRequestQuiescence(processes);
+    const rootInitiationId = String(sent.rootInitiationId);
+    const reservationPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-icp-certification-fatigue-exhaustion-assertions',
+      max: 1,
+    });
+    const exhaustedCompanion = await (async () => {
+      try {
+        return await reservationPool.query<{ local_companion_id: string }>(`
+          SELECT local_companion_id::text
+          FROM shared.icp_fatigue_turn_reservations
+          WHERE outcome IN ('delivered', 'no_reply')
+            AND root_initiation_id = $1
+          GROUP BY local_companion_id
+          HAVING COUNT(*) FILTER (WHERE decision = 'charged') > 0
+            AND COUNT(*) FILTER (WHERE decision = 'overcharge') > 0
+          ORDER BY local_companion_id
+          LIMIT 1
+        `, [rootInitiationId]);
+      } finally {
+        await reservationPool.end();
+      }
+    })();
+    const exhaustedCompanionId = exhaustedCompanion.rows.at(0)?.local_companion_id;
+    expect(exhaustedCompanionId).toBeTruthy();
+    const exhaustedAgent = exhaustedCompanionId === CERTIFICATION_COMPANION_A ? agentA : agentB;
+    const exhaustedTurns = await exhaustedAgent.turnRecordsSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as TurnRecordsSnapshot;
+    const suppressedTurns = exhaustedTurns.records.filter(record => (
+      record.correlation?.rootInitiationId === rootInitiationId
+      && record.correlation.fatigueDecision === 'suppress'
+    ));
+    expect(suppressedTurns, JSON.stringify(exhaustedTurns.records)).not.toHaveLength(0);
+    expect(suppressedTurns.every(record => record.status === 'completed')).toBe(true);
+
+    await expect(exhaustedAgent.runRecursiveWeightedThoughtScheduler(rootInitiationId)).resolves
+      .toMatchObject({ status: 'rejected', reasonCode: 'recursive_trigger' });
+    await Promise.all([agentA.enterPrivateRoom(), agentB.enterPrivateRoom()]);
+    const roomEvasion = await exhaustedAgent.runRoomWeightedThoughtScheduler();
+    expect(['deferred', 'rejected']).toContain(roomEvasion.status);
+    expect(['charge_pressure', 'fatigue_exhausted']).toContain(roomEvasion.reasonCode);
+    expect(await waitForModelRequestQuiescence(processes)).toBe(providerRequestsAfterConversation);
 
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-certification-fatigue-assertions',
@@ -522,6 +635,7 @@ describe('ICP certification real process harness', () => {
         fatigue.rows.some(row => row.decision === 'overcharge'),
         JSON.stringify(fatigue.rows),
       ).toBe(true);
+      expect(fatigue.rows.some(row => row.decision === 'charged')).toBe(true);
       for (const companionId of [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B]) {
         const companionReservations = fatigue.rows
           .filter(row => row.local_companion_id === companionId)
@@ -547,6 +661,7 @@ describe('ICP certification real process harness', () => {
     expect(artifactText).toContain('peer_do_not_disturb');
     expect(artifactText).toContain('weighted_thought');
     expect(artifactText).not.toContain('Private weighted_thought certification motivation');
+    expect(artifactText).not.toContain('Private recursive weighted-thought certification probe');
     expect(artifactText).not.toContain('replay:weighted-thought');
     expect(artifactText).not.toContain('fixture_defer');
   }, TIMEOUT_MS);

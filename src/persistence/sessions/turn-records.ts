@@ -15,6 +15,7 @@ import type {
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
@@ -426,6 +427,15 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
+  const icpCorrelation = raw.icpCorrelation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(raw.icpCorrelation);
+  if (icpCorrelation
+    && (icpCorrelation.channelId !== channelId
+      || icpCorrelation.turnId !== turnId
+      || icpCorrelation.requestId !== requestId)) {
+    throw new Error('TurnRecord ICP correlation does not match its channel/turn/request binding');
+  }
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
@@ -453,6 +463,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
       ? { roleEnvelopeRefs }
       : {}),
     ...(observability ? { observability } : {}),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
   };

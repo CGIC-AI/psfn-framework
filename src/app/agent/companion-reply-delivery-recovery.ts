@@ -73,12 +73,6 @@ export function createCompanionReplyDeliveryLifecycle(input: {
       }
       if (!response.content.trim()) {
         if (deliveryObservation?.status !== 'suppressed') {
-          await input.agent.recordIcpDeliveryObservation({
-            channelId: input.message.channelId,
-            sourceMessageId: input.message.id,
-            status: 'prepared',
-            recoveryResponse: response,
-          });
           deliveryObservation = {
             channelId: input.message.channelId,
             sourceMessageId: input.message.id,

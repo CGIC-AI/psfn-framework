@@ -974,6 +974,44 @@ describe('registerGatewayMessageHandlers', () => {
     }));
   });
 
+  it('persists a fresh fatigue-suppressed reply without an impossible prepared state', async () => {
+    const suppressedCorrelation: IcpConversationCorrelation = {
+      ...replyIcpCorrelation,
+      fatigueDecision: 'suppress',
+      fatigueReasonCode: 'fatigue_exhausted',
+    };
+    const suppressed = {
+      ...makeResponse(''),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: suppressedCorrelation.turnId,
+        requestId: suppressedCorrelation.requestId,
+        icpCorrelation: suppressedCorrelation,
+      },
+    };
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(suppressed);
+        return suppressed;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'suppressed', turnCompleted: true }),
+      );
+    });
+    expect(harness.agentLoop.recordIcpDeliveryObservation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'prepared' }),
+    );
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
+  });
+
   it('recovers a failed correlated reply after restart without another generated turn', async () => {
     const reply = {
       ...makeResponse('durable reply'),

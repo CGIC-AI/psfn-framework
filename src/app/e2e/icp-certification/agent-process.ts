@@ -71,13 +71,17 @@ type AgentProcessCommand = {
   type: 'retry_candidate_delivery';
 } | {
   id: number;
+  rootInitiationId: string;
+  type: 'run_recursive_weighted_thought_scheduler';
+} | {
+  id: number;
   phase: 'post_exit' | 'pre_entry';
   type: 'send_room_probe';
 } | {
   channelId: string;
   id: number;
   type: 'channel_snapshot' | 'served_channel_snapshot'
-    | 'force_compaction' | 'append_compaction_marker';
+    | 'turn_records_snapshot' | 'force_compaction' | 'append_compaction_marker';
 };
 
 interface AgentProcessReply {
@@ -596,6 +600,42 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: projectCandidate(candidate) });
           return;
         }
+        if (raw.type === 'run_recursive_weighted_thought_scheduler') {
+          if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
+            throw new Error('ICP autonomy is disabled by scheduler.json');
+          }
+          if (!candidateStore || !peer || !peerContact) {
+            throw new Error('Recursive autonomy probe requires multi-companion candidate ownership');
+          }
+          autonomousTriggerIndex += 1;
+          const thoughtId = `certification-recursive-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
+          const candidateIdsBefore = new Set(
+            (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
+          );
+          await weightedThoughtStore.save(createThoughtWeight({
+            id: thoughtId,
+            content: 'Private recursive weighted-thought certification probe',
+            source: 'certification_icp_reply',
+            thoughtClass: 'standard',
+            contactId: peerContact.id,
+            provenance: {
+              icpRootInitiationId: raw.rootInitiationId,
+              sourceChannelId: composeCompanionDmChannelId(companionId, peer.companionId),
+              sourceChannelType: 'companion',
+            },
+            relationshipMultiplier: 2,
+            emotionalIntensity: 1,
+          }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
+          const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
+          if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
+          await task.handler();
+          const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
+            !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
+          ));
+          if (!candidate) throw new Error('Recursive weighted-thought scheduler did not persist a candidate');
+          reply({ id: raw.id, ok: true, result: projectCandidate(candidate) });
+          return;
+        }
         if (raw.type === 'run_room_weighted_thought_scheduler') {
           if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
             throw new Error('ICP autonomy is disabled by scheduler.json');
@@ -680,6 +720,37 @@ async function main(): Promise<void> {
               roomWindowFloorMs: snapshot.roomWindowFloorMs,
               roomWindowFilteredEntryCount: snapshot.roomWindowFilteredEntryCount ?? 0,
               sourceEntryCount: snapshot.sourceEntryCount ?? 0,
+            },
+          });
+          return;
+        }
+        if (raw.type === 'turn_records_snapshot') {
+          await agent.waitForIdle();
+          const records = sessionRuntime.sessionStore.getRecentTurnRecords(raw.channelId, 100);
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              records: records.map(record => ({
+                turnId: record.turnId,
+                status: record.status,
+                hasAssistantMessage: record.assistantMessage !== undefined,
+                ...(record.icpCorrelation
+                  ? {
+                      correlation: {
+                        conversationId: record.icpCorrelation.conversationId,
+                        rootInitiationId: record.icpCorrelation.rootInitiationId,
+                        localCompanionId: record.icpCorrelation.localCompanionId,
+                        peerCompanionId: record.icpCorrelation.peerCompanionId,
+                        channelId: record.icpCorrelation.channelId,
+                        fatigueDecision: record.icpCorrelation.fatigueDecision,
+                        ...(record.icpCorrelation.fatigueReasonCode
+                          ? { fatigueReasonCode: record.icpCorrelation.fatigueReasonCode }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              })),
             },
           });
           return;

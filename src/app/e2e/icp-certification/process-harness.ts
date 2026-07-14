@@ -173,6 +173,27 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
+  async runRecursiveWeightedThoughtScheduler(
+    rootInitiationId: string,
+  ): Promise<Record<string, unknown>> {
+    const result = await this.request({
+      type: 'run_recursive_weighted_thought_scheduler',
+      rootInitiationId,
+    }) as Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source: 'recursive_weighted_thought_scheduler',
+      candidateId: String(result.candidateId ?? 'unknown'),
+      status: String(result.status ?? 'unknown'),
+      ...(result.reasonCode ? { reasonCode: String(result.reasonCode) } : {}),
+      ...(result.deliveryDisposition
+        ? { deliveryDisposition: String(result.deliveryDisposition) }
+        : {}),
+    });
+    return result;
+  }
+
   async enterPrivateRoom(): Promise<Record<string, unknown>> {
     return await this.request({ type: 'enter_private_room' }) as Record<string, unknown>;
   }
@@ -236,6 +257,10 @@ export class IcpCertificationAgentProcess {
 
   async servedChannelSnapshot(channelId: string): Promise<Record<string, unknown>> {
     return await this.request({ type: 'served_channel_snapshot', channelId }) as Record<string, unknown>;
+  }
+
+  async turnRecordsSnapshot(channelId: string): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'turn_records_snapshot', channelId }) as Record<string, unknown>;
   }
 
   async forceCompaction(channelId: string): Promise<unknown> {

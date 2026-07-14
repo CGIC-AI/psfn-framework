@@ -68,6 +68,45 @@ describe('turn-records', () => {
     expect(read[0]?.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
   });
 
+  it('round-trips a durable ICP suppression correlation', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-icp-correlation-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${companionA}:${companionB}`;
+    const turnId = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+    const requestId = 'companion-reply-11111111-1111-4111-8111-111111111111-prior-turn';
+    const record = createTurnRecord({
+      channelId,
+      channelType: 'companion',
+      turnId,
+      requestId,
+      assistantMessage: undefined,
+      icpCorrelation: {
+        conversationId: '33333333-3333-4333-8333-333333333333',
+        rootInitiationId: '44444444-4444-4444-8444-444444444444',
+        initiatedByCompanionId: companionA,
+        localCompanionId: companionB,
+        peerCompanionId: companionA,
+        peerContactId: 'contact-a',
+        channelId,
+        turnId,
+        messageId: requestId,
+        requestId,
+        chargeLane: 'companion_social',
+        surface: 'companion_dm',
+        costPurpose: 'conversation_turn',
+        costOriginStage: 'reply',
+        fatigueDecision: 'suppress',
+        fatigueReasonCode: 'fatigue_exhausted',
+      },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(channelId, 5)).toEqual([record]);
+  });
+
   it('omits location for turns that carried no place binding (legacy rows load fine)', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-nolocation-'));
     const record = createTurnRecord();

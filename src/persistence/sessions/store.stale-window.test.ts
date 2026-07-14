@@ -143,19 +143,19 @@ describe('SessionStore stale fullyLoaded window (psfn-framework-hgw3.1)', () => 
     expect(recent.at(-1)?.content).toBe('newest tail reply');
   });
 
-  it('reloadChannelFromDisk drops the in-memory view and reports the on-disk max ids', () => {
+  it('reloadChannelFromDisk drops the in-memory view and reports the on-disk max ids', async () => {
     appendMessage(writerStore, 'ch-reload', 'user', 'reload seed message', 1_000);
     const readerStore = new SessionStore(dir);
     expect(readerStore.getEntriesInRange('ch-reload', 1, Number.MAX_SAFE_INTEGER)).toHaveLength(1);
 
     const externalId = appendMessage(writerStore, 'ch-reload', 'assistant', 'reload external reply', 2_000);
 
-    const reloaded = readerStore.reloadChannelFromDisk('ch-reload');
+    const reloaded = await readerStore.reloadChannelFromDisk('ch-reload');
     expect(reloaded).not.toBeNull();
     expect(reloaded?.maxEntryId).toBe(externalId);
     expect(reloaded?.lastMessageEntryId).toBe(externalId);
     expect(readerStore.getRecent('ch-reload', 10).at(-1)?.id).toBe(externalId);
 
-    expect(readerStore.reloadChannelFromDisk('ch-missing')).toBeNull();
+    expect(await readerStore.reloadChannelFromDisk('ch-missing')).toBeNull();
   });
 });

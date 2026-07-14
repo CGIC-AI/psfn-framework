@@ -5,31 +5,39 @@ import type { SessionEntry } from '../types.js';
  * Read-side view over a fetched session tail window (psfn-framework-hgw3.5).
  *
  * Wraps a SessionStore for ONE capture so `getRecent`/`getEntriesInRange`
- * consult the shared Redis tail first:
- * - a window that fits inside the tail is served from the tail alone;
- * - a wider window merges journal-backed entries with the tail BY ENTRY ID,
- *   with the tail (Redis) copy winning on overlap — never interleaving
- *   duplicates;
- * - every other method and every other channel passes straight through.
+ * gap-fill from the shared Redis tail. Merge rule (hardened): the JOURNAL is
+ * the authenticated source of truth, so for every id the journal read
+ * returned, the journal row wins outright — Redis rows bypass the journal
+ * HMAC chain and must never override them. Tail entries are only accepted
+ * for ids NEWER than the journal window's max id: the cross-process
+ * freshness gap-fill (entries another process appended that a stale
+ * in-memory view might miss). Every other method and every other channel
+ * passes straight through.
  *
- * The tail entries must already be validated/normalized
- * (SessionStore.fetchSessionTailWindow): ascending by id, no duplicates, and
- * not behind the just-recorded entry id.
+ * The tail entries must already be validated
+ * (SessionStore.fetchSessionTailWindow): ascending by id, no duplicates, id
+ * contiguity checked, epoch-fenced, and not behind the just-recorded entry
+ * id.
  */
 export function createSessionTailReadStore(
   store: SessionStore,
   tailChannelId: string,
   tailEntries: readonly SessionEntry[],
 ): SessionStore {
-  const mergeWithTail = (base: readonly SessionEntry[], tailSlice: readonly SessionEntry[]): SessionEntry[] => {
-    const byId = new Map<number, SessionEntry>();
-    for (const entry of base) {
-      byId.set(entry.id, entry);
-    }
-    for (const entry of tailSlice) {
-      byId.set(entry.id, entry);
-    }
-    return [...byId.values()].sort((left, right) => left.id - right.id);
+  /**
+   * Append tail entries strictly NEWER than the journal window's max id.
+   * Both inputs are ascending by id, so the concatenation stays sorted.
+   */
+  const gapFillFromTail = (
+    journalEntries: readonly SessionEntry[],
+    tailSlice: readonly SessionEntry[],
+  ): SessionEntry[] => {
+    const journalMaxId = journalEntries.length > 0
+      ? journalEntries[journalEntries.length - 1].id
+      : -1;
+    const newer = tailSlice.filter(entry => entry.id > journalMaxId);
+    if (newer.length === 0) return [...journalEntries];
+    return [...journalEntries, ...newer];
   };
 
   return new Proxy(store, {
@@ -41,10 +49,7 @@ export function createSessionTailReadStore(
           }
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          if (tailEntries.length >= normalizedLimit) {
-            return tailEntries.slice(-normalizedLimit);
-          }
-          const merged = mergeWithTail(target.getRecent(channelId, normalizedLimit), tailEntries);
+          const merged = gapFillFromTail(target.getRecent(channelId, normalizedLimit), tailEntries);
           if (merged.length <= normalizedLimit) return merged;
           return merged.slice(-normalizedLimit);
         };
@@ -63,7 +68,7 @@ export function createSessionTailReadStore(
             entry => entry.id >= normalizedStart && entry.id <= normalizedEnd,
           );
           if (tailInRange.length === 0) return base;
-          return mergeWithTail(base, tailInRange);
+          return gapFillFromTail(base, tailInRange);
         };
       }
 

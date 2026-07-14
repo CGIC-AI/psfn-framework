@@ -421,7 +421,7 @@ export async function prepareTurnIdentityState(input: {
 export interface StaleSessionWindowHealPort {
   reconcileSessionChannelFromDisk: (
     channelId: string,
-  ) => { maxEntryId: number; lastMessageEntryId: number | null } | null;
+  ) => Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null>;
 }
 
 /**
@@ -455,7 +455,7 @@ export async function healStaleCapturedSessionWindow(input: {
     return snapshot;
   }
   try {
-    const reconciled = input.sessionManager.reconcileSessionChannelFromDisk(input.channelId);
+    const reconciled = await input.sessionManager.reconcileSessionChannelFromDisk(input.channelId);
     const recaptured = await input.recapture();
     const recapturedWindowMaxEntryId = recaptured.storeWindowMaxEntryId ?? null;
     const healed = recapturedWindowMaxEntryId !== null

@@ -32,19 +32,26 @@ function makeStubStore(entries: SessionEntry[]): SessionStore {
 }
 
 describe('createSessionTailReadStore (psfn-framework-hgw3.5)', () => {
-  it('serves a window that fits the tail from the tail alone', () => {
+  it('journal wins on any id overlap: tail rows never override journal rows', () => {
+    // Hardened merge rule: Redis rows bypass the journal HMAC chain, so for
+    // ids the journal read covers, the journal copy is authoritative.
     const journal = [makeEntry(1), makeEntry(2), makeEntry(3)];
     const tail = [makeEntry(2, { content: 'tail copy 2' }), makeEntry(3, { content: 'tail copy 3' })];
     const wrapped = createSessionTailReadStore(makeStubStore(journal), CHANNEL, tail);
 
-    const recent = wrapped.getRecent(CHANNEL, 2);
-    expect(recent.map(entry => entry.content)).toEqual(['tail copy 2', 'tail copy 3']);
+    const recent = wrapped.getRecent(CHANNEL, 3);
+    expect(recent.map(entry => entry.content)).toEqual([
+      'journal copy 1',
+      'journal copy 2',
+      'journal copy 3',
+    ]);
   });
 
-  it('merges wider windows by entry id with the tail copy winning, no duplicates, ascending order', () => {
+  it('gap-fills entries newer than the journal window max, no duplicates, ascending order', () => {
+    // Entry 4 exists only in the tail (this process's journal cache is
+    // stale); entry 3 overlaps with a differing tail copy and the journal
+    // copy must win.
     const journal = [makeEntry(1), makeEntry(2), makeEntry(3), makeEntry(4)];
-    // Tail is bounded to the newest two; entry 4 exists only in the tail
-    // (journal cache stale) and entry 3 overlaps with a differing copy.
     const tail = [makeEntry(3, { content: 'tail copy 3' }), makeEntry(4, { content: 'tail copy 4' })];
     const stale = makeStubStore(journal.slice(0, 3));
     const wrapped = createSessionTailReadStore(stale, CHANNEL, tail);
@@ -54,7 +61,7 @@ describe('createSessionTailReadStore (psfn-framework-hgw3.5)', () => {
     expect(recent.map(entry => entry.content)).toEqual([
       'journal copy 1',
       'journal copy 2',
-      'tail copy 3',
+      'journal copy 3',
       'tail copy 4',
     ]);
   });
@@ -68,14 +75,24 @@ describe('createSessionTailReadStore (psfn-framework-hgw3.5)', () => {
     expect(recent.map(entry => entry.id)).toEqual([2, 3, 4]);
   });
 
-  it('merges getEntriesInRange with tail entries restricted to the range', () => {
+  it('merges getEntriesInRange with journal wins on overlap and tail restricted to the range', () => {
     const journal = [makeEntry(1), makeEntry(2), makeEntry(3)];
-    const tail = [makeEntry(3, { content: 'tail copy 3' }), makeEntry(4), makeEntry(5)];
+    const tail = [
+      makeEntry(3, { content: 'tail copy 3' }),
+      makeEntry(4, { content: 'tail copy 4' }),
+      makeEntry(5, { content: 'tail copy 5' }),
+    ];
     const wrapped = createSessionTailReadStore(makeStubStore(journal), CHANNEL, tail);
 
     const range = wrapped.getEntriesInRange(CHANNEL, 2, 4);
     expect(range.map(entry => entry.id)).toEqual([2, 3, 4]);
-    expect(range[1].content).toBe('tail copy 3');
+    expect(range[1].content).toBe('journal copy 3');
+    expect(range[2].content).toBe('tail copy 4');
+  });
+
+  it('accepts tail entries wholesale when the journal read returns nothing', () => {
+    const wrapped = createSessionTailReadStore(makeStubStore([]), CHANNEL, [makeEntry(8), makeEntry(9)]);
+    expect(wrapped.getRecent(CHANNEL, 5).map(entry => entry.id)).toEqual([8, 9]);
   });
 
   it('passes other channels straight through', () => {

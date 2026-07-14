@@ -1001,10 +1001,10 @@ export class SessionManager {
    * from disk. Heal hook for a captured session window that is missing entries
    * the write path already assigned ids past (psfn-framework-hgw3.1).
    */
-  reconcileSessionChannelFromDisk(
+  async reconcileSessionChannelFromDisk(
     channelId: string,
-  ): { maxEntryId: number; lastMessageEntryId: number | null } | null {
-    return this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
+  ): Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null> {
+    return await this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
   }
 
   /**
@@ -1029,10 +1029,12 @@ export class SessionManager {
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     // Shared hot tail (psfn-framework-hgw3.5): when the tail cache is enabled
-    // and serves a window covering the just-recorded entry, the capture's
-    // recent-window reads consult it first (merging with journal reads by
-    // entry id, tail winning). Null keeps the journal-only path byte-identical
-    // — including the tail-behind fallback required by the hgw3.1 heal guard.
+    // and serves a validated window covering the just-recorded entry, the
+    // capture's recent-window reads gap-fill from it — journal rows win on
+    // any id overlap (the tail bypasses the journal HMAC chain); tail rows
+    // are accepted only for ids newer than the journal window. Null keeps the
+    // journal-only path byte-identical — including the tail-behind fallback
+    // required by the hgw3.1 heal guard.
     const tailWindow = await this.store.fetchSessionTailWindow(resolvedChannelId, {
       ...(input.excludeSessionEntryId !== undefined
         ? { expectedMinEntryId: input.excludeSessionEntryId }

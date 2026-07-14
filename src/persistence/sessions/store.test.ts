@@ -388,7 +388,7 @@ describe('SessionStore', () => {
     expect(JSON.parse(quarantine)).toMatchObject({ channelId });
   });
 
-  it('applies append-only turn tombstones to session reads and supports deterministic restore', () => {
+  it('applies append-only turn tombstones to session reads and supports deterministic restore', async () => {
     const channelId = 'api:turn-tombstone-session';
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -455,7 +455,7 @@ describe('SessionStore', () => {
       metadata: secondTurnAssistantMeta,
     });
 
-    store.redactTurn(channelId, firstTurnId, {
+    await store.redactTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
       timestamp: 1_400,
@@ -492,7 +492,7 @@ describe('SessionStore', () => {
       tombstoneTargetId: firstTurnId,
     });
 
-    reloaded.restoreTurn(channelId, firstTurnId, {
+    await reloaded.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'undo',
       timestamp: 1_500,
@@ -509,7 +509,7 @@ describe('SessionStore', () => {
     expect(restoredAgain.count(channelId)).toBe(4);
   });
 
-  it('excludes tombstoned turn ids from turn-record reads and restores deterministically', () => {
+  it('excludes tombstoned turn ids from turn-record reads and restores deterministically', async () => {
     const channelId = 'api:turn-tombstone-records';
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -551,13 +551,13 @@ describe('SessionStore', () => {
       provenanceRefs: [],
     });
 
-    store.redactTurn(channelId, firstTurnId, {
+    await store.redactTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
 
-    store.restoreTurn(channelId, firstTurnId, {
+    await store.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'undo',
     });
@@ -685,7 +685,7 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    const result = searchStore.applyCogSecTombstones({
+    const result = await searchStore.applyCogSecTombstones({
       channelId: 'api:cogsec-l0',
       caseId: 'cogsec_20260701T000000Z_l0',
       eventStore,
@@ -749,7 +749,7 @@ describe('SessionStore', () => {
     expect(reloaded.listCogSecTombstoneDiagnostics({ channelId: 'api:cogsec-l0' })[0]?.rowCount).toBe(1);
   });
 
-  it('does not modify companion L0 when sealed forensic archive write fails', () => {
+  it('does not modify companion L0 when sealed forensic archive write fails', async () => {
     const eventStore = new CogSecEventStore(join(dir, 'cogsec-events.json'));
     eventStore.createEvent({
       caseId: 'cogsec_20260701T000000Z_sealfail',
@@ -765,7 +765,7 @@ describe('SessionStore', () => {
       timestamp: 1_000,
     });
 
-    expect(() => store.applyCogSecTombstones({
+    await expect(store.applyCogSecTombstones({
       channelId: 'api:cogsec-seal-fail',
       caseId: 'cogsec_20260701T000000Z_sealfail',
       eventStore,
@@ -775,14 +775,14 @@ describe('SessionStore', () => {
         },
       },
       messageIds: [dirtyId],
-    })).toThrow('seal failed');
+    })).rejects.toThrow('seal failed');
 
     const journalPath = findSessionJournalPath(dir, 'cogsec-seal-fail');
     expect(readFileSync(journalPath, 'utf-8')).toContain('dirty payload survives because seal failed');
     expect(eventStore.getEvent('cogsec_20260701T000000Z_sealfail')?.tombstonedL0RowCount).toBe(0);
   });
 
-  it('re-signs integrity-protected journals after CogSec tombstoning', () => {
+  it('re-signs integrity-protected journals after CogSec tombstoning', async () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:integrity-key',
       activeVersion: 'v1',
@@ -813,7 +813,7 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    signedStore.applyCogSecTombstones({
+    await signedStore.applyCogSecTombstones({
       channelId: 'api:cogsec-hmac',
       caseId: 'cogsec_20260701T000000Z_hmac',
       eventStore,
@@ -841,7 +841,7 @@ describe('SessionStore', () => {
     ]);
   });
 
-  it('replaces CogSec-affected compaction summaries with safe invalidation markers', () => {
+  it('replaces CogSec-affected compaction summaries with safe invalidation markers', async () => {
     store.append({
       channelId: 'api:cogsec-summary',
       role: 'user',
@@ -856,7 +856,7 @@ describe('SessionStore', () => {
     const compactionId = store.getCompactionSummaries('api:cogsec-summary')[0]?.id;
     expect(compactionId).toBeDefined();
 
-    const result = store.applyCogSecCompactionInvalidations({
+    const result = await store.applyCogSecCompactionInvalidations({
       channelId: 'api:cogsec-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       compactionIds: [compactionId!],
@@ -877,7 +877,7 @@ describe('SessionStore', () => {
     );
   });
 
-  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', () => {
+  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', async () => {
     store.append({
       channelId: 'api:cogsec-regenerated-summary',
       role: 'user',
@@ -891,13 +891,13 @@ describe('SessionStore', () => {
     );
     const compactionId = store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.id;
     expect(compactionId).toBeDefined();
-    store.applyCogSecCompactionInvalidations({
+    await store.applyCogSecCompactionInvalidations({
       channelId: 'api:cogsec-regenerated-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       compactionIds: [compactionId!],
     });
 
-    const result = store.applyCogSecCompactionRegenerations({
+    const result = await store.applyCogSecCompactionRegenerations({
       channelId: 'api:cogsec-regenerated-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       summaries: [{
@@ -923,7 +923,7 @@ describe('SessionStore', () => {
     );
   });
 
-  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', () => {
+  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', async () => {
     store.append({
       channelId: 'api:cogsec-bad-regeneration',
       role: 'user',
@@ -938,14 +938,14 @@ describe('SessionStore', () => {
     const compactionId = store.getCompactionSummaries('api:cogsec-bad-regeneration')[0]?.id;
     expect(compactionId).toBeDefined();
 
-    expect(() => store.applyCogSecCompactionRegenerations({
+    await expect(store.applyCogSecCompactionRegenerations({
       channelId: 'api:cogsec-bad-regeneration',
       caseId: 'cogsec_20260701T000000Z_summary',
       summaries: [{
         compactionId: compactionId!,
         summary: '[CogSec redaction: cogsec_20260701T000000Z_summary]',
       }],
-    })).toThrow(/must not contain CogSec tombstone/u);
+    })).rejects.toThrow(/must not contain CogSec tombstone/u);
   });
 
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {

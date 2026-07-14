@@ -59,6 +59,24 @@ The headline fact governing everything below: the multi-companion substrate is *
 - Final integrated gate for `2z12.7`: image/privacy/transport 192/192 plus merged
   gateway/server regressions 53/53, lint, ESM+DTS build, and worktree plus
   branch-range diff checks passed. Material remaining image observations: none.
+- `psfn-framework-2z12.6` is closed on integration head `96c5ef34`
+  (active-refresh implementation `c30b3afe`, shared-query-embedding implementation
+  `0a6114c7`, bounded review remediation `96c5ef34`). Unchanged active-memory
+  refreshes now reuse the byte-identical snapshot without a new embed, vector
+  scan, or compositional rerank, and each turn can share one provenance-checked
+  query embedding between memory and wiki retrieval.
+- The single independent review found that cache identity omitted mutable
+  disclosure/room-visibility inputs and that a PostgreSQL rollback could rewind
+  the retrieval generation. The bounded remediation fingerprints the normalized
+  access-policy snapshot, disables reuse when that snapshot is unsafe, clears
+  retained context after access withdrawal, and keeps rollback generations
+  monotonic while preventing uncommitted retrieval snapshots. Evidence lives in
+  `src/faculties/memory/retrieval.ts`, `src/faculties/memory/postgres-store.ts`,
+  `src/shared/retrieval-query-embedding.ts`, and their focused regressions.
+- Final integrated gate for `2z12.6`: retrieval/cache/wiki/PostgreSQL 76/76,
+  memory-port/trust-policy support 87/87, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. The parent epic `psfn-framework-2z12` remains
+  open for its other children.
 
 ## 0. 2026-07-12 update — decided priority order
 

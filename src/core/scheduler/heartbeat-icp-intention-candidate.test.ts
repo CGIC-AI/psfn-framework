@@ -16,6 +16,7 @@ import {
   INTENTION_FOLLOW_UP_ACTION_KIND,
   INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
 } from '../intention/appraisal.js';
+import { createFileOutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
@@ -75,7 +76,10 @@ function emptyQueueStatus(): PostTurnActionQueueStatus {
   };
 }
 
-function wire(kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_companion') {
+function wire(
+  kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_companion',
+  options: { activation?: 'success' | 'fail_once' | 'false' | 'missing' } = {},
+) {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-intention-'));
   TEMP_DIRS.push(dataDir);
   const eventBus = new EventBus();
@@ -137,17 +141,26 @@ function wire(kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_com
     list: vi.fn(),
     listQuarantined: vi.fn(),
   };
+  let activationAttempts = 0;
   const onIntentionFollowUpActivated = vi.fn(async ({
     pendingFollowUpId,
     activationReason,
   }: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }) => (
-    await pendingFollowUpStore.dequeue(pendingFollowUpId, {
+  }) => {
+    activationAttempts += 1;
+    if (options.activation === 'fail_once' && activationAttempts === 1) {
+      throw new Error('injected activation persistence failure');
+    }
+    if (options.activation === 'false') return false;
+    return (
+      await pendingFollowUpStore.dequeue(pendingFollowUpId, {
       ...(activationReason ? { activationReason } : {}),
     })
-  ) !== null);
+    ) !== null;
+  });
+  const outreachOutbox = createFileOutreachOutboxStore(join(dataDir, 'outreach-outbox.jsonl'));
   const postTurnActions: PostTurnActionRuntime = {
     registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
@@ -180,8 +193,9 @@ function wire(kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_com
       postTurnActions,
       llmProvider,
       pendingFollowUpStore,
-      onIntentionFollowUpActivated,
+      ...(options.activation === 'missing' ? {} : { onIntentionFollowUpActivated }),
       proactiveOutbound,
+      outreachOutbox,
       icpIntentionCandidateAdapter: { submit },
     },
   );
@@ -195,6 +209,7 @@ function wire(kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_com
     agentLoop,
     pendingFollowUpStore,
     onIntentionFollowUpActivated,
+    outreachOutbox,
   };
 }
 
@@ -260,10 +275,49 @@ describe('heartbeat ICP intention candidate integration', () => {
       activationReason: 'icp_candidate_sent',
     });
     await expect(handler(ACTION)).resolves.toEqual({
-      detail: 'blocked:stale_pending_follow_up',
+      detail: 'icp_candidate:delivery_reconciled',
     });
     expect(submit).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before candidate submission when linked-source activation is unavailable', async () => {
+    const { handler, submit } = wire('submitted', { activation: 'missing' });
+    await expect(handler(ACTION)).rejects.toThrow('activation callback');
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('keeps a false activation result retryable without repeating the candidate pipeline', async () => {
+    const { handler, submit, pendingFollowUpStore } = wire('submitted', { activation: 'false' });
+    await expect(handler(ACTION)).rejects.toThrow('remained live');
+    await expect(handler({
+      ...ACTION,
+      id: 'action-2',
+      dedupeKey: 'intention.outbound_message:message-2:other-hash',
+    })).rejects.toThrow('remained live');
+    expect(submit).toHaveBeenCalledOnce();
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.not.toHaveProperty('activatedAt');
+  });
+
+  it('reconciles a delivered candidate after activation failure under a new action identity', async () => {
+    const {
+      handler,
+      submit,
+      pendingFollowUpStore,
+      onIntentionFollowUpActivated,
+    } = wire('submitted', { activation: 'fail_once' });
+    await expect(handler(ACTION)).rejects.toThrow('injected activation persistence failure');
+    await expect(handler({
+      ...ACTION,
+      id: 'action-after-restart',
+      dedupeKey: 'intention.outbound_message:restart:new-hash',
+    })).resolves.toEqual({ detail: 'icp_candidate:delivery_reconciled' });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(onIntentionFollowUpActivated).toHaveBeenCalledTimes(2);
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.toMatchObject({
+      activatedAt: expect.any(String),
+      activationReason: 'icp_candidate_sent',
+    });
   });
 
   it('fails a stale companion provenance recheck closed without human-send fallback', async () => {

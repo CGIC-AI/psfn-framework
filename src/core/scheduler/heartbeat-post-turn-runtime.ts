@@ -992,6 +992,49 @@ export function wireHeartbeatPostTurnRuntime(
               ...(payload.reason ? { reason: payload.reason } : {}),
               ...(typeof action.runAt === 'number' ? { runAt: action.runAt } : {}),
             };
+            const reconcileDeliveredIcpPendingFollowUp = async (
+              pendingFollowUpId: string,
+            ): Promise<void> => {
+              if (!runtimeOptions.onIntentionFollowUpActivated) {
+                throw new Error('Linked ICP intention requires a follow-up activation callback');
+              }
+              if (!runtimeOptions.pendingFollowUpStore) {
+                throw new Error('Linked ICP intention requires a pending follow-up store');
+              }
+              const activated = await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId,
+                activationReason: 'icp_candidate_sent',
+              });
+              if (activated === true) return;
+              const followUp = await runtimeOptions.pendingFollowUpStore.peek(pendingFollowUpId);
+              if (!followUp?.activatedAt) {
+                throw new Error(`Delivered ICP pending follow-up "${pendingFollowUpId}" remained live`);
+              }
+            };
+            const deliveredIcpCompletion = payload.pendingFollowUpId
+              ? runtimeOptions.outreachOutbox?.getIcpDeliveredCompletion(payload.pendingFollowUpId)
+              : undefined;
+            if (payload.pendingFollowUpId && deliveredIcpCompletion) {
+              await reconcileDeliveredIcpPendingFollowUp(payload.pendingFollowUpId);
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'skipped',
+                metadata: {
+                  skippedReason: 'icp_delivery_reconciled',
+                  deliveredActionId: deliveredIcpCompletion.actionId,
+                  deliveredRecordedAt: deliveredIcpCompletion.recordedAt,
+                },
+              });
+              return { detail: 'icp_candidate:delivery_reconciled' };
+            }
+            if (payload.pendingFollowUpId && runtimeOptions.icpIntentionCandidateAdapter) {
+              if (!runtimeOptions.onIntentionFollowUpActivated) {
+                throw new Error('Linked ICP intention requires a follow-up activation callback');
+              }
+              if (!runtimeOptions.outreachOutbox) {
+                throw new Error('Linked ICP intention requires a durable outreach outbox');
+              }
+            }
             const terminalRecord = runtimeOptions.outreachOutbox?.getTerminal(action.dedupeKey);
             if (terminalRecord) {
               runtimeOptions.outreachOutbox?.append({
@@ -1042,12 +1085,19 @@ export function wireHeartbeatPostTurnRuntime(
             if (icpCandidate.kind === 'submitted') {
               if (payload.pendingFollowUpId
                 && icpCandidate.result.outcome === 'sent'
-                && icpCandidate.result.status === 'consumed'
-                && runtimeOptions.onIntentionFollowUpActivated) {
-                await runtimeOptions.onIntentionFollowUpActivated({
-                  pendingFollowUpId: payload.pendingFollowUpId,
-                  activationReason: 'icp_candidate_sent',
+                && icpCandidate.result.status === 'consumed') {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'sent',
+                  metadata: {
+                    kind: 'icp_candidate_delivery',
+                    disposition: 'delivered',
+                    pendingFollowUpId: payload.pendingFollowUpId,
+                    candidateId: icpCandidate.result.candidateId,
+                    candidateStatus: icpCandidate.result.status,
+                  },
                 });
+                await reconcileDeliveredIcpPendingFollowUp(payload.pendingFollowUpId);
               }
               return {
                 detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,

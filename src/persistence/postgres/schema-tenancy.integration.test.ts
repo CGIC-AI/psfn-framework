@@ -64,6 +64,26 @@ async function tableSchemas(pool: import('pg').Pool, table: string): Promise<str
   return result.rows.map(row => row.table_schema);
 }
 
+async function waitForBlockedActiveConcernQueries(
+  pool: import('pg').Pool,
+  expectedCount: number,
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const result = await pool.query<{ count: string }>(`
+      SELECT COUNT(*)::text AS count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+        AND query LIKE '%active_concerns%'
+    `);
+    if (Number(result.rows[0]?.count ?? 0) >= expectedCount) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${expectedCount} blocked active-concern queries`);
+}
+
 function memoryCandidateStore(): IcpInitiationCandidateStorePort {
   const candidates = new Map<string, IcpInitiationCandidate>();
   return {
@@ -457,6 +477,159 @@ describe('Postgres schema tenancy plumbing', () => {
         })).rejects.toThrow('conflicting ICP roots');
         await expect(runtime.concernStore.getById(created.id)).resolves.toEqual(beforeConflict);
       } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'rolls back a stale conflicting reopen after concurrent lineage lands under lock',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-reopen-locked-conflict',
+        allowExitOnIdle: true,
+        max: 6,
+        schema: 'companion_concern_locked_conflict',
+      });
+      const blocker = await pool.connect();
+      let blockerOpen = false;
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_locked_conflict',
+        });
+        const runtime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'concern-locked-conflict',
+        });
+        const created = await runtime.concernStore.create({
+          text: 'Check the locked peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+        });
+        await runtime.concernStore.resolveConcern(created.id, {
+          outcome: 'Resolved before the concurrent lineage update.',
+          resolvedAt: '2026-07-13T20:30:00.000Z',
+          evidenceRefs: [{ kind: 'runtime', ref: 'resolved-before-locked-conflict' }],
+        });
+
+        await blocker.query('BEGIN');
+        blockerOpen = true;
+        await blocker.query('SELECT id FROM active_concerns WHERE id = $1 FOR UPDATE', [created.id]);
+        const concurrentUpdate = await blocker.query<{ row_json: string }>(`
+          UPDATE active_concerns
+          SET origin_icp_root_initiation_id = $2
+          WHERE id = $1
+          RETURNING to_jsonb(active_concerns)::text AS row_json
+        `, [created.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']);
+        const expectedRow = concurrentUpdate.rows[0]?.row_json;
+        if (!expectedRow) throw new Error('concurrent lineage update did not return the row');
+
+        const conflictingReopen = runtime.concernStore.create({
+          text: 'Check on the locked peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:00.000Z',
+          expiresAt: '2026-07-14T21:00:00.000Z',
+          reopenResolved: true,
+          evidenceRefs: [{ kind: 'message', ref: 'stale-conflicting-reopen' }],
+          originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        });
+        await waitForBlockedActiveConcernQueries(pool, 1);
+        await blocker.query('COMMIT');
+        blockerOpen = false;
+
+        await expect(conflictingReopen).rejects.toThrow('conflicting ICP roots');
+        const after = await pool.query<{ row_json: string }>(`
+          SELECT to_jsonb(active_concerns)::text AS row_json
+          FROM active_concerns
+          WHERE id = $1
+        `, [created.id]);
+        expect(after.rows[0]?.row_json).toBe(expectedRow);
+      } finally {
+        if (blockerOpen) await blocker.query('ROLLBACK');
+        blocker.release();
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'allows at most one ICP root to win a concurrent resolved-concern reopen',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-reopen-two-roots',
+        allowExitOnIdle: true,
+        max: 7,
+        schema: 'companion_concern_two_roots',
+      });
+      const blocker = await pool.connect();
+      let blockerOpen = false;
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_two_roots',
+        });
+        const seedRuntime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'concern-two-roots',
+        });
+        const created = await seedRuntime.concernStore.create({
+          text: 'Check the two-root peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+        });
+        await seedRuntime.concernStore.resolveConcern(created.id, {
+          outcome: 'Resolved before two roots raced.',
+          resolvedAt: '2026-07-13T20:30:00.000Z',
+          evidenceRefs: [{ kind: 'runtime', ref: 'resolved-before-two-roots' }],
+        });
+        const runtimeA = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T21:00:00.000Z'),
+          idFactory: () => 'unexpected-concern-a',
+        });
+        const runtimeB = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T21:00:00.000Z'),
+          idFactory: () => 'unexpected-concern-b',
+        });
+
+        await blocker.query('BEGIN');
+        blockerOpen = true;
+        await blocker.query('SELECT id FROM active_concerns WHERE id = $1 FOR UPDATE', [created.id]);
+        const reopen = (runtime: typeof runtimeA, root: string, evidenceRef: string) => (
+          runtime.concernStore.create({
+            text: 'Check on the two-root peer outreach plan.',
+            contactId: 'peer-contact',
+            createdAt: '2026-07-13T21:00:00.000Z',
+            expiresAt: '2026-07-14T21:00:00.000Z',
+            reopenResolved: true,
+            evidenceRefs: [{ kind: 'message', ref: evidenceRef }],
+            originIcpRootInitiationId: root,
+          })
+        );
+        const operations = [
+          reopen(runtimeA, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'root-a-evidence'),
+          reopen(runtimeB, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'root-b-evidence'),
+        ];
+        await waitForBlockedActiveConcernQueries(pool, 2);
+        await blocker.query('COMMIT');
+        blockerOpen = false;
+
+        const settled = await Promise.allSettled(operations);
+        expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+        expect(settled.filter(result => result.status === 'rejected')).toHaveLength(1);
+        const finalConcern = await seedRuntime.concernStore.getById(created.id);
+        expect(finalConcern).toMatchObject({
+          id: created.id,
+          status: 'active',
+          originIcpRootInitiationId: expect.stringMatching(/^(aaaaaaaa|bbbbbbbb)-/),
+        });
+      } finally {
+        if (blockerOpen) await blocker.query('ROLLBACK');
+        blocker.release();
         await pool.end();
       }
     },

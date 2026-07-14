@@ -34,10 +34,11 @@ was dependency-wired end to end, and the release path got tracker structure.
   charter-gap epic stays parked.
 - **Partially advanced**: `cam.1` accounting capture, `cam.2` typed
   attribution, `cam.3` durable dashboard accounting, `cam.4` canonical
-  analytics, and `cam.5` operator charge-to-cost reconciliation are
-  code-complete and validated on the pushed `feat/cost-accounting` branch at
-  integration head `38eb7933`; the parent `cam` epic and `cam.6` remain open,
-  and none of this branch is on `main` yet. It still blocks ICP
+  analytics, `cam.5` operator charge-to-cost reconciliation, and `574y`
+  operator accounting UX are code-complete and validated on the pushed
+  `feat/cost-accounting` branch at integration head `2d8ff2f0`; the parent
+  `cam` epic and ready `cam.6` certification bead remain open, and none of this
+  branch is on `main` yet. It still blocks ICP
   `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -102,7 +103,10 @@ and `psfn-framework-cam.2` is delivered through implementation head
 `43c76a32` and `825eef8c`. `psfn-framework-cam.4` is integrated and pushed at
 `459e73dd` (`362b6c72..459e73dd`). `psfn-framework-cam.5` is implemented by
 `8e12a69a`, `31c6594c`, and `073c21e7`, then integrated and pushed at
-`38eb7933`, making `38eb7933` the current implementation head.
+`38eb7933`. The `psfn-framework-574y` operator UX was implemented by
+`74042506`, `702f4fdf`, `f179c6c0`, and `61113c49`; its one review finding was
+remediated by `2d8ff2f0`, which is integrated and pushed as the current
+`feat/cost-accounting` implementation head.
 CAM.1 records immutable physical provider attempts with reconciled token and
 cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
 strict filters and groups, indexed Postgres persistence, and fail-closed Garden
@@ -127,6 +131,14 @@ ambiguous/many-to-many, and non-model buckets. Retry attempts and nested
 shard/subagent policy scopes conserve both source ledgers without double
 counting, while the companion-facing charge-budget projection remains unit-only
 and monetary-free.
+The `574y` UX keeps the dashboard a concise durable summary and makes Charge /
+Budget the analytical cockpit over the same CAM.4/CAM.5 APIs: named/custom
+ranges, timezone-aware buckets, explicit token/cost components, accessible
+graph tables, declared-dimension filtering/grouping/sorting/drill-down,
+content-free authenticated export, charge-cost coverage/conservation, and
+truthful loading/stale/error states. Accounting URL state survives Token Usage
+↔ Charge Policy navigation, and dashboard analysis links carry the committed
+Today/Week/Month range without introducing parallel accounting math or storage.
 
 CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
 Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
@@ -174,13 +186,25 @@ The single independent review returned PASS with no IMPORTANT findings. CAM.5
 had no material report-only observations and intentionally created no follow-up
 beads.
 
+`574y` final integration/regression at pushed head `2d8ff2f0`: the single
+independent review found one IMPORTANT URL-state defect, then the same reviewer
+verified the regression-only remediation as PASS. Garden accounting/navigation
+passed 12/12, dashboard navigation/state passed 12/12, canonical
+query/reconciliation passed 27/27, authenticated operator query/export and
+admin auth checks passed, and the privacy regression passed 17/17.
+`svelte-check` reported 0 errors and 0 warnings; `npm run lint`, the core
+ESM+DTS build, `npm run garden:build`, and `git diff --check` passed. The Garden
+build continues to emit the unchanged Rollup `Unknown output options:
+codeSplitting` warning; this is report-only, outside the accounting UX diff,
+and intentionally has no follow-up bead from this closeout.
+
 This is a feature-branch completion boundary, not a `main` or whole-accounting
 completion claim. The `psfn-framework-cam` parent remains open, with these
 children still pending:
 
 | Bead | Remaining scope | Status |
 |---|---|---|
-| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by `574y` | blocked |
+| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification | ready; do not claim until its certification wave starts |
 
 ## 1. Where things stand
 

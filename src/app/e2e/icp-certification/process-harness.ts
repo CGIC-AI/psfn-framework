@@ -169,6 +169,31 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
+  async enterPrivateRoom(): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'enter_private_room' }) as Record<string, unknown>;
+  }
+
+  async sendRoomProbe(phase: 'post_exit' | 'pre_entry'): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'send_room_probe', phase }) as Record<string, unknown>;
+  }
+
+  async runRoomWeightedThoughtScheduler(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'run_room_weighted_thought_scheduler' }) as
+      Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source: 'room_weighted_thought_scheduler',
+      candidateId: String(result.candidateId ?? 'unknown'),
+      status: String(result.status ?? 'unknown'),
+      ...(result.reasonCode ? { reasonCode: String(result.reasonCode) } : {}),
+      ...(result.deliveryDisposition
+        ? { deliveryDisposition: String(result.deliveryDisposition) }
+        : {}),
+    });
+    return result;
+  }
+
   async activateGardenEmergencyDisable(): Promise<Record<string, unknown>> {
     const result = await this.request({ type: 'garden_emergency_disable' }) as Record<string, unknown>;
     this.artifacts.append({
@@ -180,6 +205,10 @@ export class IcpCertificationAgentProcess {
 
   async channelSnapshot(channelId: string): Promise<Record<string, unknown>> {
     return await this.request({ type: 'channel_snapshot', channelId }) as Record<string, unknown>;
+  }
+
+  async servedChannelSnapshot(channelId: string): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'served_channel_snapshot', channelId }) as Record<string, unknown>;
   }
 
   async forceCompaction(channelId: string): Promise<unknown> {
@@ -235,6 +264,7 @@ export interface IcpCertificationProcessHarness {
   readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
   readonly modelRequestCount: number;
   queueConsentDecision(decision: IcpCertificationConsentDecision): void;
+  restartAgent(index: 0 | 1): Promise<IcpCertificationAgentProcess>;
   restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
   stop(): Promise<void>;
 }
@@ -412,6 +442,24 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     queueConsentDecision(decision) {
       modelServer.queueConsentDecision(decision);
+    },
+    async restartAgent(index) {
+      const previous = agents[index];
+      if (!previous) throw new Error(`Certification agent ${index} is unavailable`);
+      await previous.stop().catch(() => previous.forceStop());
+      const replacement = await IcpCertificationAgentProcess.start(
+        input.fixture.companions[index],
+        artifacts,
+      );
+      agents[index] = replacement;
+      const ready = await replacement.ready();
+      artifacts.append({
+        kind: 'agent_ready',
+        companionId: ready.companionId,
+        postgresSchema: ready.postgresSchema,
+        runtimeClass: ready.runtimeClass,
+      });
+      return replacement;
     },
     async restartAgents() {
       await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));

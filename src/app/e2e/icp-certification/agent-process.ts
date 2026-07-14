@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { createLLMProviderPort } from '../../../core/agent/contracts.js';
 import { createNoopSatelliteRoutingPort } from '../../../core/agent/satellite-adapter-port.js';
 import { GatewayClient } from '../../../boundary/gateway/client.js';
@@ -38,7 +40,12 @@ import {
 import { AdminIcpAutonomyDataService } from '../../../operator/garden/services/icp-autonomy-service.js';
 import { AdminSettingsDataService } from '../../../operator/garden/services/settings-service.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
-import { CERTIFICATION_EMBEDDING_DIMS } from './constants.js';
+import { CompanionPresenceRuntime } from '../../../core/agent/companion-presence-runtime.js';
+import { wireCompanionPresenceContext } from '../../agent/companion-presence-wiring.js';
+import {
+  CERTIFICATION_EMBEDDING_DIMS,
+  CERTIFICATION_PRIVATE_ROOM,
+} from './constants.js';
 
 type AgentProcessCommand = {
   id: number;
@@ -52,11 +59,17 @@ type AgentProcessCommand = {
   type: 'garden_emergency_disable';
 } | {
   id: number;
-  type: 'run_free_time_notification' | 'run_weighted_thought_scheduler';
+  type: 'enter_private_room' | 'run_free_time_notification'
+    | 'run_room_weighted_thought_scheduler' | 'run_weighted_thought_scheduler';
+} | {
+  id: number;
+  phase: 'post_exit' | 'pre_entry';
+  type: 'send_room_probe';
 } | {
   channelId: string;
   id: number;
-  type: 'channel_snapshot' | 'force_compaction' | 'append_compaction_marker';
+  type: 'channel_snapshot' | 'served_channel_snapshot'
+    | 'force_compaction' | 'append_compaction_marker';
 };
 
 interface AgentProcessReply {
@@ -168,6 +181,21 @@ async function main(): Promise<void> {
     contactStore,
     episodicStore: persistence.episodicStore,
   });
+  const presenceStore = persistence.companionPresenceStore;
+  if (!presenceStore) throw new Error('ICP certification agent requires shared companion presence');
+  const presenceRuntime = new CompanionPresenceRuntime({
+    store: presenceStore,
+    companionId,
+    eventBus: startup.eventBus,
+    placesRegistry: startup.placesRegistryConfig,
+  });
+  wireCompanionPresenceContext({
+    agentLoop: agent,
+    presenceRuntime,
+    eventBus: startup.eventBus,
+    sessionManager: sessionRuntime.sessionManager,
+    placesRegistry: startup.placesRegistryConfig,
+  });
   const registeredHandlers = registerGatewayMessageHandlers({
     gateway,
     agentLoop: agent,
@@ -275,6 +303,7 @@ async function main(): Promise<void> {
     settingsService,
     operatorLeaseTtlMs: startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
   });
+  const autonomousTriggerEpoch = randomUUID();
   let autonomousTriggerIndex = 0;
   const compactionStore = createCompactionBoundaryStore(
     createIcpDeliveryProjectionStore(sessionRuntime.sessionStore),
@@ -322,14 +351,32 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: lease });
           return;
         }
+        if (raw.type === 'enter_private_room') {
+          await presenceRuntime.recordDeliberateMove({
+            siteId: 'certification',
+            placeId: 'certification_private_room',
+            kind: 'virtual',
+          });
+          reply({ id: raw.id, ok: true, result: presenceRuntime.getOwnPresenceWindow() });
+          return;
+        }
+        if (raw.type === 'send_room_probe') {
+          const result = await gateway.companionSend(
+            CERTIFICATION_PRIVATE_ROOM,
+            `Certification ${raw.phase.replace('_', '-')} room probe.`,
+            identity.card.data.name,
+          );
+          reply({ id: raw.id, ok: true, result });
+          return;
+        }
         if (raw.type === 'run_free_time_notification') {
           if (!sourceRuntime) throw new Error('ICP autonomy is disabled by scheduler.json');
           const candidateIdsBefore = new Set(
             (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
           );
           autonomousTriggerIndex += 1;
-          const turnId = `free-time-notify-${autonomousTriggerIndex}`;
-          const toolCallId = `notify-${autonomousTriggerIndex}`;
+          const turnId = `free-time-notify-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
+          const toolCallId = `notify-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
           const notify = createNotifyTool({
             dispatch: async () => {
               throw new Error('Companion candidate notification must not dispatch during tool execution');
@@ -410,7 +457,7 @@ async function main(): Promise<void> {
             throw new Error('ICP autonomy is disabled by scheduler.json');
           }
           autonomousTriggerIndex += 1;
-          const thoughtId = `certification-weighted-${autonomousTriggerIndex}`;
+          const thoughtId = `certification-weighted-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
           const candidateIdsBefore = new Set(
             (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
           );
@@ -434,6 +481,42 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: candidate });
           return;
         }
+        if (raw.type === 'run_room_weighted_thought_scheduler') {
+          if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
+            throw new Error('ICP autonomy is disabled by scheduler.json');
+          }
+          if (presenceRuntime.getOwnPresenceWindow()?.place.placeId !== 'certification_private_room') {
+            throw new Error('Room weighted-thought scheduler requires current private-room presence');
+          }
+          autonomousTriggerIndex += 1;
+          const thoughtId = `certification-room-weighted-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
+          const candidateIdsBefore = new Set(
+            (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
+          );
+          await weightedThoughtStore.save(createThoughtWeight({
+            id: thoughtId,
+            content: 'Private room weighted-thought certification motivation',
+            source: 'certification_room_co_location',
+            thoughtClass: 'standard',
+            contactId: peerContact.id,
+            provenance: {
+              coLocationRef: `certification-room:${autonomousTriggerIndex}`,
+              sourceChannelId: CERTIFICATION_PRIVATE_ROOM,
+              sourceChannelType: 'companion',
+            },
+            relationshipMultiplier: 2,
+            emotionalIntensity: 1,
+          }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
+          const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
+          if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
+          await task.handler();
+          const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
+            !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
+          ));
+          if (!candidate) throw new Error('Room weighted-thought scheduler did not persist a candidate');
+          reply({ id: raw.id, ok: true, result: candidate });
+          return;
+        }
         if (raw.type === 'garden_emergency_disable') {
           const result = await gardenIcpAutonomy.emergencyDisable();
           const current = await autonomy.readOwnAvailability();
@@ -449,6 +532,7 @@ async function main(): Promise<void> {
           return;
         }
         if (raw.type === 'channel_snapshot') {
+          await agent.waitForIdle();
           reply({
             id: raw.id,
             ok: true,
@@ -456,6 +540,24 @@ async function main(): Promise<void> {
               entries: sessionRuntime.sessionStore.getRecent(raw.channelId, 100),
               memories: await persistence.memoryStore.getMemoriesByChannel(raw.channelId, 100),
               summaries: sessionRuntime.sessionStore.getCompactionSummaries(raw.channelId),
+            },
+          });
+          return;
+        }
+        if (raw.type === 'served_channel_snapshot') {
+          await agent.waitForIdle();
+          const snapshot = await sessionRuntime.sessionManager.captureTurnSessionContext({
+            channelId: raw.channelId,
+            llmProvider,
+          });
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              recentEntries: snapshot.recentEntries,
+              roomWindowFloorMs: snapshot.roomWindowFloorMs,
+              roomWindowFilteredEntryCount: snapshot.roomWindowFilteredEntryCount ?? 0,
+              sourceEntryCount: snapshot.sourceEntryCount ?? 0,
             },
           });
           return;
@@ -515,6 +617,7 @@ async function main(): Promise<void> {
         await scheduler.stop();
         gateway.destroy();
         await gardenIcpAutonomy.close();
+        await presenceRuntime.shutdown();
         await fatigueReservations.close();
         chargeLedger.close();
         startup.stopDebugObserver();

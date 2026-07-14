@@ -61,7 +61,7 @@ export type IcpCertificationCostProfile =
   | 'lowered_warning'
   | 'lowered_hard'
   | 'missing';
-export type IcpCertificationFatigueProfile = 'default' | 'final_reserve';
+export type IcpCertificationFatigueProfile = 'default' | 'final_reserve' | 'room_continuity';
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
@@ -158,7 +158,7 @@ function configureOwnerFiles(
   const charge = readJson(chargePath);
   charge.runChargeQuotaByLane = {
     ...(charge.runChargeQuotaByLane as Record<string, unknown>),
-    companion_social: 4,
+    companion_social: fatigueProfile === 'room_continuity' ? 20 : 4,
   };
   charge.icpCostBreaker = {
     enabled: true,
@@ -179,7 +179,9 @@ function configureOwnerFiles(
     ...(fatigue.relationshipBudgets as Record<string, unknown>),
     trusted_collaborator_mi: fatigueProfile === 'final_reserve'
       ? { softTarget: 1, hardCap: 1 }
-      : { softTarget: 2, hardCap: 3 },
+      : fatigueProfile === 'room_continuity'
+        ? { softTarget: 12, hardCap: 16 }
+        : { softTarget: 2, hardCap: 3 },
   };
   if (fatigueProfile === 'final_reserve') {
     fatigue.overcharge = {

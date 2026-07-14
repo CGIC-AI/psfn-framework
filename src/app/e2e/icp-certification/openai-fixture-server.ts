@@ -63,9 +63,23 @@ function renderChatResponse(
   return 'Acknowledged.';
 }
 
-function renderExtractionXml(): string {
+function renderExtractionXml(promptText: string): string {
+  const companionMarker = promptText.includes('you are certification a.')
+    ? 'A'
+    : promptText.includes('you are certification b.')
+      ? 'B'
+      : 'unknown';
   return [
     '<response>',
+    '<fact>',
+    `<text>Certification ${companionMarker} extraction marker is schema-private.</text>`,
+    '<type>semantic</type>',
+    '<importance>0.99</importance>',
+    '<emotional_valence>0</emotional_valence>',
+    '<confidence>0.99</confidence>',
+    `<tags>certification,schema-private,companion-${companionMarker.toLowerCase()}</tags>`,
+    '<sensitivity>personal</sensitivity>',
+    '</fact>',
     '<fact>',
     '<text>The primary user\'s favorite dessert is tiramisu.</text>',
     '<type>semantic</type>',
@@ -158,7 +172,7 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
         ? (consentDecisions.shift() ?? 'send')
         : 'send';
       const content = extraction
-        ? renderExtractionXml()
+        ? renderExtractionXml(prompt)
         : renderChatResponse(prompt, consentDecision);
       const requestedOutputTokens = typeof body.max_tokens === 'number'
         ? Math.max(1, Math.floor(body.max_tokens))

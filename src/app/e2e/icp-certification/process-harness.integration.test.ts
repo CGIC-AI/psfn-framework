@@ -14,6 +14,7 @@ import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
   CERTIFICATION_DM_CHANNEL,
+  CERTIFICATION_PRIVATE_ROOM,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
 } from './constants.js';
@@ -34,6 +35,7 @@ interface ChannelSnapshot {
     authorId?: string;
     content: string;
     role: string;
+    timestamp?: number;
   }>;
   memories: Array<{ text: string }>;
   summaries: Array<{ summary: string }>;
@@ -59,14 +61,30 @@ async function waitForBlockedCostDecision(
 async function waitForChannelEntries(
   agent: IcpCertificationProcessHarness['agents'][number],
   minimum: number,
+  channelId = CERTIFICATION_DM_CHANNEL,
 ): Promise<ChannelSnapshot> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    const snapshot = await agent.channelSnapshot(CERTIFICATION_DM_CHANNEL) as unknown as ChannelSnapshot;
+    const snapshot = await agent.channelSnapshot(channelId) as unknown as ChannelSnapshot;
     if (snapshot.entries.length >= minimum) return snapshot;
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
   }
-  throw new Error(`Timed out waiting for ${minimum} entries on ${CERTIFICATION_DM_CHANNEL}`);
+  throw new Error(`Timed out waiting for ${minimum} entries on ${channelId}`);
+}
+
+async function waitForExtractionMarker(
+  agent: IcpCertificationProcessHarness['agents'][number],
+  marker: 'A' | 'B',
+): Promise<ChannelSnapshot> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const snapshot = await agent.channelSnapshot(CERTIFICATION_PRIVATE_ROOM) as unknown as ChannelSnapshot;
+    if (snapshot.memories.some(memory => memory.text.includes(`Certification ${marker} extraction marker`))) {
+      return snapshot;
+    }
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for Certification ${marker} extraction marker`);
 }
 
 async function waitForModelRequestQuiescence(
@@ -200,6 +218,178 @@ describe('ICP certification real process harness', () => {
     expect(restartedB.summaries.length).toBeGreaterThan(0);
     expect(restartedA.entries.some(entry => entry.role === 'assistant')).toBe(true);
     expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
+  }, TIMEOUT_MS);
+
+  it('enforces private-room windows, schema-local extraction, and messaging after both restarts', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    let [agentA, agentB] = processes.agents;
+    await agentA.enterPrivateRoom();
+    await expect(agentA.sendRoomProbe('pre_entry')).resolves.toMatchObject({ deliveredTo: [] });
+    await expect(agentB.channelSnapshot(CERTIFICATION_PRIVATE_ROOM)).resolves.toMatchObject({
+      entries: [],
+      memories: [],
+    });
+
+    await agentB.enterPrivateRoom();
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.runRoomWeightedThoughtScheduler()).resolves.toMatchObject({
+      preferredChannel: 'current_room',
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    const [firstSender, firstRecipient] = await Promise.all([
+      waitForChannelEntries(agentA, 1, CERTIFICATION_PRIVATE_ROOM),
+      waitForChannelEntries(agentB, 3, CERTIFICATION_PRIVATE_ROOM),
+    ]);
+    const persistedSenderMessage = firstSender.entries.find(entry => entry.role === 'assistant');
+    const deliveredRecipientMessage = firstRecipient.entries.find(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
+    ));
+    expect(persistedSenderMessage?.timestamp).toEqual(expect.any(Number));
+    expect(deliveredRecipientMessage?.timestamp).toEqual(expect.any(Number));
+    expect(persistedSenderMessage!.timestamp!).toBeLessThanOrEqual(
+      deliveredRecipientMessage!.timestamp!,
+    );
+    expect(firstRecipient.entries.some(entry => entry.role === 'assistant')).toBe(true);
+
+    const [memoryA, memoryB] = await Promise.all([
+      waitForExtractionMarker(agentA, 'A'),
+      waitForExtractionMarker(agentB, 'B'),
+    ]);
+    expect(memoryA.memories.some(memory => memory.text.includes('Certification B extraction marker')))
+      .toBe(false);
+    expect(memoryB.memories.some(memory => memory.text.includes('Certification A extraction marker')))
+      .toBe(false);
+
+    agentB = await processes.restartAgent(1);
+    await expect(agentA.sendRoomProbe('post_exit')).resolves.toMatchObject({ deliveredTo: [] });
+    await agentB.enterPrivateRoom();
+    await agentB.publishAvailability('open_to_chat');
+    const rejoinedWindow = await agentB.servedChannelSnapshot(CERTIFICATION_PRIVATE_ROOM) as {
+      recentEntries: Array<{ content: string; role: string }>;
+      roomWindowFilteredEntryCount: number;
+      roomWindowFloorMs: number;
+      sourceEntryCount: number;
+    };
+    expect(rejoinedWindow.roomWindowFloorMs).toEqual(expect.any(Number));
+    expect(rejoinedWindow.roomWindowFilteredEntryCount).toBeGreaterThan(0);
+    expect(rejoinedWindow.recentEntries.filter(entry => (
+      entry.role === 'user' || entry.role === 'assistant'
+    ))).toEqual([]);
+    const rejoinedRaw = await agentB.channelSnapshot(CERTIFICATION_PRIVATE_ROOM) as unknown as ChannelSnapshot;
+    expect(JSON.stringify(rejoinedRaw)).not.toContain('pre-entry room probe');
+    expect(JSON.stringify(rejoinedRaw)).not.toContain('post-exit room probe');
+
+    await expect(agentA.runRoomWeightedThoughtScheduler()).resolves.toMatchObject({
+      preferredChannel: 'current_room',
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    await waitForChannelEntries(agentB, rejoinedRaw.entries.length + 2, CERTIFICATION_PRIVATE_ROOM);
+
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.all([
+        agentA.appendCompactionMarker(CERTIFICATION_PRIVATE_ROOM),
+        agentB.appendCompactionMarker(CERTIFICATION_PRIVATE_ROOM),
+      ]);
+    }
+    const roomCompactions = await Promise.all([
+      agentA.forceCompaction(CERTIFICATION_PRIVATE_ROOM),
+      agentB.forceCompaction(CERTIFICATION_PRIVATE_ROOM),
+    ]);
+    expect(roomCompactions).toEqual([
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+    ]);
+
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-icp-room-schema-assertions',
+      max: 1,
+    });
+    try {
+      const trust = await pool.query<{
+        discord_user_id: string;
+        is_machine_intelligence: boolean;
+        relationship_type: string;
+        schema_name: string;
+        trust_level: string;
+      }>(`
+        SELECT $1::text AS schema_name, discord_user_id, trust_level,
+          relationship_type, is_machine_intelligence
+        FROM ${CERTIFICATION_SCHEMA_A}.contacts
+        UNION ALL
+        SELECT $2::text AS schema_name, discord_user_id, trust_level,
+          relationship_type, is_machine_intelligence
+        FROM ${CERTIFICATION_SCHEMA_B}.contacts
+        ORDER BY schema_name
+      `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
+      expect(trust.rows).toEqual([
+        {
+          schema_name: CERTIFICATION_SCHEMA_A,
+          discord_user_id: CERTIFICATION_COMPANION_B,
+          trust_level: 'trusted',
+          relationship_type: 'ai_companion',
+          is_machine_intelligence: true,
+        },
+        {
+          schema_name: CERTIFICATION_SCHEMA_B,
+          discord_user_id: CERTIFICATION_COMPANION_A,
+          trust_level: 'trusted',
+          relationship_type: 'ai_companion',
+          is_machine_intelligence: true,
+        },
+      ]);
+      const schemaMemories = await pool.query<{ schema_name: string; text: string }>(`
+        SELECT $1::text AS schema_name, text
+        FROM ${CERTIFICATION_SCHEMA_A}.l2_memories
+        WHERE text LIKE 'Certification % extraction marker is schema-private.'
+        UNION ALL
+        SELECT $2::text AS schema_name, text
+        FROM ${CERTIFICATION_SCHEMA_B}.l2_memories
+        WHERE text LIKE 'Certification % extraction marker is schema-private.'
+        ORDER BY schema_name, text
+      `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
+      expect(schemaMemories.rows.filter(row => row.schema_name === CERTIFICATION_SCHEMA_A))
+        .toEqual(expect.arrayContaining([
+          { schema_name: CERTIFICATION_SCHEMA_A, text: 'Certification A extraction marker is schema-private.' },
+        ]));
+      expect(schemaMemories.rows.filter(row => row.schema_name === CERTIFICATION_SCHEMA_A)
+        .some(row => row.text.includes('Certification B'))).toBe(false);
+      expect(schemaMemories.rows.filter(row => row.schema_name === CERTIFICATION_SCHEMA_B))
+        .toEqual(expect.arrayContaining([
+          { schema_name: CERTIFICATION_SCHEMA_B, text: 'Certification B extraction marker is schema-private.' },
+        ]));
+      expect(schemaMemories.rows.filter(row => row.schema_name === CERTIFICATION_SCHEMA_B)
+        .some(row => row.text.includes('Certification A'))).toBe(false);
+    } finally {
+      await pool.end();
+    }
+
+    [agentA, agentB] = await processes.restartAgents();
+    await Promise.all([agentA.enterPrivateRoom(), agentB.enterPrivateRoom()]);
+    await agentB.publishAvailability('open_to_chat');
+    const restartedBefore = await agentB.channelSnapshot(
+      CERTIFICATION_PRIVATE_ROOM,
+    ) as unknown as ChannelSnapshot;
+    expect(restartedBefore.summaries.length).toBeGreaterThan(0);
+    await expect(agentA.runRoomWeightedThoughtScheduler()).resolves.toMatchObject({
+      preferredChannel: 'current_room',
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    const restartedAfter = await waitForChannelEntries(
+      agentB,
+      restartedBefore.entries.length + 2,
+      CERTIFICATION_PRIVATE_ROOM,
+    );
+    expect(restartedAfter.entries.some(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
+    ))).toBe(true);
+    expect(restartedAfter.entries.some(entry => entry.role === 'assistant')).toBe(true);
   }, TIMEOUT_MS);
 
   it.each([

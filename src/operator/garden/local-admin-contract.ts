@@ -54,6 +54,7 @@ import {
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
@@ -295,6 +296,7 @@ export function createInProcessGardenAdminContract(
     // Fresh store per decision: CogSecEventStore snapshots the file at
     // construction and the gateway writes the same file concurrently.
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+    onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'intake-quarantine'),
   });
 
   // ── Drift review cards (htm9.14/htm9.15 Cognitive Security tab) ──
@@ -411,6 +413,7 @@ export function createInProcessGardenAdminContract(
       ? createAdminPendingContactsService({
         pendingApprovals: options.pendingContactApprovals,
         contactStore: options.contactStore ?? null,
+        onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'contact-approvals'),
       })
       : null,
     rooms: createAdminRoomsService({
@@ -429,6 +432,7 @@ export function createInProcessGardenAdminContract(
       ? createAdminGraphProposalsService({
         proposalStore: options.socialGraphProposals,
         contactStore: options.contactStore ?? null,
+        onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'graph-proposals'),
       })
       : null,
     concerns: options.concernStore

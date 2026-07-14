@@ -258,6 +258,7 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<string, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly gardenQueueChangeUnsubscribers: Array<() => void> = [];
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -316,6 +317,13 @@ export class GatewayServer {
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],
       vaultOpsConfigured: Boolean(options.policyConfig.vault?.ops),
     });
+    const notifyConfirmationQueueChanged = (): void => {
+      this.notifyAll('garden.queue.changed', { queue: 'confirmations' });
+    };
+    this.gardenQueueChangeUnsubscribers.push(
+      options.eventBus.on('companion.approval.requested', notifyConfirmationQueueChanged),
+      options.eventBus.on('companion.approval.resolved', notifyConfirmationQueueChanged),
+    );
     log.info('Session HMAC keyring configured', {
       activeVersion: this.sessionHmacKeyring.activeVersion,
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
@@ -1683,6 +1691,9 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    for (const unsubscribe of this.gardenQueueChangeUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
     for (const conn of this.connections) {
       conn.destroy();
     }

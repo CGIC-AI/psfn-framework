@@ -175,6 +175,7 @@ export class AdminServerTelemetryTransport {
       'wyoming.session.start',
       'wyoming.session.end',
       'wyoming.policy.violation',
+      'garden.queue.changed',
     ];
 
     const unsubscribers: Array<() => void> = [];
@@ -230,5 +231,20 @@ function sanitizeAdminTelemetryPayload<E extends EventName>(
     return sanitizeExternalTelemetryIngested(payload.event);
   }
 
+  if (eventName === 'garden.queue.changed') {
+    return sanitizeGardenQueueChanged(data as EventMap['garden.queue.changed']);
+  }
+
   return data as Record<string, unknown>;
+}
+
+/**
+ * Project queue lifecycle activity to an invalidation hint only. The websocket
+ * is authenticated, but queue ids, counts, previews, and contents still stay
+ * behind their normal admin endpoints.
+ */
+export function sanitizeGardenQueueChanged(
+  data: EventMap['garden.queue.changed'],
+): { queue: EventMap['garden.queue.changed']['queue'] } {
+  return { queue: data.queue };
 }

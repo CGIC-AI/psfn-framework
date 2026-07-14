@@ -119,6 +119,21 @@ afterEach(() => {
 });
 
 describe('AdminGraphProposalsService', () => {
+  it('signals queue consumers after a successful operator decision', async () => {
+    const { proposal } = await proposalStore.create(baseProposalInput());
+    const onQueueChanged = vi.fn();
+    const service = createAdminGraphProposalsService({
+      proposalStore,
+      contactStore: makeContactStore({ writes: [], entityUpserts: [] }),
+      onQueueChanged,
+    });
+
+    expect((await service.approveGraphProposal(proposal.id)).ok).toBe(true);
+    expect(onQueueChanged).toHaveBeenCalledTimes(1);
+    expect((await service.rejectGraphProposal('missing')).ok).toBe(false);
+    expect(onQueueChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('AC4: approve writes the edge through upsertSocialRelationshipEdge and marks accepted', async () => {
     const { proposal } = await proposalStore.create(baseProposalInput());
     const state: EdgeStubState = { writes: [], entityUpserts: [] };

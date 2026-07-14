@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { CogSecEventStore, CogSecAction } from '../../core/cogsec/events.js';
@@ -46,6 +46,7 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -97,7 +98,15 @@ const JOURNAL_WRITE_LOCK_SUFFIX = '.write-lock';
 const JOURNAL_WRITE_LOCK_POLL_MS = 10;
 const JOURNAL_WRITE_LOCK_STALE_MS = 30_000;
 const JOURNAL_WRITE_LOCK_TIMEOUT_MS = 5_000;
-const JOURNAL_WRITE_SLEEP_STATE = new Int32Array(new SharedArrayBuffer(4));
+/**
+ * Total records the tombstone-filtering turn-record read is allowed to scan.
+ * One active tombstone must never turn a bounded tail read into a full-history
+ * scan of a multi-GiB archive; hitting this cap warns loudly and serves a
+ * partial window instead.
+ */
+const TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS = 2_048;
+/** Initial overscan multiplier for tombstone-filtered turn-record reads. */
+const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
 const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
 export {
   sanitizeChannelId,
@@ -234,59 +243,12 @@ function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
   applyLastMessageMetadata(cache, lastEntry);
 }
 
-function sleepSync(ms: number): void {
-  if (ms <= 0) return;
-  Atomics.wait(JOURNAL_WRITE_SLEEP_STATE, 0, 0, ms);
-}
-
-function journalWriteLockPath(filePath: string): string {
-  return `${filePath}${JOURNAL_WRITE_LOCK_SUFFIX}`;
-}
-
-function clearStaleJournalWriteLock(lockPath: string): boolean {
-  try {
-    const stats = statSync(lockPath);
-    if (Date.now() - stats.mtimeMs <= JOURNAL_WRITE_LOCK_STALE_MS) {
-      return false;
-    }
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return false;
-    throw error;
-  }
-
-  rmSync(lockPath, { recursive: true, force: true });
-  return true;
-}
-
 function withJournalWriteLock<T>(filePath: string, operation: () => T): T {
-  const lockPath = journalWriteLockPath(filePath);
-  const deadline = Date.now() + JOURNAL_WRITE_LOCK_TIMEOUT_MS;
-
-  for (;;) {
-    try {
-      mkdirSync(lockPath);
-      break;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') {
-        throw error;
-      }
-      if (clearStaleJournalWriteLock(lockPath)) {
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out acquiring session journal write lock for ${filePath}`);
-      }
-      sleepSync(JOURNAL_WRITE_LOCK_POLL_MS);
-    }
-  }
-
-  try {
-    return operation();
-  } finally {
-    rmSync(lockPath, { recursive: true, force: true });
-  }
+  return withCrossProcessWriteLock(`${filePath}${JOURNAL_WRITE_LOCK_SUFFIX}`, {
+    pollMs: JOURNAL_WRITE_LOCK_POLL_MS,
+    staleMs: JOURNAL_WRITE_LOCK_STALE_MS,
+    timeoutMs: JOURNAL_WRITE_LOCK_TIMEOUT_MS,
+  }, operation);
 }
 
 export class SessionStore implements TranscriptSearchPort {
@@ -908,26 +870,57 @@ export class SessionStore implements TranscriptSearchPort {
     this.turnRecordStore.appendTurnRecord(record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
+    if (limit <= 0) return [];
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
-    const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
-    const records = this.turnRecordStore.readRecentTurnRecords(
-      sessionId,
-      hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
-    );
-    if (!hasTombstones) {
-      return records;
+    let cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    // Fingerprint gate (same guarantee as fullyLoadedCacheIsCurrent for entry
+    // reads, psfn-framework-hgw3.1): cached tombstone state — INCLUDING a
+    // cached count of zero — is only trustworthy while the journal on disk is
+    // the file this process last saw. Another process's tombstone-adding
+    // journal rewrite replaces the archive, so reload before trusting it.
+    if (cached && !this.fullyLoadedCacheIsCurrent(cached)) {
+      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
     }
-
-    const loaded = this.ensureChannelFullyLoaded(channelId);
-    if (!loaded || loaded.turnTombstones.size === 0) {
-      if (records.length <= limit) return records;
-      return records.slice(-limit);
+    const tombstones = cached?.fullyLoaded ? cached.turnTombstones : null;
+    if (!tombstones || tombstones.size === 0) {
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
     }
-
-    const filtered = records.filter(record => !loaded.turnTombstones.has(record.turnId));
-    if (filtered.length <= limit) return filtered;
-    return filtered.slice(-limit);
+    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
+  }
+  /**
+   * Bounded iterative overscan for tombstone-filtered turn-record reads:
+   * request a small multiple of the limit, filter tombstoned turns, and only
+   * widen (doubling) while the segment files still have older records to
+   * offer. Capped at TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS so one active
+   * tombstone can never force a full-history scan of a large archive.
+   */
+  private readTombstoneFilteredTurnRecords(
+    sessionId: string,
+    limit: number,
+    tombstones: ReadonlySet<string>,
+  ): TurnRecord[] {
+    const scanCap = Math.max(TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS, limit);
+    let requested = Math.min(limit * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR, scanCap);
+    for (;;) {
+      const records = this.turnRecordStore.readRecentTurnRecords(sessionId, requested);
+      const filtered = records.filter(record => !tombstones.has(record.turnId));
+      // Fewer records than requested means the whole archive is already read.
+      const exhaustedHistory = records.length < requested;
+      if (filtered.length >= limit || exhaustedHistory) {
+        return filtered.length > limit ? filtered.slice(-limit) : filtered;
+      }
+      if (requested >= scanCap) {
+        log.warn('Turn-record tombstone overscan hit its scan cap; serving a partial window', {
+          sessionId,
+          limit,
+          scannedRecords: records.length,
+          scanCap,
+          survivingRecords: filtered.length,
+        });
+        return filtered;
+      }
+      requested = Math.min(requested * 2, scanCap);
+    }
   }
   async searchByKeywords(
     query: string,
@@ -1332,7 +1325,12 @@ export class SessionStore implements TranscriptSearchPort {
     return new Set(ids);
   }
   count(channelId: string): number {
-    const cached = this.getLoadedCache(channelId);
+    let cached = this.getLoadedCache(channelId);
+    // Frozen fullyLoaded caches must not serve counts across a sibling
+    // process's journal rewrite (same fingerprint gate as entry reads).
+    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
+      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
+    }
     if (cached) return cached.messageCount;
     const resolved = this.resolveExistingSession(channelId);
     if (!resolved) return 0;
@@ -1345,7 +1343,12 @@ export class SessionStore implements TranscriptSearchPort {
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    let cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    // Same fingerprint gate as count(): a frozen fullyLoaded cache must not
+    // serve activity metadata across a sibling process's journal rewrite.
+    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
+      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
+    }
     if (cached && cached.messageCount > 0 && cached.lastMessageTimestamp > 0 && cached.lastMessageRole) {
       return {
         sessionId,

@@ -14,7 +14,9 @@ import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
  *
  * Semantics:
  * - write-once: if `<hash>.json` already exists it is never rewritten
- *   (content-addressing makes the payload immutable by construction);
+ *   (content-addressing makes the payload immutable by construction); the
+ *   first intern per process against an existing file re-verifies that its
+ *   content hashes to the filename and fails closed on a mismatch;
  * - fail-closed reads: a dangling or corrupt ref is a loud error, never a
  *   silent empty tool list;
  * - kept in its own module (not woven through the JSONL append/read internals)
@@ -62,6 +64,20 @@ export function createTurnRecordSharedStore(turnRecordsDir: string): TurnRecordS
         } catch (error) {
           rmSync(tempPath, { force: true });
           throw error;
+        }
+      } else if (!resolvedByHash.has(hash)) {
+        // First sighting of this hash in this process: never trust an
+        // existing sidecar blindly — verify its content actually hashes to
+        // the filename before new records start referencing it. A mismatch
+        // means something rewrote content-addressed (immutable) data; fail
+        // closed, never silently rewrite over the evidence.
+        const existing = readFileSync(path, 'utf-8');
+        const actualHash = createHash('sha256').update(existing, 'utf-8').digest('hex');
+        if (actualHash !== hash) {
+          throw new Error(
+            `TurnRecord shared tooldefs payload at ${path} is corrupt: content hash ${actualHash} `
+            + `does not match ref "${hash}"; refusing to intern against a rewritten sidecar`,
+          );
         }
       }
       resolvedByHash.set(hash, serialized);

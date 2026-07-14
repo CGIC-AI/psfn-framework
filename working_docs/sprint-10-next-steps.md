@@ -6,6 +6,22 @@ The headline fact governing everything below: the multi-companion substrate is *
 
 ## 2026-07-14 feature status — `feat/garden-wan-performance`
 
+- `psfn-framework-t5z7.2` is closed at `4b22e676` (bounded archive reader
+  `2b0bc87b`, Garden `beforeId` adoption `689f7cfc`, single-review remediation
+  `4b22e676`). Older-message pages now seek to the requested cursor without a
+  full channel replay, and select among numbered sealed segments without
+  linearly opening every newer sibling. The existing pagination API and
+  optional-Redis behavior are unchanged.
+- The one independent review found mandatory integrity, bounded-IO,
+  cross-process tombstone-privacy, segmented-authority, and lint gaps. The one
+  allowed remediation made cursor skip authority HMAC-verified, refreshed the
+  fingerprint-gated tombstone index before bounded reads, and made canonical
+  replay, metadata, tails, quarantine, fingerprints, and rewrites agree on the
+  same logical segmented archive. Final integrated gate at `4b22e676`: six
+  exact regressions passed, the proportional journal/session/Garden slice
+  passed 137/137, lint passed, root ESM+DTS build passed, and diff checks were
+  clean. Parent epic `psfn-framework-t5z7` remains open because `.5`, `.9`, and
+  `.10` remain real work.
 - `psfn-framework-t5z7.4` is closed at `af553dc0` (server/API slice
   `118890bd`, client/UI slice `af553dc0`). The sessions index is now one
   contact-free request carrying only bounded channel/session identity,

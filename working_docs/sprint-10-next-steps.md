@@ -137,9 +137,20 @@ tree passed two consecutive full normal-mode suites (722 files / 8,357 passed /
 3 skipped, exit 0), lint, and build — the branch's first clean full-suite
 exits. `.6.6` is closed.
 
+W5 initiation sources (`s10mc.6.5`) is integrated with W6 at `2599c2f5` and
+pushed to `origin/feat/icp-autonomy`. Final merged-seam validation at that hash
+passed 32 focused test files / 609 tests, including the real Postgres autonomy,
+fatigue-reservation, schema-tenancy, intention-lifecycle, and retry-lifecycle
+integration suites; `npm run lint` and `npm run build` also passed. `.6.5` is
+closed. Two timing edges from the final W5 review remain report-only
+observations under the corrected severity standard, with no follow-up beads:
+`retryEligibleAtMs` is derived before awaited durable transition/lifecycle work,
+so a slow transition can shorten the effective cooldown; and expiry is not
+rechecked after slow deferred-to-pending or pending-to-permitted transitions.
+
 This is an implementation-wave checkpoint, not completion of the ICP epic or
-release validation. W5 and W7-W9 (`s10mc.6.5`, `.6.7` through `.6.9`) remain
-open, the parent `s10mc.6` remains open, and the feature branch has not been
+release validation. W7-W9 (`s10mc.6.7` through `.6.9`) remain open, the parent
+`s10mc.6` remains open, and the feature branch has not been
 merged into the release branch or exercised against live infrastructure.
 
 ## 1. Where things stand
@@ -212,7 +223,8 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W4 plus W6 fatigue/social regulation, hardened through `72238bc8`; W5 and W7-W9 remain open; not merged or live-tested |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W6 plus W5 initiation sources, integrated at `2599c2f5`; W7-W9 remain open; not merged to the release branch or live-tested |
+| `psfn-framework-s10mc.6.5` | W5 initiation sources — **closed** 2026-07-14: integrated with W6 at `2599c2f5`; merged seam passed 32 focused files / 609 tests (including real Postgres integration), lint, and build |
 | `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — **closed** 2026-07-14: both fresh reviews passed at `72238bc8`, follow-up beads fixed, two clean full-suite exits on the merged tree |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |

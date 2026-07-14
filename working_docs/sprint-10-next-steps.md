@@ -130,6 +130,21 @@ implementation formerly tracked as `s10d7`; the separate hard gate in §2d is
 still a restore rehearsal of a real flagship snapshot before any live schema
 cutover.
 
+Restore rollback ownership follow-up `psfn-framework-wprg` was integrated and
+pushed on this branch at `078f7bfe` on 2026-07-14 (implementation `28dac423`).
+The exact durable Postgres marker now remains present through database rollback
+and durable cleanup of published and staged trees; absent or foreign markers do
+not authorize filesystem or schema deletion. The single independent review
+found one IMPORTANT gap: a fresh restore could delete a pre-existing
+deterministic staging tree before authenticating ownership. Remediation
+`078f7bfe` makes staging collisions fail closed, rechecks them after database
+preflight, claims fresh staging atomically, and cleans only paths claimed by the
+current invocation. Final regression evidence was 33/33 focused restore tests,
+including three real-Postgres tests and the prior lost-response/SIGKILL paths;
+`npm run lint`, `npm run build`, and `npm run verify:backup-restore` also passed.
+`wprg` is closed; parent `c337` remains open while credential hardening follow-up
+`psfn-framework-5s70` is still in flight.
+
 Branch-local evidence so far: 224 focused tests, `npm run lint`, `npm run build`,
 `npm run verify:settings-contract`, and `npm run verify:backup-restore` pass.
 Repository hygiene still reports only the known identity-literal and shared-type-
@@ -220,7 +235,9 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10d4` | Future-idea: management capability tier above autonomy — deferred |
 | `psfn-framework-s10d5` | Future-idea: shared-wiki caretaker/meta layer detailed design — deferred |
 | `psfn-framework-s10d6` | Future-idea: voice subsystem rewrite — deferred |
-| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; pending merge and combined/runtime certification (§0.5) |
+| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; rollback ownership follow-up `wprg` is closed @ `078f7bfe`, but credential follow-up `5s70` and combined/runtime certification remain open (§0.5) |
+| `psfn-framework-wprg` | Restore rollback ownership — integrated, independently reviewed, remediated, final-check approved, and closed @ `078f7bfe` (§0.5) |
+| `psfn-framework-5s70` | Restore credential-channel hardening — still in flight; continues to hold parent `c337` open |
 | `psfn-framework-s10d7` | Fleet restore functions — code-complete with c337 on `feat/fleet-workspace-isolation`; real flagship restore rehearsal still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |

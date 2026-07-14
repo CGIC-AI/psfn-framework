@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../sessions/store.js';
 import {
@@ -8,9 +8,11 @@ import {
   buildMessageJournalEntry,
   buildSessionHmacKeyring,
   signJournalEntry,
+  verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
 import { runSessionIntegrityRepair } from './integrity-repair.js';
 import type { JournalEntry } from '../../core/session/types.js';
+import { makeRolledFilePath } from '../sessions/store/channel-filenames.js';
 
 let rootsToDelete: string[] = [];
 
@@ -305,5 +307,72 @@ describe('runSessionIntegrityRepair', () => {
       'Current image review: A catgirl sits on a server rack.',
     ]);
     expect(entries.some(entry => entry.content.includes('<unverified_history>'))).toBe(false);
+  });
+
+  it('repairs a rolled journal as one continuous HMAC chain and rebuilds its ordered index', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:repair-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const channelId = 'api:repair-chain';
+    const rootPath = join(harness.sessionsDir, '20260325_api-repair-chain_user_000005.jsonl');
+    const segmentPath = makeRolledFilePath(rootPath, 2);
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId,
+      role: 'user',
+      content: 'root prompt',
+      timestamp: 1_000,
+    }), keyring!, null);
+    const second = signJournalEntry(buildMessageJournalEntry(2, {
+      channelId,
+      role: 'assistant',
+      content: 'root reply',
+      timestamp: 2_000,
+    }), keyring!, first._hmac ?? null);
+    const brokenBoundary = signJournalEntry(buildMessageJournalEntry(3, {
+      channelId,
+      role: 'user',
+      content: 'segment prompt',
+      timestamp: 3_000,
+    }), keyring!, null);
+    writeJournal(rootPath, [first, second]);
+    writeJournal(segmentPath, [brokenBoundary]);
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+    });
+
+    expect(report.journal.modifiedFiles).toBe(2);
+    expect(report.journal.modifiedEntries).toBeGreaterThanOrEqual(1);
+    const repairedRoot = readFileSync(rootPath, 'utf8').trim().split('\n')
+      .map(line => JSON.parse(line) as JournalEntry);
+    const repairedSegment = readFileSync(segmentPath, 'utf8').trim().split('\n')
+      .map(line => JSON.parse(line) as JournalEntry);
+    expect(verifyJournalEntryIntegrity(
+      repairedSegment[0]!,
+      keyring!,
+      repairedRoot.at(-1)?._hmac ?? null,
+    ).verified).toBe(true);
+    expect(verifyJournalEntryIntegrity(repairedSegment[0]!, keyring!, null).verified).toBe(false);
+
+    const index = JSON.parse(
+      readFileSync(join(harness.sessionsDir, '_channel_index.json'), 'utf8'),
+    ) as { version: number; channels: Record<string, { filenames: string[] }> };
+    expect(index.version).toBe(4);
+    expect(index.channels[channelId].filenames).toEqual([
+      basename(rootPath),
+      basename(segmentPath),
+    ]);
+    const store = new SessionStore(harness.sessionsDir, { integrityKeyring: keyring });
+    expect(store.getRecent(channelId, 10).map(entry => entry.content)).toEqual([
+      'root prompt',
+      'root reply',
+      'segment prompt',
+    ]);
   });
 });

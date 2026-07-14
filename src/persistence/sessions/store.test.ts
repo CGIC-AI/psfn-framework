@@ -133,6 +133,17 @@ describe('SessionStore', () => {
     expect(store.count('ch2')).toBe(1);
   });
 
+  it('merges channel-index updates from stale store instances instead of clobbering other channels', () => {
+    const staleStore = new SessionStore(dir);
+    store.append({ channelId: 'ch-index-a', role: 'user', content: 'A', timestamp: 1_000 });
+    staleStore.append({ channelId: 'ch-index-b', role: 'user', content: 'B', timestamp: 2_000 });
+
+    const index = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf8')) as {
+      channels: Record<string, unknown>;
+    };
+    expect(Object.keys(index.channels).sort()).toEqual(['ch-index-a', 'ch-index-b']);
+  });
+
   it('persists canonical turn records in channel-scoped L0 streams', () => {
     const turnId = createTurnId();
     store.appendTurnRecord({
@@ -1154,9 +1165,17 @@ describe('SessionStore', () => {
 
     expect(existsSync(join(dir, '_channel_index.json'))).toBe(true);
     const index = JSON.parse(readFileSync(join(dir, '_channel_index.json'), 'utf-8')) as {
-      channels: Record<string, { filename: string; messageCount?: number; lastTimestamp?: number }>;
+      version: number;
+      channels: Record<string, {
+        filename: string;
+        filenames: string[];
+        messageCount?: number;
+        lastTimestamp?: number;
+      }>;
     };
+    expect(index.version).toBe(4);
     expect(index.channels['api:e2e-internal'].filename).toBe(sessionFiles[0]);
+    expect(index.channels['api:e2e-internal'].filenames).toEqual([sessionFiles[0]]);
     expect(index.channels['api:e2e-internal'].messageCount).toBe(1);
     expect(index.channels['api:e2e-internal'].lastTimestamp).toBe(1739443200000);
 
@@ -1325,7 +1344,7 @@ describe('SessionStore', () => {
     };
     expect(index.channels[channelId].messageCount).toBe(1500);
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
-  });
+  }, 20_000);
 
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';

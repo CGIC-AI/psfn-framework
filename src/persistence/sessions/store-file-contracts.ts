@@ -6,6 +6,7 @@ export interface SessionFileSeed {
 
 export const IMPORT_MANIFEST_FILENAME = '_import_manifest.jsonl';
 export const READABLE_SESSION_FILENAME = /^\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6}\.jsonl$/;
+export const ROLLED_SESSION_FILENAME = /^(\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6})\.segment-(\d{4})\.jsonl$/;
 
 /** Sanitize a channelId into a safe filename component using strict allowlist. */
 export function sanitizeChannelId(channelId: string): string {

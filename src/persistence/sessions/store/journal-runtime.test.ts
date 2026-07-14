@@ -38,6 +38,7 @@ describe('SessionJournalRuntime', () => {
       lastHmac: null,
       lastExtractionCoveredUpTo: 0,
       lastJournalEntry: null,
+      archivePaths: [filePath],
       resolvedPath: filePath,
       archiveFingerprint: null,
       messageCount: 0,
@@ -47,6 +48,7 @@ describe('SessionJournalRuntime', () => {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: null,
       recentEntriesByLimit: new Map(),
     } satisfies ChannelCache;
     const upsertChannelIndex = vi.fn();
@@ -101,6 +103,7 @@ describe('SessionJournalRuntime', () => {
       lastHmac: null,
       lastExtractionCoveredUpTo: 0,
       lastJournalEntry: null,
+      archivePaths: [filePath],
       resolvedPath: filePath,
       archiveFingerprint: null,
       messageCount: 0,
@@ -110,6 +113,7 @@ describe('SessionJournalRuntime', () => {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: null,
       recentEntriesByLimit: new Map(),
     } satisfies ChannelCache;
 
@@ -136,7 +140,11 @@ describe('SessionJournalRuntime', () => {
       listProjectionDrift: vi.fn(() => []),
     };
     const channelIndex = new Map<string, ChannelIndexEntry>([
-      ['ch-projection', { filename: filePath.split('/').at(-1)!, messageCount: 1 }],
+      ['ch-projection', {
+        filename: filePath.split('/').at(-1)!,
+        filenames: [filePath.split('/').at(-1)!],
+        messageCount: 1,
+      }],
     ]);
 
     expect(() => {
@@ -159,5 +167,49 @@ describe('SessionJournalRuntime', () => {
       'ch-projection',
       'projection backfill offline',
     );
+  });
+
+  it('retries a full chain load when the archive generation changes during the read', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-chain-generation-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionArchivePort();
+    const runtime = new SessionJournalRuntime(null, port);
+    const archive = runtime.openArchive('ch-generation', join(dir, 'session.jsonl'));
+    port.writeJournalFile(archive, [buildMessageJournalEntry(1, {
+      channelId: 'ch-generation',
+      role: 'user',
+      content: 'stable after retry',
+      timestamp: 1_000,
+    })]);
+    const generations = ['generation-1', 'generation-2', 'generation-2', 'generation-2'];
+    const fingerprintSpy = vi.spyOn(port, 'fingerprintArchive')
+      .mockImplementation(() => generations.shift() ?? 'generation-2');
+
+    expect(runtime.loadChannel(archive).entries.map(entry => entry.content)).toEqual([
+      'stable after retry',
+    ]);
+    expect(fingerprintSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries a tail read when the archive generation changes during the read', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-tail-generation-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionArchivePort();
+    const runtime = new SessionJournalRuntime(null, port);
+    const archive = runtime.openArchive('ch-tail-generation', join(dir, 'session.jsonl'));
+    port.writeJournalFile(archive, [buildMessageJournalEntry(1, {
+      channelId: 'ch-tail-generation',
+      role: 'assistant',
+      content: 'tail stable after retry',
+      timestamp: 1_000,
+    })]);
+    const generations = ['generation-1', 'generation-2', 'generation-2', 'generation-2'];
+    const fingerprintSpy = vi.spyOn(port, 'fingerprintArchive')
+      .mockImplementation(() => generations.shift() ?? 'generation-2');
+
+    expect(runtime.readRecentEntriesFromTail(archive, 1).map(entry => entry.content)).toEqual([
+      'tail stable after retry',
+    ]);
+    expect(fingerprintSpy).toHaveBeenCalledTimes(4);
   });
 });

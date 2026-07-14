@@ -31,6 +31,9 @@ export interface ChannelCache {
   lastHmac: string | null;
   lastExtractionCoveredUpTo: number;
   lastJournalEntry: JournalEntry | null;
+  /** Ordered physical JSONL files that form this one logical session. */
+  archivePaths: string[];
+  /** Active (last) archive path; retained as the write-path convenience pointer. */
   resolvedPath: string;
   archiveFingerprint: string | null;
   messageCount: number;
@@ -59,7 +62,10 @@ export interface CachedRecentEntries {
 
 export interface ChannelIndexEntry {
   channelId?: string;
+  /** Active (last) file in `filenames`. */
   filename: string;
+  /** Ordered physical JSONL files that form this one logical session. */
+  filenames: string[];
   messageCount?: number;
   activeTurnTombstoneCount?: number;
   lastTimestamp?: number;
@@ -158,7 +164,13 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 3;
+export const CHANNEL_INDEX_VERSION = 4;
+/**
+ * L0 journals roll at a fixed byte threshold. This is deliberately not a
+ * mutable runtime setting: the storage contract and its verification costs
+ * are byte-denominated, and every deployment should share the same bound.
+ */
+export const L0_SESSION_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 export function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -299,6 +311,8 @@ export function parseImportManifestLine(line: string): LegacyChatImportManifest 
 export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, right: ChannelIndexEntry): boolean {
   if (!left) return false;
   return left.filename === right.filename
+    && left.filenames.length === right.filenames.length
+    && left.filenames.every((filename, index) => filename === right.filenames[index])
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
     && left.lastTimestamp === right.lastTimestamp

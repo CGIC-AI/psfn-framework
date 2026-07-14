@@ -1476,6 +1476,80 @@ describe('SessionStore', () => {
     ]);
   });
 
+  it('keeps committed HMAC appends successful when post-write fingerprint refresh fails', () => {
+    const channelId = 'api:fingerprint-refresh-fault';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const originalFingerprintArchive = archivePort.fingerprintArchive.bind(archivePort);
+    const scanSpy = vi.spyOn(archivePort, 'scanJournalFileMetadata');
+    let fingerprintCalls = 0;
+    vi.spyOn(archivePort, 'fingerprintArchive').mockImplementation(archive => {
+      fingerprintCalls += 1;
+      if (fingerprintCalls === 2) {
+        throw new Error('simulated post-append stat failure');
+      }
+      return originalFingerprintArchive(archive);
+    });
+    const writer = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+
+    expect(writer.append({ channelId, role: 'user', content: 'first', timestamp: 1_000 })).toBe(1);
+    scanSpy.mockClear();
+
+    expect(writer.append({ channelId, role: 'assistant', content: 'second', timestamp: 2_000 })).toBe(2);
+    expect(scanSpy).toHaveBeenCalledTimes(1);
+
+    const lines = readFileSync(findSessionJournalPath(dir, 'fingerprint-refresh-fault'), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as import('../../core/session/types.js').JournalEntry);
+    expect(lines.filter(entry => entry.type === 'message').map(entry => entry.id)).toEqual([1, 2]);
+    expect(lines.filter(entry => entry.type === 'message').map(entry => entry.content)).toEqual([
+      'first',
+      'second',
+    ]);
+
+    let previousHmac: string | null = null;
+    for (const line of lines) {
+      const verification = verifyJournalEntryIntegrity(line, keyring!, previousHmac);
+      expect(verification.verified).toBe(true);
+      previousHmac = typeof line._hmac === 'string' ? line._hmac : previousHmac;
+    }
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(reloaded.getRecent(channelId, 10).map(entry => entry.content)).toEqual([
+      'first',
+      'second',
+    ]);
+  });
+
+  it('fails closed when the archive is missing after a journal append', () => {
+    const channelId = 'api:fingerprint-missing-archive';
+    const archivePort = createFilesystemSessionArchivePort();
+    const originalFingerprintArchive = archivePort.fingerprintArchive.bind(archivePort);
+    let fingerprintCalls = 0;
+    vi.spyOn(archivePort, 'fingerprintArchive').mockImplementation(archive => {
+      fingerprintCalls += 1;
+      if (fingerprintCalls === 2) return null;
+      return originalFingerprintArchive(archive);
+    });
+    const writer = new SessionStore(dir, { sessionArchivePort: archivePort });
+
+    expect(() => writer.append({
+      channelId,
+      role: 'user',
+      content: 'fail closed',
+      timestamp: 1_000,
+    })).toThrow('Session archive is missing after journal append');
+  });
+
 
   it('rolls back in-memory append state when journal persistence fails', () => {
     const channelId = 'api:append-rollback';

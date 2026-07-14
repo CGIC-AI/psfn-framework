@@ -467,7 +467,22 @@ export class SessionStore implements TranscriptSearchPort {
       journal,
       upsertChannelIndex: (channelId, entry) => this.upsertChannelIndex(channelId, entry),
     });
-    cache.archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
+    let archiveFingerprint: string | null;
+    try {
+      archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
+    } catch (error) {
+      cache.archiveFingerprint = null;
+      log.warn('Session archive fingerprint refresh failed after journal append; write cache invalidated', {
+        channelId: cache.channelId,
+        error: toErrorMessage(error),
+      });
+      return;
+    }
+    if (archiveFingerprint === null) {
+      cache.archiveFingerprint = null;
+      throw new Error(`Session archive is missing after journal append for ${cache.channelId}`);
+    }
+    cache.archiveFingerprint = archiveFingerprint;
   }
   private resolveCacheSessionKey(cache: ChannelCache): string {
     for (const [sessionId, candidate] of this.channels.entries()) {

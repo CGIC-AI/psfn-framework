@@ -88,10 +88,17 @@ class FakePostgresPool {
     if (normalized.startsWith('delete from session_messages_projection where channel_id =') && normalized.includes('and message_id =')) {
       const channelId = String(values[0] ?? '');
       const messageId = Number(values[1] ?? 0);
+      const previousRecordCount = this.records.length;
       this.records = this.records.filter(record => (
         record.channelId !== channelId || record.messageId !== messageId
       ));
-      return { rows: [], command: 'DELETE', rowCount: 1, oid: 0, fields: [] } as QueryResult;
+      return {
+        rows: [],
+        command: 'DELETE',
+        rowCount: previousRecordCount - this.records.length,
+        oid: 0,
+        fields: [],
+      } as QueryResult;
     }
 
     if (normalized.startsWith('delete from session_messages_projection where channel_id =')) {
@@ -288,6 +295,107 @@ describe('postgres session adapters', () => {
     expect(projectionStatements[0]).toMatch(/^insert into session_messages_projection /);
     expect(projectionStatements[1]).toMatch(/^delete from session_projection_drift /);
     expect(pool.drift.has('api:tracked-drift')).toBe(false);
+  });
+
+  it('keeps replacement metadata after an ambiguous insert was already queued', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-insert-replace-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:insert-before-replace';
+    const pool = new FakePostgresPool();
+    pool.records.push(
+      {
+        channelId,
+        messageId: 1,
+        role: 'user',
+        authorId: null,
+        authorName: null,
+        content: 'first persisted message',
+        timestamp: 1_000,
+        channelVisibility: 'private',
+      },
+      {
+        channelId,
+        messageId: 3,
+        role: 'assistant',
+        authorId: null,
+        authorName: null,
+        content: 'third persisted message',
+        timestamp: 3_000,
+        channelVisibility: 'private',
+      },
+    );
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId,
+      role: 'user',
+      content: 'fills the persisted id gap',
+      timestamp: 2_000,
+    });
+    adapters.transcriptProjection.replaceChannelEntries(channelId, [{
+      id: 4,
+      channelId,
+      role: 'assistant',
+      content: 'replacement message',
+      timestamp: 4_000,
+    }]);
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    expect(pool.records
+      .filter(record => record.channelId === channelId)
+      .map(record => record.messageId)).toEqual([4]);
+    expect(adapters.transcriptProjection.countProjectedMessages(channelId)).toBe(1);
+  });
+
+  it('keeps replacement metadata after a missing delete was already queued', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-delete-replace-'));
+    dirs.push(sessionsDir);
+    const channelId = 'api:delete-before-replace';
+    const pool = new FakePostgresPool();
+    pool.records.push({
+      channelId,
+      messageId: 3,
+      role: 'assistant',
+      authorId: null,
+      authorName: null,
+      content: 'third persisted message',
+      timestamp: 3_000,
+      channelVisibility: 'private',
+    });
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId,
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260714T000000Z_missing]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260714T000000Z_missing',
+        redactedAt: '2026-07-14T00:00:00.000Z',
+      }),
+      timestamp: 2_000,
+    });
+    adapters.transcriptProjection.replaceChannelEntries(channelId, [{
+      id: 4,
+      channelId,
+      role: 'assistant',
+      content: 'replacement message',
+      timestamp: 4_000,
+    }]);
+    await adapters.transcriptProjection.flushPendingWrites?.();
+
+    expect(pool.records
+      .filter(record => record.channelId === channelId)
+      .map(record => record.messageId)).toEqual([4]);
+    expect(adapters.transcriptProjection.countProjectedMessages(channelId)).toBe(1);
   });
 
   it('queues projection writes and exposes async keyword search through the adapter', async () => {

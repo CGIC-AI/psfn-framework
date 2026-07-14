@@ -33,6 +33,12 @@ interface ProjectionMessageMetadataRow {
 interface ProjectionMessageMetadata {
   count: number;
   maxMessageId: number | null;
+  epoch: number;
+}
+
+interface ProjectionMutationPrediction {
+  changed: boolean;
+  epoch: number;
 }
 
 interface ProjectionUpsertResultRow {
@@ -147,6 +153,7 @@ async function preloadProjectionMessageMetadata(
       maxMessageId: maxMessageId !== null && Number.isFinite(maxMessageId)
         ? Math.floor(maxMessageId)
         : null,
+      epoch: 0,
     });
   }
   return byChannel;
@@ -261,52 +268,60 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
   private getMessageMetadata(channelId: string): ProjectionMessageMetadata {
     const existing = this.messageMetadataByChannel.get(channelId);
     if (existing) return existing;
-    const created = { count: 0, maxMessageId: null };
+    const created = { count: 0, maxMessageId: null, epoch: 0 };
     this.messageMetadataByChannel.set(channelId, created);
     return created;
   }
 
-  private predictProjectionUpsert(channelId: string, messageId: number): boolean {
+  private predictProjectionUpsert(
+    channelId: string,
+    messageId: number,
+  ): ProjectionMutationPrediction {
     const metadata = this.getMessageMetadata(channelId);
     const predictedInserted = metadata.maxMessageId === null || messageId > metadata.maxMessageId;
     if (predictedInserted) {
       metadata.count += 1;
       metadata.maxMessageId = messageId;
     }
-    return predictedInserted;
+    return { changed: predictedInserted, epoch: metadata.epoch };
   }
 
   private reconcileProjectionUpsert(
     channelId: string,
     messageId: number,
-    predictedInserted: boolean,
+    prediction: ProjectionMutationPrediction,
     inserted: boolean,
   ): void {
     const metadata = this.getMessageMetadata(channelId);
-    if (inserted && !predictedInserted) metadata.count += 1;
-    if (!inserted && predictedInserted) metadata.count = Math.max(0, metadata.count - 1);
+    if (metadata.epoch !== prediction.epoch) return;
+    if (inserted && !prediction.changed) metadata.count += 1;
+    if (!inserted && prediction.changed) metadata.count = Math.max(0, metadata.count - 1);
     if (inserted && (metadata.maxMessageId === null || messageId > metadata.maxMessageId)) {
       metadata.maxMessageId = messageId;
     }
   }
 
-  private predictProjectionDelete(channelId: string, messageId: number): boolean {
+  private predictProjectionDelete(
+    channelId: string,
+    messageId: number,
+  ): ProjectionMutationPrediction {
     const metadata = this.getMessageMetadata(channelId);
     const predictedDeleted = metadata.count > 0
       && metadata.maxMessageId !== null
       && messageId <= metadata.maxMessageId;
     if (predictedDeleted) metadata.count -= 1;
-    return predictedDeleted;
+    return { changed: predictedDeleted, epoch: metadata.epoch };
   }
 
   private reconcileProjectionDelete(
     channelId: string,
-    predictedDeleted: boolean,
+    prediction: ProjectionMutationPrediction,
     deleted: boolean,
   ): void {
     const metadata = this.getMessageMetadata(channelId);
-    if (deleted && !predictedDeleted) metadata.count = Math.max(0, metadata.count - 1);
-    if (!deleted && predictedDeleted) metadata.count += 1;
+    if (metadata.epoch !== prediction.epoch) return;
+    if (deleted && !prediction.changed) metadata.count = Math.max(0, metadata.count - 1);
+    if (!deleted && prediction.changed) metadata.count += 1;
   }
 
   private replaceCachedChannel(channelId: string, messageIds: readonly number[]): void {
@@ -315,9 +330,11 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     for (const messageId of normalizedIds) {
       if (maxMessageId === null || messageId > maxMessageId) maxMessageId = messageId;
     }
+    const epoch = this.getMessageMetadata(channelId).epoch + 1;
     this.messageMetadataByChannel.set(channelId, {
       count: normalizedIds.length,
       maxMessageId,
+      epoch,
     });
   }
 
@@ -327,12 +344,12 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
   ): void {
     const channelId = options.channelId ?? entry.channelId;
     if (isCogSecTombstoneSessionEntry(entry)) {
-      const predictedDeleted = this.predictProjectionDelete(channelId, entry.id);
+      const prediction = this.predictProjectionDelete(channelId, entry.id);
       const clearTrackedDrift = this.driftByChannel.delete(channelId);
 
       this.enqueueWrite(channelId, async (client) => {
         const deleted = await deleteProjectionRecord(client, channelId, entry.id);
-        this.reconcileProjectionDelete(channelId, predictedDeleted, deleted);
+        this.reconcileProjectionDelete(channelId, prediction, deleted);
         if (clearTrackedDrift) {
           await client.query(
             `
@@ -347,7 +364,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     }
 
     const record = toProjectionRecord(entry, options);
-    const predictedInserted = this.predictProjectionUpsert(record.channelId, record.messageId);
+    const prediction = this.predictProjectionUpsert(record.channelId, record.messageId);
     const clearTrackedDrift = this.driftByChannel.delete(record.channelId);
 
     this.enqueueWrite(record.channelId, async (client) => {
@@ -355,7 +372,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
       this.reconcileProjectionUpsert(
         record.channelId,
         record.messageId,
-        predictedInserted,
+        prediction,
         inserted,
       );
       if (clearTrackedDrift) {

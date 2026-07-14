@@ -1166,13 +1166,16 @@ export interface AuditEntry {
   id: string;
   timestamp: number;
   source: AuditHistorySource;
-  sourceRecordId?: string;
   actionType: AuditActionType;
   decision: AuditDecision;
   narrative: string;
   details?: string;
   actor?: 'operator' | 'companion';
-  raw?: Record<string, unknown>;
+}
+
+export interface AuditHistoryDetailData {
+  entry: AuditEntry;
+  raw: Record<string, unknown> | null;
 }
 
 export interface AuditFilters {

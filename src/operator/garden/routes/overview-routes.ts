@@ -20,6 +20,7 @@ import type {
   AdminDashboardService,
   AdminModelUsageService,
 } from '../services/types.js';
+import { AdminAuditHistoryEntryNotFoundError } from '../services/audit-history-service.js';
 import {
   ADMIN_AUDIT_ACTION_TYPES,
   ADMIN_AUDIT_DECISIONS,
@@ -421,6 +422,28 @@ export function buildAdminOverviewRoutes(options: {
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load audit history'),
           }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: paramWithSuffix('/api/admin/audit/history/', 'entryId', ''),
+      handle: (_req, res, params) => {
+        if (!auditHistoryService) {
+          sendJson(res, 503, { error: AUDIT_HISTORY_UNAVAILABLE_ERROR });
+          return;
+        }
+        auditHistoryService.getAuditHistoryDetail(params.entryId ?? '').then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => {
+            if (error instanceof AdminAuditHistoryEntryNotFoundError) {
+              sendJson(res, 404, { error: 'Audit history entry not found' }, ADMIN_DYNAMIC_JSON_HEADERS);
+              return;
+            }
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to load audit history detail'),
+            }, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
         );
       },
     },

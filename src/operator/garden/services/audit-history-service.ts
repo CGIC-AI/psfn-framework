@@ -6,14 +6,17 @@ import {
   statSync,
   type Stats,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
   AdminAuditDecision,
   AdminAuditHistoryData,
+  AdminAuditHistoryDetailData,
   AdminAuditHistoryEntry,
   AdminAuditHistoryFilters,
+  AdminAuditHistoryListEntry,
   AdminAuditHistorySource,
   AdminAuditTimeRange,
 } from '../types.js';
@@ -68,6 +71,14 @@ export interface AdminAuditHistoryService {
     raw?: Record<string, unknown>;
   }): AdminAuditHistoryEntry;
   getAuditHistory(query?: AdminAuditHistoryQuery): Promise<AdminAuditHistoryData>;
+  getAuditHistoryDetail(entryId: string): Promise<AdminAuditHistoryDetailData>;
+}
+
+export class AdminAuditHistoryEntryNotFoundError extends Error {
+  constructor() {
+    super('Audit history entry not found.');
+    this.name = 'AdminAuditHistoryEntryNotFoundError';
+  }
 }
 
 export type GatewayAuditHistoryReader = (query: GatewayAuditHistoryQuery) => GatewayAuditHistoryPage;
@@ -231,8 +242,13 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     gardenStore: GardenAuditHistoryJsonlStore;
     gatewayReader?: GatewayAuditHistoryReader | null;
     chargeLedger?: Pick<RunChargeLedger, 'getData'> | null;
+    scopeId: string;
     now?: () => number;
-  }) {}
+  }) {
+    if (!deps.scopeId.trim()) {
+      throw new Error('Audit history scopeId is required.');
+    }
+  }
 
   appendGardenEntry(input: {
     actionType: AdminAuditActionType;
@@ -288,7 +304,9 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
         return right.id.localeCompare(left.id);
       });
 
-    const pageEntries = allEntries.slice(filters.offset, filters.offset + filters.limit);
+    const pageEntries = allEntries
+      .slice(filters.offset, filters.offset + filters.limit)
+      .map(entry => toAuditHistoryListEntry(entry, this.deps.scopeId));
     return {
       entries: pageEntries,
       filters,
@@ -315,9 +333,57 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     };
   }
 
+  async getAuditHistoryDetail(entryId: string): Promise<AdminAuditHistoryDetailData> {
+    if (!/^audit_[A-Za-z0-9_-]{43}$/.test(entryId)) {
+      throw new AdminAuditHistoryEntryNotFoundError();
+    }
+    const gardenEntries = safeReadGardenEntries(this.deps.gardenStore);
+    const gateway = safeReadGatewayEntries(this.deps.gatewayReader ?? null, {
+      limit: MAX_SOURCE_SCAN,
+    });
+    const charge = await safeReadChargeEntries(this.deps.chargeLedger ?? null, {
+      limit: MAX_SOURCE_SCAN,
+    });
+    const entry = [...gardenEntries, ...gateway.entries, ...charge.entries]
+      .find(candidate => toOpaqueAuditEntryId(candidate, this.deps.scopeId) === entryId);
+    if (!entry) throw new AdminAuditHistoryEntryNotFoundError();
+    return {
+      entry: toAuditHistoryListEntry(entry, this.deps.scopeId),
+      raw: entry.raw ?? null,
+    };
+  }
+
   private now(): number {
     return this.deps.now?.() ?? Date.now();
   }
+}
+
+function toAuditHistoryListEntry(
+  entry: AdminAuditHistoryEntry,
+  scopeId: string,
+): AdminAuditHistoryListEntry {
+  return {
+    id: toOpaqueAuditEntryId(entry, scopeId),
+    timestamp: entry.timestamp,
+    source: entry.source,
+    actionType: entry.actionType,
+    decision: entry.decision,
+    narrative: entry.narrative,
+    ...(entry.details ? { details: entry.details } : {}),
+    ...(entry.actor ? { actor: entry.actor } : {}),
+  };
+}
+
+function toOpaqueAuditEntryId(entry: AdminAuditHistoryEntry, scopeId: string): string {
+  const sourceIdentity = entry.sourceRecordId ?? entry.id;
+  const digest = createHash('sha256')
+    .update(scopeId)
+    .update('\0')
+    .update(entry.source)
+    .update('\0')
+    .update(sourceIdentity)
+    .digest('base64url');
+  return `audit_${digest}`;
 }
 
 function parseGardenAuditLine(line: string, lineNumber: number): AdminAuditHistoryEntry {

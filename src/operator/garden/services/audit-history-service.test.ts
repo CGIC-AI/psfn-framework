@@ -179,6 +179,7 @@ describe('AdminAuditHistoryDataService', () => {
       gardenStore,
       gatewayReader,
       chargeLedger,
+      scopeId: 'companion-a',
       now: () => 1_700_000_000_500,
     });
 
@@ -219,6 +220,7 @@ describe('AdminAuditHistoryDataService', () => {
       gardenStore: new GardenAuditHistoryJsonlStore(join(dir, 'garden-audit-history.jsonl')),
       gatewayReader: null,
       chargeLedger: null,
+      scopeId: 'companion-a',
       now: () => 1_700_000_000_500,
     });
 
@@ -251,5 +253,49 @@ describe('AdminAuditHistoryDataService', () => {
       decision: 'denied',
       actor: 'operator',
     });
+  });
+
+  it('keeps raw source records out of list payloads and resolves them only by scoped opaque id', async () => {
+    const dir = makeTempDir();
+    const gatewayReader: GatewayAuditHistoryReader = () => ({
+      entries: [{
+        id: 7,
+        timestamp: 1_700_000_000_200,
+        method: 'external.call',
+        decision: 'ALLOW',
+        paramsJson: '{"authorization":"partner-secret"}',
+        durationMs: 4,
+        error: null,
+      }],
+      total: 1,
+      limit: 2_000,
+      offset: 0,
+    });
+    const makeService = (scopeId: string) => new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(dir, `${scopeId}.jsonl`)),
+      gatewayReader,
+      chargeLedger: null,
+      scopeId,
+      now: () => 1_700_000_000_500,
+    });
+    const service = makeService('companion-a');
+
+    const list = await service.getAuditHistory({ timeRange: 'all' });
+    const repeatedList = await makeService('companion-a').getAuditHistory({ timeRange: 'all' });
+    const otherCompanion = makeService('companion-b');
+    const otherList = await otherCompanion.getAuditHistory({ timeRange: 'all' });
+
+    expect(list.entries).toHaveLength(1);
+    expect(list.entries[0]?.id).toMatch(/^audit_[A-Za-z0-9_-]{43}$/);
+    expect(list.entries[0]?.id).toBe(repeatedList.entries[0]?.id);
+    expect(list.entries[0]?.id).not.toBe(otherList.entries[0]?.id);
+    expect(JSON.stringify(list)).not.toContain('partner-secret');
+    expect(list.entries[0]).not.toHaveProperty('raw');
+    expect(list.entries[0]).not.toHaveProperty('sourceRecordId');
+
+    const detail = await service.getAuditHistoryDetail(list.entries[0]!.id);
+    expect(detail.entry).toEqual(list.entries[0]);
+    expect(detail.raw).toMatchObject({ paramsJson: expect.stringContaining('partner-secret') });
+    await expect(otherCompanion.getAuditHistoryDetail(list.entries[0]!.id)).rejects.toThrow(/not found/i);
   });
 });

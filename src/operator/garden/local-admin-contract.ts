@@ -197,6 +197,7 @@ export function createInProcessGardenAdminContract(
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
     chargeLedger,
+    scopeId: options.config.companionId ?? companionDataDir,
   });
   registerAuditTimelineSources({
     eventBus: options.eventBus,

@@ -82,9 +82,10 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 
 ### 0.3 Corrections to the 2026-07-08 text below
 
-- §2c "W6 not started / last unbuilt workstream" is superseded: `s10mc.6` is
-  now a nine-child epic with a full implementation plan
-  ([`s10-icp-autonomy.md`](./s10-icp-autonomy.md)) and wired dependencies.
+- The earlier §2c status is superseded: `s10mc.6` is now a completed
+  nine-child epic, with the implementation and
+  certification trail recorded in
+  [`s10-icp-autonomy.md`](./s10-icp-autonomy.md) and the tracker.
 - The presence/locations branches (`mc/w5a-companion-presence`,
   `mc/vinz29-dual-presence`, `mc/vinz2021-presence-follow`) are **merged to
   main** — the locations threshold `s10mc` sequenced behind is met.
@@ -180,19 +181,21 @@ finding (`psfn-framework-ecr5`) and Garden type-check diagnostics
 (`psfn-framework-qz9e`) remain separately tracked; the optional canonical-policy
 fallback observation remains report-only. No second review was performed.
 
-W9 (`s10mc.6.9`) is in progress on the isolated certification branch at
-`b4ff8709`. Its fresh post-compaction, both-agent-restart exchange exposed P1
-`psfn-framework-1lxi`: the recipient reply was delivered but the completed
-correlated recipient turn record could be read before outer post-turn
-persistence finished. `b429b37d` makes `SubstrateAgent.waitForIdle()` join the
-complete outer `TurnRunReservation`; the single review's test-evidence finding
-was remediated by `b4ff8709`, which binds the recipient record to the exact
-sender conversation/root/request identities and counts the complete new record
-delta before validation. Final P1 closeout passed the exact real-process
-restart regression, 7 proportional files / 362 tests, mandatory lint, ESM+DTS
-build, and diff checks. W9 remains in progress pending its final certification
-matrix; the parent `s10mc.6` remains open, and the feature branch has not been
-merged into the release branch or exercised against live infrastructure.
+W9 (`s10mc.6.9`) and the parent ICP autonomy epic (`s10mc.6`) are closed on
+`feat/icp-autonomy` after final integrated verification at `d8dd6ba4`. The
+certification run passed 10 real-process cases plus 2 fixture cases, covering
+autonomous initiation, deterministic no-LLM gates, private-room windows,
+schema-local extraction and trust, compaction and both-agent restart, causal
+fatigue/reserve suppression, fleet-scoped warning and hard cost stops,
+delivery failure/retry and duplicate collapse, adversarial rollback, and
+feature-off single-companion parity. The proportional combined affected
+surface passed 12 files / 346 tests; settings-contract, mandatory lint,
+ESM+DTS build, backup/restore, and reachability checks also passed. The known
+public-sanitize fixtures tracked by `psfn-framework-ecr5`, six non-core
+identity-literal findings, and one certification EOF whitespace finding were
+operator-classified report-only. All nine direct children are closed with
+evidence. The feature branch is still intentionally unmerged to the release
+branch and has not been exercised against live infrastructure.
 
 ### 0.5 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
 
@@ -355,9 +358,9 @@ In order — later steps assume earlier ones are done, except (b) and (a) can ru
 
 **(a) Full-runtime validation, flag off then flag on** — `psfn-framework-s10f8`, **P1, entry gate for everything else**. On a machine with real credentials: boot flag-off and run `smoke:chat` + `e2e` to prove single-companion inertness in an actual process (ideally through the `psfn-live-ops` validation gate); then boot flag-on with a two-entry `companions.json` against a scratch Postgres, two Discord bots in one channel, and confirm routed delivery plus a fatigue-bounded MI↔MI exchange with zero crossover alarms. This also closes the spike bead `psfn-framework-s10mc.8`. Nothing below should be treated as "done" until this runs — every merge to date is test-gated, not runtime-gated.
 
-**(b) Converge the remaining `s10-loc-*` branches** into `feat/multi-companion`. Locations work advanced past the `98e964eb` merge point independently (`s10-loc-emanation`, `s10-loc-enrollment`(-v2), `s10-loc-durable-state`). These touch the same seams multi-companion already extended (`places.json`, satellite binding, situated context) — merge conflicts are expected at the situated-presence and presence-registry layers, not just textual diff noise. Do this before further W5/W6 work lands, or the two lines of development re-diverge.
+**(b) Converge the remaining `s10-loc-*` branches** into `feat/multi-companion`. Locations work advanced past the `98e964eb` merge point independently (`s10-loc-emanation`, `s10-loc-enrollment`(-v2), `s10-loc-durable-state`). These touch the same seams multi-companion already extended (`places.json`, satellite binding, situated context) — merge conflicts are expected at the situated-presence and presence-registry layers, not just textual diff noise. Reconcile these lines before release integration so they do not re-diverge.
 
-**(c) W6 — same-cluster inter-companion channels** (`psfn-framework-s10mc.6`) — the last unbuilt workstream. The building blocks are already in place: `presence.companion.co_located` fires from `companion_presence` (merged @ `ac389e5b`), the `ChannelAdapterPort` abstraction already treats a companion-to-companion channel as "just another channel," and `companion_room`/`quiet_companion_room` fatigue budgets already exist in `charge-policy.seed.json`. What's missing is the wiring: peer-as-contact (`isMachineIntelligence`, operator-assigned trust tier), the IPC one-to-one shape, the ad-hoc many-to-many room shape, and extending `two-companion-loop.test.ts` through the real channel path (not just the engine).
+**(c) ICP autonomy — same-cluster inter-companion channels** (`psfn-framework-s10mc.6`) — **completed on `feat/icp-autonomy` through final integrated verification at `d8dd6ba4`.** All nine children are closed. The production-faithful certification proves the autonomous DM/room pipeline, persistence and restart continuity, privacy/trust isolation, fatigue/charge closure, canonical cost stops, failure recovery, and feature-off parity. Remaining work here is release-branch integration and the explicitly separate live exercise in (a)/(f), not implementation scope inside this epic.
 
 **(d) Flagship cutover off `public` schema + shard schema derivation** (remainder of `psfn-framework-s10mc.2`) — **hard gate: verify a restore round-trip of a real flagship snapshot first.** The cutover helper moves the flagship's live data out of the `public` schema into its own `companion_<uuid>` schema; doing that against production data without first proving restore works is the one step in this plan with irreversible-mistake risk. Restore build-out itself is tracked separately as `psfn-framework-s10d7` (deferred, but needed before (d) touches anything real) — sequence: prove restore on a copy, then cut over.
 
@@ -395,16 +398,16 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 
 | Bead | One-line status |
 |---|---|
-| `psfn-framework-s10mc` | Epic. Substrate code-complete through `6608579f`; open remainder: flagship cutover, shard schema derivation, per-companion trust/charge/tier owners, W6 |
+| `psfn-framework-s10mc` | Epic. Substrate code-complete through `6608579f`; ICP autonomy child epic `s10mc.6` is closed on its feature branch; open remainder: flagship cutover, shard schema derivation, per-companion trust/charge/tier owners |
 | `psfn-framework-s10mc.1` | W1 gateway multiplexing — code-complete @ `bcca5c20` (+ per-account Discord @ `eda410a4`); remainder split into `s10f1`/`s10f2` |
 | `psfn-framework-s10mc.2` | W2 Postgres tenancy — schema plumbing @ `ee375e39`, backups @ `75abf583`; **open**: flagship cutover off `public`, shard schema derivation |
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W8; W9 certification is in progress at `b4ff8709`; not merged to the release branch or live-tested |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — **closed** 2026-07-14: all nine children closed; final integrated certification at `d8dd6ba4` passed 10 real-process + 2 fixture cases, 346 proportional tests, settings-contract, lint, ESM+DTS build, and backup/restore; not yet merged to the release branch or live-tested |
 | `psfn-framework-s10mc.6.5` | W5 initiation sources — **closed** 2026-07-14: integrated with W6 at `2599c2f5`; merged seam passed 32 focused files / 609 tests (including real Postgres integration), lint, and build |
 | `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — **closed** 2026-07-14: both fresh reviews passed at `72238bc8`, follow-up beads fixed, two clean full-suite exits on the merged tree |
-| `psfn-framework-s10mc.6.9` | W9 two-real-agent certification — **in progress** at `b4ff8709`; post-restart recipient turn-record P1 is fixed and closed, final certification matrix remains |
+| `psfn-framework-s10mc.6.9` | W9 two-real-agent certification — **closed** 2026-07-14 at integrated verification point `d8dd6ba4`; 10 real-process + 2 fixture cases and 12 affected files / 346 tests passed; report-only hygiene/whitespace observations recorded in the close reason |
 | `psfn-framework-1lxi` | P1 post-restart recipient turn-record persistence — **closed** 2026-07-14 at `b4ff8709`; exact real-process regression, 362 proportional tests, lint, ESM+DTS build, and diff checks passed |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |

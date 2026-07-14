@@ -6203,6 +6203,106 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
+  it('flushes a deferred intention whisper on the next fresh ordinary steer turn without a real inbound message', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+
+    await agent.followUp(makeMessage({
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      content: 'Take a breath before answering.',
+    }));
+    // Deferred, not enqueued: no ordinary run was active to coalesce into.
+    expect(followUpSpy).not.toHaveBeenCalled();
+
+    // A coordinator-created fresh ordinary steer turn — not public handleMessage —
+    // must flush the pending whisper.
+    await agent.steer(makeMessage({ id: 'fresh-steer-flush', content: 'unrelated fresh steer' }));
+
+    expect(followUpSpy).toHaveBeenCalledTimes(1);
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'custom',
+      type: 'internalWhisper',
+      messageClass: MESSAGE_CLASSES.internalWhisper,
+      speakerName: 'Whisper',
+      content: 'Take a breath before answering.',
+    }));
+
+    followUpSpy.mockRestore();
+  });
+
+  it('never lets a deferred whisper enter a candidate turn, delivering it only on the next fresh ordinary turn', async () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test',
+      makeConfig({ capabilityTier: 'autonomous' }),
+    );
+    agent.registerTool(withCapabilityRequirement(
+      makeExtendedProbeTool('notify'),
+      'external.companion',
+    ), 'extended');
+    const nowMs = Date.now();
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '81111111-1111-4111-8111-111111111111',
+      rootInitiationId: '82222222-2222-4222-8222-222222222222',
+      localCompanionId: '8aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'whisper-isolation-peer',
+      peerCompanionId: '8bbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:81111111-1111-4111-8111-111111111111',
+      reasonSummary: 'A pending whisper must never join a candidate turn.',
+      continuationTaskKind: 'research',
+      createdAtMs: nowMs - 1_000,
+      expiresAtMs: nowMs + 60_000,
+      status: 'permitted',
+      revision: 1,
+    };
+    const permit: IcpInitiationPermit = {
+      permitId: '84444444-4444-4444-8444-444444444444',
+      candidateId: candidate.candidateId,
+      conversationId: '85555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: nowMs - 500,
+      expiresAtMs: nowMs + 60_000,
+      status: 'issued',
+      revision: 1,
+    };
+    const candidateMessage = createIcpAutonomyCandidateSchedulerMessage({ candidate, permit });
+
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+
+    await agent.followUp(makeMessage({
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      content: 'Do not leak into the candidate scope.',
+    }));
+    expect(followUpSpy).not.toHaveBeenCalled();
+
+    // The candidate turn runs to completion. It must neither flush the whisper
+    // (which would enqueue it into the candidate-owned run) nor refuse on a
+    // non-empty raw queue — the deferred whisper never touched the raw queue.
+    await expect(agent.handleIcpAutonomyCandidateTurn(candidateMessage)).resolves.toBeDefined();
+    expect(followUpSpy).not.toHaveBeenCalled();
+
+    // The whisper is not silently dropped: the next fresh ordinary turn delivers it.
+    await agent.steer(makeMessage({ id: 'post-candidate-fresh-steer', content: 'after candidate' }));
+    expect(followUpSpy).toHaveBeenCalledTimes(1);
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'custom',
+      type: 'internalWhisper',
+      content: 'Do not leak into the candidate scope.',
+    }));
+
+    followUpSpy.mockRestore();
+  });
+
   it('runs an idle runtime-authored follow-up as an attributed ordinary system turn', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(

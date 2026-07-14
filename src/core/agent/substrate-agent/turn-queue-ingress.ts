@@ -67,6 +67,10 @@ export class TurnQueueIngressCoordinator {
     });
     await predecessor;
     try {
+      // Coordinator-created fresh ordinary turns must flush deferred internal
+      // whispers too; otherwise a fresh-turn-only sequence (idle steer/followUp)
+      // never delivers a whisper that public handleMessage would have flushed.
+      this.enqueuePendingInternalFollowUpsForOrdinaryRun();
       await this.options.runFreshOrdinary(message);
     } finally {
       release();

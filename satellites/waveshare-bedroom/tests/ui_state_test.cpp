@@ -35,14 +35,17 @@ int main() {
   result = state.handle(Gesture::Tap, 180, 170, 1'500);
   assert(result.action == InteractionAction::None);
 
-  result = state.handle(Gesture::Tap, 180, 170, 2'000);
-  assert(result.action == InteractionAction::Headpat);
-
-  result = state.handle(Gesture::Tap, 20, 20, 3'500);
+  result = state.handle(Gesture::Tap, 180, 170, 3'999);
   assert(result.action == InteractionAction::None);
 
-  state.handle(Gesture::SwipeLeft, 0, 0, 4'000);
-  result = state.handle(Gesture::Tap, 180, 170, 5'000);
+  result = state.handle(Gesture::Tap, 180, 170, 4'000);
+  assert(result.action == InteractionAction::Headpat);
+
+  result = state.handle(Gesture::Tap, 20, 20, 4'500);
+  assert(result.action == InteractionAction::None);
+
+  state.handle(Gesture::SwipeLeft, 0, 0, 5'000);
+  result = state.handle(Gesture::Tap, 180, 170, 6'000);
   assert(result.page == Page::Devices);
   assert(result.action == InteractionAction::None);
 }

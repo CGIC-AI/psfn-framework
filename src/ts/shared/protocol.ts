@@ -9,6 +9,7 @@ export type ClientToHubMessage =
   | RelayTtsRequestMessage
   | TurnStartMessage
   | TurnEndMessage
+  | TouchInteractionMessage
   | ApprovalDecisionMessage
   | ArtifactPreviewRequestMessage;
 
@@ -97,6 +98,18 @@ export interface TurnStartMessage {
 export interface TurnEndMessage {
   type: "turn.end";
   reason: string;
+}
+
+export type TouchStimulusKind = "headpat" | "petting" | "hug" | "kiss";
+
+export type TouchRegion = "head" | "cheek" | "body";
+
+export interface TouchInteractionMessage {
+  type: "touch.interaction";
+  kind: TouchStimulusKind;
+  region: TouchRegion;
+  count: number;
+  durationMs: number;
 }
 
 export interface SessionReadyMessage {
@@ -297,6 +310,7 @@ export type SatelliteControlCapability =
   | "sleep_wake"
   | "presence"
   | "session_attach"
+  | "touch"
   | "approvals";
 
 export type SatelliteSafetyCapability =

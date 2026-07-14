@@ -29,7 +29,7 @@ struct InteractionResult {
 
 class UiState {
  public:
-  static constexpr std::uint32_t kHeadpatDebounceMs = 1'000;
+  static constexpr std::uint32_t kHeadpatDebounceMs = 3'000;
 
   [[nodiscard]] Page page() const { return page_; }
 

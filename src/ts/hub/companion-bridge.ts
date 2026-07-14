@@ -6,6 +6,8 @@ import type {
   ArtifactCreatedMessage,
   ToolActivityMessage,
   ToolActivityPhase,
+  TouchRegion,
+  TouchStimulusKind,
 } from "../shared/protocol.js";
 
 export type CompanionEvent =
@@ -133,6 +135,58 @@ export class CompanionBridge {
     const id = readRequiredString(payload.id, "approval decision response id");
     const status = readRequiredString(payload.status, "approval decision response status");
     return { id, status };
+  }
+
+  async submitTouchStimulus(input: {
+    sessionId: string;
+    deviceId: string;
+    kind: TouchStimulusKind;
+    region: TouchRegion;
+    count: number;
+    durationMs: number;
+    responseMode: "respond" | "observe";
+  }): Promise<{ status: "accepted"; messageId: string; response?: string }> {
+    const response = await fetch(`${this.config.baseUrl}/companion/stimuli`, {
+      method: "POST",
+      headers: {
+        ...this.buildHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...this.config.identity,
+        sessionId: input.sessionId,
+        deviceId: input.deviceId,
+        kind: input.kind,
+        region: input.region,
+        count: input.count,
+        durationMs: input.durationMs,
+        responseMode: input.responseMode,
+      }),
+    });
+    if (!response.ok) {
+      const body = (await response.text()).trim();
+      throw new CompanionRequestError(
+        response.status,
+        `Companion touch stimulus failed (${response.status})${body ? `: ${body}` : ""}`,
+      );
+    }
+    const payload = await response.json() as {
+      status?: unknown;
+      messageId?: unknown;
+      response?: unknown;
+    };
+    if (payload.status !== "accepted") {
+      throw new Error("Companion touch stimulus response status must be 'accepted'");
+    }
+    const messageId = readRequiredString(payload.messageId, "touch stimulus response messageId");
+    const responseText = payload.response === undefined
+      ? undefined
+      : readRequiredString(payload.response, "touch stimulus response text");
+    return {
+      status: "accepted",
+      messageId,
+      ...(responseText ? { response: responseText } : {}),
+    };
   }
 
   async fetchArtifactPreview(artifactId: string): Promise<{ mediaType: string; dataBase64: string }> {

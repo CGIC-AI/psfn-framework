@@ -14,6 +14,7 @@ import {
   type HubToClientMessage,
   type RuntimeIdentity,
   type SatelliteCapabilities,
+  type TouchInteractionMessage,
 } from "../shared/protocol.js";
 import {
   appendEvent,
@@ -42,6 +43,7 @@ import {
   canReceiveArtifacts,
   canReceiveStreamingAudio,
   canReceiveToolActivity,
+  canSendTouchInteractions,
   canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
   EmbodiedSessionRegistry,
@@ -403,6 +405,9 @@ class RealtimeConnection {
       case "approval.decision":
         await this.handleApprovalDecision(message);
         return;
+      case "touch.interaction":
+        await this.handleTouchInteraction(message);
+        return;
       case "artifact.preview":
         await this.handleArtifactPreviewRequest(message);
         return;
@@ -417,6 +422,66 @@ class RealtimeConnection {
   private async resolveRuntimeIdentity(): Promise<RuntimeIdentity | undefined> {
     this.identityTask ??= this.loadRuntimeIdentity();
     return this.identityTask;
+  }
+
+  private async handleTouchInteraction(message: TouchInteractionMessage): Promise<void> {
+    if (!canSendTouchInteractions(this.capabilities)) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Satellite did not advertise the touch capability" },
+      });
+      return;
+    }
+    if (!this.companion) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Companion touch bridge is not configured" },
+      });
+      return;
+    }
+    if (
+      !["headpat", "petting", "hug", "kiss"].includes(message.kind)
+      || !["head", "cheek", "body"].includes(message.region)
+      || !Number.isInteger(message.count)
+      || message.count < 1
+      || message.count > 20
+      || !Number.isInteger(message.durationMs)
+      || message.durationMs < 0
+      || message.durationMs > 60_000
+    ) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Touch interaction payload is invalid" },
+      });
+      return;
+    }
+
+    try {
+      const result = await this.companion.submitTouchStimulus({
+        sessionId: this.sessionId,
+        deviceId: this.deviceId,
+        kind: message.kind,
+        region: message.region,
+        count: message.count,
+        durationMs: message.durationMs,
+        responseMode: "respond",
+      });
+      if (result.response) {
+        await this.send({
+          type: "message",
+          data: {
+            role: "assistant",
+            content: result.response,
+            final: true,
+          },
+        });
+      }
+    } catch (error) {
+      const messageText = error instanceof CompanionRequestError && error.status === 429
+        ? "Touch interaction is cooling down"
+        : "Touch interaction delivery failed";
+      await this.send({ type: "error-event", data: { message: messageText } });
+    }
   }
 
   private async loadRuntimeIdentity(): Promise<RuntimeIdentity | undefined> {

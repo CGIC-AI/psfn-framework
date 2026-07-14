@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -25,6 +25,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Respond in one short, spoken-friendly sentence unless the user explicitly asks for more. "
     "Do not call tools. Do not add preambles, summaries, or extra reassurance."
 )
+
+TouchKind = Literal["headpat", "petting", "hug", "kiss"]
+TouchRegion = Literal["head", "cheek", "body"]
+TouchResponseMode = Literal["respond", "observe"]
 
 
 class PsfnStreamingProvider:
@@ -106,6 +110,43 @@ class PsfnStreamingProvider:
                 final_text = response_text.strip() or "I don't have a response yet."
                 updated_history = [*prior_history, {"role": "user", "content": text}, {"role": "assistant", "content": final_text}]
                 await self._set_history(conversation_id, updated_history)
+
+    async def submit_touch_stimulus(
+        self,
+        *,
+        conversation_id: str,
+        kind: TouchKind,
+        region: TouchRegion,
+        count: int,
+        duration_ms: int,
+        response_mode: TouchResponseMode,
+    ) -> dict[str, str]:
+        payload = {
+            "satelliteId": self._claim_config.satellite_id,
+            "endpointId": self._claim_config.endpoint_id,
+            "claimType": self._claim_config.type,
+            "sessionId": conversation_id,
+            "deviceId": self._claim_config.endpoint_id,
+            "kind": kind,
+            "region": region,
+            "count": count,
+            "durationMs": duration_ms,
+            "responseMode": response_mode,
+        }
+        response = await self._client.post(
+            "/companion/stimuli",
+            json=payload,
+            headers=self._request_headers,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(_format_http_error(response))
+        data = response.json()
+        if not isinstance(data, dict) or data.get("status") != "accepted" or not isinstance(data.get("messageId"), str):
+            raise RuntimeError("PSFN companion stimulus returned an invalid response")
+        result = {"status": "accepted", "messageId": data["messageId"]}
+        if isinstance(data.get("response"), str):
+            result["response"] = data["response"]
+        return result
 
     async def aclose(self) -> None:
         if self._owns_client:

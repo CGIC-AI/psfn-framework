@@ -16,7 +16,7 @@
     "studio:dev": "npm run studio:build && node scripts/serve-device-studio.mjs",
     "studio:smoke:sprites": "npm run studio:build && node scripts/smoke-device-studio-sprite-editor.mjs",
     "studio:sprites": "npm run build:ts && node dist/ts/device-studio/sprite-cli.js",
-    "test:firmware": "c++ -std=c++17 -Wall -Wextra -Werror -pedantic satellites/waveshare-bedroom/tests/ui_state_test.cpp -o /tmp/psfn-waveshare-ui-state-test && /tmp/psfn-waveshare-ui-state-test",
+    "test:firmware": "npm run firmware:prepare:waveshare-bedroom && node --test satellites/waveshare-bedroom/tests/firmware_wiring.test.mjs && c++ -std=c++17 -Wall -Wextra -Werror -pedantic satellites/waveshare-bedroom/tests/ui_state_test.cpp -o /tmp/psfn-waveshare-ui-state-test && /tmp/psfn-waveshare-ui-state-test",
     "test:ts": "npm run build:ts && node --test dist/ts/**/*.test.js",
     "check:ts": "tsc -p tsconfig.json --noEmit"
   },

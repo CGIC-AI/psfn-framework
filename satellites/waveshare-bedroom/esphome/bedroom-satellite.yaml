@@ -43,6 +43,21 @@ image:
     type: RGB565
     transparency: alpha_channel
 
+binary_sensor:
+  - platform: template
+    id: headpat_signal
+    name: Headpat
+
+script:
+  - id: headpat_feedback
+    mode: restart
+    then:
+      - lvgl.widget.show: headpat_feedback_label
+      - delay: 100ms
+      - lambda: id(headpat_signal).publish_state(false);
+      - delay: 600ms
+      - lvgl.widget.hide: headpat_feedback_label
+
 api:
   encryption:
     key: !secret api_encryption_key

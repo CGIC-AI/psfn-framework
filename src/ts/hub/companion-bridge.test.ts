@@ -31,6 +31,13 @@ const APPROVAL_CAPABILITIES: SatelliteCapabilities = {
   safety: [],
 };
 
+const TOUCH_CAPABILITIES: SatelliteCapabilities = {
+  input: ["text"],
+  output: ["text", "subtitle"],
+  control: ["interrupt", "session_attach", "touch"],
+  safety: [],
+};
+
 const PLAIN_CAPABILITIES: SatelliteCapabilities = {
   input: ["text"],
   output: ["text", "subtitle"],
@@ -258,6 +265,54 @@ test("companion bridge proxies approval decisions and surfaces backplane failure
   }
 });
 
+test("companion bridge submits typed touch stimuli with its registered identity", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+
+  try {
+    backplane.stimulusResponse = {
+      status: 200,
+      body: JSON.stringify({
+        status: "accepted",
+        messageId: "stimulus-1",
+        response: "Purrsephone smiles.",
+      }),
+    };
+    const result = await bridge.submitTouchStimulus({
+      sessionId: "bedroom",
+      deviceId: "waveshare-bedroom",
+      kind: "headpat",
+      region: "head",
+      count: 1,
+      durationMs: 0,
+      responseMode: "respond",
+    });
+
+    assert.deepEqual(result, {
+      status: "accepted",
+      messageId: "stimulus-1",
+      response: "Purrsephone smiles.",
+    });
+    assert.deepEqual(backplane.stimulusRequests, [{
+      authorization: "Bearer companion-key",
+      body: {
+        ...TEST_IDENTITY,
+        sessionId: "bedroom",
+        deviceId: "waveshare-bedroom",
+        kind: "headpat",
+        region: "head",
+        count: 1,
+        durationMs: 0,
+        responseMode: "respond",
+      },
+    }]);
+  } finally {
+    await bridge.stop();
+    await backplane.stop();
+  }
+});
+
 test("companion bridge enforces the artifact preview size cap and relays denials", async () => {
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
@@ -370,6 +425,102 @@ test("hub relays companion events only to satellites that advertised the matchin
   } finally {
     await capable?.close();
     await plain?.close();
+    await server.close();
+    await backplane.stop();
+  }
+});
+
+test("hub forwards a capable client's typed touch interaction and relays the companion response", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  backplane.stimulusResponse = {
+    status: 200,
+    body: JSON.stringify({
+      status: "accepted",
+      messageId: "stimulus-1",
+      response: "Mmm, bedtime headpats.",
+    }),
+  };
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const server = new RealtimeHubServer(testHubConfig(), {
+    agent: new FakeAgent(),
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+  });
+  let client: TestClient | null = null;
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "companion-app", TOUCH_CAPABILITIES);
+    client.clearMessages();
+    client.send({
+      type: "touch.interaction",
+      kind: "headpat",
+      region: "head",
+      count: 1,
+      durationMs: 0,
+    });
+
+    await waitFor(() => backplane.stimulusRequests.length === 1, "touch stimulus forwarding");
+    assert.deepEqual(backplane.stimulusRequests[0]?.body, {
+      ...TEST_IDENTITY,
+      sessionId: "companion-test:companion-app",
+      deviceId: "companion-app-device",
+      kind: "headpat",
+      region: "head",
+      count: 1,
+      durationMs: 0,
+      responseMode: "respond",
+    });
+    assert.deepEqual(await client.waitForMessage("message"), {
+      type: "message",
+      data: {
+        role: "assistant",
+        content: "Mmm, bedtime headpats.",
+        final: true,
+      },
+    });
+  } finally {
+    await client?.close();
+    await server.close();
+    await backplane.stop();
+  }
+});
+
+test("hub rejects touch interactions from clients without the touch capability", async () => {
+  const backplane = new FakeBackplane();
+  const baseUrl = await backplane.start();
+  const bridge = new CompanionBridge(bridgeConfig(baseUrl));
+  const server = new RealtimeHubServer(testHubConfig(), {
+    agent: new FakeAgent(),
+    voxtaTts: null,
+    voxtaStt: null,
+    companion: bridge,
+  });
+  let client: TestClient | null = null;
+
+  try {
+    await server.start();
+    const port = (server.address() as AddressInfo).port;
+    client = await TestClient.connect(port, "plain-speaker", PLAIN_CAPABILITIES);
+    client.send({
+      type: "touch.interaction",
+      kind: "headpat",
+      region: "head",
+      count: 1,
+      durationMs: 0,
+    });
+
+    const error = await client.waitForMessage("error-event");
+    assert.match(
+      (error as Extract<HubToClientMessage, { type: "error-event" }>).data.message,
+      /did not advertise the touch capability/,
+    );
+    assert.equal(backplane.stimulusRequests.length, 0);
+  } finally {
+    await client?.close();
     await server.close();
     await backplane.stop();
   }
@@ -651,7 +802,12 @@ class FakeBackplane {
     contentType: "application/json",
     body: Buffer.from("{\"error\":\"not found\"}"),
   };
+  stimulusResponse: { status: number; body: string } = {
+    status: 200,
+    body: JSON.stringify({ status: "accepted", messageId: "stimulus-1" }),
+  };
   readonly approvalRequests: Array<{ id: string; authorization?: string; body: unknown }> = [];
+  readonly stimulusRequests: Array<{ authorization?: string; body: unknown }> = [];
   readonly previewRequests: string[] = [];
   sseConnectionCount = 0;
   lastEventsAuthorization: string | undefined;
@@ -731,6 +887,16 @@ class FakeBackplane {
       });
       response.writeHead(this.approvalResponse.status, { "Content-Type": "application/json" });
       response.end(this.approvalResponse.body);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/companion/stimuli") {
+      const body = await readBody(request);
+      this.stimulusRequests.push({
+        authorization: request.headers.authorization,
+        body: JSON.parse(body),
+      });
+      response.writeHead(this.stimulusResponse.status, { "Content-Type": "application/json" });
+      response.end(this.stimulusResponse.body);
       return;
     }
     const previewMatch = url.pathname.match(/^\/companion\/artifacts\/([^/]+)\/preview$/);

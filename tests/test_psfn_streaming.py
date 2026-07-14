@@ -170,3 +170,75 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
 
     await provider.aclose()
     await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_provider_submits_typed_headpat_to_companion_stimuli_route() -> None:
+    captured: list[tuple[str, str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append((
+            request.url.path,
+            request.headers.get("authorization", ""),
+            json.loads(request.content.decode("utf-8")),
+        ))
+        return httpx.Response(
+            200,
+            json={
+                "status": "accepted",
+                "messageId": "companion-stimulus-1",
+                "response": "Mmm, bedtime headpats.",
+            },
+            request=request,
+        )
+
+    client = httpx.AsyncClient(
+        base_url="http://psfn.test/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    provider = PsfnStreamingProvider(
+        api_base_url="http://psfn.test/v1",
+        api_key="satellite-secret",
+        model_name="psfn",
+        claim_config=normalize_claim_config(
+            capability_profile="voice-only",
+            satellite_id="bedroom",
+            endpoint_id="waveshare-bedroom",
+            display_name="Purrsephone Bedroom",
+        ),
+        client=client,
+    )
+
+    result = await provider.submit_touch_stimulus(
+        conversation_id="bedroom",
+        kind="headpat",
+        region="head",
+        count=1,
+        duration_ms=0,
+        response_mode="respond",
+    )
+
+    assert result == {
+        "status": "accepted",
+        "messageId": "companion-stimulus-1",
+        "response": "Mmm, bedtime headpats.",
+    }
+    assert captured == [(
+        "/v1/companion/stimuli",
+        "Bearer satellite-secret",
+        {
+            "satelliteId": "bedroom",
+            "endpointId": "waveshare-bedroom",
+            "claimType": "voice-only",
+            "sessionId": "bedroom",
+            "deviceId": "waveshare-bedroom",
+            "kind": "headpat",
+            "region": "head",
+            "count": 1,
+            "durationMs": 0,
+            "responseMode": "respond",
+        },
+    )]
+
+    await provider.aclose()
+    await client.aclose()

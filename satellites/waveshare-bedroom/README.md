@@ -26,7 +26,11 @@ routing, TTS, endpoint authentication, and bounded Home Assistant control.
 The first UI uses replaceable pixel-art states for idle, listening, thinking,
 speaking, and error. Wake detection immediately raises the backlight to full
 brightness and shows a purple `Listening...` label over Purrsephone's idle
-sprite. A deliberate tap on the head is a headpat. Horizontal
+sprite. A deliberate tap on the head is a headpat. The device gives immediate
+local feedback, emits one native-API pulse to Satellite Hub, and suppresses
+additional headpats for three seconds. Hub forwards the typed interaction to
+PSFN's authenticated companion stimulus ingress; PSFN independently enforces
+the same cooldown and authors the descriptive primary-user message. Horizontal
 swipes enter a bedroom-device carousel; only configured room affordances may be
 controlled.
 

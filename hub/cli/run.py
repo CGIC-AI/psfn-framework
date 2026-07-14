@@ -11,6 +11,12 @@ from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
 from hub.devices.esphome_session import ESPHomeSession
+from hub.devices.interaction_runtime import (
+    ESPHomeInteractionRecorder,
+    SatelliteInteraction,
+    deliver_interaction,
+    find_headpat_signal_key,
+)
 from hub.devices.realtime_server import RealtimeVoiceServer
 from hub.devices.voice_runtime_streaming import StreamingVoiceAssistantRuntime
 from hub.media.http_audio import StaticAudioServer
@@ -41,6 +47,20 @@ async def _run_esphome_runtime(
         claim_config=config.psfn_satellite_claim,
         client_certificate=config.psfn_client_certificate,
     )
+    interaction_tasks: set[asyncio.Task[None]] = set()
+
+    async def deliver_headpat(interaction: SatelliteInteraction) -> None:
+        try:
+            result = await deliver_interaction(
+                interaction,
+                submitter=agent,
+                conversation_id=config.voice_conversation_id,
+            )
+            response = result.get("response", "").strip()
+            detail = f": {response}" if response else ""
+            typer.echo(f"Headpat delivered to Purrsephone{detail}")
+        except Exception as exc:
+            typer.echo(f"Headpat delivery failed: {exc}")
 
     try:
         while True:
@@ -52,6 +72,26 @@ async def _run_esphome_runtime(
                         (entity.key for entity in entities if isinstance(entity, MediaPlayerInfo)),
                         None,
                     )
+                    headpat_signal_key = find_headpat_signal_key(entities)
+                    if headpat_signal_key is not None:
+                        interaction_recorder = ESPHomeInteractionRecorder(
+                            headpat_signal_key=headpat_signal_key,
+                            endpoint_id=config.psfn_satellite_claim.endpoint_id,
+                            artifacts_root=config.artifacts_root,
+                        )
+
+                        def handle_interaction_state(state) -> None:
+                            interaction = interaction_recorder.handle_state(state)
+                            if interaction is not None:
+                                typer.echo(
+                                    f"Interaction received: {interaction.interaction_type} "
+                                    f"from {interaction.endpoint_id}",
+                                )
+                                task = asyncio.create_task(deliver_headpat(interaction))
+                                interaction_tasks.add(task)
+                                task.add_done_callback(interaction_tasks.discard)
+
+                        session.subscribe_states(handle_interaction_state)
                     runtime = StreamingVoiceAssistantRuntime(
                         session=session,
                         stt=stt,
@@ -92,6 +132,10 @@ async def _run_esphome_runtime(
                 continue
             await asyncio.sleep(2)
     finally:
+        for task in interaction_tasks:
+            task.cancel()
+        if interaction_tasks:
+            await asyncio.gather(*interaction_tasks, return_exceptions=True)
         audio_server.stop()
         await agent.aclose()
         await stt.aclose()

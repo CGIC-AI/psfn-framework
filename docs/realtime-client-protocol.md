@@ -155,13 +155,14 @@ must be capability-gated through `hello`, versioned, typed in
 `src/ts/shared/protocol.ts`, documented here, and covered by focused protocol
 tests.
 
-## Companion Approvals, Artifacts, And Tool Activity
+## Companion Touch, Approvals, Artifacts, And Tool Activity
 
 The hub can bridge a PSFN companion backplane (`PSFN_COMPANION_BASE_URL`) into
 the realtime websocket path. The backplane endpoints live on the same gateway
 API edge as `/v1/chat/completions`, so the base URL is typically the same
-`<gateway>/v1` value as `PSFN_API_BASE_URL`. PSFN owns approvals, artifacts,
-and tool events; the hub only relays the redacted payloads PSFN emits and
+`<gateway>/v1` value as `PSFN_API_BASE_URL`. PSFN owns touch ingestion,
+approvals, artifacts, and tool events; the hub only relays typed requests or
+the redacted payloads PSFN emits and
 proxies decisions and preview reads back. If the backplane is unconfigured or
 unreachable, the hub relays nothing and rejects the client requests below —
 there is no fake or cached data.
@@ -180,6 +181,7 @@ closed.
 
 All of these message families are capability-gated through `hello`:
 
+- `touch.interaction` requires the `touch` control capability.
 - `approval.requested` / `approval.resolved` and the `approval.decision`
   request require the `approvals` control capability.
 - `artifact.created`, `artifact.preview`, `artifact.preview.result`, and
@@ -189,6 +191,24 @@ All of these message families are capability-gated through `hello`:
 A satellite that did not advertise the matching capability receives none of
 the hub-to-client events, and its `approval.decision` is rejected with an
 `error-event`.
+
+### Client To Hub Touch
+
+```json
+{
+  "type": "touch.interaction",
+  "kind": "headpat",
+  "region": "head",
+  "count": 12,
+  "durationMs": 1100
+}
+```
+
+`kind` is `headpat`, `petting`, `hug`, or `kiss`; `region` is `head`, `cheek`,
+or `body`. Counts are limited to 1–20 and duration to 0–60000 ms. Clients must
+coalesce rapid taps before sending. The Hub sends no caller-authored prose:
+PSFN validates the enum payload, applies an independent cooldown, and authors
+the primary-user description.
 
 ### Hub To Client
 

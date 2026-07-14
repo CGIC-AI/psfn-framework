@@ -168,6 +168,10 @@ export function canUseApprovals(capabilities: SatelliteCapabilities): boolean {
   return Boolean(capabilities.control?.includes("approvals"));
 }
 
+export function canSendTouchInteractions(capabilities: SatelliteCapabilities): boolean {
+  return Boolean(capabilities.control?.includes("touch"));
+}
+
 export function canReceiveArtifacts(capabilities: SatelliteCapabilities): boolean {
   return Boolean(capabilities.output?.includes("artifact"));
 }

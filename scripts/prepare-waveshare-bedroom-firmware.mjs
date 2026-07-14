@@ -119,11 +119,31 @@ replaceRequired(
   "media amplifier enable",
 );
 
+// The repo-owned headpat reducer used to be included in the build without any
+// runtime caller. Dispatch initial CST816 touches while the idle face is
+// visible, then keep both the local feedback and native-API signal behind the
+// reducer's hit target and debounce.
+replaceRequired(
+  "    on_touch:\n      - script.execute: backlight_timer\n      - if:\n          condition:\n            runtime_controller.is_active:\n              id: runtime\n              activity: timer_ringing\n          then:\n            - runtime_controller.event:\n                id: runtime\n                event: timer_stopped\n",
+  "    on_touch:\n      - script.execute: backlight_timer\n      - lambda: |-\n          if (id(current_mode) != 0 ||\n              id(voice_assistant_phase) != ${voice_assist_idle_phase_id}) {\n            return;\n          }\n          static psfn::satellite::UiState headpat_state;\n          const auto result = headpat_state.handle(\n              psfn::satellite::Gesture::Tap, touch.x, touch.y, millis());\n          if (result.action == psfn::satellite::InteractionAction::Headpat) {\n            id(headpat_feedback).execute();\n            id(headpat_event).trigger(\"headpat\");\n          }\n      - if:\n          condition:\n            runtime_controller.is_active:\n              id: runtime\n              activity: timer_ringing\n          then:\n            - runtime_controller.event:\n                id: runtime\n                event: timer_stopped\n",
+  "touchscreen headpat dispatch",
+);
+replaceRequired(
+  'id(headpat_event).trigger("headpat");',
+  "id(headpat_signal).publish_state(true);",
+  "headpat native-API signal",
+);
+
 // Preserve the upstream widget IDs and lifecycle scripts while replacing its
 // borrowed character art with the repo-owned Purrsephone state sprites.
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
 if (!idleAnimation.test(profile)) throw new Error("Prepared profile is missing the idle animation");
 profile = profile.replace(idleAnimation, "$1              - purrsephone_idle\n$2");
+replaceRequired(
+  "            duration: 6600ms\n            auto_start: false\n",
+  "            duration: 6600ms\n            auto_start: false\n        - label:\n            id: headpat_feedback_label\n            text: \"Headpat!\"\n            align: BOTTOM_MID\n            y: -22\n            text_font: montserrat_20\n            text_color: 0xC084FC\n            hidden: true\n",
+  "idle headpat feedback label",
+);
 replaceRequired(
   "src: assistant_gui_listening",
   "src: purrsephone_idle\n        - label:\n            text: \"Listening...\"\n            align: BOTTOM_MID\n            y: -18\n            text_font: montserrat_20\n            text_color: 0x8B5CF6",

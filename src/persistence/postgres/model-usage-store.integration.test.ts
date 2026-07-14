@@ -161,6 +161,153 @@ afterAll(async () => {
 }, INTEGRATION_TIMEOUT_MS);
 
 describe('PostgresModelUsageStore reconciliation', () => {
+  it('runs one tenant-scoped analytics grammar across DST buckets, groups, cursors, and export', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-analytics-contract',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const store = new PostgresModelUsageStore(pool, { companionId: 'analytics-companion' });
+    const sinceMs = Date.parse('2026-03-08T05:00:00.000Z');
+    const untilMs = Date.parse('2026-03-09T04:00:00.000Z');
+    const event = (
+      id: string,
+      recordedAtMs: number,
+      provider: string,
+      status: 'success' | 'failure',
+      totalCost: number,
+    ): ModelUsageEventInput => ({
+      logicalCallId: id,
+      recordedAtMs,
+      startedAtMs: recordedAtMs - 250,
+      completedAtMs: recordedAtMs,
+      durationMs: 250,
+      ttftMs: 50,
+      status,
+      settlement: status === 'success' ? 'complete' : 'partial',
+      callKind: 'chat',
+      attribution: {
+        companionId: 'analytics-companion',
+        channelId: `${provider}-channel`,
+        channelType: 'api',
+        callType: 'chat',
+        purpose: 'analytics-contract',
+      },
+      provider,
+      model: `${provider}-model`,
+      inputTokens: 10,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 2,
+      outputTokens: 5,
+      totalTokens: 20,
+      providerCost: {
+        input: totalCost / 4,
+        cacheRead: totalCost / 4,
+        cacheWrite: totalCost / 4,
+        output: totalCost / 4,
+        total: totalCost,
+      },
+      effectiveCost: {
+        input: totalCost / 4,
+        cacheRead: totalCost / 4,
+        cacheWrite: totalCost / 4,
+        output: totalCost / 4,
+        total: totalCost,
+      },
+      costSource: 'provider',
+      currency: 'USD',
+    });
+
+    try {
+      await store.recordUsageEvent(event('analytics-a', sinceMs + 30 * 60_000, 'provider-a', 'success', 0.03));
+      await store.recordUsageEvent(event('analytics-b', sinceMs + 2.5 * 60 * 60_000, 'provider-b', 'failure', 0.02));
+      await store.recordUsageEvent(event('analytics-c', sinceMs + 10 * 60 * 60_000, 'provider-c', 'success', 0.01));
+
+      const query = {
+        range: 'custom' as const,
+        sinceMs,
+        untilMs,
+        timezone: 'America/New_York',
+        bucket: 'hour' as const,
+        groupBy: ['provider', 'status'] as ModelUsageGroupDimension[],
+        topN: 1,
+        limit: 2,
+      };
+      const first = await store.getUsageData(query);
+      expect(first.resolvedRange).toMatchObject({
+        sinceMs,
+        untilMs,
+        timezone: 'America/New_York',
+        bucket: 'hour',
+        boundary: '[sinceMs, untilMs)',
+      });
+      expect(first.totals).toMatchObject({
+        calls: 3,
+        successfulCalls: 2,
+        failedCalls: 1,
+        inputTokens: 30,
+        cacheReadTokens: 9,
+        cacheWriteTokens: 6,
+        outputTokens: 15,
+        totalTokens: 60,
+        providerCostUsd: 0.06,
+        totalCostUsd: 0.06,
+        totalDurationMs: 750,
+        averageTtftMs: 50,
+      });
+      expect(first.totals.providerCost).toMatchObject({
+        inputUsd: 0.015,
+        inputKnownCalls: 3,
+        cacheReadUsd: 0.015,
+        cacheWriteUsd: 0.015,
+        outputUsd: 0.015,
+        totalKnownCalls: 3,
+      });
+      expect(first.timeSeries).toHaveLength(23);
+      expect(first.timeSeries.reduce((sum, bucket) => sum + bucket.calls, 0)).toBe(3);
+      expect(first.timeSeries.filter(bucket => bucket.calls === 0)).toHaveLength(20);
+      expect(first.groups).toHaveLength(2);
+      expect(first.groups[0]).toMatchObject({
+        dimensions: { provider: 'provider-a', status: 'success' },
+        isOther: false,
+        metrics: { calls: 1, totalCostUsd: 0.03 },
+      });
+      expect(first.groups[1]).toMatchObject({ isOther: true, metrics: { calls: 2, totalCostUsd: 0.03 } });
+      expect(first.groups.reduce((sum, group) => sum + group.metrics.calls, 0)).toBe(first.totals.calls);
+
+      const ascending = await store.getUsageData({
+        ...query,
+        sortBy: 'effectiveCostUsd',
+        sortDirection: 'asc',
+      });
+      expect(ascending.groups[0]).toMatchObject({
+        dimensions: { provider: 'provider-c', status: 'success' },
+        metrics: { totalCostUsd: 0.01 },
+      });
+
+      expect(first.eventPage.items.map(item => item.id)).toEqual(['analytics-c:0', 'analytics-b:0']);
+      expect(first.eventPage.hasMore).toBe(true);
+      const second = await store.getUsageData({ ...query, cursor: first.eventPage.nextCursor ?? undefined });
+      expect(second.eventPage.items.map(item => item.id)).toEqual(['analytics-a:0']);
+      expect(second.eventPage.hasMore).toBe(false);
+      await expect(store.getUsageData({ ...query, provider: 'different', cursor: first.eventPage.nextCursor ?? undefined }))
+        .rejects.toThrow('cursor');
+
+      const expensive = await store.getUsageData({ ...query, eventOrder: 'expensive' });
+      expect(expensive.eventPage.items.map(item => item.id)).toEqual(['analytics-a:0', 'analytics-b:0']);
+
+      const exported = await store.exportUsageEvents(query);
+      expect(exported.rows.map(row => row.id)).toEqual(['analytics-a:0', 'analytics-b:0', 'analytics-c:0']);
+      expect(exported.rows[0]).not.toHaveProperty('metadata');
+      expect(exported.rows[0]).not.toHaveProperty('errorMessage');
+      expect((await store.getUsageData({ ...query, provider: "provider-a' OR 1=1 --" })).totals.calls).toBe(0);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('reconciles the dashboard selected range with canonical usage across process and operator restarts', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
@@ -549,7 +696,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       const usage = await store.getUsageData({
         conversationId: reset.newLogicalSessionId,
         rootInitiationId: 'root-initiation-1',
-        groupBy: ['sessionId', 'channelId', 'conversationId', 'rootInitiationId'],
+        groupBy: ['sessionId', 'channelId'],
       });
       expect(usage.totals.calls).toBe(1);
       expect(usage.recentEvents[0]?.attribution).toMatchObject({
@@ -677,7 +824,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('hydrates Garden grouped costs from complete aggregates instead of the event display window', async () => {
+  it('keeps unknown historical prices explicit and independent of the event display window', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
     const pool = createPostgresPool(databaseUrl, {
@@ -711,14 +858,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
           costSource: 'none',
         });
       }
-      const discovery = {
-        getAvailableModels: vi.fn(async () => [{
-          id: 'openrouter/deepseek/deepseek-v4-pro',
-          pricing: { prompt: '0.000002', completion: '0.000004' },
-        }]),
-        invalidateCache: vi.fn(),
-      };
-      const service = new AdminModelUsageDataService(store, discovery);
+      const service = new AdminModelUsageDataService(store);
       const groupBy: ModelUsageGroupDimension[] = ['channelId', 'costSource'];
 
       const atLimitOne = await service.getModelUsageData({ groupBy, limit: 1 });
@@ -726,21 +866,21 @@ describe('PostgresModelUsageStore reconciliation', () => {
 
       expect(atLimitOne.recentEvents).toHaveLength(1);
       expect(atLimitTwo.recentEvents).toHaveLength(2);
-      expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(0.008, 8);
-      expect(atLimitTwo.totals.totalCostUsd).toBeCloseTo(0.008, 8);
+      expect(atLimitOne.totals.totalCostUsd).toBe(0);
+      expect(atLimitTwo.totals.totalCostUsd).toBe(0);
       expect(atLimitOne.groupedBy).toEqual(atLimitTwo.groupedBy);
       expect(atLimitOne.groupedBy.channelId).toEqual([
-        expect.objectContaining({ key: 'channel-1', calls: 2, totalCostUsd: 0.008 }),
+        expect.objectContaining({ key: 'channel-1', calls: 2, totalCostUsd: 0 }),
       ]);
       expect(atLimitOne.groupedBy.costSource).toEqual([
-        expect.objectContaining({ key: 'estimate', calls: 2, totalCostUsd: 0.008 }),
+        expect.objectContaining({ key: 'none', calls: 2, totalCostUsd: 0 }),
       ]);
     } finally {
       await pool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('reranks all Garden groups after hydration when the most expensive group was outside the stored top twenty', async () => {
+  it('returns stable top-N plus Other independently of the event display window', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
     const pool = createPostgresPool(databaseUrl, {
@@ -776,37 +916,22 @@ describe('PostgresModelUsageStore reconciliation', () => {
           costSource: 'none',
         });
       }));
-      const discovery = {
-        getAvailableModels: vi.fn(async () => Array.from({ length: 21 }, (_, offset) => {
-          const index = offset + 1;
-          const suffix = String(index).padStart(2, '0');
-          return {
-            id: `openrouter/model-${suffix}`,
-            pricing: {
-              prompt: index === 21 ? '1' : '0.000001',
-              completion: index === 21 ? '1' : '0.000001',
-            },
-          };
-        })),
-        invalidateCache: vi.fn(),
-      };
-      const service = new AdminModelUsageDataService(store, discovery);
+      const service = new AdminModelUsageDataService(store);
 
       const atLimitOne = await service.getModelUsageData({ limit: 1, groupBy: ['channelId'] });
       const atLimitTwo = await service.getModelUsageData({ limit: 2, groupBy: ['channelId'] });
 
       expect(atLimitOne.recentEvents).toHaveLength(1);
       expect(atLimitTwo.recentEvents).toHaveLength(2);
-      expect(atLimitOne.groupedBy.channelId).toEqual(atLimitTwo.groupedBy.channelId);
-      expect(atLimitOne.groupedBy.channelId).toHaveLength(21);
-      expect(atLimitOne.groupedBy.channelId?.[0]).toEqual(expect.objectContaining({
-        key: 'channel-21',
-        calls: 1,
-        totalCostUsd: 1,
+      expect(atLimitOne.groups).toEqual(atLimitTwo.groups);
+      expect(atLimitOne.groups).toHaveLength(21);
+      expect(atLimitOne.groups.at(-1)).toEqual(expect.objectContaining({
+        dimensions: { channelId: 'Other' },
+        isOther: true,
+        metrics: expect.objectContaining({ calls: 1, totalTokens: 1, totalCostUsd: 0 }),
       }));
-      expect(atLimitOne.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
-        .toBeCloseTo(1.02, 8);
-      expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(1.02, 8);
+      expect(atLimitOne.groups.reduce((sum, group) => sum + group.metrics.calls, 0)).toBe(21);
+      expect(atLimitOne.totals.totalCostUsd).toBe(0);
     } finally {
       await pool.end();
     }
@@ -1051,15 +1176,17 @@ describe('PostgresModelUsageStore reconciliation', () => {
       const usageA = await companionA.getUsageData({
         channelType: 'api',
         shardId: 'shard-7',
-        groupBy: ['companionId', 'channelType', 'shardId', 'subagentId'],
+        groupBy: ['companionId', 'channelType'],
       });
       expect(usageA.totals).toMatchObject({ calls: 1, totalTokens: 19 });
       expect(usageA.groupedBy.companionId).toEqual([
         expect.objectContaining({ key: 'companion-a', calls: 1, cacheReadTokens: 3, cacheWriteTokens: 4 }),
       ]);
       expect(usageA.groupedBy.channelType?.[0]).toMatchObject({ key: 'api', calls: 1 });
-      expect(usageA.groupedBy.shardId?.[0]).toMatchObject({ key: 'shard-7', calls: 1 });
-      expect(usageA.groupedBy.subagentId?.[0]).toMatchObject({ key: 'unknown', calls: 1 });
+      expect(usageA.groups[0]).toMatchObject({
+        dimensions: { companionId: 'companion-a', channelType: 'api' },
+        metrics: { calls: 1 },
+      });
       expect(usageA.attributionCoverage.byDimension.shardId).toEqual({
         knownCalls: 1,
         unknownCalls: 0,

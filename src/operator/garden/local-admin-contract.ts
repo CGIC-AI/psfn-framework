@@ -194,7 +194,7 @@ export function createInProcessGardenAdminContract(
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const modelUsage = modelUsageStore
-    ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery)
+    ? new AdminModelUsageDataService(modelUsageStore)
     : null;
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),

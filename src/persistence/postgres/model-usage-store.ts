@@ -20,6 +20,9 @@ import type {
   ModelUsageCostSource,
   ModelUsageCostBreakdown,
   ModelUsageData,
+  ModelUsageExportData,
+  ModelUsageExportPort,
+  ModelUsageExportRow,
   ModelUsageEvent,
   ModelUsageEventInput,
   ModelUsageQuery,
@@ -29,10 +32,18 @@ import type {
   ModelUsageSettlement,
   ModelUsageTotals,
   ModelUsageGroupDimension,
+  ModelUsageGroup,
+  ModelUsageResolvedRange,
+  ModelUsageTimeBucket,
 } from '../../shared/telemetry/model-usage.js';
 import {
+  MODEL_USAGE_BUCKETS,
   MODEL_USAGE_CALL_KINDS,
   MODEL_USAGE_COST_SOURCES,
+  MODEL_USAGE_EVENT_ORDERS,
+  MODEL_USAGE_GROUP_SORTS,
+  MODEL_USAGE_RANGES,
+  MODEL_USAGE_SORT_DIRECTIONS,
   MODEL_USAGE_STATUSES,
 } from '../../shared/telemetry/model-usage.js';
 import {
@@ -51,10 +62,17 @@ import {
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  createModelUsageBucketBoundaries,
+  resolveModelUsageRange,
+} from '../../shared/telemetry/model-usage-range.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 2_000;
 const DEFAULT_BREAKDOWN_LIMIT = 20;
+const DEFAULT_TOP_N = 20;
+const MAX_TOP_N = 100;
+const MAX_EXPORT_ROWS = 50_000;
 const MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [1_297_431_347, 1_431_521_607] as const;
 
 interface ModelUsageEventRow {
@@ -142,19 +160,54 @@ interface TotalsRow {
   provider_cost_usd: number | string | null;
   estimated_cost_usd: number | string | null;
   total_cost_usd: number | string | null;
+  provider_input_cost_usd: number | string | null;
+  provider_input_known_calls: number | string;
+  provider_output_cost_usd: number | string | null;
+  provider_output_known_calls: number | string;
+  provider_cache_read_cost_usd: number | string | null;
+  provider_cache_read_known_calls: number | string;
+  provider_cache_write_cost_usd: number | string | null;
+  provider_cache_write_known_calls: number | string;
+  provider_cost_known_calls: number | string;
+  estimated_input_cost_usd: number | string | null;
+  estimated_input_known_calls: number | string;
+  estimated_output_cost_usd: number | string | null;
+  estimated_output_known_calls: number | string;
+  estimated_cache_read_cost_usd: number | string | null;
+  estimated_cache_read_known_calls: number | string;
+  estimated_cache_write_cost_usd: number | string | null;
+  estimated_cache_write_known_calls: number | string;
+  estimated_cost_known_calls: number | string;
+  effective_input_cost_usd: number | string | null;
+  effective_input_known_calls: number | string;
+  effective_output_cost_usd: number | string | null;
+  effective_output_known_calls: number | string;
+  effective_cache_read_cost_usd: number | string | null;
+  effective_cache_read_known_calls: number | string;
+  effective_cache_write_cost_usd: number | string | null;
+  effective_cache_write_known_calls: number | string;
+  effective_cost_known_calls: number | string;
+  total_duration_ms: number | string | null;
+  duration_samples: number | string;
+  total_ttft_ms: number | string | null;
+  ttft_samples: number | string;
   average_duration_ms: number | string | null;
   average_ttft_ms: number | string | null;
 }
 
-interface BreakdownRow {
+interface BreakdownRow extends TotalsRow {
   key: string | null;
-  calls: number | string;
-  input_tokens: number | string | null;
-  output_tokens: number | string | null;
-  cache_read_tokens: number | string | null;
-  cache_write_tokens: number | string | null;
-  total_tokens: number | string | null;
-  total_cost_usd: number | string | null;
+}
+
+interface TimeBucketRow extends TotalsRow {
+  bucket_start_ms: number | string;
+}
+
+interface GroupRow extends TotalsRow {
+  dimension_0: string | null;
+  dimension_1: string | null;
+  is_other: boolean;
+  sort_rank: number | string;
 }
 
 interface CostHydrationBreakdownRow extends BreakdownRow {
@@ -176,6 +229,12 @@ interface BudgetSpendRow {
 interface SqlWhere {
   clause: string;
   values: unknown[];
+}
+
+interface PreparedModelUsageQuery {
+  query: ModelUsageQuery;
+  resolvedRange: ModelUsageResolvedRange;
+  where: SqlWhere;
 }
 
 export type ModelUsageStoreScope =
@@ -592,6 +651,22 @@ function mapCostBreakdown(
 }
 
 function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
+  const cost = (value: unknown): number => roundModelUsageUsd(nonNegativeCost(value) ?? 0);
+  const aggregateCost = (
+    prefix: 'provider' | 'estimated' | 'effective',
+    totalField: 'provider_cost_usd' | 'estimated_cost_usd' | 'total_cost_usd',
+  ) => ({
+    inputUsd: cost(row?.[`${prefix}_input_cost_usd`]),
+    inputKnownCalls: nonNegativeInteger(row?.[`${prefix}_input_known_calls`]),
+    outputUsd: cost(row?.[`${prefix}_output_cost_usd`]),
+    outputKnownCalls: nonNegativeInteger(row?.[`${prefix}_output_known_calls`]),
+    cacheReadUsd: cost(row?.[`${prefix}_cache_read_cost_usd`]),
+    cacheReadKnownCalls: nonNegativeInteger(row?.[`${prefix}_cache_read_known_calls`]),
+    cacheWriteUsd: cost(row?.[`${prefix}_cache_write_cost_usd`]),
+    cacheWriteKnownCalls: nonNegativeInteger(row?.[`${prefix}_cache_write_known_calls`]),
+    totalUsd: cost(row?.[totalField]),
+    totalKnownCalls: nonNegativeInteger(row?.[`${prefix}_cost_known_calls`]),
+  });
   return {
     calls: nonNegativeInteger(row?.calls),
     successfulCalls: nonNegativeInteger(row?.successful_calls),
@@ -601,9 +676,16 @@ function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
     cacheReadTokens: nonNegativeInteger(row?.cache_read_tokens),
     cacheWriteTokens: nonNegativeInteger(row?.cache_write_tokens),
     totalTokens: nonNegativeInteger(row?.total_tokens),
-    providerCostUsd: nonNegativeCost(row?.provider_cost_usd) ?? 0,
-    estimatedCostUsd: nonNegativeCost(row?.estimated_cost_usd) ?? 0,
-    totalCostUsd: nonNegativeCost(row?.total_cost_usd) ?? 0,
+    providerCostUsd: cost(row?.provider_cost_usd),
+    estimatedCostUsd: cost(row?.estimated_cost_usd),
+    totalCostUsd: cost(row?.total_cost_usd),
+    providerCost: aggregateCost('provider', 'provider_cost_usd'),
+    estimatedCost: aggregateCost('estimated', 'estimated_cost_usd'),
+    effectiveCost: aggregateCost('effective', 'total_cost_usd'),
+    totalDurationMs: nonNegativeInteger(row?.total_duration_ms),
+    durationSamples: nonNegativeInteger(row?.duration_samples),
+    totalTtftMs: nonNegativeInteger(row?.total_ttft_ms),
+    ttftSamples: nonNegativeInteger(row?.ttft_samples),
     averageDurationMs: row?.average_duration_ms === null || row?.average_duration_ms === undefined
       ? null
       : asNumber(row.average_duration_ms),
@@ -614,19 +696,277 @@ function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
 }
 
 function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
+  const metrics = mapTotals(row);
   return {
     key: row.key?.trim() || 'unknown',
-    calls: nonNegativeInteger(row.calls),
-    inputTokens: nonNegativeInteger(row.input_tokens),
-    outputTokens: nonNegativeInteger(row.output_tokens),
-    cacheReadTokens: nonNegativeInteger(row.cache_read_tokens),
-    cacheWriteTokens: nonNegativeInteger(row.cache_write_tokens),
-    totalTokens: nonNegativeInteger(row.total_tokens),
-    totalCostUsd: nonNegativeCost(row.total_cost_usd) ?? 0,
+    ...metrics,
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort {
+function mapExportRow(event: ModelUsageEvent): ModelUsageExportRow {
+  return {
+    id: event.id,
+    logicalCallId: event.logicalCallId,
+    attempt: event.attempt,
+    recordedAtMs: event.recordedAtMs,
+    status: event.status,
+    callKind: event.callKind,
+    attribution: event.attribution,
+    provider: event.provider,
+    model: event.model,
+    ...(event.slotKey !== undefined ? { slotKey: event.slotKey } : {}),
+    ...(event.requestedProvider !== undefined ? { requestedProvider: event.requestedProvider } : {}),
+    ...(event.requestedModel !== undefined ? { requestedModel: event.requestedModel } : {}),
+    inputTokens: event.inputTokens,
+    cacheReadTokens: event.cacheReadTokens,
+    cacheWriteTokens: event.cacheWriteTokens,
+    outputTokens: event.outputTokens,
+    totalTokens: event.totalTokens,
+    providerCost: event.providerCost,
+    estimatedCost: event.estimatedCost,
+    effectiveCost: event.effectiveCost,
+    costSource: event.costSource,
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    ...(event.ttftMs !== undefined ? { ttftMs: event.ttftMs } : {}),
+  };
+}
+
+const MODEL_USAGE_AGGREGATE_SQL = `
+  COUNT(*) AS calls,
+  COUNT(*) FILTER (WHERE status = 'success') AS successful_calls,
+  COUNT(*) FILTER (WHERE status = 'failure') AS failed_calls,
+  COALESCE(SUM(input_tokens), 0) AS input_tokens,
+  COALESCE(SUM(output_tokens), 0) AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+  COALESCE(SUM(total_tokens), 0) AS total_tokens,
+  COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
+  COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+  COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd,
+  COALESCE(SUM(provider_input_cost_usd), 0) AS provider_input_cost_usd,
+  COUNT(provider_input_cost_usd) AS provider_input_known_calls,
+  COALESCE(SUM(provider_output_cost_usd), 0) AS provider_output_cost_usd,
+  COUNT(provider_output_cost_usd) AS provider_output_known_calls,
+  COALESCE(SUM(provider_cache_read_cost_usd), 0) AS provider_cache_read_cost_usd,
+  COUNT(provider_cache_read_cost_usd) AS provider_cache_read_known_calls,
+  COALESCE(SUM(provider_cache_write_cost_usd), 0) AS provider_cache_write_cost_usd,
+  COUNT(provider_cache_write_cost_usd) AS provider_cache_write_known_calls,
+  COUNT(provider_cost_usd) AS provider_cost_known_calls,
+  COALESCE(SUM(estimated_input_cost_usd), 0) AS estimated_input_cost_usd,
+  COUNT(estimated_input_cost_usd) AS estimated_input_known_calls,
+  COALESCE(SUM(estimated_output_cost_usd), 0) AS estimated_output_cost_usd,
+  COUNT(estimated_output_cost_usd) AS estimated_output_known_calls,
+  COALESCE(SUM(estimated_cache_read_cost_usd), 0) AS estimated_cache_read_cost_usd,
+  COUNT(estimated_cache_read_cost_usd) AS estimated_cache_read_known_calls,
+  COALESCE(SUM(estimated_cache_write_cost_usd), 0) AS estimated_cache_write_cost_usd,
+  COUNT(estimated_cache_write_cost_usd) AS estimated_cache_write_known_calls,
+  COUNT(estimated_cost_usd) AS estimated_cost_known_calls,
+  COALESCE(SUM(effective_input_cost_usd), 0) AS effective_input_cost_usd,
+  COUNT(effective_input_cost_usd) AS effective_input_known_calls,
+  COALESCE(SUM(effective_output_cost_usd), 0) AS effective_output_cost_usd,
+  COUNT(effective_output_cost_usd) AS effective_output_known_calls,
+  COALESCE(SUM(effective_cache_read_cost_usd), 0) AS effective_cache_read_cost_usd,
+  COUNT(effective_cache_read_cost_usd) AS effective_cache_read_known_calls,
+  COALESCE(SUM(effective_cache_write_cost_usd), 0) AS effective_cache_write_cost_usd,
+  COUNT(effective_cache_write_cost_usd) AS effective_cache_write_known_calls,
+  COUNT(effective_cost_usd) AS effective_cost_known_calls,
+  COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
+  COUNT(duration_ms) AS duration_samples,
+  COALESCE(SUM(ttft_ms), 0) AS total_ttft_ms,
+  COUNT(ttft_ms) AS ttft_samples,
+  AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS average_duration_ms,
+  AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL) AS average_ttft_ms
+`;
+
+function emptyAggregateCost(): ModelUsageTotals['providerCost'] {
+  return {
+    inputUsd: 0,
+    inputKnownCalls: 0,
+    outputUsd: 0,
+    outputKnownCalls: 0,
+    cacheReadUsd: 0,
+    cacheReadKnownCalls: 0,
+    cacheWriteUsd: 0,
+    cacheWriteKnownCalls: 0,
+    totalUsd: 0,
+    totalKnownCalls: 0,
+  };
+}
+
+function emptyModelUsageTotals(): ModelUsageTotals {
+  return {
+    calls: 0,
+    successfulCalls: 0,
+    failedCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    providerCostUsd: 0,
+    estimatedCostUsd: 0,
+    totalCostUsd: 0,
+    providerCost: emptyAggregateCost(),
+    estimatedCost: emptyAggregateCost(),
+    effectiveCost: emptyAggregateCost(),
+    totalDurationMs: 0,
+    durationSamples: 0,
+    totalTtftMs: 0,
+    ttftSamples: 0,
+    averageDurationMs: null,
+    averageTtftMs: null,
+  };
+}
+
+function addAggregateCost(
+  left: ModelUsageTotals['providerCost'],
+  right: ModelUsageTotals['providerCost'],
+): ModelUsageTotals['providerCost'] {
+  return {
+    inputUsd: roundModelUsageUsd(left.inputUsd + right.inputUsd),
+    inputKnownCalls: left.inputKnownCalls + right.inputKnownCalls,
+    outputUsd: roundModelUsageUsd(left.outputUsd + right.outputUsd),
+    outputKnownCalls: left.outputKnownCalls + right.outputKnownCalls,
+    cacheReadUsd: roundModelUsageUsd(left.cacheReadUsd + right.cacheReadUsd),
+    cacheReadKnownCalls: left.cacheReadKnownCalls + right.cacheReadKnownCalls,
+    cacheWriteUsd: roundModelUsageUsd(left.cacheWriteUsd + right.cacheWriteUsd),
+    cacheWriteKnownCalls: left.cacheWriteKnownCalls + right.cacheWriteKnownCalls,
+    totalUsd: roundModelUsageUsd(left.totalUsd + right.totalUsd),
+    totalKnownCalls: left.totalKnownCalls + right.totalKnownCalls,
+  };
+}
+
+function addModelUsageTotals(left: ModelUsageTotals, right: ModelUsageTotals): ModelUsageTotals {
+  const durationSamples = left.durationSamples + right.durationSamples;
+  const ttftSamples = left.ttftSamples + right.ttftSamples;
+  const totalDurationMs = left.totalDurationMs + right.totalDurationMs;
+  const totalTtftMs = left.totalTtftMs + right.totalTtftMs;
+  return {
+    calls: left.calls + right.calls,
+    successfulCalls: left.successfulCalls + right.successfulCalls,
+    failedCalls: left.failedCalls + right.failedCalls,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    providerCostUsd: roundModelUsageUsd(left.providerCostUsd + right.providerCostUsd),
+    estimatedCostUsd: roundModelUsageUsd(left.estimatedCostUsd + right.estimatedCostUsd),
+    totalCostUsd: roundModelUsageUsd(left.totalCostUsd + right.totalCostUsd),
+    providerCost: addAggregateCost(left.providerCost, right.providerCost),
+    estimatedCost: addAggregateCost(left.estimatedCost, right.estimatedCost),
+    effectiveCost: addAggregateCost(left.effectiveCost, right.effectiveCost),
+    totalDurationMs,
+    durationSamples,
+    totalTtftMs,
+    ttftSamples,
+    averageDurationMs: durationSamples === 0 ? null : totalDurationMs / durationSamples,
+    averageTtftMs: ttftSamples === 0 ? null : totalTtftMs / ttftSamples,
+  };
+}
+
+function groupComparator(query: ModelUsageQuery): (left: ModelUsageGroup, right: ModelUsageGroup) => number {
+  const sortBy = query.sortBy ?? 'effectiveCostUsd';
+  const direction = query.sortDirection === 'asc' ? 1 : -1;
+  const value = (group: ModelUsageGroup): number => {
+    switch (sortBy) {
+      case 'calls': return group.metrics.calls;
+      case 'totalTokens': return group.metrics.totalTokens;
+      case 'effectiveCostUsd': return group.metrics.totalCostUsd;
+      case 'averageDurationMs': return group.metrics.averageDurationMs ?? -1;
+      case 'averageTtftMs': return group.metrics.averageTtftMs ?? -1;
+    }
+  };
+  return (left, right) => (
+    direction * (value(left) - value(right))
+    || JSON.stringify(left.dimensions).localeCompare(JSON.stringify(right.dimensions))
+  );
+}
+
+interface ModelUsageEventCursor {
+  queryHash: string;
+  order: 'recent' | 'expensive';
+  recordedAtMs: number;
+  id: string;
+  effectiveCostUsd: number;
+}
+
+function eventCursorQueryHash(query: ModelUsageQuery): string {
+  const { cursor: _cursor, limit: _limit, ...stableQuery } = query;
+  return createHash('sha256').update(JSON.stringify(canonicalize(stableQuery))).digest('hex');
+}
+
+function encodeEventCursor(
+  event: ModelUsageEvent,
+  order: ModelUsageEventCursor['order'],
+  query: ModelUsageQuery,
+): string {
+  const cursor: ModelUsageEventCursor = {
+    queryHash: eventCursorQueryHash(query),
+    order,
+    recordedAtMs: event.recordedAtMs,
+    id: event.id,
+    effectiveCostUsd: event.effectiveCostUsd ?? 0,
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeEventCursor(value: string, query: ModelUsageQuery): ModelUsageEventCursor {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    throw new Error('cursor is malformed');
+  }
+  if (!isRecord(parsed)) throw new Error('cursor is malformed');
+  const keys = Object.keys(parsed);
+  if (keys.some(key => !['queryHash', 'order', 'recordedAtMs', 'id', 'effectiveCostUsd'].includes(key))) {
+    throw new Error('cursor contains unsupported fields');
+  }
+  if (
+    parsed.queryHash !== eventCursorQueryHash(query)
+    || (parsed.order !== 'recent' && parsed.order !== 'expensive')
+    || !Number.isSafeInteger(parsed.recordedAtMs)
+    || typeof parsed.id !== 'string'
+    || !parsed.id
+    || parsed.id.length > 512
+    || typeof parsed.effectiveCostUsd !== 'number'
+    || !Number.isFinite(parsed.effectiveCostUsd)
+    || parsed.effectiveCostUsd < 0
+  ) {
+    throw new Error('cursor does not match this model usage query');
+  }
+  return parsed as unknown as ModelUsageEventCursor;
+}
+
+function appendEventCursor(
+  where: SqlWhere,
+  order: ModelUsageEventCursor['order'],
+  cursor: ModelUsageEventCursor | undefined,
+): SqlWhere {
+  if (!cursor) return where;
+  if (cursor.order !== order) throw new Error('cursor event order does not match the query');
+  const values = [...where.values];
+  const addValue = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+  const recorded = addValue(cursor.recordedAtMs);
+  const id = addValue(cursor.id);
+  let cursorClause = `(recorded_at_ms < ${recorded} OR (recorded_at_ms = ${recorded} AND id < ${id}))`;
+  if (order === 'expensive') {
+    const cost = addValue(cursor.effectiveCostUsd);
+    cursorClause = `(COALESCE(effective_cost_usd, 0) < ${cost}
+      OR (COALESCE(effective_cost_usd, 0) = ${cost} AND recorded_at_ms < ${recorded})
+      OR (COALESCE(effective_cost_usd, 0) = ${cost} AND recorded_at_ms = ${recorded} AND id < ${id}))`;
+  }
+  return {
+    clause: where.clause ? `${where.clause} AND ${cursorClause}` : `WHERE ${cursorClause}`,
+    values,
+  };
+}
+
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, ModelUsageExportPort {
   private readonly ready: Promise<void>;
   private readonly companionId?: string;
 
@@ -774,11 +1114,14 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
     await this.ready;
-    const normalizedQuery = normalizeQuery(query, this.companionId);
-    const where = buildWhere(normalizedQuery);
+    const prepared = await this.prepareQuery(query);
+    const { query: normalizedQuery, resolvedRange, where } = prepared;
     const groupedByDimensions = normalizedQuery.groupBy ?? [];
     const [
       totals,
+      timeSeries,
+      groups,
+      eventPage,
       byModel,
       byPurpose,
       byTool,
@@ -789,12 +1132,15 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       groupedByEntries,
     ] = await Promise.all([
       this.queryTotals(where),
+      this.queryTimeSeries(where, resolvedRange),
+      this.queryGroups(where, normalizedQuery),
+      this.queryEventPage(where, normalizedQuery),
       this.queryBreakdown(where, "provider || ':' || model"),
       this.queryBreakdown(where, 'purpose'),
       this.queryBreakdown(where, 'tool_name'),
       this.queryBreakdown(where, 'call_kind'),
       this.queryEvents(where, normalizedQuery.limit, 'recorded_at_ms DESC, id DESC'),
-      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC'),
+      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC, id DESC'),
       this.queryAttributionCoverage(where),
       Promise.all(groupedByDimensions.map(async dimension => [
         dimension,
@@ -803,7 +1149,11 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     ]);
     return {
       query: normalizedQuery,
+      resolvedRange,
       totals,
+      timeSeries,
+      groups,
+      eventPage,
       byModel,
       byPurpose,
       byTool,
@@ -820,8 +1170,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     dimensions: readonly ModelUsageGroupDimension[],
   ): Promise<ModelUsageCostHydrationData> {
     await this.ready;
-    const normalizedQuery = normalizeQuery(query, this.companionId);
-    const where = buildWhere(normalizedQuery);
+    const { where } = await this.prepareQuery(query);
     const uniqueDimensions = [...new Set(dimensions.map((dimension) => {
       if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
         throw new Error(`Cost hydration has unsupported dimension ${JSON.stringify(dimension)}`);
@@ -833,6 +1182,57 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       await this.queryCostHydrationBreakdown(where, dimension),
     ] as const));
     return { byDimension: Object.fromEntries(entries) };
+  }
+
+  async exportUsageEvents(query: ModelUsageQuery = {}): Promise<ModelUsageExportData> {
+    await this.ready;
+    const prepared = await this.prepareQuery({ ...query, cursor: undefined });
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${prepared.where.clause}
+      ORDER BY recorded_at_ms ASC, id ASC
+      LIMIT ${MAX_EXPORT_ROWS + 1}
+    `, prepared.where.values);
+    if (rows.length > MAX_EXPORT_ROWS) {
+      throw new Error(`Model usage export exceeds the ${MAX_EXPORT_ROWS} row safety limit`);
+    }
+    return {
+      query: prepared.query,
+      resolvedRange: prepared.resolvedRange,
+      rows: rows.map(row => mapExportRow(mapEventRow(row))),
+    };
+  }
+
+  private async prepareQuery(query: ModelUsageQuery): Promise<PreparedModelUsageQuery> {
+    const normalizedQuery = normalizeQuery(query, this.companionId);
+    let allSinceMs: number | undefined;
+    if ((normalizedQuery.range ?? 'all') === 'all') {
+      const unboundedWhere = buildWhere({ ...normalizedQuery, sinceMs: undefined, untilMs: undefined });
+      const earliest = await queryOne<{ earliest_ms: number | string | null }>(this.pool, `
+        SELECT MIN(recorded_at_ms) AS earliest_ms
+        FROM model_usage_events
+        ${unboundedWhere.clause}
+      `, unboundedWhere.values);
+      if (earliest?.earliest_ms !== null && earliest?.earliest_ms !== undefined) {
+        allSinceMs = nonNegativeInteger(earliest.earliest_ms);
+      }
+    }
+    const resolvedRange = resolveModelUsageRange(normalizedQuery, {
+      nowMs: Date.now(),
+      ...(allSinceMs !== undefined ? { allSinceMs } : {}),
+    });
+    const canonicalQuery: ModelUsageQuery = {
+      ...normalizedQuery,
+      range: resolvedRange.range,
+      timezone: resolvedRange.timezone,
+    };
+    const where = buildWhere({
+      ...canonicalQuery,
+      sinceMs: resolvedRange.sinceMs,
+      untilMs: resolvedRange.untilMs,
+    });
+    return { query: canonicalQuery, resolvedRange, where };
   }
 
   async getModelBudgetSpend(
@@ -888,19 +1288,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   private async queryTotals(where: SqlWhere): Promise<ModelUsageTotals> {
     const row = await queryOne<TotalsRow>(this.pool, `
       SELECT
-        COUNT(*) AS calls,
-        COUNT(*) FILTER (WHERE status = 'success') AS successful_calls,
-        COUNT(*) FILTER (WHERE status = 'failure') AS failed_calls,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
-        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
-        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd,
-        AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS average_duration_ms,
-        AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL) AS average_ttft_ms
+        ${MODEL_USAGE_AGGREGATE_SQL}
       FROM model_usage_events
       ${where.clause}
     `, where.values);
@@ -911,13 +1299,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     const rows = await queryRows<BreakdownRow>(this.pool, `
       SELECT
         ${expression} AS key,
-        COUNT(*) AS calls,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd
+        ${MODEL_USAGE_AGGREGATE_SQL}
       FROM model_usage_events
       ${where.clause}
       GROUP BY key
@@ -925,6 +1307,101 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       LIMIT ${DEFAULT_BREAKDOWN_LIMIT}
     `, where.values);
     return rows.map(mapBreakdown);
+  }
+
+  private async queryTimeSeries(
+    where: SqlWhere,
+    range: ModelUsageResolvedRange,
+  ): Promise<ModelUsageTimeBucket[]> {
+    const timezoneParameter = where.values.length + 1;
+    const expression = range.bucket === 'hour'
+      ? 'FLOOR(recorded_at_ms / 3600000.0) * 3600000'
+      : `EXTRACT(EPOCH FROM (date_trunc('${range.bucket}', to_timestamp(recorded_at_ms / 1000.0) AT TIME ZONE $${timezoneParameter}) AT TIME ZONE $${timezoneParameter})) * 1000`;
+    const values = range.bucket === 'hour' ? where.values : [...where.values, range.timezone];
+    const rows = await queryRows<TimeBucketRow>(this.pool, `
+      SELECT
+        ${expression} AS bucket_start_ms,
+        ${MODEL_USAGE_AGGREGATE_SQL}
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY bucket_start_ms
+      ORDER BY bucket_start_ms ASC
+    `, values);
+    const byStart = new Map(rows.map(row => [nonNegativeInteger(row.bucket_start_ms), mapTotals(row)]));
+    return createModelUsageBucketBoundaries(range).map(boundary => ({
+      startMs: boundary.startMs,
+      endMs: boundary.endMs,
+      ...emptyModelUsageTotals(),
+      ...(byStart.get(boundary.startMs) ?? {}),
+    }));
+  }
+
+  private async queryGroups(where: SqlWhere, query: ModelUsageQuery): Promise<ModelUsageGroup[]> {
+    const dimensions = query.groupBy ?? [];
+    if (dimensions.length === 0) return [];
+    const expressions = dimensions.map(dimension => MODEL_USAGE_DIMENSION_SQL[dimension]);
+    const rows = await queryRows<GroupRow>(this.pool, `
+      SELECT
+        ${expressions[0]} AS dimension_0,
+        ${expressions[1] ?? 'NULL::text'} AS dimension_1,
+        FALSE AS is_other,
+        0 AS sort_rank,
+        ${MODEL_USAGE_AGGREGATE_SQL}
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY ${expressions.join(', ')}
+      LIMIT 5001
+    `, where.values);
+    if (rows.length > 5_000) {
+      throw new Error('Model usage grouping exceeds the 5000-group safety limit');
+    }
+    const groups = rows.map((row): ModelUsageGroup => ({
+      dimensions: Object.fromEntries(dimensions.map((dimension, index) => [
+        dimension,
+        (index === 0 ? row.dimension_0 : row.dimension_1)?.trim() || MODEL_USAGE_UNKNOWN_DIMENSION,
+      ])),
+      isOther: false,
+      metrics: mapTotals(row),
+    }));
+    groups.sort(groupComparator(query));
+    const topN = query.topN ?? DEFAULT_TOP_N;
+    if (groups.length <= topN) return groups;
+    const visible = groups.slice(0, topN);
+    const otherMetrics = groups.slice(topN).reduce(
+      (total, group) => addModelUsageTotals(total, group.metrics),
+      emptyModelUsageTotals(),
+    );
+    return [...visible, {
+      dimensions: Object.fromEntries(dimensions.map(dimension => [dimension, 'Other'])),
+      isOther: true,
+      metrics: otherMetrics,
+    }];
+  }
+
+  private async queryEventPage(where: SqlWhere, query: ModelUsageQuery): Promise<ModelUsageData['eventPage']> {
+    const order = query.eventOrder ?? 'recent';
+    const limit = normalizeLimit(query.limit);
+    const cursor = query.cursor ? decodeEventCursor(query.cursor, query) : undefined;
+    const cursorWhere = appendEventCursor(where, order, cursor);
+    const orderBy = order === 'recent'
+      ? 'recorded_at_ms DESC, id DESC'
+      : 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC, id DESC';
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${cursorWhere.clause}
+      ORDER BY ${orderBy}
+      LIMIT ${limit + 1}
+    `, cursorWhere.values);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(mapEventRow);
+    const last = items.at(-1);
+    return {
+      order,
+      items,
+      hasMore,
+      nextCursor: hasMore && last ? encodeEventCursor(last, order, query) : null,
+    };
   }
 
   private async queryCostHydrationBreakdown(
@@ -1026,6 +1503,8 @@ const QUERY_TEXT_FIELDS = [
   'requestedProvider',
   'requestedModel',
   'runId',
+  'timezone',
+  'cursor',
 ] as const satisfies ReadonlyArray<keyof ModelUsageQuery>;
 
 const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<string>>> = {
@@ -1037,12 +1516,18 @@ const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<strin
   chargeSurface: new Set(MODEL_USAGE_CHARGE_SURFACES),
   status: new Set(MODEL_USAGE_STATUSES),
   costSource: new Set(MODEL_USAGE_COST_SOURCES),
+  range: new Set(MODEL_USAGE_RANGES),
+  bucket: new Set(MODEL_USAGE_BUCKETS),
+  sortBy: new Set(MODEL_USAGE_GROUP_SORTS),
+  sortDirection: new Set(MODEL_USAGE_SORT_DIRECTIONS),
+  eventOrder: new Set(MODEL_USAGE_EVENT_ORDERS),
 };
 const GROUP_DIMENSION_SET: ReadonlySet<string> = new Set(MODEL_USAGE_GROUP_DIMENSIONS);
 const QUERY_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
   'sinceMs',
   'untilMs',
   'limit',
+  'topN',
   'groupBy',
   ...QUERY_TEXT_FIELDS,
   ...Object.keys(QUERY_ENUM_VALUES),
@@ -1061,7 +1546,8 @@ function normalizeQueryText(value: unknown, field: string): string | undefined {
   if (typeof value !== 'string') throw new Error(`${field} must be a string`);
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} must be non-empty`);
-  if (normalized.length > 512) throw new Error(`${field} must be at most 512 characters`);
+  const maxLength = field === 'cursor' ? 2_048 : 512;
+  if (normalized.length > maxLength) throw new Error(`${field} must be at most ${maxLength} characters`);
   if (/[\u0000-\u001F\u007F-\u009F]/u.test(normalized)) {
     throw new Error(`${field} must not contain control characters`);
   }
@@ -1086,10 +1572,17 @@ function normalizeQuery(
     ? DEFAULT_EVENT_LIMIT
     : normalizeQueryInteger(query.limit, 'limit');
   if (limit === 0) throw new Error('limit must be at least 1');
+  const topN = query.topN === undefined
+    ? DEFAULT_TOP_N
+    : normalizeQueryInteger(query.topN, 'topN');
+  if (topN === 0 || (topN ?? DEFAULT_TOP_N) > MAX_TOP_N) {
+    throw new Error(`topN must be between 1 and ${MAX_TOP_N}`);
+  }
   const normalized: ModelUsageQuery = {
     ...(sinceMs !== undefined ? { sinceMs } : {}),
     ...(untilMs !== undefined ? { untilMs } : {}),
     limit: Math.min(MAX_EVENT_LIMIT, limit ?? DEFAULT_EVENT_LIMIT),
+    topN: topN ?? DEFAULT_TOP_N,
   };
   for (const field of QUERY_TEXT_FIELDS) {
     const value = normalizeQueryText(query[field], String(field));
@@ -1112,6 +1605,7 @@ function normalizeQuery(
       return dimension as ModelUsageGroupDimension;
     }))];
     normalized.groupBy = groupBy;
+    if (groupBy.length > 2) throw new Error('groupBy supports at most two dimensions');
   }
   if (tenantCompanionId) {
     const requestedCompanionId = normalized.companionId;
@@ -1134,7 +1628,7 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
     clauses.push(`${clause} $${values.length}`);
   };
   if (query.sinceMs !== undefined) push('recorded_at_ms >=', query.sinceMs);
-  if (query.untilMs !== undefined) push('recorded_at_ms <=', query.untilMs);
+  if (query.untilMs !== undefined) push('recorded_at_ms <', query.untilMs);
   if (query.provider) push('provider =', query.provider);
   if (query.model) push('model =', query.model);
   const dimensionFilters: ReadonlyArray<[ModelUsageGroupDimension, unknown]> = [

@@ -32,11 +32,36 @@ export const MODEL_USAGE_CALL_KINDS = [
 ] as const;
 export const MODEL_USAGE_STATUSES = ['success', 'failure'] as const;
 export const MODEL_USAGE_COST_SOURCES = ['provider', 'estimate', 'none'] as const;
+export const MODEL_USAGE_RANGES = [
+  'today',
+  'week',
+  'month',
+  'quarter',
+  'year',
+  'all',
+  'custom',
+] as const;
+export const MODEL_USAGE_BUCKETS = ['auto', 'hour', 'day', 'week', 'month'] as const;
+export const MODEL_USAGE_GROUP_SORTS = [
+  'calls',
+  'totalTokens',
+  'effectiveCostUsd',
+  'averageDurationMs',
+  'averageTtftMs',
+] as const;
+export const MODEL_USAGE_SORT_DIRECTIONS = ['asc', 'desc'] as const;
+export const MODEL_USAGE_EVENT_ORDERS = ['recent', 'expensive'] as const;
 
 export type ModelUsageCallKind = typeof MODEL_USAGE_CALL_KINDS[number];
 export type ModelUsageStatus = typeof MODEL_USAGE_STATUSES[number];
 export type ModelUsageSettlement = 'complete' | 'partial' | 'unknown';
 export type ModelUsageCostSource = typeof MODEL_USAGE_COST_SOURCES[number];
+export type ModelUsageRange = typeof MODEL_USAGE_RANGES[number];
+export type ModelUsageBucket = typeof MODEL_USAGE_BUCKETS[number];
+export type ResolvedModelUsageBucket = Exclude<ModelUsageBucket, 'auto'>;
+export type ModelUsageGroupSort = typeof MODEL_USAGE_GROUP_SORTS[number];
+export type ModelUsageSortDirection = typeof MODEL_USAGE_SORT_DIRECTIONS[number];
+export type ModelUsageEventOrder = typeof MODEL_USAGE_EVENT_ORDERS[number];
 
 export interface ModelUsageCostBreakdown {
   input?: number;
@@ -62,6 +87,9 @@ export interface ModelUsageEventInput {
   attribution: ModelUsageAttributionInput;
   provider: string;
   model: string;
+  slotKey?: string;
+  requestedProvider?: string;
+  requestedModel?: string;
   slotKey?: string;
   requestedProvider?: string;
   requestedModel?: string;
@@ -126,9 +154,18 @@ export interface ModelUsageEvent extends Required<Pick<
 }
 
 export interface ModelUsageQuery {
+  range?: ModelUsageRange;
+  /** IANA timezone used only to resolve calendar ranges and day/week/month buckets. */
+  timezone?: string;
   sinceMs?: number;
   untilMs?: number;
+  bucket?: ModelUsageBucket;
   limit?: number;
+  cursor?: string;
+  eventOrder?: ModelUsageEventOrder;
+  topN?: number;
+  sortBy?: ModelUsageGroupSort;
+  sortDirection?: ModelUsageSortDirection;
   provider?: string;
   model?: string;
   toolName?: string;
@@ -178,8 +215,28 @@ export interface ModelUsageTotals {
   providerCostUsd: number;
   estimatedCostUsd: number;
   totalCostUsd: number;
+  providerCost: ModelUsageAggregateCost;
+  estimatedCost: ModelUsageAggregateCost;
+  effectiveCost: ModelUsageAggregateCost;
+  totalDurationMs: number;
+  durationSamples: number;
+  totalTtftMs: number;
+  ttftSamples: number;
   averageDurationMs: number | null;
   averageTtftMs: number | null;
+}
+
+export interface ModelUsageAggregateCost {
+  inputUsd: number;
+  inputKnownCalls: number;
+  outputUsd: number;
+  outputKnownCalls: number;
+  cacheReadUsd: number;
+  cacheReadKnownCalls: number;
+  cacheWriteUsd: number;
+  cacheWriteKnownCalls: number;
+  totalUsd: number;
+  totalKnownCalls: number;
 }
 
 export interface ModelUsageBreakdown {
@@ -191,6 +248,46 @@ export interface ModelUsageBreakdown {
   cacheWriteTokens: number;
   totalTokens: number;
   totalCostUsd: number;
+  successfulCalls?: number;
+  failedCalls?: number;
+  providerCost?: ModelUsageAggregateCost;
+  estimatedCost?: ModelUsageAggregateCost;
+  effectiveCost?: ModelUsageAggregateCost;
+  totalDurationMs?: number;
+  durationSamples?: number;
+  totalTtftMs?: number;
+  ttftSamples?: number;
+  averageDurationMs?: number | null;
+  averageTtftMs?: number | null;
+}
+
+export interface ModelUsageResolvedRange {
+  range: ModelUsageRange;
+  timezone: string;
+  sinceMs: number;
+  untilMs: number;
+  bucket: ResolvedModelUsageBucket;
+  /** Every analytics query uses the half-open interval [sinceMs, untilMs). */
+  boundary: '[sinceMs, untilMs)';
+  calendarWeekStartsOn: 'monday';
+}
+
+export interface ModelUsageTimeBucket extends ModelUsageTotals {
+  startMs: number;
+  endMs: number;
+}
+
+export interface ModelUsageGroup {
+  dimensions: Partial<Record<ModelUsageGroupDimension, string>>;
+  isOther: boolean;
+  metrics: ModelUsageTotals;
+}
+
+export interface ModelUsageEventPage {
+  order: ModelUsageEventOrder;
+  items: ModelUsageEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /** Complete aggregate slice used to hydrate missing costs without reading display-limited events. */
@@ -216,7 +313,11 @@ export interface ModelUsageAttributionCoverage {
 
 export interface ModelUsageData {
   query: ModelUsageQuery;
+  resolvedRange: ModelUsageResolvedRange;
   totals: ModelUsageTotals;
+  timeSeries: ModelUsageTimeBucket[];
+  groups: ModelUsageGroup[];
+  eventPage: ModelUsageEventPage;
   byModel: ModelUsageBreakdown[];
   byPurpose: ModelUsageBreakdown[];
   byTool: ModelUsageBreakdown[];
@@ -233,6 +334,39 @@ export interface ModelUsageRecorder {
 
 export interface ModelUsageQueryPort {
   getUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
+}
+
+export interface ModelUsageExportRow {
+  id: string;
+  logicalCallId: string;
+  attempt: number;
+  recordedAtMs: number;
+  status: ModelUsageStatus;
+  callKind: ModelUsageCallKind;
+  attribution: ModelUsageAttribution;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  providerCost: ModelUsageCostBreakdown;
+  estimatedCost: ModelUsageCostBreakdown;
+  effectiveCost: ModelUsageCostBreakdown;
+  costSource: ModelUsageCostSource;
+  durationMs?: number;
+  ttftMs?: number;
+}
+
+export interface ModelUsageExportData {
+  query: ModelUsageQuery;
+  resolvedRange: ModelUsageResolvedRange;
+  rows: ModelUsageExportRow[];
+}
+
+export interface ModelUsageExportPort {
+  exportUsageEvents(query?: ModelUsageQuery): Promise<ModelUsageExportData>;
 }
 
 export interface ModelUsageCostHydrationQueryPort extends ModelUsageQueryPort {

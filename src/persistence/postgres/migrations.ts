@@ -1419,6 +1419,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_workload_time ON model_usage_events(companion_id, workload_type, workload_id, recorded_at_ms DESC) WHERE workload_id <> 'unknown';`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_status_cost_time ON model_usage_events(companion_id, status, cost_source, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_slot_time ON model_usage_events(companion_id, slot_key, requested_provider, requested_model, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_expensive ON model_usage_events(companion_id, (COALESCE(effective_cost_usd, 0)) DESC, recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
 ];
 

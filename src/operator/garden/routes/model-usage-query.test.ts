@@ -24,7 +24,13 @@ describe('parseModelUsageQuery', () => {
       ['status', 'success'],
       ['costSource', 'estimate'],
       ['groupBy', 'companionId,channelType'],
-      ['groupBy', 'shardId'],
+      ['range', 'custom'],
+      ['timezone', 'America/New_York'],
+      ['bucket', 'hour'],
+      ['topN', '12'],
+      ['sortBy', 'totalTokens'],
+      ['sortDirection', 'asc'],
+      ['eventOrder', 'expensive'],
     ]));
 
     expect(parsed).toEqual({
@@ -49,7 +55,14 @@ describe('parseModelUsageQuery', () => {
         workloadId: 'shard-1',
         status: 'success',
         costSource: 'estimate',
-        groupBy: ['companionId', 'channelType', 'shardId'],
+        range: 'custom',
+        timezone: 'America/New_York',
+        bucket: 'hour',
+        topN: 12,
+        sortBy: 'totalTokens',
+        sortDirection: 'asc',
+        eventOrder: 'expensive',
+        groupBy: ['companionId', 'channelType'],
       },
     });
   });
@@ -59,9 +72,16 @@ describe('parseModelUsageQuery', () => {
     ['duplicate scalars', 'provider=a&provider=b', 'Duplicate provider'],
     ['empty text', 'sessionId=', 'must be non-empty'],
     ['invalid interval', 'sinceMs=200&untilMs=100', 'less than or equal'],
+    ['one-sided custom range', 'sinceMs=100', 'requires sinceMs and untilMs'],
+    ['huge custom range', 'sinceMs=1&untilMs=40000000000', 'at most'],
     ['fractional limit', 'limit=1.5', 'safe integer'],
     ['invalid enum', 'channelType=email', 'Invalid channelType'],
     ['invalid grouping', 'groupBy=channelType,wat', 'Invalid groupBy'],
+    ['too many group dimensions', 'groupBy=channelType,model,status', 'at most two'],
+    ['invalid timezone', 'range=today&timezone=Not/AZone', 'timezone'],
+    ['abusive buckets', 'range=year&bucket=hour', 'too many'],
+    ['excessive event page', 'limit=2001', 'at most 2000'],
+    ['excessive top N', 'topN=101', 'at most 100'],
   ])('rejects %s', (_name, query, message) => {
     expect(parseModelUsageQuery(new URLSearchParams(query))).toEqual({
       ok: false,

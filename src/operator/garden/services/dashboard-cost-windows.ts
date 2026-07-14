@@ -43,11 +43,11 @@ export function resolveDashboardCostWindowRange(
 ): { sinceMs: number; untilMs: number } {
   switch (window) {
     case 'today':
-      return { sinceMs: startOfDashboardUtcDay(nowMs), untilMs: nowMs };
+      return { sinceMs: startOfDashboardUtcDay(nowMs), untilMs: nowMs + 1 };
     case 'week':
-      return { sinceMs: startOfDashboardUtcWeek(nowMs), untilMs: nowMs };
+      return { sinceMs: startOfDashboardUtcWeek(nowMs), untilMs: nowMs + 1 };
     case 'month':
-      return { sinceMs: startOfDashboardUtcMonth(nowMs), untilMs: nowMs };
+      return { sinceMs: startOfDashboardUtcMonth(nowMs), untilMs: nowMs + 1 };
   }
 }
 

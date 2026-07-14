@@ -11,20 +11,20 @@ import {
 } from './dashboard-cost-windows.js';
 
 describe('dashboard durable model-usage windows', () => {
-  it('resolves UTC today/week/month ranges with one inclusive data-through timestamp', () => {
+  it('resolves UTC today/week/month ranges with a half-open boundary after data-through', () => {
     const nowMs = Date.UTC(2026, 2, 18, 12, 34, 56, 789);
 
     expect(resolveDashboardCostWindowRange('today', nowMs)).toEqual({
       sinceMs: startOfDashboardUtcDay(nowMs),
-      untilMs: nowMs,
+      untilMs: nowMs + 1,
     });
     expect(resolveDashboardCostWindowRange('week', nowMs)).toEqual({
       sinceMs: startOfDashboardUtcWeek(nowMs),
-      untilMs: nowMs,
+      untilMs: nowMs + 1,
     });
     expect(resolveDashboardCostWindowRange('month', nowMs)).toEqual({
       sinceMs: startOfDashboardUtcMonth(nowMs),
-      untilMs: nowMs,
+      untilMs: nowMs + 1,
     });
   });
 

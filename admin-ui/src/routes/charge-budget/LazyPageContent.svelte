@@ -138,7 +138,12 @@
     try {
       const [chargeData, usageData, policyJson, dayData, monthData] = await Promise.all([
         getCharges({ limit: 200 }),
-        getModelUsage({ limit: 200, sinceMs: timestamp - 30 * DAY_MS }),
+        getModelUsage({
+          range: 'month',
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          bucket: 'day',
+          limit: 200,
+        }),
         getSubConfig('charge-policy'),
         getCharges({ limit: 500, sinceMs: timestamp - DAY_MS }),
         getCharges({ limit: 500, sinceMs: timestamp - 30 * DAY_MS }),

@@ -204,7 +204,7 @@ describe('AdminDashboardDataService', () => {
 
     expect(modelUsageService.getModelUsageData).toHaveBeenCalledWith({
       sinceMs: startOfDashboardUtcWeek(nowMs),
-      untilMs: nowMs,
+      untilMs: nowMs + 1,
       limit: 1,
     });
     expect(dashboard.stats.modelUsage).toMatchObject({

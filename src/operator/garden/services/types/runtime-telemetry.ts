@@ -11,6 +11,10 @@ import type {
   ModelUsageQuery,
 } from '../../../../shared/telemetry/model-usage.js';
 import type { FatigueTuningReport } from '../../../../core/agent/fatigue/adaptive-tuning.js';
+import type {
+  ModelUsageExportFormat,
+  SerializedModelUsageExport,
+} from '../model-usage-export.js';
 
 export interface AdminChargeLedgerService {
   getChargeLedgerData(query?: RunChargeLedgerQuery & FatigueLedgerQuery): Promise<RunChargeLedgerData & {
@@ -21,4 +25,8 @@ export interface AdminChargeLedgerService {
 
 export interface AdminModelUsageService {
   getModelUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
+  exportModelUsageData?(
+    query: ModelUsageQuery,
+    format: ModelUsageExportFormat,
+  ): Promise<SerializedModelUsageExport>;
 }

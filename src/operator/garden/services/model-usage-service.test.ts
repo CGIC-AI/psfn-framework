@@ -1,471 +1,74 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  ModelUsageCostHydrationData,
-  ModelUsageCostHydrationQueryPort,
   ModelUsageData,
+  ModelUsageExportData,
+  ModelUsageExportPort,
+  ModelUsageQueryPort,
 } from '../../../shared/telemetry/model-usage.js';
 import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../../shared/telemetry/model-usage-attribution.js';
 import { AdminModelUsageDataService } from './model-usage-service.js';
 
-function makeUsageData(): ModelUsageData {
-  const attributionCoverage = {
-    totalCalls: 1,
-    byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map(dimension => [dimension, {
-      knownCalls: 0,
-      unknownCalls: 1,
-      coveragePercent: 0,
-    }])) as ModelUsageData['attributionCoverage']['byDimension'],
+function usageFixture(): ModelUsageData {
+  const emptyCost = {
+    inputUsd: 0, inputKnownCalls: 0, outputUsd: 0, outputKnownCalls: 0,
+    cacheReadUsd: 0, cacheReadKnownCalls: 0, cacheWriteUsd: 0, cacheWriteKnownCalls: 0,
+    totalUsd: 0, totalKnownCalls: 0,
+  };
+  const totals = {
+    calls: 1, successfulCalls: 1, failedCalls: 0, inputTokens: 10, outputTokens: 5,
+    cacheReadTokens: 3, cacheWriteTokens: 2, totalTokens: 20,
+    providerCostUsd: 0, estimatedCostUsd: 0, totalCostUsd: 0,
+    providerCost: emptyCost, estimatedCost: emptyCost, effectiveCost: emptyCost,
+    totalDurationMs: 100, durationSamples: 1, totalTtftMs: 20, ttftSamples: 1,
+    averageDurationMs: 100, averageTtftMs: 20,
   };
   return {
-    query: { limit: 10 },
-    totals: {
-      calls: 1,
-      successfulCalls: 1,
-      failedCalls: 0,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      providerCostUsd: 0,
-      estimatedCostUsd: 0,
-      totalCostUsd: 0,
-      averageDurationMs: null,
-      averageTtftMs: null,
+    query: { range: 'custom', sinceMs: 1, untilMs: 2 },
+    resolvedRange: {
+      range: 'custom', timezone: 'UTC', sinceMs: 1, untilMs: 2, bucket: 'hour',
+      boundary: '[sinceMs, untilMs)', calendarWeekStartsOn: 'monday',
     },
-    byModel: [{
-      key: 'litellm:deepseek/deepseek-v4-pro',
-      calls: 1,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      totalCostUsd: 0,
-    }],
-    byPurpose: [{
-      key: 'background',
-      calls: 1,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      totalCostUsd: 0,
-    }],
-    byTool: [{
-      key: 'unknown',
-      calls: 1,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      totalCostUsd: 0,
-    }],
-    byCallKind: [{
-      key: 'completion',
-      calls: 1,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      totalCostUsd: 0,
-    }],
-    recentEvents: [{
-      id: 'usage-1',
-      logicalCallId: 'llm:1',
-      attempt: 1,
-      recordedAtMs: 1,
-      startedAtMs: 1,
-      dayKey: '2026-06-14',
-      monthKey: '2026-06',
-      status: 'success',
-      settlement: 'complete',
-      callKind: 'completion',
-      attribution: {
-        companionId: 'unknown',
-        sessionId: 'unknown',
-        channelId: 'unknown',
-        channelType: 'unknown',
-        callType: 'background',
-        purpose: 'background',
-        originType: 'unknown',
-        originStage: 'unknown',
-        service: 'unknown',
-        process: 'unknown',
-        turnId: 'unknown',
-        requestId: 'unknown',
-        toolName: 'unknown',
-        toolCallId: 'unknown',
-        chargeLane: 'unknown',
-        chargeSurface: 'unknown',
-        chargeRunId: 'unknown',
-        chargeRootRunId: 'unknown',
-        chargeParentRunId: 'unknown',
-        shardId: 'unknown',
-        subagentId: 'unknown',
-        conversationId: 'unknown',
-        rootInitiationId: 'unknown',
-        workloadType: 'unknown',
-        workloadId: 'unknown',
-      },
-      provider: 'litellm',
-      model: 'deepseek/deepseek-v4-pro',
-      requestedProvider: 'litellm',
-      requestedModel: 'deepseek/deepseek-v4-pro',
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      estimatedCostUsd: 0,
-      providerCost: {},
-      estimatedCost: {},
-      effectiveCost: {},
-      costSource: 'none',
-      metadata: {},
-    }],
-    expensiveEvents: [],
-    groupedBy: {},
-    attributionCoverage,
-  };
-}
-
-function makeCostHydrationData(usage: ModelUsageData): ModelUsageCostHydrationData {
-  const modelKey = usage.byModel[0]?.key ?? 'litellm:deepseek/deepseek-v4-pro';
-  const rows = (
-    breakdown: ModelUsageData['byModel'],
-    options: { model?: boolean; costSource?: boolean } = {},
-  ) => breakdown.map(entry => ({
-    ...entry,
-    modelKey: options.model ? entry.key : modelKey,
-    costSource: options.costSource && (entry.key === 'provider' || entry.key === 'estimate')
-      ? entry.key
-      : 'none' as const,
-  }));
-  return {
-    byDimension: {
-      model: rows(usage.byModel, { model: true }),
-      purpose: rows(usage.byPurpose),
-      toolName: rows(usage.byTool),
-      callKind: rows(usage.byCallKind),
-      ...Object.fromEntries(Object.entries(usage.groupedBy).map(([dimension, breakdown]) => [
-        dimension,
-        rows(breakdown, { costSource: dimension === 'costSource' }),
-      ])),
+    totals,
+    timeSeries: [{ startMs: 1, endMs: 2, ...totals }],
+    groups: [],
+    eventPage: { order: 'recent', items: [], nextCursor: null, hasMore: false },
+    byModel: [], byPurpose: [], byTool: [], byCallKind: [], groupedBy: {},
+    attributionCoverage: {
+      totalCalls: 1,
+      byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map(dimension => [dimension, {
+        knownCalls: 0, unknownCalls: 1, coveragePercent: 0,
+      }])) as ModelUsageData['attributionCoverage']['byDimension'],
     },
+    recentEvents: [], expensiveEvents: [],
   };
 }
 
 describe('AdminModelUsageDataService', () => {
-  it('hydrates missing usage costs from discovery pricing', async () => {
-    const usage = makeUsageData();
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async () => usage),
-      getUsageCostHydrationData: vi.fn(async () => makeCostHydrationData(usage)),
+  it('returns the canonical persisted projection without repricing or reshaping it', async () => {
+    const fixture = usageFixture();
+    const store: ModelUsageQueryPort & ModelUsageExportPort = {
+      getUsageData: vi.fn(async () => fixture),
+      exportUsageEvents: vi.fn(),
     };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => [{
-        id: 'openrouter/deepseek/deepseek-v4-pro',
-        pricing: {
-          prompt: '0.000002',
-          completion: '0.000004',
-        },
-      }]),
-      invalidateCache: vi.fn(),
-    };
-
-    const service = new AdminModelUsageDataService(store, discovery);
-    const data = await service.getModelUsageData({ limit: 10 });
-
-    expect(data.recentEvents[0]).toMatchObject({
-      estimatedCostUsd: 0.004,
-      costSource: 'estimate',
-      metadata: {
-        costHydration: {
-          source: 'model_discovery',
-          modelId: 'openrouter/deepseek/deepseek-v4-pro',
-        },
-      },
-    });
-    expect(data.recentEvents[0]?.providerCostUsd).toBeUndefined();
-    expect(data.totals.estimatedCostUsd).toBeCloseTo(0.004, 8);
-    expect(data.totals.totalCostUsd).toBeCloseTo(0.004, 8);
-    expect(data.byModel[0]?.totalCostUsd).toBeCloseTo(0.004, 8);
+    const result = await new AdminModelUsageDataService(store).getModelUsageData(fixture.query);
+    expect(result).toBe(fixture);
+    expect(result.timeSeries[0]?.totalCostUsd).toBe(result.totals.totalCostUsd);
   });
 
-  it('hydrates aggregate model totals when historical rows are outside the recent event window', async () => {
-    const historical = makeUsageData();
-    historical.recentEvents = [];
-    historical.expensiveEvents = [];
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async () => historical),
-      getUsageCostHydrationData: vi.fn(async () => makeCostHydrationData(historical)),
+  it('serializes exports returned by the same canonical store query', async () => {
+    const fixture = usageFixture();
+    const exportData: ModelUsageExportData = {
+      query: fixture.query,
+      resolvedRange: fixture.resolvedRange,
+      rows: [],
     };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => [{
-        id: 'openrouter/deepseek/deepseek-v4-pro',
-        pricing: {
-          prompt: '0.000002',
-          completion: '0.000004',
-        },
-      }]),
-      invalidateCache: vi.fn(),
+    const store: ModelUsageQueryPort & ModelUsageExportPort = {
+      getUsageData: vi.fn(),
+      exportUsageEvents: vi.fn(async () => exportData),
     };
-
-    const service = new AdminModelUsageDataService(store, discovery);
-    const data = await service.getModelUsageData({ limit: 10 });
-
-    expect(data.recentEvents).toEqual([]);
-    expect(data.byModel[0]).toMatchObject({
-      key: 'litellm:deepseek/deepseek-v4-pro',
-      totalCostUsd: 0.004,
-    });
-    expect(data.totals.estimatedCostUsd).toBeCloseTo(0.004, 8);
-    expect(data.totals.totalCostUsd).toBeCloseTo(0.004, 8);
-  });
-
-  it('reconciles hydrated costs across requested channel and cost-source groups', async () => {
-    const usage = makeUsageData();
-    usage.query = { limit: 10, groupBy: ['channelId', 'costSource'] };
-    usage.recentEvents[0]!.attribution.channelId = 'channel-1';
-    const baseBreakdown = {
-      calls: 1,
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 1500,
-      totalCostUsd: 0,
-    };
-    usage.groupedBy = {
-      channelId: [{ key: 'channel-1', ...baseBreakdown }],
-      costSource: [{ key: 'none', ...baseBreakdown }],
-    };
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async () => usage),
-      getUsageCostHydrationData: vi.fn(async () => makeCostHydrationData(usage)),
-    };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => [{
-        id: 'openrouter/deepseek/deepseek-v4-pro',
-        pricing: { prompt: '0.000002', completion: '0.000004' },
-      }]),
-      invalidateCache: vi.fn(),
-    };
-
-    const data = await new AdminModelUsageDataService(store, discovery)
-      .getModelUsageData(usage.query);
-
-    expect(data.groupedBy.channelId).toEqual([
-      expect.objectContaining({ key: 'channel-1', calls: 1, totalCostUsd: 0.004 }),
-    ]);
-    expect(data.groupedBy.costSource).toEqual([
-      expect.objectContaining({ key: 'estimate', calls: 1, totalCostUsd: 0.004 }),
-    ]);
-    expect(data.groupedBy.costSource?.some(entry => entry.key === 'none')).toBe(false);
-    expect(data.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
-      .toBeCloseTo(data.totals.totalCostUsd, 8);
-    expect(data.groupedBy.costSource?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
-      .toBeCloseTo(data.totals.totalCostUsd, 8);
-  });
-
-  it('hydrates complete grouped totals independently of the recent-event display limit', async () => {
-    const makeTwoCallUsage = (limit: number): ModelUsageData => {
-      const usage = makeUsageData();
-      const newest = {
-        ...usage.recentEvents[0]!,
-        id: 'usage-2',
-        logicalCallId: 'llm:2',
-        recordedAtMs: 2,
-        startedAtMs: 2,
-        attribution: {
-          ...usage.recentEvents[0]!.attribution,
-          channelId: 'channel-1',
-        },
-      };
-      const oldest = {
-        ...usage.recentEvents[0]!,
-        id: 'usage-1',
-        logicalCallId: 'llm:1',
-        attribution: {
-          ...usage.recentEvents[0]!.attribution,
-          channelId: 'channel-1',
-        },
-      };
-      const aggregate = {
-        calls: 2,
-        inputTokens: 2000,
-        outputTokens: 1000,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        totalTokens: 3000,
-        totalCostUsd: 0,
-      };
-      usage.query = { limit, groupBy: ['channelId', 'costSource'] };
-      usage.totals = {
-        ...usage.totals,
-        calls: 2,
-        successfulCalls: 2,
-        inputTokens: 2000,
-        outputTokens: 1000,
-        totalTokens: 3000,
-      };
-      usage.byModel = [{ key: 'litellm:deepseek/deepseek-v4-pro', ...aggregate }];
-      usage.byPurpose = [{ key: 'background', ...aggregate }];
-      usage.byTool = [{ key: 'unknown', ...aggregate }];
-      usage.byCallKind = [{ key: 'completion', ...aggregate }];
-      usage.groupedBy = {
-        channelId: [{ key: 'channel-1', ...aggregate }],
-        costSource: [{ key: 'none', ...aggregate }],
-      };
-      usage.recentEvents = limit === 1 ? [newest] : [newest, oldest];
-      return usage;
-    };
-    const completeUsage = makeTwoCallUsage(2);
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async query => makeTwoCallUsage(query?.limit ?? 1)),
-      getUsageCostHydrationData: vi.fn(async () => makeCostHydrationData(completeUsage)),
-    };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => [{
-        id: 'openrouter/deepseek/deepseek-v4-pro',
-        pricing: { prompt: '0.000002', completion: '0.000004' },
-      }]),
-      invalidateCache: vi.fn(),
-    };
-    const service = new AdminModelUsageDataService(store, discovery);
-
-    const atLimitOne = await service.getModelUsageData({
-      limit: 1,
-      groupBy: ['channelId', 'costSource'],
-    });
-    const atLimitTwo = await service.getModelUsageData({
-      limit: 2,
-      groupBy: ['channelId', 'costSource'],
-    });
-
-    expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(0.008, 8);
-    expect(atLimitTwo.totals.totalCostUsd).toBeCloseTo(0.008, 8);
-    expect(atLimitOne.groupedBy).toEqual(atLimitTwo.groupedBy);
-    expect(atLimitOne.groupedBy.channelId).toEqual([
-      expect.objectContaining({ key: 'channel-1', calls: 2, totalCostUsd: 0.008 }),
-    ]);
-    expect(atLimitOne.groupedBy.costSource).toEqual([
-      expect.objectContaining({ key: 'estimate', calls: 2, totalCostUsd: 0.008 }),
-    ]);
-  });
-
-  it('ranks requested groups from all hydrated aggregates beyond the stored top twenty', async () => {
-    const allAggregates = Array.from({ length: 21 }, (_, offset) => {
-      const index = offset + 1;
-      const isExpensiveOmittedGroup = index === 21;
-      return {
-        key: `channel-${String(index).padStart(2, '0')}`,
-        modelKey: `litellm:model-${String(index).padStart(2, '0')}`,
-        costSource: 'none' as const,
-        calls: 1,
-        inputTokens: isExpensiveOmittedGroup ? 1 : 1000,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        totalTokens: isExpensiveOmittedGroup ? 1 : 1000,
-        totalCostUsd: 0,
-      };
-    });
-    const makeTwentyOneGroupUsage = (limit: number): ModelUsageData => {
-      const usage = makeUsageData();
-      const displayedAggregates = allAggregates.slice(0, 20);
-      usage.query = { limit, groupBy: ['channelId'] };
-      usage.totals = {
-        ...usage.totals,
-        calls: 21,
-        successfulCalls: 21,
-        inputTokens: 20_001,
-        outputTokens: 0,
-        totalTokens: 20_001,
-      };
-      usage.byModel = displayedAggregates.map(aggregate => ({
-        ...aggregate,
-        key: aggregate.modelKey,
-      }));
-      usage.groupedBy = {
-        channelId: displayedAggregates.map(({ modelKey: _modelKey, costSource: _costSource, ...aggregate }) => aggregate),
-      };
-      usage.recentEvents = Array.from({ length: limit }, (_, index) => ({
-        ...usage.recentEvents[0]!,
-        id: `usage-${index + 1}`,
-        logicalCallId: `llm:${index + 1}`,
-        model: `model-${String(index + 1).padStart(2, '0')}`,
-        inputTokens: 1000,
-        outputTokens: 0,
-        totalTokens: 1000,
-        attribution: {
-          ...usage.recentEvents[0]!.attribution,
-          channelId: `channel-${String(index + 1).padStart(2, '0')}`,
-        },
-      }));
-      return usage;
-    };
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async query => makeTwentyOneGroupUsage(query?.limit ?? 1)),
-      getUsageCostHydrationData: vi.fn(async () => ({
-        byDimension: {
-          model: allAggregates.map(aggregate => ({
-            ...aggregate,
-            key: aggregate.modelKey.slice(aggregate.modelKey.indexOf(':') + 1),
-          })),
-          channelId: allAggregates,
-        },
-      })),
-    };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => allAggregates.map((aggregate, index) => ({
-        id: `openrouter/${aggregate.modelKey.slice(aggregate.modelKey.indexOf(':') + 1)}`,
-        pricing: {
-          prompt: index === 20 ? '1' : '0.000001',
-          completion: index === 20 ? '1' : '0.000001',
-        },
-      }))),
-      invalidateCache: vi.fn(),
-    };
-    const service = new AdminModelUsageDataService(store, discovery);
-
-    const atLimitOne = await service.getModelUsageData({ limit: 1, groupBy: ['channelId'] });
-    const atLimitTwo = await service.getModelUsageData({ limit: 2, groupBy: ['channelId'] });
-
-    expect(atLimitOne.groupedBy.channelId).toEqual(atLimitTwo.groupedBy.channelId);
-    expect(atLimitOne.groupedBy.channelId).toHaveLength(21);
-    expect(atLimitOne.groupedBy.channelId?.[0]).toEqual(expect.objectContaining({
-      key: 'channel-21',
-      calls: 1,
-      totalCostUsd: 1,
-    }));
-    expect(atLimitOne.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
-      .toBeCloseTo(1.02, 8);
-    expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(1.02, 8);
-  });
-
-  it('propagates required aggregate-query failures after model discovery succeeds', async () => {
-    const usage = makeUsageData();
-    const store: ModelUsageCostHydrationQueryPort = {
-      getUsageData: vi.fn(async () => usage),
-      getUsageCostHydrationData: vi.fn(async () => {
-        throw new Error('model usage hydration query unavailable');
-      }),
-    };
-    const discovery = {
-      getAvailableModels: vi.fn(async () => [{
-        id: 'openrouter/deepseek/deepseek-v4-pro',
-        pricing: { prompt: '0.000002', completion: '0.000004' },
-      }]),
-      invalidateCache: vi.fn(),
-    };
-
-    await expect(new AdminModelUsageDataService(store, discovery)
-      .getModelUsageData({ limit: 10 }))
-      .rejects.toThrow('model usage hydration query unavailable');
+    const result = await new AdminModelUsageDataService(store)
+      .exportModelUsageData(fixture.query, 'json');
+    expect(JSON.parse(result.body)).toEqual(exportData);
+    expect(store.exportUsageEvents).toHaveBeenCalledWith(fixture.query);
   });
 });

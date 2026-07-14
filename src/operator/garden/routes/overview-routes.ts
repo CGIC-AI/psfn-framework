@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../../../channels/backplane/http/primitives.js';
+import { sendJson, sendText } from '../../../channels/backplane/http/primitives.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
@@ -494,6 +494,48 @@ export function buildAdminOverviewRoutes(options: {
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/model-usage/export'),
+      handle: (req, res) => {
+        if (!modelUsageService?.exportModelUsageData) {
+          sendJson(res, 503, { error: MODEL_USAGE_UNAVAILABLE_ERROR });
+          return;
+        }
+        const url = parseRequestUrl(req, '/api/admin/model-usage/export');
+        const formats = url.searchParams.getAll('format');
+        if (formats.length !== 1 || (formats[0] !== 'csv' && formats[0] !== 'json')) {
+          sendJson(res, 400, { error: 'format query parameter must be exactly one of: csv, json.' });
+          return;
+        }
+        const queryParams = new URLSearchParams(url.searchParams);
+        queryParams.delete('format');
+        const query = parseModelUsageQuery(queryParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
+          return;
+        }
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Model usage export is outside this Garden tenant.' });
+          return;
+        }
+        modelUsageService.exportModelUsageData(query.value, formats[0]).then(
+          payload => sendText(res, 200, payload.body, {
+            ...ADMIN_DYNAMIC_JSON_HEADERS,
+            'Content-Type': payload.contentType,
+            'Content-Disposition': `attachment; filename="${payload.filename}"`,
+            'X-Model-Usage-Row-Count': String(payload.rowCount),
+          }),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to export model usage telemetry'),
           }),
         );
       },

@@ -1502,6 +1502,76 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_slot_time ON model_usage_events(companion_id, slot_key, requested_provider, requested_model, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_expensive ON model_usage_events(companion_id, (COALESCE(effective_cost_usd, 0)) DESC, recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
+  `
+  CREATE TABLE IF NOT EXISTS icp_conversation_cost_reservations (
+    logical_call_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    root_initiation_id TEXT NOT NULL,
+    companion_id TEXT NOT NULL,
+    cost_purpose TEXT NOT NULL,
+    closeout_eligible BOOLEAN NOT NULL,
+    projected_cost_usd DOUBLE PRECISION NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reservation_reason TEXT NOT NULL,
+    settled_event_id TEXT,
+    created_at_ms BIGINT NOT NULL,
+    settled_at_ms BIGINT,
+    PRIMARY KEY (logical_call_id, attempt),
+    CHECK (attempt >= 0),
+    CHECK (cost_purpose IN ('conversation_turn', 'tool', 'summary', 'extraction', 'sidecar')),
+    CHECK (projected_cost_usd >= 0 AND projected_cost_usd <> 'NaN'::double precision),
+    CHECK (status IN ('pending', 'settled', 'settled_unknown')),
+    CHECK (reservation_reason IN ('below_warning', 'final_closeout_reserve')),
+    CHECK (
+      (status = 'pending' AND settled_event_id IS NULL AND settled_at_ms IS NULL)
+      OR (status IN ('settled', 'settled_unknown') AND settled_event_id IS NOT NULL AND settled_at_ms IS NOT NULL)
+    )
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_icp_conversation_cost_reservations_projection
+    ON icp_conversation_cost_reservations (conversation_id, root_initiation_id, status, created_at_ms);
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS icp_conversation_cost_decisions (
+    decision_id TEXT PRIMARY KEY,
+    recorded_at_ms BIGINT NOT NULL,
+    logical_call_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    root_initiation_id TEXT NOT NULL,
+    companion_id TEXT NOT NULL,
+    cost_purpose TEXT NOT NULL,
+    closeout_eligible BOOLEAN NOT NULL,
+    allowed BOOLEAN NOT NULL,
+    replayed BOOLEAN NOT NULL,
+    reason TEXT NOT NULL,
+    projected_request_cost_usd DOUBLE PRECISION NOT NULL,
+    actual_cost_usd DOUBLE PRECISION NOT NULL,
+    pending_projected_cost_usd DOUBLE PRECISION NOT NULL,
+    projected_total_cost_usd DOUBLE PRECISION NOT NULL,
+    unknown_cost_attempt_count INTEGER NOT NULL,
+    warning_threshold_usd DOUBLE PRECISION NOT NULL,
+    hard_limit_usd DOUBLE PRECISION NOT NULL,
+    CHECK (attempt >= 0),
+    CHECK (cost_purpose IN ('conversation_turn', 'tool', 'summary', 'extraction', 'sidecar')),
+    CHECK (reason IN (
+      'below_warning', 'final_closeout_reserve', 'warning_closeout_reserve_only',
+      'hard_limit_exceeded', 'unknown_historical_cost', 'attempt_already_settled'
+    )),
+    CHECK (projected_request_cost_usd >= 0 AND projected_request_cost_usd <> 'NaN'::double precision),
+    CHECK (actual_cost_usd >= 0 AND actual_cost_usd <> 'NaN'::double precision),
+    CHECK (pending_projected_cost_usd >= 0 AND pending_projected_cost_usd <> 'NaN'::double precision),
+    CHECK (projected_total_cost_usd >= 0 AND projected_total_cost_usd <> 'NaN'::double precision),
+    CHECK (unknown_cost_attempt_count >= 0),
+    CHECK (warning_threshold_usd > 0 AND hard_limit_usd > warning_threshold_usd)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_icp_conversation_cost_decisions_timeline
+    ON icp_conversation_cost_decisions (conversation_id, root_initiation_id, recorded_at_ms DESC, decision_id DESC);
+  `,
 ];
 
 export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [

@@ -1,4 +1,6 @@
 import type { ObservabilityCallType } from '../contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../contracts/icp-autonomy.js';
+import type { IcpCostBreakerConfig } from '../contracts/charge-policy.js';
 import type {
   ModelUsageAttribution,
   ModelUsageAttributionInput,
@@ -399,4 +401,72 @@ export interface ModelUsageBudgetQueryPort {
     nowMs?: number,
     scope?: { companionId: string },
   ): Promise<ModelUsageBudgetSpendSnapshot>;
+}
+
+export type EnabledIcpCostBreakerPolicy = Extract<IcpCostBreakerConfig, { enabled: true }>;
+
+export type IcpConversationCostEnforcementState =
+  | 'normal'
+  | 'warning'
+  | 'hard_stop'
+  | 'unknown_cost';
+
+export interface IcpConversationCostProjection {
+  conversationId: string;
+  rootInitiationId: string;
+  actualCostUsd: number;
+  pendingProjectedCostUsd: number;
+  projectedTotalCostUsd: number;
+  warningThresholdUsd: number;
+  hardLimitUsd: number;
+  remainingToHardLimitUsd: number;
+  actualAttemptCount: number;
+  unknownCostAttemptCount: number;
+  pendingReservationCount: number;
+  staleReservationCount: number;
+  settledReservationCount: number;
+  attributedCompanionCount: number;
+  enforcementState: IcpConversationCostEnforcementState;
+}
+
+export interface IcpConversationCostProjectionQuery {
+  conversationId: string;
+  rootInitiationId: string;
+  policy: EnabledIcpCostBreakerPolicy;
+  nowMs?: number;
+}
+
+export interface IcpConversationCostReservationInput {
+  logicalCallId: string;
+  attempt: number;
+  projectedCostUsd: number;
+  correlation: IcpConversationCorrelation;
+  policy: EnabledIcpCostBreakerPolicy;
+  requestedAtMs?: number;
+}
+
+export type IcpConversationCostReservationReason =
+  | 'below_warning'
+  | 'final_closeout_reserve'
+  | 'warning_closeout_reserve_only'
+  | 'hard_limit_exceeded'
+  | 'unknown_historical_cost'
+  | 'attempt_already_settled';
+
+export interface IcpConversationCostReservationResult {
+  allowed: boolean;
+  replayed: boolean;
+  reason: IcpConversationCostReservationReason;
+  projectedRequestCostUsd: number;
+  projection: IcpConversationCostProjection;
+}
+
+/** Fleet-only atomic reservation/query surface owned by canonical model accounting. */
+export interface IcpConversationCostAccountingPort {
+  reserveIcpConversationCost(
+    input: IcpConversationCostReservationInput,
+  ): Promise<IcpConversationCostReservationResult>;
+  getIcpConversationCostProjection(
+    query: IcpConversationCostProjectionQuery,
+  ): Promise<IcpConversationCostProjection>;
 }

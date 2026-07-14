@@ -249,3 +249,76 @@ describe('executeFleetRestoreTransaction pre-commit cleanup', () => {
     expect(readdirSync(join(root, 'restore'))).toEqual([]);
   });
 });
+
+describe('executeFleetRestoreTransaction staging ownership', () => {
+  it.each(['absent', 'foreign'] as const)(
+    'preserves pre-existing staged content with an %s marker and no journal',
+    async (markerState) => {
+      const root = join(tmpdir(), `fleet-restore-staging-ownership-${markerState}-${Date.now()}`);
+      roots.push(root);
+      const artifactDir = join(root, 'artifact');
+      const source = join(artifactDir, 'tree');
+      const destination = join(root, 'restore', 'destination');
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, 'payload.txt'), 'backup payload\n');
+      const baseOptions: FleetRestoreTransactionOptions = {
+        kind: 'companion',
+        artifactDir,
+        backupRootDir: join(root, 'backups'),
+        dumpPath: join(artifactDir, 'database', 'scope.dump'),
+        databaseTarget: 'postgresql://restore@127.0.0.1/runtime',
+        expectedSchemas: ['companion_alpha'],
+        specs: [{ treeDirName: 'tree', destination }],
+        assertTargetDatabaseSafe: async () => undefined,
+        inspectDatabaseState: async () => 'none',
+        inspectDatabaseOperation: async () => 'absent',
+        prepareDatabaseOperation: async () => undefined,
+        commitDatabaseOperation: async () => undefined,
+        removeDatabaseOperation: async () => undefined,
+        restoreDatabase: async () => undefined,
+        rollbackDatabase: async () => undefined,
+        faultInjection: (stage) => {
+          if (stage === 'after_journal') throw new Error('injected journal loss');
+        },
+      };
+
+      await expect(executeFleetRestoreTransaction(baseOptions)).rejects.toThrow(/journal loss/);
+      const restoreRoot = join(root, 'restore');
+      const journalName = readdirSync(restoreRoot)
+        .find(name => name.startsWith('.restore-operation-'));
+      if (!journalName) throw new Error('Expected a seeded restore journal');
+      const journalPath = join(restoreRoot, journalName);
+      const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+        trees: Array<{ staging: string }>;
+      };
+      const staging = journal.trees[0].staging;
+      rmSync(journalPath);
+      rmSync(staging, { recursive: true, force: true });
+      mkdirSync(staging);
+      const sentinelPath = join(staging, 'sentinel.txt');
+      writeFileSync(sentinelPath, markerState + ' owner sentinel\n');
+
+      let error: unknown;
+      try {
+        await executeFleetRestoreTransaction({
+          ...baseOptions,
+          inspectDatabaseOperation: async () => markerState,
+          prepareDatabaseOperation: async () => {
+            throw new Error('orphaned staging must not be claimed');
+          },
+          faultInjection: undefined,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(readFileSync(sentinelPath, 'utf8')).toBe(markerState + ' owner sentinel\n');
+      expect(readdirSync(restoreRoot).filter(name => name.startsWith('.restore-operation-')))
+        .toEqual([]);
+      expect(existsSync(destination)).toBe(false);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/staging.*already exists|staging.*ownership/i);
+    },
+  );
+});

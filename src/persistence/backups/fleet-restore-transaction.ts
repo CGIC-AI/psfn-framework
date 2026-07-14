@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -147,6 +148,15 @@ function assertDestinationsDoNotExist(trees: readonly StagedRestoreTree[]): void
   }
 }
 
+function assertStagingDoesNotExist(trees: readonly StagedRestoreTree[]): void {
+  const collision = trees.find(tree => existsSync(tree.staging));
+  if (collision) {
+    throw new Error(
+      `Fleet restore staging path already exists without an authenticated restore journal: ${collision.staging}`,
+    );
+  }
+}
+
 function createRestoreDatabaseOperation(
   options: FleetRestoreTransactionOptions,
   trees: readonly StagedRestoreTree[],
@@ -171,13 +181,17 @@ function stageRestoreTrees(
     ...tree,
     staging: join(dirname(tree.destination), `.${basename(tree.destination)}.restore-${operationId}`),
   }));
+  const claimed: StagedRestoreTree[] = [];
   try {
     for (const tree of staged) {
       ensureDirectoryDurableSync(dirname(tree.destination));
-      if (existsSync(tree.staging)) {
-        rmSync(tree.staging, { recursive: true, force: true });
-        fsyncDirectorySync(dirname(tree.staging));
+      try {
+        mkdirSync(tree.staging);
+      } catch (error) {
+        assertStagingDoesNotExist([tree]);
+        throw error;
       }
+      claimed.push(tree);
       cpSync(tree.source, tree.staging, { recursive: true, errorOnExist: true, force: false });
     }
     prepareStaging?.(staged);
@@ -187,7 +201,7 @@ function stageRestoreTrees(
     }
     return staged;
   } catch (error) {
-    cleanupStagedTrees(staged);
+    cleanupStagedTrees(claimed);
     throw error;
   }
 }
@@ -329,10 +343,12 @@ export async function executeFleetRestoreTransaction(
     journal = parseRestoreJournal(journalPath, expectedJournal);
   } else {
     assertDestinationsDoNotExist(plannedTrees);
+    assertStagingDoesNotExist(expectedTrees);
     await options.assertTargetDatabaseSafe();
     // Database preflight invokes external tooling, so recheck filesystem
     // collisions immediately before recording intent and touching Postgres.
     assertDestinationsDoNotExist(plannedTrees);
+    assertStagingDoesNotExist(expectedTrees);
     journal = {
       ...expectedJournal,
       trees: stageRestoreTrees(plannedTrees, operationId, options.prepareStaging),

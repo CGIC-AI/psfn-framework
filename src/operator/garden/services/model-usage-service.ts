@@ -33,27 +33,29 @@ export class AdminModelUsageDataService implements AdminModelUsageService {
   async getModelUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
     const data = await this.store.getUsageData(query);
     if (!this.modelDiscovery) return data;
+    let availableModels: DiscoveredModel[];
     try {
-      const hydrationDimensions = [...new Set<ModelUsageGroupDimension>([
-        'model',
-        'purpose',
-        'toolName',
-        'callKind',
-        ...(data.query.groupBy ?? []),
-      ])];
-      const [availableModels, costHydration] = await Promise.all([
-        this.modelDiscovery.getAvailableModels(),
-        this.store.getUsageCostHydrationData(data.query, hydrationDimensions),
-      ]);
-      const pricingLookup = buildPricingLookup(availableModels);
-      if (pricingLookup.size === 0) return data;
-      return hydrateMissingModelUsageCosts(data, pricingLookup, costHydration);
+      availableModels = await this.modelDiscovery.getAvailableModels();
     } catch (error) {
-      log.warn('Failed to hydrate model usage costs from discovery pricing', {
+      log.warn('Failed to discover model pricing for usage cost hydration', {
         error: error instanceof Error ? error.message : String(error),
       });
       return data;
     }
+    const pricingLookup = buildPricingLookup(availableModels);
+    if (pricingLookup.size === 0) return data;
+    const hydrationDimensions = [...new Set<ModelUsageGroupDimension>([
+      'model',
+      'purpose',
+      'toolName',
+      'callKind',
+      ...(data.query.groupBy ?? []),
+    ])];
+    const costHydration = await this.store.getUsageCostHydrationData(
+      data.query,
+      hydrationDimensions,
+    );
+    return hydrateMissingModelUsageCosts(data, pricingLookup, costHydration);
   }
 }
 
@@ -285,6 +287,7 @@ function hydrateBreakdownFromCostAggregates(
   lookup: ReadonlyMap<string, ModelPricingRates>,
   options: {
     keyForAggregate?: (aggregate: ModelUsageCostHydrationBreakdown) => string;
+    includeAllAggregateKeys?: boolean;
     reclassifyEstimatedNone?: boolean;
   } = {},
 ): ModelUsageBreakdown[] {
@@ -293,7 +296,7 @@ function hydrateBreakdownFromCostAggregates(
   const byKey = new Map<string, ModelUsageBreakdown>();
   for (const aggregate of aggregates) {
     const sourceKey = options.keyForAggregate?.(aggregate) ?? aggregate.key;
-    if (!allowedKeys.has(sourceKey)) continue;
+    if (!options.includeAllAggregateKeys && !allowedKeys.has(sourceKey)) continue;
     seenKeys.add(sourceKey);
     const cost = hydratedAggregateCost(aggregate, lookup);
     const outputKey = options.reclassifyEstimatedNone
@@ -368,7 +371,10 @@ function hydrateMissingModelUsageCosts(
       breakdown,
       costHydration.byDimension[dimension] ?? [],
       lookup,
-      { reclassifyEstimatedNone: dimension === 'costSource' },
+      {
+        includeAllAggregateKeys: true,
+        reclassifyEstimatedNone: dimension === 'costSource',
+      },
     );
   }
   return {

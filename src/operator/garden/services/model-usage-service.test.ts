@@ -357,4 +357,115 @@ describe('AdminModelUsageDataService', () => {
       expect.objectContaining({ key: 'estimate', calls: 2, totalCostUsd: 0.008 }),
     ]);
   });
+
+  it('ranks requested groups from all hydrated aggregates beyond the stored top twenty', async () => {
+    const allAggregates = Array.from({ length: 21 }, (_, offset) => {
+      const index = offset + 1;
+      const isExpensiveOmittedGroup = index === 21;
+      return {
+        key: `channel-${String(index).padStart(2, '0')}`,
+        modelKey: `litellm:model-${String(index).padStart(2, '0')}`,
+        costSource: 'none' as const,
+        calls: 1,
+        inputTokens: isExpensiveOmittedGroup ? 1 : 1000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: isExpensiveOmittedGroup ? 1 : 1000,
+        totalCostUsd: 0,
+      };
+    });
+    const makeTwentyOneGroupUsage = (limit: number): ModelUsageData => {
+      const usage = makeUsageData();
+      const displayedAggregates = allAggregates.slice(0, 20);
+      usage.query = { limit, groupBy: ['channelId'] };
+      usage.totals = {
+        ...usage.totals,
+        calls: 21,
+        successfulCalls: 21,
+        inputTokens: 20_001,
+        outputTokens: 0,
+        totalTokens: 20_001,
+      };
+      usage.byModel = displayedAggregates.map(aggregate => ({
+        ...aggregate,
+        key: aggregate.modelKey,
+      }));
+      usage.groupedBy = {
+        channelId: displayedAggregates.map(({ modelKey: _modelKey, costSource: _costSource, ...aggregate }) => aggregate),
+      };
+      usage.recentEvents = Array.from({ length: limit }, (_, index) => ({
+        ...usage.recentEvents[0]!,
+        id: `usage-${index + 1}`,
+        logicalCallId: `llm:${index + 1}`,
+        model: `model-${String(index + 1).padStart(2, '0')}`,
+        inputTokens: 1000,
+        outputTokens: 0,
+        totalTokens: 1000,
+        attribution: {
+          ...usage.recentEvents[0]!.attribution,
+          channelId: `channel-${String(index + 1).padStart(2, '0')}`,
+        },
+      }));
+      return usage;
+    };
+    const store: ModelUsageCostHydrationQueryPort = {
+      getUsageData: vi.fn(async query => makeTwentyOneGroupUsage(query?.limit ?? 1)),
+      getUsageCostHydrationData: vi.fn(async () => ({
+        byDimension: {
+          model: allAggregates.map(aggregate => ({
+            ...aggregate,
+            key: aggregate.modelKey.slice(aggregate.modelKey.indexOf(':') + 1),
+          })),
+          channelId: allAggregates,
+        },
+      })),
+    };
+    const discovery = {
+      getAvailableModels: vi.fn(async () => allAggregates.map((aggregate, index) => ({
+        id: `openrouter/${aggregate.modelKey.slice(aggregate.modelKey.indexOf(':') + 1)}`,
+        pricing: {
+          prompt: index === 20 ? '1' : '0.000001',
+          completion: index === 20 ? '1' : '0.000001',
+        },
+      }))),
+      invalidateCache: vi.fn(),
+    };
+    const service = new AdminModelUsageDataService(store, discovery);
+
+    const atLimitOne = await service.getModelUsageData({ limit: 1, groupBy: ['channelId'] });
+    const atLimitTwo = await service.getModelUsageData({ limit: 2, groupBy: ['channelId'] });
+
+    expect(atLimitOne.groupedBy.channelId).toEqual(atLimitTwo.groupedBy.channelId);
+    expect(atLimitOne.groupedBy.channelId).toHaveLength(21);
+    expect(atLimitOne.groupedBy.channelId?.[0]).toEqual(expect.objectContaining({
+      key: 'channel-21',
+      calls: 1,
+      totalCostUsd: 1,
+    }));
+    expect(atLimitOne.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
+      .toBeCloseTo(1.02, 8);
+    expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(1.02, 8);
+  });
+
+  it('propagates required aggregate-query failures after model discovery succeeds', async () => {
+    const usage = makeUsageData();
+    const store: ModelUsageCostHydrationQueryPort = {
+      getUsageData: vi.fn(async () => usage),
+      getUsageCostHydrationData: vi.fn(async () => {
+        throw new Error('model usage hydration query unavailable');
+      }),
+    };
+    const discovery = {
+      getAvailableModels: vi.fn(async () => [{
+        id: 'openrouter/deepseek/deepseek-v4-pro',
+        pricing: { prompt: '0.000002', completion: '0.000004' },
+      }]),
+      invalidateCache: vi.fn(),
+    };
+
+    await expect(new AdminModelUsageDataService(store, discovery)
+      .getModelUsageData({ limit: 10 }))
+      .rejects.toThrow('model usage hydration query unavailable');
+  });
 });

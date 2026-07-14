@@ -440,6 +440,78 @@ describe('PostgresModelUsageStore reconciliation', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('reranks all Garden groups after hydration when the most expensive group was outside the stored top twenty', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-garden-full-group-ranking',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      await Promise.all(Array.from({ length: 21 }, async (_, offset) => {
+        const index = offset + 1;
+        const suffix = String(index).padStart(2, '0');
+        const isExpensiveOmittedGroup = index === 21;
+        await store.recordUsageEvent({
+          logicalCallId: `garden-ranked-${suffix}`,
+          recordedAtMs: 1_752_700_000_000 + index,
+          startedAtMs: 1_752_699_999_900 + index,
+          status: 'success',
+          settlement: 'complete',
+          callKind: 'completion',
+          attribution: {
+            companionId: 'companion-a',
+            sessionId: 'garden-ranked-session',
+            channelId: `channel-${suffix}`,
+            channelType: 'api',
+            callType: 'background',
+            purpose: 'garden-full-group-ranking',
+          },
+          provider: 'litellm',
+          model: `model-${suffix}`,
+          inputTokens: isExpensiveOmittedGroup ? 1 : 1000,
+          totalTokens: isExpensiveOmittedGroup ? 1 : 1000,
+          costSource: 'none',
+        });
+      }));
+      const discovery = {
+        getAvailableModels: vi.fn(async () => Array.from({ length: 21 }, (_, offset) => {
+          const index = offset + 1;
+          const suffix = String(index).padStart(2, '0');
+          return {
+            id: `openrouter/model-${suffix}`,
+            pricing: {
+              prompt: index === 21 ? '1' : '0.000001',
+              completion: index === 21 ? '1' : '0.000001',
+            },
+          };
+        })),
+        invalidateCache: vi.fn(),
+      };
+      const service = new AdminModelUsageDataService(store, discovery);
+
+      const atLimitOne = await service.getModelUsageData({ limit: 1, groupBy: ['channelId'] });
+      const atLimitTwo = await service.getModelUsageData({ limit: 2, groupBy: ['channelId'] });
+
+      expect(atLimitOne.recentEvents).toHaveLength(1);
+      expect(atLimitTwo.recentEvents).toHaveLength(2);
+      expect(atLimitOne.groupedBy.channelId).toEqual(atLimitTwo.groupedBy.channelId);
+      expect(atLimitOne.groupedBy.channelId).toHaveLength(21);
+      expect(atLimitOne.groupedBy.channelId?.[0]).toEqual(expect.objectContaining({
+        key: 'channel-21',
+        calls: 1,
+        totalCostUsd: 1,
+      }));
+      expect(atLimitOne.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
+        .toBeCloseTo(1.02, 8);
+      expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(1.02, 8);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('persists immutable component economics across restart and rejects conflicting dedupe', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();

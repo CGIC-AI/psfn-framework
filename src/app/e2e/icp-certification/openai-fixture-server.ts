@@ -19,8 +19,11 @@ export interface IcpCertificationModelRequest {
 export interface IcpCertificationModelServer {
   baseUrl: string;
   readonly requests: readonly IcpCertificationModelRequest[];
+  queueConsentDecision(decision: IcpCertificationConsentDecision): void;
   stop(): Promise<void>;
 }
+
+export type IcpCertificationConsentDecision = 'send' | 'defer' | 'decline';
 
 function normalizeText(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -29,8 +32,15 @@ function normalizeText(value: unknown): string {
   return String(value ?? '');
 }
 
-function renderChatResponse(promptText: string): string {
-  if (promptText.includes('private consent moment')) return '{"action":"send"}';
+function renderChatResponse(
+  promptText: string,
+  consentDecision: IcpCertificationConsentDecision,
+): string {
+  if (promptText.includes('private consent moment')) {
+    return consentDecision === 'send'
+      ? '{"action":"send"}'
+      : JSON.stringify({ action: consentDecision, reason: `fixture_${consentDecision}` });
+  }
   if (promptText.includes('initiate one natural message to the peer')) {
     return 'I wanted to check in and share a quiet hello.';
   }
@@ -130,6 +140,7 @@ function sendStreamingResponse(
 
 export async function startIcpCertificationModelServer(): Promise<IcpCertificationModelServer> {
   const requests: IcpCertificationModelRequest[] = [];
+  const consentDecisions: IcpCertificationConsentDecision[] = [];
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -143,7 +154,12 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
         .toLowerCase();
       requests.push({ model });
       const extraction = model.includes('deepseek') && !prompt.includes('private consent moment');
-      const content = extraction ? renderExtractionXml() : renderChatResponse(prompt);
+      const consentDecision = prompt.includes('private consent moment')
+        ? (consentDecisions.shift() ?? 'send')
+        : 'send';
+      const content = extraction
+        ? renderExtractionXml()
+        : renderChatResponse(prompt, consentDecision);
       const requestedOutputTokens = typeof body.max_tokens === 'number'
         ? Math.max(1, Math.floor(body.max_tokens))
         : undefined;
@@ -190,6 +206,9 @@ export async function startIcpCertificationModelServer(): Promise<IcpCertificati
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     get requests() {
       return requests;
+    },
+    queueConsentDecision(decision) {
+      consentDecisions.push(decision);
     },
     async stop() {
       await new Promise<void>((resolveClose, rejectClose) => {

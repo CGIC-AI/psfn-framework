@@ -11,6 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
 import { createBootstrapStarterCard } from '../../../core/identity/loader.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import {
   resolveCompanionAdminTransportSocketPath,
 } from '../../../operator/garden/transport-paths.js';
@@ -60,6 +61,7 @@ export type IcpCertificationCostProfile =
   | 'lowered_warning'
   | 'lowered_hard'
   | 'missing';
+export type IcpCertificationFatigueProfile = 'default' | 'final_reserve';
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
@@ -70,17 +72,35 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+export function setIcpCertificationAutonomyEnabled(
+  fixture: Pick<IcpCertificationFixture, 'systemDataDir'>,
+  enabled: boolean,
+): void {
+  const schedulerPath = join(fixture.systemDataDir, 'scheduler.json');
+  const scheduler = readJson(schedulerPath);
+  const icpAutonomy = scheduler.icpAutonomy;
+  if (!isRecord(icpAutonomy)) {
+    throw new Error('Certification scheduler owner is missing icpAutonomy');
+  }
+  icpAutonomy.enabled = enabled;
+  writeJson(schedulerPath, scheduler);
+}
+
 function copyCanonicalOwners(seedDir: string, systemDataDir: string): void {
   for (const owner of OWNER_NAMES) {
     cpSync(join(seedDir, `${owner}.seed.json`), join(systemDataDir, `${owner}.json`));
   }
 }
 
-function configureOwnerFiles(systemDataDir: string): void {
+function configureOwnerFiles(
+  systemDataDir: string,
+  autonomyEnabled: boolean,
+  fatigueProfile: IcpCertificationFatigueProfile,
+): void {
   const schedulerPath = join(systemDataDir, 'scheduler.json');
   const scheduler = readJson(schedulerPath);
   scheduler.icpAutonomy = {
-    enabled: true,
+    enabled: autonomyEnabled,
     candidate: {
       defaultTtlMs: 120_000,
       retryCadenceMs: 50,
@@ -157,8 +177,16 @@ function configureOwnerFiles(systemDataDir: string): void {
   const fatigue = charge.fatigue as Record<string, unknown>;
   fatigue.relationshipBudgets = {
     ...(fatigue.relationshipBudgets as Record<string, unknown>),
-    trusted_collaborator_mi: { softTarget: 2, hardCap: 3 },
+    trusted_collaborator_mi: fatigueProfile === 'final_reserve'
+      ? { softTarget: 1, hardCap: 1 }
+      : { softTarget: 2, hardCap: 3 },
   };
+  if (fatigueProfile === 'final_reserve') {
+    fatigue.overcharge = {
+      ...(fatigue.overcharge as Record<string, unknown>),
+      reserveResponses: 1,
+    };
+  }
   writeJson(chargePath, charge);
 
   const places = readJson(join('config', 'places.seed.json'));
@@ -240,8 +268,10 @@ function makeCompanion(input: {
 }
 
 export function createIcpCertificationFixture(input: {
+  autonomyEnabled?: boolean;
   databaseUrl: string;
   costProfile?: IcpCertificationCostProfile;
+  fatigueProfile?: IcpCertificationFatigueProfile;
   seedDir?: string;
 }): IcpCertificationFixture {
   const rootDir = mkdtempSync(join(tmpdir(), 'psfn-icp-certification-'));
@@ -257,7 +287,11 @@ export function createIcpCertificationFixture(input: {
   mkdirSync(companionDataB, { recursive: true });
   mkdirSync(socketDir, { recursive: true });
   copyCanonicalOwners(seedDir, systemDataDir);
-  configureOwnerFiles(systemDataDir);
+  configureOwnerFiles(
+    systemDataDir,
+    input.autonomyEnabled ?? true,
+    input.fatigueProfile ?? 'default',
+  );
   const modelsPath = join(systemDataDir, 'models.json');
   const models = readJson(modelsPath);
   const modelEntries = models.models as Array<Record<string, unknown>>;

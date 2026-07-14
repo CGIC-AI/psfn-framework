@@ -9,12 +9,15 @@ import {
   wireMemoryRuntime,
 } from '../../startup/composition/composition.js';
 import { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
+import { RunChargeLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { prepareAgentStartupContext } from '../../agent/startup-context.js';
 import { registerGatewayMessageHandlers } from '../../agent/gateway-message-handlers.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
 import { createIcpInitiationSourceRuntime } from '../../../core/icp/initiation-source-runtime.js';
 import { createLlmIcpInitiationConsentEvaluator } from '../../../core/icp/initiation-consent-evaluator.js';
+import { createIcpAutonomyRuntimeEnablement } from '../../../core/icp/runtime-enablement.js';
 import { runAutoCompaction } from '../../../core/session/manager/compaction-service.js';
 import { createCompactionBoundaryStore } from '../../../core/session/manager/compaction-boundary-store.js';
 import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
@@ -28,6 +31,9 @@ type AgentProcessCommand = {
   id: number;
   type: 'publish_availability';
   state: 'open_to_chat' | 'busy' | 'do_not_disturb';
+} | {
+  id: number;
+  type: 'runtime_emergency_disable';
 } | {
   id: number;
   type: 'submit_initiation';
@@ -126,6 +132,14 @@ async function main(): Promise<void> {
     fatigueRegulationReservations: fatigueReservations,
     streamTransport: { stream: gateway.stream.bind(gateway) },
   });
+  const chargeLedger = new RunChargeLedger(
+    resolveChargeLedgerPath(startup.pathSnapshot.companionDataDir),
+    startup.eventBus,
+  );
+  agent.setDurableChargeRecorder(
+    event => chargeLedger.commitChargeEvent(event).outcome,
+    event => chargeLedger.probeChargeEvent(event),
+  );
   agent.contactStore = contactStore;
   agent.scratchpadProvider = persistence.memoryStore;
   wireMemoryRuntime({
@@ -167,21 +181,27 @@ async function main(): Promise<void> {
   });
   const candidateStore = persistence.icpInitiationCandidateStore;
   if (!candidateStore) throw new Error('ICP certification agent requires a candidate store');
-  const sourceRuntime = createIcpInitiationSourceRuntime({
-    localCompanionId: companionId,
-    store: candidateStore,
-    peers: autonomy,
-    gateway,
-    consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
-    isExternalCompanionAuthorized: () => startup.capabilityRuntime.has('external.companion'),
-    policy: {
-      candidateDefaultTtlMs: startup.schedulerConfig.icpAutonomy.candidate.defaultTtlMs,
-      retryCadenceMs: startup.schedulerConfig.icpAutonomy.candidate.retryCadenceMs,
-      maxRetryAttempts: startup.schedulerConfig.icpAutonomy.candidate.maxRetryAttempts,
-      permitTtlMs: startup.schedulerConfig.icpAutonomy.permit.ttlMs,
-    },
-    eventBus: startup.eventBus,
-  });
+  const runtimeEnablement = createIcpAutonomyRuntimeEnablement(
+    startup.schedulerConfig.icpAutonomy.enabled,
+  );
+  const sourceRuntime = startup.schedulerConfig.icpAutonomy.enabled
+    ? createIcpInitiationSourceRuntime({
+        localCompanionId: companionId,
+        store: candidateStore,
+        peers: autonomy,
+        gateway,
+        consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
+        isExternalCompanionAuthorized: () => runtimeEnablement.isEnabled()
+          && startup.capabilityRuntime.has('external.companion'),
+        policy: {
+          candidateDefaultTtlMs: startup.schedulerConfig.icpAutonomy.candidate.defaultTtlMs,
+          retryCadenceMs: startup.schedulerConfig.icpAutonomy.candidate.retryCadenceMs,
+          maxRetryAttempts: startup.schedulerConfig.icpAutonomy.candidate.maxRetryAttempts,
+          permitTtlMs: startup.schedulerConfig.icpAutonomy.permit.ttlMs,
+        },
+        eventBus: startup.eventBus,
+      })
+    : undefined;
   const compactionStore = createCompactionBoundaryStore(
     createIcpDeliveryProjectionStore(sessionRuntime.sessionStore),
   );
@@ -229,6 +249,7 @@ async function main(): Promise<void> {
           return;
         }
         if (raw.type === 'submit_initiation') {
+          if (!sourceRuntime) throw new Error('ICP autonomy is disabled by scheduler.json');
           const result = await sourceRuntime.submit({
             source: raw.source,
             peerContactId: peerContact.id,
@@ -238,6 +259,21 @@ async function main(): Promise<void> {
             cause: { kind: 'independent' },
           });
           reply({ id: raw.id, ok: true, result });
+          return;
+        }
+        if (raw.type === 'runtime_emergency_disable') {
+          runtimeEnablement.disable();
+          const current = await autonomy.readOwnAvailability();
+          const lease = await autonomy.publishOwnAvailability({
+            state: 'do_not_disturb',
+            expiresAtMs: Date.now() + startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+            revision: (current.lease?.revision ?? 0) + 1,
+          });
+          reply({
+            id: raw.id,
+            ok: true,
+            result: { enabled: runtimeEnablement.isEnabled(), lease },
+          });
           return;
         }
         if (raw.type === 'channel_snapshot') {
@@ -283,16 +319,20 @@ async function main(): Promise<void> {
         }
         if (raw.type === 'append_compaction_marker') {
           compactionMarkerIndex += 1;
+          const assistantMarker = compactionMarkerIndex % 2 === 0;
           sessionRuntime.sessionStore.append({
             channelId: raw.channelId,
-            role: compactionMarkerIndex % 2 === 0 ? 'assistant' : 'user',
+            role: assistantMarker ? 'assistant' : 'user',
             content: 'deterministic certification continuity marker '.repeat(20).trim(),
-            authorId: compactionMarkerIndex % 2 === 0 ? companionId : 'certification-fixture',
-            authorName: compactionMarkerIndex % 2 === 0
+            authorId: assistantMarker ? companionId : 'certification-fixture',
+            authorName: assistantMarker
               ? identity.card.data.name
               : 'Certification Fixture',
             timestamp: Date.now() + compactionMarkerIndex,
             channelVisibility: 'private',
+            metadata: JSON.stringify({
+              turn: { actorKind: assistantMarker ? 'machine_intelligence' : 'human' },
+            }),
           });
           reply({ id: raw.id, ok: true });
           return;
@@ -300,6 +340,7 @@ async function main(): Promise<void> {
         await agent.waitForIdle();
         gateway.destroy();
         await fatigueReservations.close();
+        chargeLedger.close();
         startup.stopDebugObserver();
         reply({ id: raw.id, ok: true });
         process.disconnect();

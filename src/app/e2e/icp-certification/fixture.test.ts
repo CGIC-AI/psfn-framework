@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
+import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -54,5 +55,16 @@ describe('ICP certification production-shape fixture', () => {
       },
     });
     expect(existsSync(fixture.artifactsPath)).toBe(false);
+  });
+
+  it('can boot the canonical owner surface with autonomous initiation disabled', () => {
+    fixture = createIcpCertificationFixture({
+      autonomyEnabled: false,
+      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+    });
+
+    expect(loadSchedulerConfig(fixture.systemDataDir)).toMatchObject({
+      icpAutonomy: { enabled: false },
+    });
   });
 });

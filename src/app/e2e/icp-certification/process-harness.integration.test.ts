@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -5,7 +7,9 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
+import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
+import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -13,7 +17,11 @@ import {
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
 } from './constants.js';
-import { createIcpCertificationFixture, type IcpCertificationFixture } from './fixture.js';
+import {
+  createIcpCertificationFixture,
+  setIcpCertificationAutonomyEnabled,
+  type IcpCertificationFixture,
+} from './fixture.js';
 import {
   startIcpCertificationProcessHarness,
   type IcpCertificationProcessHarness,
@@ -59,6 +67,25 @@ async function waitForChannelEntries(
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
   }
   throw new Error(`Timed out waiting for ${minimum} entries on ${CERTIFICATION_DM_CHANNEL}`);
+}
+
+async function waitForModelRequestQuiescence(
+  harness: IcpCertificationProcessHarness,
+): Promise<number> {
+  const deadline = Date.now() + 20_000;
+  let previousCount = harness.modelRequestCount;
+  let unchangedSinceMs = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+    const currentCount = harness.modelRequestCount;
+    if (currentCount !== previousCount) {
+      previousCount = currentCount;
+      unchangedSinceMs = Date.now();
+      continue;
+    }
+    if (Date.now() - unchangedSinceMs >= 750) return currentCount;
+  }
+  throw new Error(`Model fixture did not quiesce after ${harness.modelRequestCount} requests`);
 }
 
 describe('ICP certification real process harness', () => {
@@ -234,5 +261,168 @@ describe('ICP certification real process harness', () => {
       reason: 'missing_cost_metadata',
     });
     expect(processes.modelRequestCount).toBe(1);
+  }, TIMEOUT_MS);
+
+  it('closes deterministic gates before the LLM and resists replay after weighted-thought consent', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'final_reserve' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('do_not_disturb');
+    await expect(agentA.submitInitiation('free_time', 'adversarial:dnd')).resolves.toMatchObject({
+      outcome: 'rejected',
+      status: 'rejected',
+      reasonCode: 'peer_do_not_disturb',
+    });
+    expect(processes.modelRequestCount).toBe(0);
+
+    await agentB.publishAvailability('open_to_chat');
+    processes.queueConsentDecision('defer');
+    await expect(agentA.submitInitiation('weighted_thought', 'consent:defer')).resolves
+      .toMatchObject({
+        outcome: 'deferred',
+        status: 'deferred',
+        reasonCode: 'candidate_deferred',
+      });
+    processes.queueConsentDecision('decline');
+    await expect(agentA.submitInitiation('weighted_thought', 'consent:decline')).resolves
+      .toMatchObject({
+        outcome: 'declined',
+        status: 'declined',
+        reasonCode: 'candidate_declined',
+      });
+
+    await Promise.all([
+      agentA.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+      agentB.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+    ]);
+    const sent = await agentA.submitInitiation('weighted_thought', 'replay:weighted-thought');
+    expect(sent).toMatchObject({
+      outcome: 'sent',
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    const settledRequestCount = await waitForModelRequestQuiescence(processes);
+    await expect(agentA.submitInitiation('weighted_thought', 'replay:weighted-thought')).resolves
+      .toMatchObject({
+        candidateId: sent.candidateId,
+        outcome: 'deduped',
+        status: 'consumed',
+      });
+    expect(await waitForModelRequestQuiescence(processes)).toBe(settledRequestCount);
+
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-icp-certification-fatigue-assertions',
+      max: 1,
+    });
+    try {
+      const fatigue = await pool.query<{
+        decision: 'charged' | 'overcharge';
+        local_companion_id: string;
+        reservation_count: string;
+      }>(`
+        SELECT local_companion_id::text, decision, COUNT(*)::text AS reservation_count
+        FROM shared.icp_fatigue_turn_reservations
+        WHERE outcome IN ('delivered', 'no_reply')
+        GROUP BY local_companion_id, decision
+      `);
+      const reservationCount = fatigue.rows.reduce(
+        (sum, row) => sum + Number(row.reservation_count),
+        0,
+      );
+      expect(reservationCount).toBeGreaterThan(0);
+      expect(reservationCount).toBeLessThanOrEqual(10);
+      expect(
+        fatigue.rows.some(row => row.decision === 'overcharge'),
+        JSON.stringify(fatigue.rows),
+      ).toBe(true);
+      for (const companionId of [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B]) {
+        const companionReservations = fatigue.rows
+          .filter(row => row.local_companion_id === companionId)
+          .reduce((sum, row) => sum + Number(row.reservation_count), 0);
+        expect(companionReservations).toBeLessThanOrEqual(5);
+      }
+    } finally {
+      await pool.end();
+    }
+
+    const socialCharge = fixture.companions.reduce((sum, companion) => {
+      const rolling = readRunChargeRollingWindowFromLedger(
+        resolveChargeLedgerPath(companion.companionDataDir),
+      );
+      return sum + (rolling.spentByLane.companion_social ?? 0);
+    }, 0);
+    expect(socialCharge).toBeGreaterThan(0);
+    expect(socialCharge).toBeLessThanOrEqual(8);
+
+    await processes.stop();
+    const artifactText = readFileSync(fixture.artifactsPath, 'utf8');
+    expect(artifactText).toContain('runtimeClass');
+    expect(artifactText).toContain('peer_do_not_disturb');
+    expect(artifactText).toContain('weighted_thought');
+    expect(artifactText).not.toContain('Private weighted_thought certification motivation');
+    expect(artifactText).not.toContain('replay:weighted-thought');
+    expect(artifactText).not.toContain('fixture_defer');
+  }, TIMEOUT_MS);
+
+  it('fails closed under the one-way runtime emergency fence and resumes only after restart', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.activateRuntimeEmergencyDisable()).resolves.toMatchObject({
+      enabled: false,
+      lease: { state: 'do_not_disturb' },
+    });
+    setIcpCertificationAutonomyEnabled(fixture, false);
+    await expect(agentA.submitInitiation('free_time', 'emergency:blocked')).resolves.toMatchObject({
+      outcome: 'rejected',
+      status: 'rejected',
+      reasonCode: 'policy_denied',
+    });
+    expect(processes.modelRequestCount).toBe(0);
+
+    let [restartedA, restartedB] = await processes.restartAgents();
+    await restartedB.publishAvailability('open_to_chat');
+    await expect(restartedA.submitInitiation('free_time', 'emergency:owner-disabled')).rejects
+      .toThrow(/autonomy is disabled by scheduler\.json/i);
+    expect(processes.modelRequestCount).toBe(0);
+
+    setIcpCertificationAutonomyEnabled(fixture, true);
+    [restartedA, restartedB] = await processes.restartAgents();
+    await restartedB.publishAvailability('open_to_chat');
+    await expect(restartedA.submitInitiation('free_time', 'emergency:rollback')).resolves
+      .toMatchObject({
+        outcome: 'sent',
+        status: 'consumed',
+        deliveryDisposition: 'delivered',
+      });
+    expect(processes.modelRequestCount).toBeGreaterThan(0);
+  }, TIMEOUT_MS);
+
+  it('boots both real agents with feature-off parity and rejects initiation without an LLM call', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, autonomyEnabled: false });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await expect(Promise.all([agentA.ready(), agentB.ready()])).resolves.toEqual([
+      expect.objectContaining({ runtimeClass: 'SubstrateAgent' }),
+      expect.objectContaining({ runtimeClass: 'SubstrateAgent' }),
+    ]);
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.submitInitiation('free_time', 'feature-off')).rejects
+      .toThrow(/autonomy is disabled by scheduler\.json/i);
+    expect(processes.modelRequestCount).toBe(0);
+    await expect(agentA.channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toMatchObject({
+      entries: [],
+      summaries: [],
+    });
   }, TIMEOUT_MS);
 });

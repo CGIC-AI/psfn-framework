@@ -34,6 +34,8 @@ import type {
 } from './fixture.js';
 import { configureIcpCertificationModelEndpoint } from './fixture.js';
 import { startIcpCertificationModelServer } from './openai-fixture-server.js';
+import type { IcpCertificationConsentDecision } from './openai-fixture-server.js';
+import { IcpCertificationArtifactRecorder } from './artifact-recorder.js';
 
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
 const START_TIMEOUT_MS = 60_000;
@@ -66,6 +68,7 @@ export class IcpCertificationAgentProcess {
   private constructor(
     readonly fixture: IcpCertificationCompanionFixture,
     private readonly child: ChildProcess,
+    private readonly artifacts: IcpCertificationArtifactRecorder,
   ) {
     this.readyPromise = new Promise<CertificationAgentReady>((resolveReady, rejectReady) => {
       this.readyResolve = resolveReady;
@@ -85,13 +88,14 @@ export class IcpCertificationAgentProcess {
 
   static async start(
     fixture: IcpCertificationCompanionFixture,
+    artifacts: IcpCertificationArtifactRecorder,
   ): Promise<IcpCertificationAgentProcess> {
     const child = fork(AGENT_PROCESS_ENTRY, [], {
       env: fixture.env,
       execArgv: ['--import', 'tsx'],
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    const process = new IcpCertificationAgentProcess(fixture, child);
+    const process = new IcpCertificationAgentProcess(fixture, child, artifacts);
     const stderr: string[] = [];
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', chunk => stderr.push(String(chunk)));
@@ -122,15 +126,43 @@ export class IcpCertificationAgentProcess {
   async publishAvailability(
     state: 'open_to_chat' | 'busy' | 'do_not_disturb',
   ): Promise<Record<string, unknown>> {
-    return await this.request({ type: 'publish_availability', state }) as Record<string, unknown>;
+    const result = await this.request({ type: 'publish_availability', state }) as Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'availability',
+      companionId: this.fixture.companionId,
+      state,
+    });
+    return result;
   }
 
   async submitInitiation(
     source: 'free_time' | 'weighted_thought',
     sourceRecordId: string,
   ): Promise<Record<string, unknown>> {
-    return await this.request({ type: 'submit_initiation', source, sourceRecordId }) as
+    const result = await this.request({ type: 'submit_initiation', source, sourceRecordId }) as
       Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source,
+      candidateId: String(result.candidateId ?? 'unknown'),
+      outcome: String(result.outcome ?? 'unknown'),
+      status: String(result.status ?? 'unknown'),
+      ...(result.reasonCode ? { reasonCode: String(result.reasonCode) } : {}),
+      ...(result.deliveryDisposition
+        ? { deliveryDisposition: String(result.deliveryDisposition) }
+        : {}),
+    });
+    return result;
+  }
+
+  async activateRuntimeEmergencyDisable(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'runtime_emergency_disable' }) as Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'runtime_emergency_disable',
+      companionId: this.fixture.companionId,
+    });
+    return result;
   }
 
   async channelSnapshot(channelId: string): Promise<Record<string, unknown>> {
@@ -189,6 +221,7 @@ export interface IcpCertificationProcessHarness {
   gateway: GatewayServer;
   readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
   readonly modelRequestCount: number;
+  queueConsentDecision(decision: IcpCertificationConsentDecision): void;
   restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
   stop(): Promise<void>;
 }
@@ -215,6 +248,8 @@ export async function startIcpCertificationProcessHarness(input: {
   fixture: IcpCertificationFixture;
 }): Promise<IcpCertificationProcessHarness> {
   const modelServer = await startIcpCertificationModelServer();
+  const artifacts = new IcpCertificationArtifactRecorder(input.fixture.artifactsPath);
+  artifacts.append({ kind: 'harness_lifecycle', state: 'started', modelRequestCount: 0 });
   configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
   const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = 'icp-certification-loopback-key';
@@ -232,7 +267,17 @@ export async function startIcpCertificationProcessHarness(input: {
     usageRecorder: modelUsage,
     usageBudgetQuery: modelUsage,
     icpConversationCostAccounting: modelUsage,
-    onIcpConversationCostDecision: decision => costDecisions.push(decision),
+    onIcpConversationCostDecision: decision => {
+      costDecisions.push(decision);
+      artifacts.append({
+        kind: 'cost_decision',
+        companionId: decision.localCompanionId,
+        conversationId: decision.conversationId,
+        model: decision.model,
+        outcome: decision.outcome,
+        reason: decision.reason,
+      });
+    },
   });
   const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
@@ -314,7 +359,15 @@ export async function startIcpCertificationProcessHarness(input: {
   try {
     await waitForSocket(input.fixture.gatewaySocketPath);
     for (const companion of input.fixture.companions) {
-      agents.push(await IcpCertificationAgentProcess.start(companion));
+      const agent = await IcpCertificationAgentProcess.start(companion, artifacts);
+      agents.push(agent);
+      const ready = await agent.ready();
+      artifacts.append({
+        kind: 'agent_ready',
+        companionId: ready.companionId,
+        postgresSchema: ready.postgresSchema,
+        runtimeClass: ready.runtimeClass,
+      });
     }
   } catch (error) {
     for (const agent of agents) agent.forceStop();
@@ -344,11 +397,22 @@ export async function startIcpCertificationProcessHarness(input: {
     get modelRequestCount() {
       return modelServer.requests.length;
     },
+    queueConsentDecision(decision) {
+      modelServer.queueConsentDecision(decision);
+    },
     async restartAgents() {
       await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));
       agents = [];
       for (const companion of input.fixture.companions) {
-        agents.push(await IcpCertificationAgentProcess.start(companion));
+        const agent = await IcpCertificationAgentProcess.start(companion, artifacts);
+        agents.push(agent);
+        const ready = await agent.ready();
+        artifacts.append({
+          kind: 'agent_ready',
+          companionId: ready.companionId,
+          postgresSchema: ready.postgresSchema,
+          runtimeClass: ready.runtimeClass,
+        });
       }
       return agents as unknown as readonly [
         IcpCertificationAgentProcess,
@@ -365,6 +429,11 @@ export async function startIcpCertificationProcessHarness(input: {
       await autonomy.close();
       await presence.close();
       await modelUsagePool.end();
+      artifacts.append({
+        kind: 'harness_lifecycle',
+        state: 'stopped',
+        modelRequestCount: modelServer.requests.length,
+      });
       await modelServer.stop();
       if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
       else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;

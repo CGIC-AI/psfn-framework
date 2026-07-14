@@ -277,7 +277,10 @@ export class GatewayServer {
     }
     if (this.multiCompanion.enabled) {
       const missingWorkspaceRoots = this.multiCompanion.fleetCompanionIds.filter(
-        companionId => !this.multiCompanion.personalWorkspaceByCompanionId[companionId]?.trim(),
+        (companionId) => {
+          const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
+          return typeof workspacePath !== 'string' || !workspacePath.trim();
+        },
       );
       if (missingWorkspaceRoots.length > 0) {
         throw new Error(
@@ -481,7 +484,7 @@ export class GatewayServer {
       throw new Error('Multi-companion workspace access requires an authenticated companion connection');
     }
     const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
-    if (!workspacePath?.trim()) {
+    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       throw new Error(`No Personal Workspace is resolved for companion ${companionId}`);
     }
     return workspacePath;

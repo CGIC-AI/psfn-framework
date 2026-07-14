@@ -1,4 +1,4 @@
-import { isAbsolute, resolve, sep } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-diagnostics.js';
 import {

@@ -61,7 +61,7 @@ function resolvePersonalFilesDir(
   }
   const personalFilesDir =
     bootstrap.server.multiCompanion.personalWorkspaceByCompanionId[companionId];
-  if (!personalFilesDir?.trim()) {
+  if (typeof personalFilesDir !== 'string' || !personalFilesDir.trim()) {
     throw new Error(
       `Multi-companion ${surface} surface has no resolved Personal Workspace for ${companionId}`,
     );

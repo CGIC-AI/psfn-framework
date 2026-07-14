@@ -485,6 +485,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
           ADMIN_TRANSPORT_MODE: 'network',

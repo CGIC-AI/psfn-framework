@@ -40,6 +40,27 @@ The headline fact governing everything below: the multi-companion substrate is *
   `admin-ui/src/lib/events/prompt-monitor.ts:336` and
   `admin-ui/src/lib/events/prompt-monitor.test.ts:260` remain report-only.
   Parent epic `psfn-framework-t5z7` remains open for its other children.
+- `psfn-framework-t5z7.7` is closed through `c22a1cea` (shared visibility and
+  websocket queue controllers `edc50e4b`, polling-page adoption `2a9150e2`,
+  gateway signal scoping `5042ae25`, reconnect and subsystem-health remediation
+  `c22a1cea`). Hidden Garden tabs now make zero network poll requests; becoming
+  visible performs one immediate refresh and resumes the fallback interval.
+  Confirmation, contact-approval, graph-proposal, and CogSec approval pages use
+  content-free websocket invalidations while connected and visibility-aware
+  fallback polling while disconnected. Local-only shards and telemetry clocks
+  remain local intervals.
+- The single independent review at `2a9150e2` found four important freshness
+  and multi-companion issues. The one allowed remediation pinned confirmation
+  and gateway queue signals to the authenticated healthy companion, emitted
+  intake-quarantine hints only after durable text/image holds, made a
+  websocket false-to-true reconnect perform exactly one visibility-gated
+  refresh with no fallback timer left behind, and moved subsystem health onto
+  the shared visibility poller. Final integrated gate at `c22a1cea`: gateway
+  signaling and quarantine tests 130/130, Garden poller/adoption tests 17/17,
+  root ESM+DTS build, Garden build, lint, and worktree plus branch-range diff
+  checks passed. Garden's inherited `codeSplitting` warnings and the untouched
+  prompt-monitor diagnostics remain report-only. Parent epic
+  `psfn-framework-t5z7` remains open for its other children.
 
 ## 0. 2026-07-12 update — decided priority order
 

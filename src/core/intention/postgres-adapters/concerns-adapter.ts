@@ -77,6 +77,17 @@ function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): bool
   return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
 }
 
+function assertCompatibleConcernIcpRoot(
+  existing: Pick<ActiveConcern, 'id' | 'originIcpRootInitiationId'>,
+  incomingRoot: string | undefined,
+): void {
+  if (existing.originIcpRootInitiationId
+    && incomingRoot
+    && existing.originIcpRootInitiationId !== incomingRoot) {
+    throw new Error(`Cannot merge active concern "${existing.id}" across conflicting ICP roots`);
+  }
+}
+
 export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   private activeConcernCache = new Map<string, ActiveConcern>();
 
@@ -192,6 +203,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       });
       if (recentlyResolved) {
         if (input.reopenResolved === true) {
+          assertCompatibleConcernIcpRoot(recentlyResolved, originIcpRootInitiationId);
           const reopened = await this.transitionConcernStatus(recentlyResolved.id, {
             status,
             transitionedAt: createdAt,
@@ -576,11 +588,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     });
     const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
     const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
-    if (existing.originIcpRootInitiationId
-      && input.originIcpRootInitiationId
-      && existing.originIcpRootInitiationId !== input.originIcpRootInitiationId) {
-      throw new Error(`Cannot merge active concern "${existing.id}" across conflicting ICP roots`);
-    }
+    assertCompatibleConcernIcpRoot(existing, input.originIcpRootInitiationId);
     const originIcpRootInitiationId = existing.originIcpRootInitiationId
       ?? input.originIcpRootInitiationId;
     const row = await queryOne<ActiveConcernRow>(

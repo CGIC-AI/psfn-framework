@@ -339,6 +339,131 @@ describe('Postgres schema tenancy plumbing', () => {
   );
 
   it(
+    'preserves a pending follow-up ICP root across supersede and rejects relabeling atomically',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-follow-up-supersede-lineage',
+        allowExitOnIdle: true,
+        max: 1,
+        schema: 'companion_follow_up_supersede',
+      });
+      const originalRoot = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_follow_up_supersede',
+        });
+        const runtime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'follow-up-supersede-lineage',
+        });
+        const created = await runtime.pendingFollowUpStore.enqueue({
+          content: 'Check in about the peer outreach plan tomorrow.',
+          priority: 'medium',
+          timing: 'soon',
+          channelId: 'api:test',
+          channelType: 'api',
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          contactId: 'peer-contact',
+          sourceMessageId: 'rooted-source',
+          originIcpRootInitiationId: originalRoot,
+        });
+        if (!created) throw new Error('rooted pending follow-up was not created');
+
+        const unrootedSupersede = await runtime.pendingFollowUpStore.enqueue({
+          content: 'Check in tomorrow about the peer outreach plan.',
+          priority: 'high',
+          timing: 'soon',
+          channelId: 'api:test',
+          channelType: 'api',
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          contactId: 'peer-contact',
+          sourceMessageId: 'unrooted-source',
+        });
+        expect(unrootedSupersede).toMatchObject({
+          id: created.id,
+          originIcpRootInitiationId: originalRoot,
+          sourceMessageId: 'unrooted-source',
+        });
+        const beforeConflict = await runtime.pendingFollowUpStore.peek(created.id);
+
+        await expect(runtime.pendingFollowUpStore.enqueue({
+          content: 'Check in about the peer outreach plan tomorrow.',
+          priority: 'low',
+          timing: 'soon',
+          channelId: 'api:test',
+          channelType: 'api',
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          contactId: 'peer-contact',
+          sourceMessageId: 'conflicting-source',
+          originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        })).rejects.toThrow();
+        await expect(runtime.pendingFollowUpStore.peek(created.id)).resolves.toEqual(beforeConflict);
+      } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'rejects a conflicting ICP root before reopening a resolved PostgreSQL concern',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-reopen-lineage',
+        allowExitOnIdle: true,
+        max: 1,
+        schema: 'companion_concern_reopen',
+      });
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_reopen',
+        });
+        const runtime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'concern-reopen-lineage',
+        });
+        const created = await runtime.concernStore.create({
+          text: 'Check the peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+          originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        });
+        await runtime.concernStore.resolveConcern(created.id, {
+          outcome: 'The outreach plan was handled.',
+          resolvedAt: '2026-07-13T20:30:00.000Z',
+          evidenceRefs: [{ kind: 'runtime', ref: 'resolved-before-conflict' }],
+        });
+        const beforeConflict = await runtime.concernStore.getById(created.id);
+        expect(beforeConflict).toMatchObject({
+          status: 'resolved',
+          resolvedAt: '2026-07-13T20:30:00.000Z',
+          resolutionOutcome: 'The outreach plan was handled.',
+        });
+
+        await expect(runtime.concernStore.create({
+          text: 'Check on the peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:00.000Z',
+          expiresAt: '2026-07-14T21:00:00.000Z',
+          reopenResolved: true,
+          evidenceRefs: [{ kind: 'message', ref: 'new-conflicting-evidence' }],
+          originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        })).rejects.toThrow('conflicting ICP roots');
+        await expect(runtime.concernStore.getById(created.id)).resolves.toEqual(beforeConflict);
+      } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
     'rejects same-root outreach derived from a restarted PostgreSQL concern before consent',
     async () => {
       const databaseUrl = await freshDatabaseUrl();

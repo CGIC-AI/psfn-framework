@@ -1040,6 +1040,15 @@ export function wireHeartbeatPostTurnRuntime(
               return { detail: `blocked:${icpCandidate.reason}` };
             }
             if (icpCandidate.kind === 'submitted') {
+              if (payload.pendingFollowUpId
+                && icpCandidate.result.outcome === 'sent'
+                && icpCandidate.result.status === 'consumed'
+                && runtimeOptions.onIntentionFollowUpActivated) {
+                await runtimeOptions.onIntentionFollowUpActivated({
+                  pendingFollowUpId: payload.pendingFollowUpId,
+                  activationReason: 'icp_candidate_sent',
+                });
+              }
               return {
                 detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,
               };

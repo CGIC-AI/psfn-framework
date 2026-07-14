@@ -461,8 +461,14 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           source_message_id = $11,
           context_summary = $12,
           wake_conditions = $13,
-          origin_icp_root_initiation_id = $14
-        WHERE id = $1 AND activated_at IS NULL
+          origin_icp_root_initiation_id = COALESCE(origin_icp_root_initiation_id, $14::uuid)
+        WHERE id = $1
+          AND activated_at IS NULL
+          AND (
+            $14::uuid IS NULL
+            OR origin_icp_root_initiation_id IS NULL
+            OR origin_icp_root_initiation_id = $14::uuid
+          )
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,

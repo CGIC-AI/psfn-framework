@@ -75,7 +75,7 @@ function emptyQueueStatus(): PostTurnActionQueueStatus {
   };
 }
 
-function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
+function wire(kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_companion') {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-intention-'));
   TEMP_DIRS.push(dataDir);
   const eventBus = new EventBus();
@@ -97,19 +97,57 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
             status: 'consumed',
           },
         }
+      : kind === 'deferred'
+        ? {
+            kind: 'submitted',
+            result: {
+              outcome: 'deferred',
+              candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              status: 'deferred',
+            },
+          }
+        : kind === 'declined'
+          ? {
+              kind: 'submitted',
+              result: {
+                outcome: 'declined',
+                candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                status: 'declined',
+              },
+            }
       : kind === 'blocked'
         ? { kind: 'blocked', reason: 'stale_provenance' }
         : { kind: 'not_companion' },
   );
   const pending = pendingFollowUp();
+  let storedPending: PendingFollowUp | null = pending;
   const pendingFollowUpStore: PendingFollowUpStorePort = {
     enqueue: vi.fn(),
-    peek: vi.fn(async () => pending),
-    dequeue: vi.fn(),
+    peek: vi.fn(async () => storedPending),
+    dequeue: vi.fn(async (_id, options) => {
+      if (!storedPending || storedPending.activatedAt) return null;
+      storedPending = {
+        ...storedPending,
+        activatedAt: new Date().toISOString(),
+        ...(options?.activationReason ? { activationReason: options.activationReason } : {}),
+      };
+      return storedPending;
+    }),
     quarantine: vi.fn(),
     list: vi.fn(),
     listQuarantined: vi.fn(),
   };
+  const onIntentionFollowUpActivated = vi.fn(async ({
+    pendingFollowUpId,
+    activationReason,
+  }: {
+    pendingFollowUpId: string;
+    activationReason?: string;
+  }) => (
+    await pendingFollowUpStore.dequeue(pendingFollowUpId, {
+      ...(activationReason ? { activationReason } : {}),
+    })
+  ) !== null);
   const postTurnActions: PostTurnActionRuntime = {
     registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
@@ -142,13 +180,22 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
       postTurnActions,
       llmProvider,
       pendingFollowUpStore,
+      onIntentionFollowUpActivated,
       proactiveOutbound,
       icpIntentionCandidateAdapter: { submit },
     },
   );
   const handler = handlers.get(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
   if (!handler) throw new Error('intention outbound handler was not registered');
-  return { handler, submit, dispatch, handlers, agentLoop };
+  return {
+    handler,
+    submit,
+    dispatch,
+    handlers,
+    agentLoop,
+    pendingFollowUpStore,
+    onIntentionFollowUpActivated,
+  };
 }
 
 const ACTION = {
@@ -193,10 +240,27 @@ describe('heartbeat ICP intention candidate integration', () => {
     }));
   });
 
-  it('routes a live peer intention to the candidate broker and never dispatches draft text', async () => {
-    const { handler, submit, dispatch } = wire('submitted');
+  it('consumes a sent ICP pending source and blocks a repeated candidate pipeline', async () => {
+    const {
+      handler,
+      submit,
+      dispatch,
+      pendingFollowUpStore,
+      onIntentionFollowUpActivated,
+    } = wire('submitted');
     await expect(handler(ACTION)).resolves.toEqual({
       detail: 'icp_candidate:sent:consumed',
+    });
+    expect(onIntentionFollowUpActivated).toHaveBeenCalledWith({
+      pendingFollowUpId: 'follow-up-1',
+      activationReason: 'icp_candidate_sent',
+    });
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.toMatchObject({
+      activatedAt: expect.any(String),
+      activationReason: 'icp_candidate_sent',
+    });
+    await expect(handler(ACTION)).resolves.toEqual({
+      detail: 'blocked:stale_pending_follow_up',
     });
     expect(submit).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
@@ -208,6 +272,24 @@ describe('heartbeat ICP intention candidate integration', () => {
       detail: 'blocked:stale_provenance',
     });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['deferred', 'deferred'],
+    ['declined', 'declined'],
+  ] as const)('keeps a pending source live when ICP is %s', async (kind, status) => {
+    const {
+      handler,
+      submit,
+      pendingFollowUpStore,
+      onIntentionFollowUpActivated,
+    } = wire(kind);
+    await expect(handler(ACTION)).resolves.toEqual({
+      detail: `icp_candidate:${kind}:${status}`,
+    });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(onIntentionFollowUpActivated).not.toHaveBeenCalled();
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.not.toHaveProperty('activatedAt');
   });
 
   it('preserves the existing outbound path for a non-companion contact', async () => {

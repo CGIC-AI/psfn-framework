@@ -6,6 +6,8 @@ import type { PurrMemory } from './types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { WikiRetrievalService } from '../wiki/retrieval.js';
 import { resolveEmbeddingProviderProvenanceFromConfig } from './embedding.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../core/contacts/types.js';
 
 function makeMemory(id: string, text: string): PurrMemory & { similarity: number } {
   return {
@@ -176,6 +178,93 @@ describe('active-memory refresh cache', () => {
     expect(embedding.embed).toHaveBeenCalledTimes(2);
     expect(fixture.store.searchByEmbedding).toHaveBeenCalledTimes(2);
   });
+
+  it('reruns and withholds a consent-gated memory when disclosure consent is withdrawn', async () => {
+    const gated = {
+      ...makeMemory('memory-consent', 'The private launch phrase is blue heron.'),
+      tags: ['consent_required'],
+    };
+    const { store } = makeStore([gated]);
+    const embedding = makeEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalBudgetPct: 0.1 });
+    const grantedRequest = {
+      contextText: 'launch phrase',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+      channelMeta: { disclosureConsentGranted: true },
+    };
+
+    const granted = await retriever.refreshActiveMemoryContext(grantedRequest);
+    const withdrawn = await retriever.refreshActiveMemoryContext({
+      ...grantedRequest,
+      channelMeta: { disclosureConsentGranted: false },
+    });
+
+    expect(granted?.contextBlock).toContain(gated.text);
+    expect(withdrawn?.contextBlock).not.toContain(gated.text);
+    expect(withdrawn?.selectedMemoryIds).not.toContain(gated.id);
+    expect(withdrawn?.manifestSeed?.policyRejectedReasonTags).toEqual({
+      'boundary.consent_required': 1,
+    });
+    expect(embedding.embed).toHaveBeenCalledTimes(2);
+    expect(store.searchByEmbedding).toHaveBeenCalledTimes(2);
+  });
+
+  it('reruns and withholds room-scoped memory when contact room visibility is withdrawn', async () => {
+    const roomMemory = {
+      ...makeMemory('memory-room', 'The blue room selected the copper release train.'),
+      scopeRef: { kind: 'conversation' as const, id: 'discord:blue-room' },
+      scopeTags: ['room_context'],
+      provenance: { channelId: 'discord:blue-room' },
+    };
+    const { store } = makeStore([roomMemory]);
+    const embedding = makeEmbedding();
+    const visibleContact: Contact = {
+      id: 'contact-a',
+      displayName: 'A',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: '2026-07-01T00:00:00.000Z',
+      lastSeen: '2026-07-14T00:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:blue-room',
+        firstSeen: '2026-07-01T00:00:00.000Z',
+        lastSeen: '2026-07-14T00:00:00.000Z',
+      }],
+    };
+    let currentContact: Contact = visibleContact;
+    const contactStore = {
+      getById: vi.fn(async () => currentContact),
+      getEmotionalSnapshot: vi.fn(async () => undefined),
+      getSocialGraphEntityByContactId: vi.fn(async () => undefined),
+    } as unknown as ContactStorePort;
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalBudgetPct: 0.1 },
+      undefined,
+      contactStore,
+    );
+    const request = {
+      contextText: 'release train',
+      channelId: 'api:dm-a',
+      trustLevel: 'regular' as const,
+      channelMeta: { isDirectMessage: true },
+      canonicalContactId: 'contact-a',
+    };
+
+    const visible = await retriever.refreshActiveMemoryContext(request);
+    currentContact = { ...visibleContact, conversationChannels: [] };
+    const withdrawn = await retriever.refreshActiveMemoryContext(request);
+
+    expect(visible?.contextBlock).toContain(roomMemory.text);
+    expect(withdrawn?.contextBlock).not.toContain(roomMemory.text);
+    expect(withdrawn?.manifestSeed?.roomVisibilityRejectedCount).toBe(1);
+    expect(embedding.embed).toHaveBeenCalledTimes(2);
+    expect(store.searchByEmbedding).toHaveBeenCalledTimes(2);
+  });
+
 });
 
 describe('shared per-turn retrieval embedding', () => {

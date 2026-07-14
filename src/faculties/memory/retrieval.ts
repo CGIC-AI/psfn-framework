@@ -10,6 +10,11 @@ import {
   type TurnRetrievalQueryEmbedding,
 } from '../../shared/retrieval-query-embedding.js';
 import { resolveEmbeddingProviderProvenanceFromConfig } from './embedding.js';
+import {
+  getRuntimeTrustPolicy,
+  getRuntimeTrustPolicyRevision,
+} from '../../system/trust/runtime-policy.js';
+import { getRuntimeChannelEnvelopeLabelsRevision } from '../../system/trust/runtime-channel-labels.js';
 import type {
   ContactProfileArtifact,
   MemoryStorePort,
@@ -212,7 +217,14 @@ function activeMemoryRefreshFingerprintsEqual(
   return left !== undefined
     && right !== undefined
     && left.contextHash === right.contextHash
-    && left.corpusVersion === right.corpusVersion;
+    && left.corpusVersion === right.corpusVersion
+    && left.accessPolicyHash === right.accessPolicyHash;
+}
+
+interface ResolvedActiveMemoryRefreshCacheState {
+  fingerprint?: ActiveMemoryRefreshFingerprint;
+  accessPolicyHash?: string;
+  roomVisibility?: RetrievalRoomVisibilityContext;
 }
 
 type ProactiveRecallRuntimeConfig = SubstrateConfig & {
@@ -371,9 +383,14 @@ export class MemoryRetriever implements MemoryProvider {
     });
   }
 
-  refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
-    const identity = resolveActiveMemoryContextIdentity(request);
-    const fingerprint = this.resolveActiveMemoryRefreshFingerprint(request.contextText);
+  async refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
+    const stableRequest: ActiveMemoryContextRequest = {
+      ...request,
+      ...(request.channelMeta ? { channelMeta: { ...request.channelMeta } } : {}),
+    };
+    const identity = resolveActiveMemoryContextIdentity(stableRequest);
+    const cacheState = await this.resolveActiveMemoryRefreshCacheState(stableRequest);
+    const { fingerprint, accessPolicyHash, roomVisibility } = cacheState;
     const existing = this.activeMemoryRefreshLoops.get(identity.key);
     if (existing) {
       if (
@@ -382,7 +399,12 @@ export class MemoryRetriever implements MemoryProvider {
       ) {
         return existing.running;
       }
-      existing.latestWork = { request, fingerprint };
+      existing.latestWork = {
+        request: stableRequest,
+        fingerprint,
+        accessPolicyHash,
+        roomVisibility,
+      };
       return existing.running;
     }
 
@@ -390,7 +412,12 @@ export class MemoryRetriever implements MemoryProvider {
       ...(fingerprint ? { runningFingerprint: fingerprint } : {}),
       running: Promise.resolve(null),
     };
-    loop.running = this.runActiveMemoryRefreshLoop(identity.key, { request, fingerprint })
+    loop.running = this.runActiveMemoryRefreshLoop(identity.key, {
+      request: stableRequest,
+      fingerprint,
+      accessPolicyHash,
+      roomVisibility,
+    })
       .finally(() => {
         if (this.activeMemoryRefreshLoops.get(identity.key) === loop) {
           this.activeMemoryRefreshLoops.delete(identity.key);
@@ -405,6 +432,8 @@ export class MemoryRetriever implements MemoryProvider {
     initialWork: {
       request: ActiveMemoryContextRequest;
       fingerprint?: ActiveMemoryRefreshFingerprint;
+      accessPolicyHash?: string;
+      roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<ActiveMemoryContextSnapshot | null> {
     let nextWork: typeof initialWork | undefined = initialWork;
@@ -414,7 +443,12 @@ export class MemoryRetriever implements MemoryProvider {
       if (activeLoop) {
         activeLoop.runningFingerprint = nextWork.fingerprint;
       }
-      latestSnapshot = await this.performActiveMemoryRefresh(nextWork.request, nextWork.fingerprint);
+      latestSnapshot = await this.performActiveMemoryRefresh(
+        nextWork.request,
+        nextWork.fingerprint,
+        nextWork.accessPolicyHash,
+        nextWork.roomVisibility,
+      );
       const loop = this.activeMemoryRefreshLoops.get(key);
       nextWork = loop?.latestWork;
       if (loop) {
@@ -427,6 +461,8 @@ export class MemoryRetriever implements MemoryProvider {
   private async performActiveMemoryRefresh(
     request: ActiveMemoryContextRequest,
     fingerprint: ActiveMemoryRefreshFingerprint | undefined,
+    accessPolicyHash: string | undefined,
+    roomVisibility: RetrievalRoomVisibilityContext | undefined,
   ): Promise<ActiveMemoryContextSnapshot | null> {
     const identity = resolveActiveMemoryContextIdentity(request);
     const existing = this.activeMemoryContexts.get(identity.key);
@@ -459,6 +495,7 @@ export class MemoryRetriever implements MemoryProvider {
               companionId: request.companionId ?? '',
             }
             : undefined,
+          roomVisibility,
         )
         : undefined;
 
@@ -480,6 +517,8 @@ export class MemoryRetriever implements MemoryProvider {
           startedAt,
           identity,
           fingerprint,
+          accessPolicyHash,
+          roomVisibility,
         },
       );
       return cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
@@ -488,16 +527,109 @@ export class MemoryRetriever implements MemoryProvider {
     }
   }
 
-  private resolveActiveMemoryRefreshFingerprint(
-    contextText: string,
-  ): ActiveMemoryRefreshFingerprint | undefined {
-    const corpusVersion = this.memoryStore.getRetrievalCorpusVersion?.();
+  private async resolveActiveMemoryRefreshCacheState(
+    request: ActiveMemoryContextRequest,
+  ): Promise<ResolvedActiveMemoryRefreshCacheState> {
+    let accessPolicyHash: string | undefined;
+    let roomVisibility: RetrievalRoomVisibilityContext | undefined;
+    try {
+      if (
+        this.sessionQuarantineFilter
+        && typeof this.sessionQuarantineFilter.getRetiredLogicalSessionIds !== 'function'
+      ) {
+        return {};
+      }
+      roomVisibility = await this.resolveRoomVisibilityContext(
+        request.channelId,
+        request.channelMeta,
+        request.canonicalContactId,
+        request.conversationScope,
+      );
+      const channelDisclosure = classifyChannelDisclosure(request.channelId, request.channelMeta);
+      const visibilityScope = resolveBroadcastVisibilityScope(request.channelId, request.channelMeta)
+        ?? 'non_broadcast';
+      const conversationScope = request.conversationScope;
+      const normalizedAccessState = {
+        trustLevel: request.trustLevel ?? 'regular',
+        channelId: request.channelId.trim(),
+        canonicalContactId: request.canonicalContactId?.trim() || null,
+        channelMeta: {
+          isDirectMessage: request.channelMeta?.isDirectMessage ?? null,
+          disclosureConsentGranted: request.channelMeta?.disclosureConsentGranted ?? null,
+          privacyLevel: request.channelMeta?.privacyLevel ?? null,
+          broadcastApprovalToken: request.channelMeta?.broadcastApprovalToken?.trim() || null,
+        },
+        channelDisclosure,
+        visibilityScope,
+        operatorApproval: visibilityScope === 'approved_private_context',
+        roomVisibility: {
+          currentChannelId: roomVisibility.currentChannelId.trim(),
+          currentIsDirectMessage: roomVisibility.currentIsDirectMessage ?? null,
+          canonicalContactRoomIds: [...(roomVisibility.canonicalContactRoomIds ?? [])]
+            .map(roomId => roomId.trim())
+            .filter(Boolean)
+            .sort(),
+        },
+        conversationScope: conversationScope
+          ? {
+            kind: conversationScope.kind,
+            key: conversationScope.key,
+            channelId: conversationScope.channelId,
+            envelope: conversationScope.envelope,
+            recentSpeakers: conversationScope.recentSpeakers.map(speaker => ({
+              authorId: speaker.authorId,
+              name: speaker.name,
+            })),
+            ...(conversationScope.kind === 'dm'
+              ? { contact: conversationScope.contact }
+              : {
+                roomName: conversationScope.roomName ?? null,
+                memberCountHint: conversationScope.memberCountHint ?? null,
+              }),
+          }
+          : null,
+        retiredLogicalSessionIds: this.sessionQuarantineFilter
+          ? [...this.sessionQuarantineFilter.getRetiredLogicalSessionIds!()]
+            .map(sessionId => sessionId.trim())
+            .filter(Boolean)
+            .sort()
+          : [],
+        channelEnvelopeLabelsRevision: getRuntimeChannelEnvelopeLabelsRevision(),
+        trustPolicyRevision: getRuntimeTrustPolicyRevision(),
+        trustPolicy: getRuntimeTrustPolicy(),
+      };
+      accessPolicyHash = createHash('sha256')
+        .update(JSON.stringify(normalizedAccessState), 'utf8')
+        .digest('hex');
+    } catch (error) {
+      log.debug('Active memory refresh cache disabled: access policy could not be fingerprinted safely', {
+        channelId: request.channelId,
+        error: toErrorMessage(error),
+      });
+      return {};
+    }
+
+    let corpusVersion: number | undefined;
+    try {
+      corpusVersion = await this.memoryStore.getRetrievalCorpusVersion?.();
+    } catch (error) {
+      log.debug('Active memory refresh cache disabled: corpus version is not safely readable', {
+        channelId: request.channelId,
+        error: toErrorMessage(error),
+      });
+      return { accessPolicyHash, roomVisibility };
+    }
     if (!Number.isSafeInteger(corpusVersion) || (corpusVersion ?? -1) < 0) {
-      return undefined;
+      return { accessPolicyHash, roomVisibility };
     }
     return {
-      contextHash: createHash('sha256').update(contextText, 'utf8').digest('hex'),
-      corpusVersion,
+      accessPolicyHash,
+      roomVisibility,
+      fingerprint: {
+        contextHash: createHash('sha256').update(request.contextText, 'utf8').digest('hex'),
+        corpusVersion,
+        accessPolicyHash,
+      },
     };
   }
 
@@ -599,6 +731,7 @@ export class MemoryRetriever implements MemoryProvider {
       requestId: string;
       companionId: string;
     },
+    roomVisibility?: RetrievalRoomVisibilityContext,
   ): Promise<TurnMemorySnapshot> {
     return captureTurnMemorySnapshotWithDeps(
       {
@@ -612,6 +745,7 @@ export class MemoryRetriever implements MemoryProvider {
         callerContext,
         retrievalMode,
         ...(retrievalQueryEmbedding ? { retrievalQueryEmbedding } : {}),
+        ...(roomVisibility ? { roomVisibility } : {}),
       },
       {
         memoryStore: this.memoryStore,
@@ -710,12 +844,13 @@ export class MemoryRetriever implements MemoryProvider {
     const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const roomVisibility = await this.resolveRoomVisibilityContext(
-      channelId,
-      channelMeta,
-      canonicalContactId,
-      conversationScope,
-    );
+    const roomVisibility = activeContextTarget?.roomVisibility
+      ?? await this.resolveRoomVisibilityContext(
+        channelId,
+        channelMeta,
+        canonicalContactId,
+        conversationScope,
+      );
     const socialContext = canonicalContactId
       ? await resolveRetrievalSocialContext(this.contactStore, canonicalContactId, effectiveTrust, channelPrivacy)
       : undefined;

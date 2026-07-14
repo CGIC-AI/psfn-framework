@@ -9,6 +9,7 @@ import type { ContactProfileArtifact } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import type { MemoryWithheldSummary } from '../withheld-summary.js';
 import type { EpisodicRetrievalChain } from './episodic.js';
+import type { RetrievalRoomVisibilityContext } from './access.js';
 import type {
   RetrievalContactContext,
   RetrievalSocialContext,
@@ -41,11 +42,13 @@ export interface ActiveMemoryState {
   refreshSerial: number;
   maxEntries: number;
   completedRefreshFingerprint?: ActiveMemoryRefreshFingerprint;
+  completedAccessPolicyHash?: string;
 }
 
 export interface ActiveMemoryRefreshFingerprint {
   contextHash: string;
   corpusVersion: number;
+  accessPolicyHash: string;
 }
 
 export interface ActiveMemoryRefreshTarget {
@@ -53,6 +56,8 @@ export interface ActiveMemoryRefreshTarget {
   startedAt: number;
   identity: ReturnType<typeof resolveActiveMemoryContextIdentity>;
   fingerprint?: ActiveMemoryRefreshFingerprint;
+  accessPolicyHash?: string;
+  roomVisibility?: RetrievalRoomVisibilityContext;
 }
 
 export interface ActiveMemoryRefreshLoop {
@@ -60,6 +65,8 @@ export interface ActiveMemoryRefreshLoop {
   latestWork?: {
     request: ActiveMemoryContextRequest;
     fingerprint?: ActiveMemoryRefreshFingerprint;
+    accessPolicyHash?: string;
+    roomVisibility?: RetrievalRoomVisibilityContext;
   };
   running: Promise<ActiveMemoryContextSnapshot | null>;
 }

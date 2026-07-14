@@ -68,6 +68,7 @@ export interface CaptureTurnMemorySnapshotInput {
     requestId: string;
     companionId: string;
   };
+  roomVisibility?: RetrievalRoomVisibilityContext;
 }
 
 export interface CaptureTurnMemorySnapshotDeps {
@@ -142,7 +143,8 @@ export async function captureTurnMemorySnapshot(
   const { channelPrivacy, broadcast } = channelDisclosure;
   const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
   const operatorApproval = visibilityScope === 'approved_private_context';
-  const roomVisibility = await deps.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+  const roomVisibility = input.roomVisibility
+    ?? await deps.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
   const rawProfile = canonicalContactId
     ? await deps.memoryStore.getContactProfile(canonicalContactId)
     : undefined;

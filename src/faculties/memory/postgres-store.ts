@@ -200,7 +200,14 @@ class PostgresMemoryStore implements MemoryStorePort {
     return this.salienceMaintenanceRevision;
   }
 
-  getRetrievalCorpusVersion(): number {
+  async getRetrievalCorpusVersion(): Promise<number> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Retrieval corpus version is unavailable inside a memory-store transaction');
+    }
+    // Retrieval must not fingerprint or scan the in-memory mirror while a
+    // transaction can still roll back. The persist chain settles only after
+    // COMMIT/ROLLBACK and cache restoration have completed.
+    await this.persistChain;
     return this.retrievalCorpusVersion;
   }
 
@@ -579,7 +586,6 @@ class PostgresMemoryStore implements MemoryStorePort {
       const memoriesSnapshot = new Map(this.memories);
       const embeddingsSnapshot = new Map(this.embeddings);
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
-      const retrievalCorpusVersionSnapshot = this.retrievalCorpusVersion;
       try {
         await client.query('BEGIN');
         const result = await this.transactionContext.run(state, () => handler());
@@ -600,7 +606,9 @@ class PostgresMemoryStore implements MemoryStorePort {
         this.memories = memoriesSnapshot;
         this.embeddings = embeddingsSnapshot;
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
-        this.retrievalCorpusVersion = retrievalCorpusVersionSnapshot;
+        // Generations are monotonic. A rollback is itself a corpus transition:
+        // any refresh that observed staged in-memory data must become stale.
+        this.markRetrievalCorpusChanged();
         throw error;
       } finally {
         client.release();

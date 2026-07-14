@@ -873,6 +873,58 @@ describe('postgres memory store unit coverage', () => {
     expect((await store.getById('txn-rollback-source'))?.salience).toBe(0.42);
   });
 
+  it('never exposes a rolled-back transaction as a reusable active-memory snapshot', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const embeddings = makeEmbeddingProvider();
+    const embedSpy = vi.spyOn(embeddings, 'embed');
+    const retriever = new MemoryRetriever(store, embeddings, {
+      telemetryEnabled: false,
+      contextWindow: 32_000,
+    });
+    const uncommitted = makeMemory('txn-rolled-back-memory', 'Uncommitted launch phrase blue heron');
+    let signalInserted!: () => void;
+    const inserted = new Promise<void>(resolve => {
+      signalInserted = resolve;
+    });
+    let releaseTransaction!: () => void;
+    const transactionGate = new Promise<void>(resolve => {
+      releaseTransaction = resolve;
+    });
+    const versionBefore = await store.getRetrievalCorpusVersion!();
+    const transaction = store.runInTransaction(async () => {
+      await store.insertMemory(uncommitted, new Float32Array([1, 0, 0, 0]));
+      signalInserted();
+      await transactionGate;
+      throw new Error('deliberate rollback');
+    });
+    await inserted;
+
+    const refresh = retriever.refreshActiveMemoryContext({
+      contextText: 'launch phrase',
+      channelId: 'api:test',
+      trustLevel: 'primary',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const embeddedBeforeRollback = embedSpy.mock.calls.length > 0;
+    releaseTransaction();
+    await expect(transaction).rejects.toThrow('deliberate rollback');
+    const first = await refresh;
+    const second = await retriever.refreshActiveMemoryContext({
+      contextText: 'launch phrase',
+      channelId: 'api:test',
+      trustLevel: 'primary',
+    });
+    const versionAfter = await store.getRetrievalCorpusVersion!();
+
+    expect(embeddedBeforeRollback).toBe(false);
+    expect(first?.contextBlock ?? '').not.toContain(uncommitted.text);
+    expect(second?.contextBlock ?? '').not.toContain(uncommitted.text);
+    expect(versionAfter).toBeGreaterThan(versionBefore);
+    expect(embedSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects nested memory-store transactions', async () => {
     postgresMocks.activePool = new FakeMemoryPool();
     const store = await createPostgresMemoryStore('postgres://unused', 4);

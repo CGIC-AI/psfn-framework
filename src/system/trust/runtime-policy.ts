@@ -30,17 +30,24 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
 };
 
 let activePolicy: TrustPolicyConfig = DEFAULT_POLICY;
+let activePolicyRevision = 0;
 
 export function getRuntimeTrustPolicy(): TrustPolicyConfig {
   return activePolicy;
 }
 
+export function getRuntimeTrustPolicyRevision(): number {
+  return activePolicyRevision;
+}
+
 export function setRuntimeTrustPolicy(policy: TrustPolicyConfig): void {
   activePolicy = policy;
+  activePolicyRevision += 1;
 }
 
 export function resetRuntimeTrustPolicy(): void {
   activePolicy = DEFAULT_POLICY;
+  activePolicyRevision += 1;
 }
 
 export function getDefaultTrustPolicy(): TrustPolicyConfig {

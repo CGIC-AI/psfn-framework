@@ -122,6 +122,21 @@ describe('gateway inline image retention RPC flow', () => {
     }
   });
 
+  it('leaves the URL-addressed screening path unchanged and does not mint a retained handle', async () => {
+    const { methods } = createHarness();
+    const result = await methods.get('intake.screen_image')!({
+      imageUrl: 'https://cdn.example.test/partner-image.png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope: 'turn-url-path',
+    }) as VisionIntakeImageScreenResult;
+
+    expect(result).toMatchObject({
+      kind: 'screened',
+      withheld: false,
+    });
+    expect(result.retainedImage).toBeUndefined();
+  });
+
   it('fails closed when a retained handle is used outside its request scope', async () => {
     const { methods, stream } = createHarness();
     const screened = await methods.get('intake.screen_image')!({

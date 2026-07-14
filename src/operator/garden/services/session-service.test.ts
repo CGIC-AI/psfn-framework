@@ -17,6 +17,8 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../../core/contacts/types.js';
 import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
 
 function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
@@ -93,6 +95,125 @@ describe('AdminSessionDataService', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('lists bounded session rows without loading contacts or changing payload size with contact count', async () => {
+    store.append({
+      channelId: 'api:bounded-list',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_001,
+      authorId: 'user-1',
+    });
+
+    const makeContact = (index: number): Contact => ({
+      id: `contact-${index}`,
+      displayName: `Contact ${index}`,
+      trustLevel: 'regular',
+      relationshipType: 'acquaintance',
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
+      notes: `private-${index}`,
+    });
+    const emptyListAll = vi.fn(async () => [] as Contact[]);
+    const largeListAll = vi.fn(async () => Array.from({ length: 1_000 }, (_, index) => makeContact(index)));
+    const createService = (listAll: typeof emptyListAll | typeof largeListAll) => new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore: { listAll } as unknown as ContactStorePort,
+    });
+
+    const emptyContactsPayload = await createService(emptyListAll).listSessions();
+    const largeContactsPayload = await createService(largeListAll).listSessions();
+
+    expect(emptyListAll).not.toHaveBeenCalled();
+    expect(largeListAll).not.toHaveBeenCalled();
+    expect(Buffer.byteLength(JSON.stringify(largeContactsPayload)))
+      .toBe(Buffer.byteLength(JSON.stringify(emptyContactsPayload)));
+    expect(largeContactsPayload.channels).toEqual([{
+      sessionId: 'api:bounded-list',
+      channelId: 'api:bounded-list',
+      messageCount: 1,
+      lastActivityAt: 1_700_000_000_001,
+    }]);
+  });
+
+  it('lists session routes without recursively issuing a session-list request', async () => {
+    store.append({
+      channelId: 'api:route-list',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_002,
+    });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+    const listSessions = vi.spyOn(service, 'listSessions');
+
+    const result = await service.listSessionRoutes();
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(result.channels).toEqual([{
+      sessionId: 'api:route-list',
+      channelId: 'api:route-list',
+      messageCount: 1,
+      lastActivityAt: 1_700_000_000_002,
+    }]);
+  });
+
+  it('resolves linked contact display detail only for the selected session without exposing private fields', async () => {
+    const sessionId = 'api:selected-detail';
+    store.append({
+      channelId: sessionId,
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_003,
+      authorId: 'user-42',
+    });
+    const linkedContact: Contact = {
+      id: 'contact-42',
+      displayName: 'Selected Person',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-02T00:00:00.000Z',
+      notes: 'private operator notes must not cross this endpoint',
+      channels: [{
+        channel: 'api',
+        userId: 'user-42',
+        privacyLevel: 'private',
+        linkedAt: '2026-01-01T00:00:00.000Z',
+      }],
+    };
+    const listAll = vi.fn(async () => [linkedContact]);
+    const getByChannelIdentity = vi.fn(async () => linkedContact);
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore: { listAll, getByChannelIdentity } as unknown as ContactStorePort,
+    });
+
+    const detail = await service.getSessionDetail(sessionId);
+
+    expect(listAll).toHaveBeenCalledOnce();
+    expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'user-42');
+    expect(detail).toEqual({
+      channel: {
+        sessionId,
+        channelId: sessionId,
+        messageCount: 1,
+        lastActivityAt: 1_700_000_000_003,
+        linkedContactId: 'contact-42',
+        linkedContactName: 'Selected Person',
+      },
+    });
+    expect(JSON.stringify(detail)).not.toContain('private operator notes');
+    expect(JSON.stringify(detail)).not.toContain('trustLevel');
+    expect(JSON.stringify(detail)).not.toContain('privacyLevel');
   });
 
   it('returns newest message page by default and older pages by beforeId cursor', () => {

@@ -33,15 +33,24 @@ import type {
   AdminContinuityProvenanceView,
 } from './continuity.js';
 
+export type AdminSessionListRow = Pick<
+  ChannelInfo,
+  'sessionId' | 'channelId' | 'messageCount' | 'lastActivityAt' | 'displayLabel'
+>;
+
 export interface AdminSessionListData {
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
+}
+
+export interface AdminSessionDetailData {
+  channel: AdminSessionListRow & Pick<ChannelInfo, 'linkedContactId' | 'linkedContactName'>;
 }
 
 export type AdminSessionRouteView = SourceChannelSessionRoute;
 
 export interface AdminSessionRouteListData {
   routes: AdminSessionRouteView[];
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
 }
 
 export interface AdminSessionRouteResetInput {
@@ -205,6 +214,7 @@ export interface AdminSessionTurnDetailData {
 
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
+  getSessionDetail(sessionId: string): Promise<AdminSessionDetailData>;
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
   getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData;
   searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;

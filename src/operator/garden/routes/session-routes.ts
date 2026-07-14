@@ -9,6 +9,7 @@ import type {
   AdminSessionService,
 } from '../services/types.js';
 import {
+  AdminSessionNotFoundError,
   AdminSessionTurnNotFoundError,
   MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT,
   MAX_ADMIN_SESSION_SEARCH_LIMIT,
@@ -370,6 +371,26 @@ export function buildAdminSessionRoutes(options: {
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to search session messages'),
           }),
+        );
+      },
+    },
+    {
+      // Contact/link detail is intentionally absent from the session index.
+      // Resolve it only after the operator selects one concrete session.
+      method: 'GET',
+      match: wrappedParamPath('/api/admin/sessions/', '/detail', 'channelId'),
+      handle: (req, res, { channelId }) => {
+        sessionService.getSessionDetail(channelId).then(
+          payload => sendCompressedJson(req, res, 200, payload),
+          (error) => {
+            if (error instanceof AdminSessionNotFoundError) {
+              sendJson(res, 404, { error: error.message });
+              return;
+            }
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to load session detail'),
+            });
+          },
         );
       },
     },

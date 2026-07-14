@@ -52,6 +52,8 @@ import type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionMessageOntologyView,
+  AdminSessionDetailData,
+  AdminSessionListRow,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionSearchData,
@@ -95,6 +97,13 @@ export class AdminSessionTurnNotFoundError extends Error {
   constructor(public readonly sessionId: string, public readonly turnId: string) {
     super(`Turn "${turnId}" not found for session "${sessionId}"`);
     this.name = 'AdminSessionTurnNotFoundError';
+  }
+}
+
+export class AdminSessionNotFoundError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`Session "${sessionId}" not found`);
+    this.name = 'AdminSessionNotFoundError';
   }
 }
 
@@ -473,44 +482,54 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  async listSessions(): Promise<AdminSessionListData> {
+  private listSessionRows(): AdminSessionListRow[] {
     const channels = this.deps.sessionStore.listChannels();
     const activityBySessionId = new Map(
       this.deps.sessionStore
         .listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)
         .map(summary => [summary.sessionId, summary]),
     );
-    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
-    return {
-      channels: await Promise.all(channels.map(async (channel) => {
-        const sessionActivity = activityBySessionId.get(channel.sessionId);
-        const channelWithActivity = (
-          typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
-        )
-          ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
-          : channel;
+    return channels.map((channel) => {
+      const sessionActivity = activityBySessionId.get(channel.sessionId);
+      return (
+        typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
+      )
+        ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
+        : channel;
+    });
+  }
 
-        const linkedContact = await getLinkedContactForSession({
-          channelId: channel.channelId,
-          contacts,
-          sessionStore: this.deps.sessionStore,
-          contactStore: this.deps.contactStore,
-        });
-        if (!linkedContact) return channelWithActivity;
-        return {
-          ...channelWithActivity,
-          linkedContactId: linkedContact.id,
-          linkedContactName: linkedContact.displayName,
-        };
-      })),
+  async listSessions(): Promise<AdminSessionListData> {
+    return { channels: this.listSessionRows() };
+  }
+
+  async getSessionDetail(sessionId: string): Promise<AdminSessionDetailData> {
+    const channel = this.listSessionRows().find(candidate => candidate.sessionId === sessionId);
+    if (!channel) throw new AdminSessionNotFoundError(sessionId);
+
+    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
+    const linkedContact = await getLinkedContactForSession({
+      sessionId: channel.sessionId,
+      channelId: channel.channelId,
+      contacts,
+      sessionStore: this.deps.sessionStore,
+      contactStore: this.deps.contactStore,
+    });
+    return {
+      channel: linkedContact
+        ? {
+            ...channel,
+            linkedContactId: linkedContact.id,
+            linkedContactName: linkedContact.displayName,
+          }
+        : channel,
     };
   }
 
   async listSessionRoutes(): Promise<AdminSessionRouteListData> {
-    const sessions = await this.listSessions();
     return {
       routes: this.deps.sessionManager.listSessionRoutes(),
-      channels: sessions.channels,
+      channels: this.listSessionRows(),
     };
   }
 

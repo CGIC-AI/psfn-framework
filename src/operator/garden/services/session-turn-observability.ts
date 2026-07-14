@@ -18,13 +18,21 @@ import type {
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from './types.js';
-import type { ContextMessage, TurnRecord } from '../../../shared/contracts/runtime.js';
+import type {
+  ContextMessage,
+  LLMProviderWireMessage,
+  PromptSectionTelemetry,
+  TurnRecord,
+} from '../../../shared/contracts/runtime.js';
+import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
   serializePromptPlanForProvider,
   serializePromptPlanSystemPrompt,
 } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
+import { rebuildProviderWireMessagesForPrompt } from '../../../core/agent/substrate-agent/turn-execution/prompt-invocation-history.js';
+import { contextMessagesToPiMessages } from '../../../primitives/llm/message-conversion.js';
 
 /**
  * Truncation-point inventory (bead u9jo.2).
@@ -106,15 +114,90 @@ function buildRecordedRoleEnvelopeRefs(record: AdminSessionTurnData['record']): 
     .map(ref => ref.trim());
 }
 
-function cloneProviderMessages(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  return snapshot?.promptContext?.providerObservability?.providerWireMessages.map(message => ({ ...message })) ?? [];
+/**
+ * Reconstruct the provider wire messages from the canonical PromptPlan the same
+ * way the runtime did at write time (agent-invocation.ts): serialize the plan
+ * for the recorded transport to seed the system lane, convert plan.messages into
+ * the provider history exactly as `contextMessagesToPiMessages` produced it, and
+ * append the current turn from `promptContext.currentTurnInput`. Reuses the
+ * runtime's own `rebuildProviderWireMessagesForPrompt`, so the read-time
+ * projection cannot drift from the write-time capture.
+ *
+ * Returns [] when the plan or the recorded system-role transport is unavailable
+ * (nothing canonical to derive from).
+ */
+function deriveProviderWireMessages(snapshot: AdminTurnSnapshotData | null): LLMProviderWireMessage[] {
+  const plan = snapshot?.plan ?? null;
+  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
+  if (!plan || !transport) return [];
+  const seededWireMessages = serializePromptPlanForProvider(plan, transport).providerWireMessages;
+  const historyMessages = contextMessagesToPiMessages(plan.messages);
+  const currentPromptMessage: AgentMessage = {
+    role: 'user',
+    content: snapshot?.promptContext?.currentTurnInput ?? '',
+    timestamp: 0,
+  };
+  return rebuildProviderWireMessagesForPrompt(seededWireMessages, historyMessages, currentPromptMessage);
 }
 
-function cloneActiveTools(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['activeTools'] {
-  return snapshot?.toolContext?.activeTools.map(tool => ({
+/**
+ * FAT-RECORD READ PATH (schema tolerance, not a legacy shim): when the snapshot
+ * embedded the provider wire messages verbatim, prefer that byte-for-byte so
+ * historical records keep rendering exactly as captured. SLIM records that no
+ * longer persist the duplicated copy derive it from the canonical plan.
+ */
+function resolveProviderMessages(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['providerMessages'] {
+  const embedded = snapshot?.promptContext?.providerObservability?.providerWireMessages;
+  const messages = embedded ?? deriveProviderWireMessages(snapshot);
+  return messages.map(message => ({ ...message }));
+}
+
+/**
+ * FAT-RECORD READ PATH: prefer the embedded `toolContext.activeTools` verbatim.
+ * SLIM records fall back to `plan.toolDefinitions` — byte-identical to
+ * activeTools at write time (agent-invocation.ts binds the same array to both).
+ */
+function resolveActiveTools(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['activeTools'] {
+  const tools = snapshot?.toolContext?.activeTools ?? snapshot?.plan?.toolDefinitions ?? [];
+  return tools.map(tool => ({
     ...tool,
     inputSchema: cloneUnknownValue(tool.inputSchema),
-  })) ?? [];
+  }));
+}
+
+/**
+ * Derive a Final System Sections view from the canonical plan blocks. NOTE: the
+ * write-time `finalSystemSections` is a distinct SEMANTIC decomposition built by
+ * the session context builder (titled sections with authenticity provenance),
+ * NOT a 1:1 rendering of plan blocks — so this derived view is a best-effort
+ * ordered-block projection, not a byte-faithful reconstruction. The fat-record
+ * read path below always prefers the embedded copy when present.
+ */
+function deriveFinalSystemSectionsFromPlan(snapshot: AdminTurnSnapshotData | null): PromptSectionTelemetry[] {
+  const plan = snapshot?.plan ?? null;
+  if (!plan) return [];
+  return plan.blocks
+    .filter(block => block.renderedText.trim().length > 0)
+    .map(block => ({
+      id: block.id,
+      title: block.id,
+      content: block.renderedText,
+      charCount: block.renderedText.length,
+      tokenCount: block.tokensEst,
+    }));
+}
+
+/**
+ * FAT-RECORD READ PATH (schema tolerance): prefer the embedded
+ * `finalSystemSections` verbatim; SLIM records derive the best-effort plan-block
+ * projection (see `deriveFinalSystemSectionsFromPlan`).
+ */
+function resolveFinalSystemSections(
+  snapshot: AdminTurnSnapshotData | null,
+): AdminPromptLoomData['generatedPrompt']['finalSystemSections'] {
+  const embedded = snapshot?.promptContext?.finalSystemSections;
+  const sections = embedded ?? deriveFinalSystemSectionsFromPlan(snapshot);
+  return sections.map(section => cloneUnknownValue(section));
 }
 
 function clonePromptSections(
@@ -164,7 +247,10 @@ function addHistoricalHitsForSections(
   }
 }
 
-function collectHistoricalSnapshotHits(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomHistoricalSnapshotHit[] {
+function collectHistoricalSnapshotHits(
+  snapshot: AdminTurnSnapshotData | null,
+  finalSystemSections: AdminPromptLoomData['generatedPrompt']['finalSystemSections'],
+): AdminPromptLoomHistoricalSnapshotHit[] {
   const hits: AdminPromptLoomHistoricalSnapshotHit[] = [];
   addHistoricalHitsForText(hits, 'prompt.staticPrefixTemplate', snapshot?.prompt?.staticPrefixTemplate);
   addHistoricalHitsForText(hits, 'prompt.dynamicSuffixTemplate', snapshot?.prompt?.dynamicSuffixTemplate);
@@ -174,10 +260,12 @@ function collectHistoricalSnapshotHits(snapshot: AdminTurnSnapshotData | null): 
     'promptContext.runtimeContextSections',
     snapshot?.promptContext?.runtimeContextSections,
   );
+  // Resolved sections (embedded copy for fat records, plan-block projection for
+  // slim records) so the removed-layer scan works regardless of persistence.
   addHistoricalHitsForSections(
     hits,
     'promptContext.finalSystemSections',
-    snapshot?.promptContext?.finalSystemSections,
+    finalSystemSections,
   );
   return hits;
 }
@@ -277,19 +365,20 @@ function buildProviderWireData(
     legacy: plan === null,
     systemRoleTransport: transport,
     systemPrompt: legacyFinalSystemPrompt,
-    messages: cloneProviderMessages(snapshot),
-    toolDefinitions: cloneActiveTools(snapshot),
+    messages: resolveProviderMessages(snapshot),
+    toolDefinitions: resolveActiveTools(snapshot),
   };
 }
 
-function buildPromptLoomData(
+export function buildPromptLoomData(
   record: TurnRecord,
   snapshot: AdminTurnSnapshotData | null,
 ): AdminPromptLoomData {
   const promptContext = snapshot?.promptContext;
   const response = promptContext?.response ?? null;
   const renderedChatOutput = response?.content ?? record.assistantMessage?.content ?? null;
-  const historicalHits = collectHistoricalSnapshotHits(snapshot);
+  const finalSystemSections = resolveFinalSystemSections(snapshot);
+  const historicalHits = collectHistoricalSnapshotHits(snapshot, finalSystemSections);
   const promptStrings = derivePromptLoomPromptStrings(snapshot);
   return {
     source: 'turn_snapshot',
@@ -312,12 +401,12 @@ function buildPromptLoomData(
       inputSections: clonePromptSections(promptContext?.inputSections),
       runtimeContextSections: clonePromptSections(promptContext?.runtimeContextSections),
       memoryContextSections: clonePromptSections(promptContext?.memoryContextSections),
-      finalSystemSections: clonePromptSections(promptContext?.finalSystemSections),
+      finalSystemSections,
     },
     providerPayload: {
       finalSystemPrompt: promptStrings.finalSystemPrompt,
-      providerMessages: cloneProviderMessages(snapshot),
-      activeTools: cloneActiveTools(snapshot),
+      providerMessages: resolveProviderMessages(snapshot),
+      activeTools: resolveActiveTools(snapshot),
     },
     providerResult: {
       response: response ? { ...response } : null,

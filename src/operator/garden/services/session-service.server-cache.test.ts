@@ -312,7 +312,7 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
     appendMessage(store, channelId, 'second', 2_000);
     await store.flushSessionTailWrites();
     const service = makeService(store, dir);
-    const rangeRead = vi.spyOn(store, 'getEntriesInRange');
+    const boundedRead = vi.spyOn(store, 'getEntriesBefore');
 
     const older = await service.getSessionMessagesForAdminRead(channelId, {
       beforeId: 2,
@@ -320,7 +320,7 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
     });
 
     expect(older.messages.map((entry: SessionEntry) => entry.content)).toEqual(['first']);
-    expect(rangeRead).toHaveBeenCalledOnce();
+    expect(boundedRead).toHaveBeenCalledOnce();
     expect(tail.calls.getTail).toBe(0);
   });
 });

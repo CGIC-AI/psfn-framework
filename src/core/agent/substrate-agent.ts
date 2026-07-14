@@ -572,7 +572,7 @@ export class SubstrateAgent {
       },
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
-      resolveTurnTools: () => this.toolRuntimeFacade.getActiveTurnTools(),
+      resolveTurnTools: () => this.toolRuntimeFacade.resolveOwnedTurnTools(),
     });
 
     this.installRuntimeHooks();

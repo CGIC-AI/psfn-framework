@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,7 +58,6 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');

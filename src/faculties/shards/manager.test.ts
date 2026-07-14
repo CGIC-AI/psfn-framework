@@ -3,7 +3,7 @@ import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Agent } from '../../boundary/pi-agent/index.js';
+import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
@@ -16,6 +16,7 @@ import {
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import { resolveInstalledAgentTurnTools } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { ShardFoldReviewController } from './fold-review.js';
@@ -53,17 +54,23 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   });
 });
 
-// pi-agent-core 0.73 removed Agent.setSystemPrompt()/setTools(); shard agent
-// configuration now flows through `agent.state` assignments, so capture the
-// effective config of each inner Agent at prompt time instead of spying on
-// the removed prototype methods.
-type AgentRunConfig = { systemPrompt: string; tools: Array<{ name: string; execute: (...args: any[]) => Promise<any> }> };
+// pi-agent-core 0.73 removed Agent.setSystemPrompt()/setTools(). The production
+// prompt loop now resolves tools from the exact async turn owner, so this test
+// double must consume that same resolver instead of mutable Agent state.
+type AgentRunConfig = {
+  agent: Agent;
+  systemPrompt: string;
+  tools: readonly AgentTool<any>[];
+};
 const agentRunConfigs: AgentRunConfig[] = [];
-function recordAgentRunConfig(agent: Agent): void {
-  agentRunConfigs.push({
+function recordAgentRunConfig(agent: Agent): AgentRunConfig {
+  const config = {
+    agent,
     systemPrompt: agent.state.systemPrompt,
-    tools: agent.state.tools as unknown as AgentRunConfig['tools'],
-  });
+    tools: resolveInstalledAgentTurnTools(agent),
+  };
+  agentRunConfigs.push(config);
+  return config;
 }
 
 function restoreDefaultPromptMock(): void {
@@ -1369,6 +1376,100 @@ describe('ShardManager', () => {
     expect(injected).not.toContain('load_tools');
     expect(injected).not.toContain('repo_commit');
     expect(injected).not.toContain('spawn_subagent');
+  });
+
+  it('keeps mocked prompt tool snapshots bound to each concurrent shard turn', async () => {
+    const alphaTool = makeTestTool('alpha_tool');
+    const betaTool = makeTestTool('beta_tool');
+    let releaseAlpha!: () => void;
+    let markAlphaEntered!: () => void;
+    let markBetaEntered!: () => void;
+    const alphaRelease = new Promise<void>((resolve) => {
+      releaseAlpha = resolve;
+    });
+    const alphaEntered = new Promise<void>((resolve) => {
+      markAlphaEntered = resolve;
+    });
+    const betaEntered = new Promise<void>((resolve) => {
+      markBetaEntered = resolve;
+    });
+
+    promptSpy.mockImplementation(async function (this: Agent) {
+      const config = recordAgentRunConfig(this);
+      const toolNames = config.tools.map(tool => tool.name);
+      if (toolNames.includes('alpha_tool')) {
+        markAlphaEntered();
+        await alphaRelease;
+      } else if (toolNames.includes('beta_tool')) {
+        markBetaEntered();
+      }
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: mockShardContent }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+
+    const alphaManager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'nursery',
+        shardToolsets: { nursery: ['alpha_tool'] },
+      },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({ core: [alphaTool.tool], extended: [] }),
+    });
+    const betaManager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'nursery',
+        shardToolsets: { nursery: ['beta_tool'] },
+      },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({ core: [betaTool.tool], extended: [] }),
+    });
+
+    const alphaRun = alphaManager.spawn({ name: 'alpha-turn', task: 'test' });
+    await alphaEntered;
+    const betaRun = betaManager.spawn({ name: 'beta-turn', task: 'test' });
+    await betaEntered;
+    await betaRun;
+    releaseAlpha();
+    await alphaRun;
+
+    const alphaConfig = agentRunConfigs.find(config => (
+      config.tools.some(tool => tool.name === 'alpha_tool')
+    ));
+    const betaConfig = agentRunConfigs.find(config => (
+      config.tools.some(tool => tool.name === 'beta_tool')
+    ));
+    const alphaToolNames = alphaConfig?.tools.map(tool => tool.name) ?? [];
+    const betaToolNames = betaConfig?.tools.map(tool => tool.name) ?? [];
+    expect(alphaToolNames).toContain('alpha_tool');
+    expect(alphaToolNames).not.toContain('beta_tool');
+    expect(betaToolNames).toContain('beta_tool');
+    expect(betaToolNames).not.toContain('alpha_tool');
+    expect(() => resolveInstalledAgentTurnTools(alphaConfig!.agent)).toThrow(
+      'Turn-owned tools are unavailable outside their exact async owner',
+    );
+    expect(() => resolveInstalledAgentTurnTools(betaConfig!.agent)).toThrow(
+      'Turn-owned tools are unavailable outside their exact async owner',
+    );
   });
 
   it('stamps shard source provenance on shard memory writes and quarantines imports behind review', async () => {

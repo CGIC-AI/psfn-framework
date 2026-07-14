@@ -531,9 +531,13 @@ export class ToolRuntimeFacade {
     }, run);
   }
 
-  getActiveTurnTools(): readonly AgentTool<any>[] {
+  resolveOwnedTurnTools(): readonly AgentTool<any>[] | undefined {
     const active = this.toolTurnContext.getStore()?.activeTools;
-    return active ? [...active] : [...this.agent.state.tools];
+    return active ? [...active] : undefined;
+  }
+
+  getActiveTurnTools(): readonly AgentTool<any>[] {
+    return this.resolveOwnedTurnTools() ?? [...this.agent.state.tools];
   }
 
   setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {

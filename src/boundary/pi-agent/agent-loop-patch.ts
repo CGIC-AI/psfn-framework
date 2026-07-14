@@ -30,6 +30,29 @@ export interface AgentLoopPromptCacheHooks {
   resolveTurnTools?: () => readonly AgentTool<any>[] | undefined;
 }
 
+const installedTurnToolResolvers = new WeakMap<
+  Agent,
+  NonNullable<AgentLoopPromptCacheHooks['resolveTurnTools']>
+>();
+
+/**
+ * Resolve the tool snapshot owned by the current async turn for a patched
+ * agent. This is also the supported seam for prompt-loop test doubles: they
+ * must consume the same owner-bound resolver as the production loop instead
+ * of reading mutable Agent state.
+ */
+export function resolveInstalledAgentTurnTools(agent: Agent): readonly AgentTool<any>[] {
+  const resolveTurnTools = installedTurnToolResolvers.get(agent);
+  if (!resolveTurnTools) {
+    throw new Error('Agent does not have an installed turn-tool resolver');
+  }
+  const tools = resolveTurnTools();
+  if (!tools) {
+    throw new Error('Turn-owned tools are unavailable outside their exact async owner');
+  }
+  return [...tools];
+}
+
 type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
 
 /**
@@ -78,6 +101,9 @@ export function installAgentToolSchedulerPatch(
   if (target.__psfnToolSchedulerPatched) {
     return;
   }
+  if (promptCacheHooks?.resolveTurnTools) {
+    installedTurnToolResolvers.set(agent, promptCacheHooks.resolveTurnTools);
+  }
 
   async function runScheduledLoop(
     this: PatchedAgent,
@@ -108,14 +134,16 @@ export function installAgentToolSchedulerPatch(
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
-    const initialTurnTools = promptCacheHooks?.resolveTurnTools?.() ?? this._state.tools;
+    const initialTurnTools = promptCacheHooks?.resolveTurnTools
+      ? resolveInstalledAgentTurnTools(this as unknown as Agent)
+      : [...this._state.tools];
     const context = {
       systemPrompt: this._state.systemPrompt,
       messages: this._state.messages.slice(),
       tools: [...initialTurnTools],
-      getTools: () => [
-        ...(promptCacheHooks?.resolveTurnTools?.() ?? initialTurnTools),
-      ],
+      getTools: () => promptCacheHooks?.resolveTurnTools
+        ? [...resolveInstalledAgentTurnTools(this as unknown as Agent)]
+        : [...initialTurnTools],
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
     const config = this.createLoopConfig(options);

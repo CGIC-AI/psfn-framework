@@ -2,12 +2,10 @@ import type {
   IcpAutonomyReasonCode,
   IcpAvailabilityLease,
   IcpConversationEpisode,
-  IcpInitiationPermit,
-} from '../../../../shared/contracts/icp-autonomy.js';
-import type {
   IcpInitiationCandidateStatus,
+  IcpInitiationPermit,
   IcpInitiationSource,
-} from '../../../../core/icp/initiation-candidate.js';
+} from '../../../../shared/contracts/icp-autonomy.js';
 import type { EffectiveIcpAutonomySettingsState } from './settings.js';
 
 export interface AdminIcpCandidateView {

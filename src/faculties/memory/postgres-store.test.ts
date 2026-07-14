@@ -555,6 +555,9 @@ describe('postgres memory store unit coverage', () => {
       const pool = new FakeMemoryPool();
       postgresMocks.activePool = pool;
       const store = await createPostgresMemoryStore('postgres://unused', 4);
+      const decay = new SalienceDecay(store);
+      await decay.run();
+
       await store.insertMemory(makeMemory('pg-idle-decay', 'Idle decay memory', {
         type: 'episodic',
         salience: 1,
@@ -562,7 +565,6 @@ describe('postgres memory store unit coverage', () => {
         lastAccessed: now - 7 * 24 * 60 * 60_000,
       }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
 
-      const decay = new SalienceDecay(store);
       await decay.run();
       const firstObserved = await store.getById('pg-idle-decay');
       expect(firstObserved?.salience).toBeCloseTo(0.5, 10);
@@ -592,6 +594,46 @@ describe('postgres memory store unit coverage', () => {
 
       expect(listSpy).toHaveBeenCalled();
       expect(querySpy).toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('continues the exponential decay curve without double-decaying after restart', async () => {
+    const dayMs = 24 * 60 * 60_000;
+    const halflifeMs = 7 * dayMs;
+    const now = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const pool = new FakeMemoryPool();
+      postgresMocks.activePool = pool;
+      const store = await createPostgresMemoryStore('postgres://unused', 4);
+      const decay = new SalienceDecay(store);
+      await decay.run();
+
+      await store.insertMemory(makeMemory('pg-restart-decay', 'Restart decay memory', {
+        type: 'episodic',
+        salience: 1,
+        extractedAt: now - halflifeMs,
+        lastAccessed: now - halflifeMs,
+      }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+      await decay.run();
+      expect((await store.getById('pg-restart-decay'))?.salience).toBeCloseTo(0.5, 10);
+
+      const restartedStore = await createPostgresMemoryStore('postgres://unused', 4);
+      const restartedDecay = new SalienceDecay(restartedStore);
+      const bulkUpdateSpy = vi.spyOn(restartedStore, 'bulkUpdateSalience');
+
+      await restartedDecay.run();
+      expect(bulkUpdateSpy).not.toHaveBeenCalled();
+      expect((await restartedStore.getById('pg-restart-decay'))?.salience).toBeCloseTo(0.5, 10);
+
+      nowSpy.mockReturnValue(now + dayMs);
+      await restartedDecay.run();
+
+      const expectedAfterOneDay = 0.5 * Math.exp((-Math.LN2 * dayMs) / halflifeMs);
+      expect((await restartedStore.getById('pg-restart-decay'))?.salience)
+        .toBeCloseTo(expectedAfterOneDay, 10);
     } finally {
       nowSpy.mockRestore();
     }

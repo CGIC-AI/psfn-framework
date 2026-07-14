@@ -13,17 +13,18 @@ const MEANINGFUL_SALIENCE_DELTA = 0.01;
 
 interface TrackedDecayAnchor {
   baseSalience: number;
-  lastAccessed: number;
+  sourceLastAccessed: number;
+  decayEpoch: number;
   lastPersistedSalience: number;
   halflife: number;
   salienceFloor: number;
 }
 
 function calculateDecayedSalience(
-  anchor: Pick<TrackedDecayAnchor, 'baseSalience' | 'lastAccessed' | 'halflife' | 'salienceFloor'>,
+  anchor: Pick<TrackedDecayAnchor, 'baseSalience' | 'decayEpoch' | 'halflife' | 'salienceFloor'>,
   now: number,
 ): number {
-  const dt = Math.max(0, now - anchor.lastAccessed);
+  const dt = Math.max(0, now - anchor.decayEpoch);
   const decayFactor = Math.exp((-Math.LN2 * dt) / anchor.halflife);
   return Math.max(anchor.salienceFloor, anchor.baseSalience * decayFactor);
 }
@@ -37,7 +38,7 @@ function nextMeaningfulDecayAt(anchor: TrackedDecayAnchor, now: number): number 
   ) {
     return Number.POSITIVE_INFINITY;
   }
-  const crossingAt = anchor.lastAccessed
+  const crossingAt = anchor.decayEpoch
     + (-Math.log(targetSalience / anchor.baseSalience) * anchor.halflife) / Math.LN2;
   return Math.max(now + 1, Math.floor(crossingAt) + 1);
 }
@@ -48,6 +49,7 @@ export class SalienceDecay {
   private readonly batchSize: number;
   private readonly activeRuns = new Set<object>();
   private readonly trackedAnchors = new Map<string, TrackedDecayAnchor>();
+  private reconstructPersistedAnchors = true;
   private lastProcessedRevision: number | null = null;
   private nextTrackedRunAt = 0;
 
@@ -138,7 +140,7 @@ export class SalienceDecay {
     }
   }
 
-  private resolveTrackedAnchor(memory: PurrMemory): TrackedDecayAnchor | null {
+  private resolveTrackedAnchor(memory: PurrMemory, now: number): TrackedDecayAnchor | null {
     const profile = getMemoryDecayProfile(memory);
     const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
     if (!halflife || halflife <= 0) return null;
@@ -146,7 +148,7 @@ export class SalienceDecay {
     const existing = this.trackedAnchors.get(memory.id);
     if (
       existing
-      && existing.lastAccessed === memory.lastAccessed
+      && existing.sourceLastAccessed === memory.lastAccessed
       && existing.lastPersistedSalience === memory.salience
       && existing.halflife === halflife
       && existing.salienceFloor === profile.salienceFloor
@@ -156,7 +158,8 @@ export class SalienceDecay {
 
     const created: TrackedDecayAnchor = {
       baseSalience: memory.salience,
-      lastAccessed: memory.lastAccessed,
+      sourceLastAccessed: memory.lastAccessed,
+      decayEpoch: this.reconstructPersistedAnchors ? now : memory.lastAccessed,
       lastPersistedSalience: memory.salience,
       halflife,
       salienceFloor: profile.salienceFloor,
@@ -194,7 +197,7 @@ export class SalienceDecay {
         const updatedAnchors: TrackedDecayAnchor[] = [];
         for (const memory of memories) {
           seenIds.add(memory.id);
-          const anchor = this.resolveTrackedAnchor(memory);
+          const anchor = this.resolveTrackedAnchor(memory, now);
           if (!anchor) continue;
           const newSalience = calculateDecayedSalience(anchor, now);
           const shouldUpdate = Math.abs(newSalience - memory.salience) > MEANINGFUL_SALIENCE_DELTA;
@@ -227,6 +230,7 @@ export class SalienceDecay {
       }
 
       if (!completed) return;
+      this.reconstructPersistedAnchors = false;
       for (const id of this.trackedAnchors.keys()) {
         if (!seenIds.has(id)) this.trackedAnchors.delete(id);
       }

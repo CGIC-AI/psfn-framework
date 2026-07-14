@@ -43,6 +43,10 @@ export class TurnRunReservation {
   private activeWriterOwner: TurnRunOwnerContext | null = null;
   private readonly activeOwner = new AsyncLocalStorage<TurnRunOwnerContext>();
 
+  getCurrentOwnerAttribution(): TurnRunOwnerAttribution | null {
+    return this.activeOwner.getStore()?.attribution ?? null;
+  }
+
   async runShared<T>(
     owner: TurnRunOwnerAttribution,
     run: () => Promise<T>,

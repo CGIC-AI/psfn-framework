@@ -106,6 +106,7 @@ function spyOnAgentStateSet<T>(agentInstance: { state: unknown }, prop: string):
   };
 }
 
+const realAgentPrompt = Agent.prototype.prompt;
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   // Simulate adding an assistant response to the agent's messages
   this.state.messages.push({
@@ -6116,7 +6117,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(agent.isStreaming).toBe(false);
   });
 
-  it('steer records user message and calls agent.steer', async () => {
+  it('runs idle steering as an attributed ordinary turn without using the raw queue', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -6125,14 +6126,25 @@ describe('SubstrateAgent steering + follow-up', () => {
     // spy on pi-agent-core Agent.prototype.steer
     const steerSpy = vi.spyOn(Agent.prototype, 'steer');
 
-    // steer is a no-op when agent isn't streaming
     await agent.steer(makeMessage({ content: 'actually...' }));
     expect(steerSpy).not.toHaveBeenCalled();
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'actually...',
+      'user-1',
+      'TestUser',
+      undefined,
+      expect.anything(),
+      expect.objectContaining({
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
+    );
 
     steerSpy.mockRestore();
   });
 
-  it('followUp records user message and calls agent.followUp', async () => {
+  it('runs an idle external follow-up as an attributed ordinary turn without using the raw queue', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -6148,14 +6160,14 @@ describe('SubstrateAgent steering + follow-up', () => {
       'user-1',
       'TestUser',
       undefined,
-      undefined,
+      expect.anything(),
       expect.objectContaining({
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
       }),
     );
-    expect(followUpSpy).toHaveBeenCalled();
+    expect(followUpSpy).not.toHaveBeenCalled();
 
     followUpSpy.mockRestore();
   });
@@ -6177,6 +6189,9 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
+    expect(followUpSpy).not.toHaveBeenCalled();
+
+    await agent.handleMessage(makeMessage({ id: 'ordinary-after-pending-whisper' }));
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
       role: 'custom',
       type: 'internalWhisper',
@@ -6188,7 +6203,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('routes runtime-authored follow-ups as system notes instead of queued user turns', async () => {
+  it('runs an idle runtime-authored follow-up as an attributed ordinary system turn', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -6209,18 +6224,13 @@ describe('SubstrateAgent steering + follow-up', () => {
       'system:runtime',
       'Runtime',
       undefined,
-      undefined,
+      expect.anything(),
       expect.objectContaining({
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
       }),
     );
-    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
-      role: 'custom',
-      type: 'systemNote',
-      messageClass: MESSAGE_CLASSES.systemNote,
-      content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
-    }));
+    expect(followUpSpy).not.toHaveBeenCalled();
 
     followUpSpy.mockRestore();
   });
@@ -6240,9 +6250,6 @@ describe('SubstrateAgent steering + follow-up', () => {
 
   it('preserves immediate follow-up and steer delivery for an ordinary active run', async () => {
     const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
-    );
     let markPromptEntered!: () => void;
     let releasePrompt!: () => void;
     const promptEntered = new Promise<void>((resolve) => {
@@ -6251,21 +6258,41 @@ describe('SubstrateAgent steering + follow-up', () => {
     const promptRelease = new Promise<void>((resolve) => {
       releasePrompt = resolve;
     });
-    promptSpy.mockImplementationOnce(async function (this: Agent) {
-      this.state.isStreaming = true;
-      markPromptEntered();
-      await promptRelease;
-      this.state.isStreaming = false;
-      this.state.messages.push({
+    let streamCall = 0;
+    const streamFn = vi.fn(async () => {
+      streamCall += 1;
+      if (streamCall === 1) {
+        markPromptEntered();
+        await promptRelease;
+      }
+      const response = {
         role: 'assistant',
-        content: [{ type: 'text' as const, text: 'ordinary turn complete' }],
-        api: '' as any,
-        provider: '' as any,
-        model: '',
+        content: [{ type: 'text' as const, text: `ordinary scheduled response ${streamCall}` }],
+        api: 'chat',
+        provider: 'test',
+        model: 'test-model',
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any,
+        stopReason: 'stop' as const,
         timestamp: Date.now(),
-      });
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(response) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(response),
+      } as never;
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      makeConfig(),
+      { streamFn },
+    );
+    promptSpy.mockImplementationOnce(function (this: Agent, input, images) {
+      return realAgentPrompt.call(this, input, images);
     });
     const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
     const steerSpy = vi.spyOn(Agent.prototype, 'steer');
@@ -6313,6 +6340,328 @@ describe('SubstrateAgent steering + follow-up', () => {
     await ordinaryRun;
     followUpSpy.mockRestore();
     steerSpy.mockRestore();
+  });
+
+  it('runs multiple idle follow-up and steer inputs as fresh ordinary FIFO turns', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    let releaseFirst!: () => void;
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const promptOrder: string[] = [];
+    const appendResponse = (target: Agent, text: string): void => {
+      target.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    };
+    const capturePrompt = (label: string, wait?: Promise<void>) => async function (
+      this: Agent,
+      promptInput: unknown,
+    ) {
+      expect(JSON.stringify(promptInput)).toContain(label);
+      promptOrder.push(label);
+      if (wait) await wait;
+      appendResponse(this, `${label} complete`);
+    };
+    promptSpy
+      .mockImplementationOnce(capturePrompt('idle follow-up one', firstRelease))
+      .mockImplementationOnce(capturePrompt('idle steer two'))
+      .mockImplementationOnce(capturePrompt('idle follow-up three'));
+
+    const runs = [
+      agent.followUp(makeMessage({ id: 'idle-fifo-1', content: 'idle follow-up one' })),
+      agent.steer(makeMessage({ id: 'idle-fifo-2', content: 'idle steer two' })),
+      agent.followUp(makeMessage({ id: 'idle-fifo-3', content: 'idle follow-up three' })),
+    ];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(promptOrder).toEqual(['idle follow-up one']);
+
+    releaseFirst();
+    await Promise.all(runs);
+    expect(promptOrder).toEqual([
+      'idle follow-up one',
+      'idle steer two',
+      'idle follow-up three',
+    ]);
+  });
+
+  it('keeps an idle follow-up out of the next candidate scheduled loop', async () => {
+    const sessionManager = makeMockSessionManager();
+    const nowMs = Date.now();
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '61111111-1111-4111-8111-111111111111',
+      rootInitiationId: '62222222-2222-4222-8222-222222222222',
+      localCompanionId: '6aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'idle-follow-up-peer',
+      peerCompanionId: '6bbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:61111111-1111-4111-8111-111111111111',
+      reasonSummary: 'Exercise the authentic candidate queue boundary.',
+      continuationTaskKind: 'research',
+      createdAtMs: nowMs - 1_000,
+      expiresAtMs: nowMs + 60_000,
+      status: 'permitted',
+      revision: 1,
+    };
+    const permit: IcpInitiationPermit = {
+      permitId: '64444444-4444-4444-8444-444444444444',
+      candidateId: candidate.candidateId,
+      conversationId: '65555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: nowMs - 500,
+      expiresAtMs: nowMs + 60_000,
+      status: 'issued',
+      revision: 1,
+    };
+    const candidateMessage = createIcpAutonomyCandidateSchedulerMessage({ candidate, permit });
+    const ordinaryMessage = makeMessage({
+      id: 'idle-follow-up-before-candidate',
+      channelId: 'discord:idle-follow-up',
+      content: 'ordinary idle follow-up must stay ordinary',
+    });
+    const providerContexts: Array<{
+      toolNames: string[];
+      messages: unknown[];
+    }> = [];
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const makeStreamResult = (message: unknown) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'start', partial: structuredClone(message) };
+        yield { type: 'done' };
+      },
+      result: async () => structuredClone(message),
+    });
+    let notifyRequested = false;
+    const streamFn = vi.fn(async (_model, context: { messages: unknown[]; tools?: AgentTool<any>[] }) => {
+      const contextSnapshot = structuredClone(context.messages);
+      const containsForeignFollowUp = JSON.stringify(contextSnapshot).includes(ordinaryMessage.content);
+      providerContexts.push({
+        toolNames: (context.tools ?? []).map(tool => tool.name),
+        messages: contextSnapshot,
+      });
+      const callIndex = providerContexts.length;
+      const requestNotify = callIndex > 1 && containsForeignFollowUp && !notifyRequested;
+      notifyRequested ||= requestNotify;
+      const message = requestNotify
+        ? {
+            role: 'assistant',
+            content: [{
+              type: 'toolCall',
+              id: `idle-follow-up-notify-${callIndex}`,
+              name: 'notify',
+              arguments: {
+                action: 'send',
+                target_kind: 'companion',
+                contact_id: candidate.peerContactId,
+                initiation_permit: permit.permitId,
+              },
+            }],
+            api: 'chat',
+            provider: 'test',
+            model: 'test-model',
+            usage: zeroUsage,
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          }
+        : {
+            role: 'assistant',
+            content: [{ type: 'text', text: `scheduled response ${callIndex}` }],
+            api: 'chat',
+            provider: 'test',
+            model: 'test-model',
+            usage: zeroUsage,
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          };
+      return makeStreamResult(message) as never;
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      makeConfig({ capabilityTier: 'autonomous' }),
+      { streamFn: streamFn as never },
+    );
+    const notifyProbe = makeExtendedProbeTool('notify');
+    agent.registerTool(withCapabilityRequirement(
+      notifyProbe,
+      'external.companion',
+    ), 'extended');
+    promptSpy
+      .mockImplementationOnce(function (this: Agent, input, images) {
+        return realAgentPrompt.call(this, input, images);
+      })
+      .mockImplementationOnce(function (this: Agent, input, images) {
+        return realAgentPrompt.call(this, input, images);
+      });
+
+    const followUpRun = agent.followUp(ordinaryMessage);
+    const candidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await Promise.all([followUpRun, candidateRun]);
+
+    expect(providerContexts).toHaveLength(2);
+    const ordinaryProvider = providerContexts.find(context => (
+      JSON.stringify(context.messages).includes(ordinaryMessage.content)
+    ));
+    expect(ordinaryProvider).toBeDefined();
+    expect(ordinaryProvider?.toolNames).not.toContain('notify');
+    const candidateProviders = providerContexts.filter(context => context.toolNames.includes('notify'));
+    expect(candidateProviders).toHaveLength(1);
+    expect(JSON.stringify(candidateProviders)).not.toContain(ordinaryMessage.content);
+    expect(notifyProbe.execute).not.toHaveBeenCalled();
+    const ordinaryRecords = sessionManager.recordUserMessage.mock.calls.filter(call => (
+      call[1] === ordinaryMessage.content
+    ));
+    expect(ordinaryRecords).toHaveLength(1);
+    expect(JSON.stringify(ordinaryRecords)).not.toContain(candidate.candidateId);
+    expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+  });
+
+  it('fails candidate start closed when an errored ordinary loop leaves accepted queue ingress pending', async () => {
+    const sessionManager = makeMockSessionManager();
+    const nowMs = Date.now();
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '71111111-1111-4111-8111-111111111111',
+      rootInitiationId: '72222222-2222-4222-8222-222222222222',
+      localCompanionId: '7aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'raw-queue-peer',
+      peerCompanionId: '7bbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:71111111-1111-4111-8111-111111111111',
+      reasonSummary: 'Candidate must fail closed around an ordinary raw queue.',
+      continuationTaskKind: 'research',
+      createdAtMs: nowMs - 1_000,
+      expiresAtMs: nowMs + 60_000,
+      status: 'permitted',
+      revision: 1,
+    };
+    const permit: IcpInitiationPermit = {
+      permitId: '74444444-4444-4444-8444-444444444444',
+      candidateId: candidate.candidateId,
+      conversationId: '75555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: nowMs - 500,
+      expiresAtMs: nowMs + 60_000,
+      status: 'issued',
+      revision: 1,
+    };
+    const candidateMessage = createIcpAutonomyCandidateSchedulerMessage({ candidate, permit });
+    const queuedMessage = makeMessage({
+      id: 'ordinary-follow-up-before-loop-error',
+      content: 'accepted ordinary follow-up survives loop error',
+    });
+    let markErroredProviderEntered!: () => void;
+    let releaseErroredProvider!: () => void;
+    const erroredProviderEntered = new Promise<void>((resolve) => {
+      markErroredProviderEntered = resolve;
+    });
+    const erroredProviderRelease = new Promise<void>((resolve) => {
+      releaseErroredProvider = resolve;
+    });
+    const providerContexts: Array<{ messages: unknown[]; toolNames: string[] }> = [];
+    let streamCall = 0;
+    const streamFn = vi.fn(async (_model, context: { messages: unknown[]; tools?: AgentTool<any>[] }) => {
+      streamCall += 1;
+      providerContexts.push({
+        messages: structuredClone(context.messages),
+        toolNames: (context.tools ?? []).map(tool => tool.name),
+      });
+      if (streamCall === 1) {
+        markErroredProviderEntered();
+        await erroredProviderRelease;
+      }
+      const response = {
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: streamCall === 1 ? '' : `ordinary recovery ${streamCall}` }],
+        api: 'chat',
+        provider: 'test',
+        model: 'test-model',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: streamCall === 1 ? 'error' as const : 'stop' as const,
+        ...(streamCall === 1 ? { errorMessage: 'scripted ordinary provider failure' } : {}),
+        timestamp: Date.now(),
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(response) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(response),
+      } as never;
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      makeConfig({ capabilityTier: 'autonomous' }),
+      { streamFn: streamFn as never },
+    );
+    const notifyProbe = makeExtendedProbeTool('notify');
+    agent.registerTool(withCapabilityRequirement(notifyProbe, 'external.companion'), 'extended');
+    promptSpy
+      .mockImplementationOnce(function (this: Agent, input, images) {
+        return realAgentPrompt.call(this, input, images);
+      })
+      .mockImplementationOnce(function (this: Agent, input, images) {
+        return realAgentPrompt.call(this, input, images);
+      });
+
+    const erroredOrdinaryRun = agent.handleMessage(makeMessage({
+      id: 'ordinary-owner-that-errors',
+      content: 'ordinary owner starts',
+    }));
+    await erroredProviderEntered;
+    await agent.followUp(queuedMessage);
+    releaseErroredProvider();
+    await erroredOrdinaryRun;
+
+    await expect(agent.handleIcpAutonomyCandidateTurn(candidateMessage)).rejects.toThrow(
+      'ordinary Agent queue ingress remains pending',
+    );
+    expect(notifyProbe.execute).not.toHaveBeenCalled();
+
+    await agent.handleMessage(makeMessage({
+      id: 'ordinary-owner-drains-pending',
+      content: 'drain accepted ordinary follow-up',
+    }));
+    expect(providerContexts).toHaveLength(3);
+    expect(JSON.stringify(providerContexts[0]?.messages)).not.toContain(queuedMessage.content);
+    expect(JSON.stringify(providerContexts[1]?.messages)).not.toContain(queuedMessage.content);
+    expect(JSON.stringify(providerContexts[2]?.messages)).toContain(queuedMessage.content);
+    for (const context of providerContexts) {
+      expect(context.toolNames).not.toContain('notify');
+    }
+    const queuedRecords = sessionManager.recordUserMessage.mock.calls.filter(call => (
+      call[1] === queuedMessage.content
+    ));
+    expect(queuedRecords).toHaveLength(1);
+    expect(JSON.stringify(queuedRecords)).not.toContain(candidate.candidateId);
   });
 
   it('reserves one agent owner across candidate pre-turn work and releases after cancellation', async () => {
@@ -6853,6 +7202,51 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(JSON.stringify(cancellationPrompts[3]?.[0])).toContain('foreign cancellation queued input');
     expect(cancellationOrdinaryToolSets).toHaveLength(3);
     for (const toolNames of cancellationOrdinaryToolSets) {
+      expect(toolNames).not.toContain('notify');
+    }
+    expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+
+    let markErroredCandidateEntered!: () => void;
+    let releaseErroredCandidate!: () => void;
+    const erroredCandidateEntered = new Promise<void>((resolve) => {
+      markErroredCandidateEntered = resolve;
+    });
+    const erroredCandidateRelease = new Promise<void>((resolve) => {
+      releaseErroredCandidate = resolve;
+    });
+    promptSpy.mockImplementationOnce(async () => {
+      markErroredCandidateEntered();
+      await erroredCandidateRelease;
+      throw new Error('candidate provider failed');
+    });
+    const erroredCandidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await erroredCandidateEntered;
+    const errorOrdinaryToolSets: string[][] = [];
+    for (let index = 0; index < 2; index += 1) {
+      promptSpy.mockImplementationOnce(async function (this: Agent) {
+        errorOrdinaryToolSets.push(agent.getActiveTurnTools().map(tool => tool.name));
+        appendAssistant(this, `error deferred ordinary ${index + 1}`);
+      });
+    }
+    let errorIngressSettled = 0;
+    const errorIngressRuns = [
+      agent.followUp(makeMessage({
+        id: 'foreign-follow-up-during-candidate-error',
+        content: 'foreign error follow-up',
+      })).finally(() => { errorIngressSettled += 1; }),
+      agent.steer(makeMessage({
+        id: 'foreign-steer-during-candidate-error',
+        content: 'foreign error steer',
+      })).finally(() => { errorIngressSettled += 1; }),
+    ];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(errorIngressSettled).toBe(0);
+    releaseErroredCandidate();
+    await expect(erroredCandidateRun).rejects.toThrow('candidate provider failed');
+    await Promise.all(errorIngressRuns);
+    expect(errorIngressSettled).toBe(2);
+    expect(errorOrdinaryToolSets).toHaveLength(2);
+    for (const toolNames of errorOrdinaryToolSets) {
       expect(toolNames).not.toContain('notify');
     }
     expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');

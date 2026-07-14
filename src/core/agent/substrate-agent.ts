@@ -56,6 +56,7 @@ import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-
 import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
+import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingress.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -274,6 +275,7 @@ export class SubstrateAgent {
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnRunReservation = new TurnRunReservation();
+  private readonly turnQueueIngress: TurnQueueIngressCoordinator;
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
@@ -535,6 +537,14 @@ export class SubstrateAgent {
       }),
       convertToLlm,
     });
+    this.turnQueueIngress = new TurnQueueIngressCoordinator({
+      agent: this.agent,
+      resolveOwner: () => this.turnRunReservation.getCurrentOwnerAttribution(),
+      runFreshOrdinary: async (message) => {
+        await this.handleMessageUnderReservation(message);
+      },
+    });
+    this.agent.subscribe((event) => this.turnQueueIngress.observeAgentEvent(event));
     this.turnSupportRuntime = new TurnSupportRuntime({
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
@@ -879,7 +889,8 @@ export class SubstrateAgent {
   /**
    * Inject a steering message mid-run. Delivered after current tool execution,
    * remaining tool calls are skipped, and the message is added to context
-   * before the next LLM call. No-op if agent isn't streaming.
+   * before the next LLM call. When no ordinary run can accept it, the message
+   * starts a fresh ordinary turn under its own reservation owner.
    * Input arriving during an exclusive candidate turn is deferred as a fresh
    * ordinary turn so it cannot steer the candidate-owned provider loop.
    */
@@ -889,17 +900,14 @@ export class SubstrateAgent {
       sourceId: message.id,
       ingress: 'steer',
     }, async ({ deferredFromExclusive }) => {
-      if (deferredFromExclusive) {
-        await this.handleMessageUnderReservation(message);
-        return;
-      }
-      await this.steerActiveRun(message);
+      if (!deferredFromExclusive && await this.trySteerActiveRun(message)) return;
+      await this.turnQueueIngress.runFreshOrdinary(message);
     });
   }
 
-  private async steerActiveRun(message: SubstrateMessage): Promise<void> {
-    if (!this.agent.state.isStreaming) return;
+  private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.resolveAuthorContext(message);
+    if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     this.turnSupportRuntime.recordUserMessage(
       message,
       createTurnId(),
@@ -913,6 +921,7 @@ export class SubstrateAgent {
       timestamp: Date.now(),
     } satisfies UserMessage);
     log.debug('Steered message', { channelId: message.channelId, content: message.content.slice(0, 80) });
+    return true;
   }
 
   /**
@@ -930,29 +939,37 @@ export class SubstrateAgent {
       sourceId: message.id,
       ingress: 'follow-up',
     }, async ({ deferredFromExclusive }) => {
-      if (deferredFromExclusive) {
-        await this.handleMessageUnderReservation(message);
+      if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
+      if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
+        this.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
         return;
       }
-      await this.followUpActiveRun(message);
+      await this.turnQueueIngress.runFreshOrdinary(message);
     });
   }
 
-  private async followUpActiveRun(message: SubstrateMessage): Promise<void> {
+  private createInternalWhisperMessage(message: SubstrateMessage): InternalWhisperMessage {
+    return {
+      role: 'custom',
+      type: 'internalWhisper',
+      messageClass: MESSAGE_CLASSES.internalWhisper,
+      content: message.content,
+      speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
+      timestamp: Date.now(),
+    };
+  }
+
+  private async tryQueueFollowUpOnActiveOrdinaryRun(
+    message: SubstrateMessage,
+  ): Promise<boolean> {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-      this.agent.followUp({
-        role: 'custom',
-        type: 'internalWhisper',
-        messageClass: MESSAGE_CLASSES.internalWhisper,
-        content: message.content,
-        speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
-        timestamp: Date.now(),
-      } satisfies InternalWhisperMessage);
+      if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+      this.agent.followUp(this.createInternalWhisperMessage(message));
       log.debug('Queued follow-up', {
         channelId: message.channelId,
         internalKind: 'whisper',
       });
-      return;
+      return true;
     }
 
     const isSystemOriginated = message.authorId.startsWith('system:');
@@ -960,6 +977,10 @@ export class SubstrateAgent {
     const systemContent = isSystemOriginated
       ? formatAttributedSystemContent(message.content, message.authorName)
       : message.content;
+    const authorContext: ResolvedAuthorContext | null = isSystemOriginated
+      ? null
+      : await this.resolveAuthorContext(message);
+    if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     if (isSystemOriginated) {
       this.turnSupportRuntime.recordSystemMessage(
         message,
@@ -968,7 +989,9 @@ export class SubstrateAgent {
         systemContent,
       );
     } else {
-      const authorContext = await this.resolveAuthorContext(message);
+      if (!authorContext) {
+        throw new Error('External follow-up requires resolved ordinary author context');
+      }
       this.turnSupportRuntime.recordUserMessage(
         message,
         turnId,
@@ -994,6 +1017,7 @@ export class SubstrateAgent {
       channelId: message.channelId,
       systemOriginated: isSystemOriginated,
     });
+    return true;
   }
 
   /**
@@ -1179,7 +1203,10 @@ export class SubstrateAgent {
   ): Promise<AgentResponse> {
     return this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
-      () => this.handleMessageUnderReservation(message, deliveryLifecycle),
+      () => {
+        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
+        return this.handleMessageUnderReservation(message, deliveryLifecycle);
+      },
     );
   }
 
@@ -1423,6 +1450,7 @@ export class SubstrateAgent {
       kind: 'candidate-turn',
       sourceId: message.id,
     }, async () => {
+      this.turnQueueIngress.assertCandidateQueueEmpty();
       const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
       if (!candidateOrigin) {
         throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');

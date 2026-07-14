@@ -15,7 +15,8 @@ describe('model usage provider conformance corpus', () => {
     expect(fixture.provenance.generation).toContain('no provider request');
     expect(new Set(fixture.requirements.map(requirement => requirement.id)).size)
       .toBe(fixture.requirements.length);
-    expect(fixture.requirements.every(requirement => requirement.level === 'MUST')).toBe(true);
+    expect(fixture.requirements.map(requirement => requirement.level))
+      .toEqual(Array.from({ length: fixture.requirements.length }, () => 'MUST'));
     expect(Object.isFrozen(fixture)).toBe(true);
     expect(Object.isFrozen(fixture.providerCases[0]?.rawUsage)).toBe(true);
   });

@@ -66,7 +66,7 @@ async function createLegacyModelUsageTable(pool: Pool): Promise<void> {
       cache_write_tokens INTEGER NOT NULL DEFAULT 0,
       total_tokens INTEGER NOT NULL DEFAULT 0,
       provider_cost_usd DOUBLE PRECISION,
-      estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      estimated_cost_usd DOUBLE PRECISION,
       cost_source TEXT NOT NULL DEFAULT 'none',
       currency TEXT,
       stop_reason TEXT,
@@ -120,6 +120,24 @@ async function insertLegacyEvidenceCorpus(pool: Pool): Promise<void> {
         'tool', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'repl', NULL, NULL, NULL,
         NULL, NULL, NULL, 'litellm', 'tool-model', NULL, NULL, NULL, 4, 3, 2, 1, 99,
         NULL, 0, 'none', 'EUR', '{}'::jsonb, 'legacy:legacy-repaired-total'
+      ),
+      (
+        'legacy-provider-null-cost', 'legacy-provider-null-cost-call', 0,
+        1752300400000, 1752300399900, 1752300400000,
+        '2025-07-12', '2025-07', 'success', 'chat', 'chat', 'chat',
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        NULL, NULL, NULL, 'openrouter', 'provider-null-cost-model', NULL, NULL, NULL,
+        6, 2, 0, 0, 8, NULL, NULL, 'provider', 'USD', '{}'::jsonb,
+        'legacy:legacy-provider-null-cost'
+      ),
+      (
+        'legacy-estimate-null-cost', 'legacy-estimate-null-cost-call', 0,
+        1752300500000, 1752300499900, 1752300500000,
+        '2025-07-12', '2025-07', 'success', 'completion', 'summary', 'summary',
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        NULL, NULL, NULL, 'ollama', 'estimate-null-cost-model', NULL, NULL, NULL,
+        7, 3, 0, 0, 10, NULL, NULL, 'estimate', 'USD', '{}'::jsonb,
+        'legacy:legacy-estimate-null-cost'
       )
   `);
 }
@@ -145,16 +163,16 @@ describe('model usage migration certification', () => {
         transaction: 'rolled_back',
         rollbackVerified: true,
         evidence: {
-          historicalRows: 4,
-          cost: { known: 1, inferred: 1, unknown: 2 },
-          tokenTotals: { known: 2, inferred: 1, unknown: 1 },
+          historicalRows: 6,
+          cost: { known: 1, inferred: 1, unknown: 4 },
+          tokenTotals: { known: 4, inferred: 1, unknown: 1 },
           quarantinedNonUsdRows: 1,
         },
       });
       expect(dryRun.evidence.attribution.channelId).toEqual({
         known: 1,
         inferred: 0,
-        unknown: 3,
+        unknown: 5,
       });
 
       const rolledBackColumns = await pool.query<{ column_name: string }>(`
@@ -166,7 +184,7 @@ describe('model usage migration certification', () => {
       `);
       expect(rolledBackColumns.rows).toEqual([]);
       expect(await pool.query('SELECT COUNT(*)::integer AS count FROM model_usage_events'))
-        .toMatchObject({ rows: [{ count: 4 }] });
+        .toMatchObject({ rows: [{ count: 6 }] });
 
       await expect(certifyModelUsageMigrations(pool, { mode: 'apply' }))
         .rejects.toThrow('backup reference');

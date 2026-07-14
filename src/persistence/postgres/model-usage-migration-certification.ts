@@ -162,11 +162,39 @@ async function inspectEvidence(executor: QueryExecutor): Promise<ModelUsageMigra
   if (!await modelUsageTableExists(executor)) return emptyEvidenceReport();
 
   const evidence = await executor.query<EvidenceRow>(`
+    WITH legacy_evidence AS (
+      SELECT *,
+             NUM_NONNULLS(
+               provider_input_cost_usd,
+               provider_output_cost_usd,
+               provider_cache_read_cost_usd,
+               provider_cache_write_cost_usd,
+               provider_cost_usd,
+               estimated_input_cost_usd,
+               estimated_output_cost_usd,
+               estimated_cache_read_cost_usd,
+               estimated_cache_write_cost_usd,
+               estimated_cost_usd,
+               effective_input_cost_usd,
+               effective_output_cost_usd,
+               effective_cache_read_cost_usd,
+               effective_cache_write_cost_usd,
+               effective_cost_usd
+             ) > 0 AS has_monetary_evidence
+      FROM model_usage_events
+      WHERE event_fingerprint LIKE 'legacy:%'
+    )
     SELECT
       COUNT(*) AS historical_rows,
-      COUNT(*) FILTER (WHERE cost_source = 'provider') AS provider_cost_rows,
-      COUNT(*) FILTER (WHERE cost_source = 'estimate') AS estimated_cost_rows,
-      COUNT(*) FILTER (WHERE cost_source = 'none') AS unknown_cost_rows,
+      COUNT(*) FILTER (
+        WHERE cost_source = 'provider' AND has_monetary_evidence
+      ) AS provider_cost_rows,
+      COUNT(*) FILTER (
+        WHERE cost_source = 'estimate' AND has_monetary_evidence
+      ) AS estimated_cost_rows,
+      COUNT(*) FILTER (
+        WHERE NOT has_monetary_evidence OR cost_source = 'none'
+      ) AS unknown_cost_rows,
       COUNT(*) FILTER (
         WHERE NOT COALESCE(metadata_json -> '_accountingMigration' ? 'legacyTotalTokens', FALSE)
           AND (input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) > 0
@@ -181,10 +209,9 @@ async function inspectEvidence(executor: QueryExecutor): Promise<ModelUsageMigra
       COUNT(*) FILTER (
         WHERE metadata_json -> '_accountingMigration' ->> 'nonUsdCostQuarantined' = 'true'
       ) AS quarantined_non_usd_rows
-    FROM model_usage_events
-    WHERE event_fingerprint LIKE 'legacy:%'
+    FROM legacy_evidence
   `);
-  const row = evidence.rows[0];
+  const row = evidence.rows.at(0);
   if (!row) return emptyEvidenceReport();
 
   const historicalRows = count(row.historical_rows);

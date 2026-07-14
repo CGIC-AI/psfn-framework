@@ -55,6 +55,7 @@ import {
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
+import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -272,6 +273,7 @@ export class SubstrateAgent {
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
+  private readonly turnRunReservation = new TurnRunReservation();
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
@@ -1134,6 +1136,15 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     deliveryLifecycle?: TurnDeliveryLifecycle,
   ): Promise<AgentResponse> {
+    return this.turnRunReservation.runShared(
+      () => this.handleMessageUnderReservation(message, deliveryLifecycle),
+    );
+  }
+
+  private async handleMessageUnderReservation(
+    message: SubstrateMessage,
+    deliveryLifecycle?: TurnDeliveryLifecycle,
+  ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
@@ -1366,13 +1377,15 @@ export class SubstrateAgent {
   }
 
   async handleIcpAutonomyCandidateTurn(message: SubstrateMessage): Promise<AgentResponse> {
-    const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
-    if (!candidateOrigin) {
-      throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');
-    }
-    return this.toolRuntimeFacade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
-      await this.agent.waitForIdle();
-      return await this.handleMessage(message);
+    return this.turnRunReservation.runExclusive(async () => {
+      const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
+      if (!candidateOrigin) {
+        throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');
+      }
+      return this.toolRuntimeFacade.runWithIcpAutonomyCandidateNotifyScope(
+        message,
+        () => this.handleMessageUnderReservation(message),
+      );
     });
   }
 

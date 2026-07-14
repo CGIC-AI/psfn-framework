@@ -47,6 +47,7 @@ import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { IcpInitiationCandidate } from '../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js';
 import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
+import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -973,42 +974,23 @@ describe('production ICP candidate control-plane reachability', () => {
           result: async () => structuredClone(message),
         } as never;
       });
-      let candidateWaitEntered!: () => void;
-      let releaseCandidateWait!: () => void;
-      const candidateWaiting = new Promise<void>((resolve) => { candidateWaitEntered = resolve; });
-      const candidateWaitRelease = new Promise<void>((resolve) => { releaseCandidateWait = resolve; });
-      vi.spyOn(Agent.prototype, 'waitForIdle').mockImplementationOnce(async () => {
-        candidateWaitEntered();
-        await candidateWaitRelease;
+      let candidatePromptEntered!: () => void;
+      let releaseCandidatePrompt!: () => void;
+      const candidatePromptStarted = new Promise<void>((resolve) => {
+        candidatePromptEntered = resolve;
       });
-      const ordinaryTurnToolNames: string[][] = [];
-      captureActiveTurnToolsOnNextPrompt(agent, ordinaryTurnToolNames);
-      const candidateDispatch = controlPlane.icpAutonomyCandidateDispatcher!.dispatch({
-        candidate,
-        permit,
+      const candidatePromptRelease = new Promise<void>((resolve) => {
+        releaseCandidatePrompt = resolve;
       });
-      await candidateWaiting;
-      await agent.handleMessage(makeMessage({
-        id: 'ordinary-overlap-during-candidate-pre-turn',
-        channelId: 'discord:ordinary-overlap',
-        channelType: 'discord',
-        authorId: 'operator-1',
-        authorName: 'Operator',
-        content: 'ordinary overlap while candidate is waiting',
-      }));
-      expect(ordinaryTurnToolNames).toHaveLength(1);
-      expect(ordinaryTurnToolNames[0]).not.toContain('notify');
-      expect(((agent as any).agent as Agent).state.tools.map(tool => tool.name))
-        .not.toContain('notify');
 
       promptSpy.mockImplementationOnce(async function (this: Agent, promptMessage) {
+        candidatePromptEntered();
+        await candidatePromptRelease;
         notifyActivationDuringTurn = agent.getAdaptiveToolRuntimeState().activeTools.find(
           tool => tool.toolName === 'notify',
         );
         const activeTurnTools = agent.getActiveTurnTools();
-        if (!activeTurnTools.some(tool => tool.name === 'notify')) {
-          throw new Error('production candidate turn did not activate notify');
-        }
+        expect(activeTurnTools.map(tool => tool.name)).toEqual(['notify']);
         const candidateNotifySchema = activeTurnTools.find(tool => tool.name === 'notify')?.parameters as {
           properties?: Record<string, unknown>;
         };
@@ -1046,9 +1028,38 @@ describe('production ICP candidate control-plane reachability', () => {
         );
         this.state.messages.push(...turnMessages);
       });
-      releaseCandidateWait();
+
+      const candidateDispatch = controlPlane.icpAutonomyCandidateDispatcher!.dispatch({
+        candidate,
+        permit,
+      });
+      await candidatePromptStarted;
+
+      const ordinaryTurnToolNames: string[][] = [];
+      captureActiveTurnToolsOnNextPrompt(agent, ordinaryTurnToolNames);
+      let ordinaryTurnSettled = false;
+      const ordinaryTurn = agent.handleMessage(makeMessage({
+        id: 'ordinary-overlap-during-candidate-turn',
+        channelId: 'discord:ordinary-overlap',
+        channelType: 'discord',
+        authorId: 'operator-1',
+        authorName: 'Operator',
+        content: 'ordinary overlap while candidate owns the turn',
+      })).finally(() => {
+        ordinaryTurnSettled = true;
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(ordinaryTurnSettled).toBe(false);
+      expect(ordinaryTurnToolNames).toHaveLength(0);
+      expect(((agent as any).agent as Agent).state.tools.map(tool => tool.name))
+        .not.toContain('notify');
+
+      releaseCandidatePrompt();
 
       await expect(candidateDispatch).resolves.toMatchObject({ content: 'Candidate handoff queued.' });
+      await expect(ordinaryTurn).resolves.toBeDefined();
+      expect(ordinaryTurnToolNames).toHaveLength(1);
+      expect(ordinaryTurnToolNames[0]).not.toContain('notify');
 
       expect(notifyActivationDuringTurn).toEqual({
         toolName: 'notify',
@@ -6225,6 +6236,160 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(idleSpy).toHaveBeenCalled();
 
     idleSpy.mockRestore();
+  });
+
+  it('reserves one agent owner across candidate pre-turn work and releases after cancellation', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'test',
+      makeConfig({ capabilityTier: 'autonomous' }),
+    );
+    agent.registerTool(withCapabilityRequirement(
+      makeExtendedProbeTool('notify'),
+      'external.companion',
+    ), 'extended');
+    const nowMs = Date.now();
+    const candidate: IcpInitiationCandidate = {
+      candidateId: '11111111-1111-4111-8111-111111111111',
+      rootInitiationId: '22222222-2222-4222-8222-222222222222',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'peer-contact-b',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      preferredChannel: 'dm',
+      source: 'intention',
+      provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+      reasonSummary: 'Continue the approved private research task.',
+      continuationTaskKind: 'research',
+      createdAtMs: nowMs - 1_000,
+      expiresAtMs: nowMs + 60_000,
+      status: 'permitted',
+      revision: 2,
+    };
+    const permit: IcpInitiationPermit = {
+      permitId: '44444444-4444-4444-8444-444444444444',
+      candidateId: candidate.candidateId,
+      conversationId: '55555555-5555-4555-8555-555555555555',
+      senderCompanionId: candidate.localCompanionId,
+      recipientCompanionId: candidate.peerCompanionId,
+      channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+      provenanceRef: candidate.provenanceRef,
+      issuedAtMs: nowMs - 500,
+      expiresAtMs: nowMs + 60_000,
+      status: 'issued',
+      revision: 1,
+    };
+    const candidateMessage = createIcpAutonomyCandidateSchedulerMessage({ candidate, permit });
+    const promptOrder: string[] = [];
+    let markFirstCandidateEntered!: () => void;
+    let releaseFirstCandidate!: () => void;
+    const firstCandidateEntered = new Promise<void>((resolve) => {
+      markFirstCandidateEntered = resolve;
+    });
+    const firstCandidateRelease = new Promise<void>((resolve) => {
+      releaseFirstCandidate = resolve;
+    });
+    const appendAssistant = (target: Agent, content: string): void => {
+      target.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: content }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    };
+    promptSpy
+      .mockImplementationOnce(async function (this: Agent) {
+        promptOrder.push('candidate-1');
+        markFirstCandidateEntered();
+        await firstCandidateRelease;
+        appendAssistant(this, 'candidate one complete');
+      })
+      .mockImplementationOnce(async function (this: Agent) {
+        promptOrder.push('ordinary');
+        appendAssistant(this, 'ordinary complete');
+      })
+      .mockImplementationOnce(async function (this: Agent) {
+        promptOrder.push('candidate-2');
+        appendAssistant(this, 'candidate two complete');
+      });
+
+    const firstCandidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await firstCandidateEntered;
+    const globalToolsBeforeOverlap = agent.getActiveTurnTools().map(tool => tool.name);
+    let ordinarySettled = false;
+    let secondCandidateSettled = false;
+    const ordinaryRun = agent.handleMessage(makeMessage({
+      id: 'ordinary-reservation-overlap',
+      channelId: 'discord:reservation-overlap',
+      channelType: 'discord',
+    })).then((result) => {
+      ordinarySettled = true;
+      return result;
+    });
+    const secondCandidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage).then((result) => {
+      secondCandidateSettled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(promptOrder).toEqual(['candidate-1']);
+    expect(ordinarySettled).toBe(false);
+    expect(secondCandidateSettled).toBe(false);
+    expect(agent.getActiveTurnTools().map(tool => tool.name)).toEqual(globalToolsBeforeOverlap);
+
+    releaseFirstCandidate();
+    await Promise.all([firstCandidateRun, ordinaryRun, secondCandidateRun]);
+    expect(promptOrder).toEqual(['candidate-1', 'ordinary', 'candidate-2']);
+
+    promptSpy.mockImplementationOnce(async () => {
+      throw new DOMException('candidate cancelled', 'AbortError');
+    });
+    await expect(agent.handleIcpAutonomyCandidateTurn(candidateMessage)).rejects.toThrow(
+      'candidate cancelled',
+    );
+    mockAssistantResponse('ordinary after cancellation');
+    await expect(agent.handleMessage(makeMessage({ id: 'ordinary-after-candidate-cancel' })))
+      .resolves.toMatchObject({ content: 'ordinary after cancellation' });
+
+    const fairnessOrder: string[] = [];
+    let markOrdinaryEntered!: () => void;
+    let releaseOrdinary!: () => void;
+    const ordinaryEntered = new Promise<void>((resolve) => {
+      markOrdinaryEntered = resolve;
+    });
+    const ordinaryRelease = new Promise<void>((resolve) => {
+      releaseOrdinary = resolve;
+    });
+    promptSpy
+      .mockImplementationOnce(async function (this: Agent) {
+        fairnessOrder.push('ordinary-active');
+        markOrdinaryEntered();
+        await ordinaryRelease;
+        appendAssistant(this, 'active ordinary complete');
+      })
+      .mockImplementationOnce(async function (this: Agent) {
+        fairnessOrder.push('candidate-writer');
+        appendAssistant(this, 'queued candidate complete');
+      })
+      .mockImplementationOnce(async function (this: Agent) {
+        fairnessOrder.push('ordinary-late');
+        appendAssistant(this, 'late ordinary complete');
+      });
+    const activeOrdinaryRun = agent.handleMessage(makeMessage({ id: 'ordinary-active-first' }));
+    await ordinaryEntered;
+    const queuedCandidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    const lateOrdinaryRun = agent.handleMessage(makeMessage({ id: 'ordinary-after-writer-queued' }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fairnessOrder).toEqual(['ordinary-active']);
+
+    releaseOrdinary();
+    await Promise.all([activeOrdinaryRun, queuedCandidateRun, lateOrdinaryRun]);
+    expect(fairnessOrder).toEqual(['ordinary-active', 'candidate-writer', 'ordinary-late']);
   });
 
   it('abort delegates to agent.abort', () => {

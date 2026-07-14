@@ -4,13 +4,15 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  linkSync,
   openSync,
   readSync,
   readdirSync,
-  renameSync,
   statSync,
+  unlinkSync,
 } from 'node:fs';
 import { appendJsonLine } from '../jsonl.js';
+import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
@@ -54,6 +56,33 @@ export const TURN_RECORD_SEGMENT_MAX_BYTES = 64 * 1024 * 1024;
 const TURN_RECORD_TAIL_SCAN_CHUNK_BYTES = 256 * 1024;
 
 const NEWLINE_BYTE = 0x0a;
+
+/**
+ * Rotation lock parameters. Rotation shares the mkdir-based cross-process lock
+ * mechanism the session-journal write path uses (agent, gateway, and garden
+ * all mount the sessions dir), scoped per channel via the active-file path.
+ */
+const ROTATION_LOCK_SUFFIX = '.rotate-lock';
+const ROTATION_LOCK_POLL_MS = 10;
+const ROTATION_LOCK_STALE_MS = 30_000;
+const ROTATION_LOCK_TIMEOUT_MS = 5_000;
+/** Attempts to claim a free segment number before rotation fails loudly. */
+const ROTATION_SEGMENT_CLAIM_ATTEMPTS = 100;
+/**
+ * Restarts a tail read is allowed after losing a race with a concurrent
+ * rotation (a listed file vanished between listing and open) before the read
+ * fails loudly.
+ */
+const TAIL_READ_ROTATION_RETRIES = 3;
+
+/** Process-lifetime count of quarantined turn-record lines (finding: the
+ * quarantine warn alone was easy to miss; this backs a stable counter event). */
+let quarantinedTurnRecordLineCount = 0;
+
+/** Test/observability hook: process-lifetime quarantined-line counter. */
+export function getQuarantinedTurnRecordLineCount(): number {
+  return quarantinedTurnRecordLineCount;
+}
 const VALID_CHANNEL_TYPES = new Set<ChannelType>(CHANNEL_TYPES);
 const VALID_TURN_STATUSES = new Set<TurnRecord['status']>(['completed', 'failed']);
 const VALID_OBSERVABILITY_CALL_TYPES = new Set<TurnObservabilityCallType>([
@@ -541,13 +570,117 @@ function nextFreeSegmentNumber(dir: string, sanitizedChannelId: string): number 
   return candidate;
 }
 
-function rotateActiveSegment(dir: string, sanitizedChannelId: string, activePath: string): void {
-  const segmentNumber = nextFreeSegmentNumber(dir, sanitizedChannelId);
-  const target = join(dir, segmentFileName(sanitizedChannelId, segmentNumber));
-  renameSync(activePath, target);
-  log.info('rotated turn-record segment', {
-    channel: sanitizedChannelId,
-    segment: segmentNumber,
+function fileIdentityKey(stat: { dev: number | bigint; ino: number | bigint }): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+/**
+ * Finish a rotation that a previous process started but did not complete: it
+ * hard-linked the active file to a segment name and crashed before unlinking
+ * the active name, so both names point at the same inode. Appends after the
+ * crash landed in that shared inode (i.e. in the segment), so simply dropping
+ * the active name completes the rotation without losing or duplicating data.
+ */
+function completeInterruptedRotation(
+  dir: string,
+  sanitizedChannelId: string,
+  activePath: string,
+  activeIdentity: string,
+): boolean {
+  for (const segment of listRotatedSegments(dir, sanitizedChannelId)) {
+    let segmentStat;
+    try {
+      segmentStat = statSync(segment.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (fileIdentityKey(segmentStat) !== activeIdentity) continue;
+    unlinkSync(activePath);
+    log.warn('completed an interrupted turn-record rotation', {
+      channel: sanitizedChannelId,
+      segment: segment.segmentNumber,
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Rotate the active file into the next free numbered segment. MUST run under
+ * the per-channel rotation lock. The destination is claimed with linkSync —
+ * an exclusive primitive that fails EEXIST instead of clobbering — so even a
+ * writer that bypasses the lock (older binary, manual tooling) can never
+ * overwrite a completed segment; a collision just advances to the next number.
+ */
+function rotateActiveSegmentLocked(dir: string, sanitizedChannelId: string, activePath: string): void {
+  const activeIdentity = fileIdentityKey(statSync(activePath));
+  if (completeInterruptedRotation(dir, sanitizedChannelId, activePath, activeIdentity)) {
+    return;
+  }
+  for (let attempt = 0; attempt < ROTATION_SEGMENT_CLAIM_ATTEMPTS; attempt++) {
+    const segmentNumber = nextFreeSegmentNumber(dir, sanitizedChannelId);
+    const target = join(dir, segmentFileName(sanitizedChannelId, segmentNumber));
+    try {
+      linkSync(activePath, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // Another writer claimed this number between our scan and the link.
+      // The claimed segment is left untouched; retry with the next number.
+      continue;
+    }
+    unlinkSync(activePath);
+    log.info('rotated turn-record segment', {
+      channel: sanitizedChannelId,
+      segment: segmentNumber,
+    });
+    return;
+  }
+  throw new Error(
+    `Failed to claim a free turn-record segment number for channel ${sanitizedChannelId} `
+    + `after ${ROTATION_SEGMENT_CLAIM_ATTEMPTS} attempts`,
+  );
+}
+
+/**
+ * Rotate the active file if it reached the size cap. The whole decision +
+ * rename runs under a cross-process per-channel lock (same mkdir mechanism as
+ * session-journal writes) so two writers can never pick the same "free"
+ * segment number or rotate a freshly-created active file; the size check is
+ * re-evaluated under the lock because the loser of the race sees the new,
+ * small active file and must skip.
+ */
+function maybeRotateActiveSegment(
+  dir: string,
+  sanitizedChannelId: string,
+  activePath: string,
+  segmentMaxBytes: number,
+): void {
+  let preLockSize: number;
+  try {
+    preLockSize = statSync(activePath).size;
+  } catch (error) {
+    // No active file (never written, or a concurrent rotation just moved it):
+    // nothing to rotate; the append recreates it.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (preLockSize < segmentMaxBytes) return;
+  withCrossProcessWriteLock(`${activePath}${ROTATION_LOCK_SUFFIX}`, {
+    pollMs: ROTATION_LOCK_POLL_MS,
+    staleMs: ROTATION_LOCK_STALE_MS,
+    timeoutMs: ROTATION_LOCK_TIMEOUT_MS,
+  }, () => {
+    let size: number;
+    try {
+      size = statSync(activePath).size;
+    } catch (error) {
+      // A concurrent writer already rotated while we waited for the lock.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (size < segmentMaxBytes) return;
+    rotateActiveSegmentLocked(dir, sanitizedChannelId, activePath);
   });
 }
 
@@ -571,6 +704,17 @@ function quarantineTurnRecordLine(
     channelId,
     rawLength: rawLine.length,
     reason,
+  });
+  // Stable counter event: quarantining keeps reads alive but makes the served
+  // window incomplete, which must be observable beyond the warn line above.
+  // The error-level record lands in the diagnostic log ring (Garden-visible);
+  // no telemetry port is reachable from this layer, so this is the emission.
+  quarantinedTurnRecordLineCount += 1;
+  log.error('turn_record_line_quarantined', {
+    channelId,
+    path,
+    reason,
+    quarantinedLinesThisProcess: quarantinedTurnRecordLineCount,
   });
   try {
     appendJsonLine(`${path}.quarantine`, {
@@ -604,14 +748,23 @@ function scanSegmentBackward(
   channelId: string,
   limit: number,
   chunkBytes: number,
-  stats?: TurnRecordTailStats,
+  stats: TurnRecordTailStats | undefined,
+  scannedFileIdentities: Set<string>,
 ): TurnRecord[] {
   const collected: TurnRecord[] = [];
   if (limit <= 0) return collected;
 
   const fd = openSync(path, 'r');
   try {
-    const fileSize = fstatSync(fd).size;
+    const fileStat = fstatSync(fd);
+    // Dedupe by (dev, ino) within one logical read: a rotation between the
+    // active-file scan and the segment listing can surface the SAME inode
+    // twice (once under the active name, once under its new segment name),
+    // which would duplicate every record in it.
+    const identity = fileIdentityKey(fileStat);
+    if (scannedFileIdentities.has(identity)) return collected;
+    scannedFileIdentities.add(identity);
+    const fileSize = fileStat.size;
     if (fileSize <= 0) return collected;
 
     // Returns true once `limit` records are collected (caller should stop).
@@ -670,28 +823,33 @@ export interface ReadRecentTurnRecordsOptions {
 }
 
 /**
- * Read the most recent `limit` turn records for a channel across all segments,
- * newest segment first, until the limit is satisfied. Returns records in
- * ascending (oldest-first) order to match the historical contract.
+ * One full tail pass over the active file plus rotated segments, newest first.
+ * Throws ENOENT if a listed file vanished before it could be opened (a
+ * concurrent rotation won the race); the caller restarts from a fresh listing.
  */
-export function readRecentTurnRecordsAcrossSegments(
-  sessionsDir: string,
+function readRecentTurnRecordsOnce(
+  dir: string,
+  sanitized: string,
   channelId: string,
   limit: number,
-  options: ReadRecentTurnRecordsOptions = {},
+  chunkBytes: number,
+  stats?: TurnRecordTailStats,
 ): TurnRecord[] {
-  if (limit <= 0) return [];
-
-  const sanitized = sanitizeChannelId(channelId);
-  const dir = turnRecordsDir(sessionsDir);
-  const chunkBytes = options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES;
   const collectedNewestFirst: TurnRecord[] = [];
+  const scannedFileIdentities = new Set<string>();
 
   const scanOne = (path: string): void => {
     if (collectedNewestFirst.length >= limit) return;
     if (!existsSync(path)) return;
     const remaining = limit - collectedNewestFirst.length;
-    const records = scanSegmentBackward(path, channelId, remaining, chunkBytes, options.stats);
+    const records = scanSegmentBackward(
+      path,
+      channelId,
+      remaining,
+      chunkBytes,
+      stats,
+      scannedFileIdentities,
+    );
     for (const record of records) collectedNewestFirst.push(record);
   };
 
@@ -709,11 +867,54 @@ export function readRecentTurnRecordsAcrossSegments(
 }
 
 /**
+ * Read the most recent `limit` turn records for a channel across all segments,
+ * newest segment first, until the limit is satisfied. Returns records in
+ * ascending (oldest-first) order to match the historical contract.
+ *
+ * Coherent against concurrent rotation: a file that disappears between the
+ * existence check and the open (ENOENT) restarts the whole scan from a fresh
+ * segment listing (bounded retries, then a loud error), and files already
+ * scanned in this read are skipped by (dev, ino) so a rotated active file is
+ * never counted twice.
+ */
+export function readRecentTurnRecordsAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  limit: number,
+  options: ReadRecentTurnRecordsOptions = {},
+): TurnRecord[] {
+  if (limit <= 0) return [];
+
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  const chunkBytes = options.scanChunkBytes ?? TURN_RECORD_TAIL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return readRecentTurnRecordsOnce(dir, sanitized, channelId, limit, chunkBytes, options.stats);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
+        throw new Error(
+          `Turn-record tail read for channel ${channelId} kept losing races with segment rotation `
+          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
+        );
+      }
+      log.warn('turn-record tail read raced a rotation; restarting from a fresh segment listing', {
+        channelId,
+        attempt: attempt + 1,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+}
+
+/**
  * Append a turn record to the active segment, rotating first if the active file
- * has reached the size cap. Rotation renames the active file to the next free
- * numbered segment (collision-safe) and lets the append recreate a fresh active
- * file. Single writer per process; rename picks the next free number so parallel
- * store instances do not reuse a segment number.
+ * has reached the size cap. Rotation hard-links the active file to the next
+ * free numbered segment under a cross-process per-channel lock (exclusive
+ * create, never a clobbering rename) and lets the append recreate a fresh
+ * active file.
  */
 export function appendTurnRecordWithRotation(
   sessionsDir: string,
@@ -725,9 +926,7 @@ export function appendTurnRecordWithRotation(
   const dir = turnRecordsDir(sessionsDir);
   const activePath = join(dir, `${sanitized}.jsonl`);
 
-  if (existsSync(activePath) && statSync(activePath).size >= segmentMaxBytes) {
-    rotateActiveSegment(dir, sanitized, activePath);
-  }
+  maybeRotateActiveSegment(dir, sanitized, activePath, segmentMaxBytes);
 
   appendJsonLine(activePath, normalized);
 }

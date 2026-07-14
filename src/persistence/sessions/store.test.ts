@@ -8,6 +8,8 @@ import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity 
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
@@ -30,6 +32,32 @@ function appendSessionMessages(
       timestamp: 1_700_000_000_000 + index,
     });
   }
+}
+
+function buildTurnRecordFixture(
+  channelId: string,
+  index: number,
+  turnId: TurnRecord['turnId'],
+): TurnRecord {
+  const startedAt = 1_700_000_000_000 + index * 1_000;
+  return {
+    schemaVersion: 1,
+    turnId,
+    requestId: `req-${index}`,
+    channelId,
+    channelType: 'api',
+    startedAt,
+    completedAt: startedAt + 500,
+    status: 'completed',
+    userMessage: { role: 'user', content: `prompt-${index}`, timestamp: startedAt },
+    assistantMessage: { role: 'assistant', content: `reply-${index}`, timestamp: startedAt + 500 },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: 'test/model' },
+    provenanceRefs: [],
+  };
 }
 
 function findSessionJournalPath(rootDir: string, filenameFragment: string): string {
@@ -565,6 +593,84 @@ describe('SessionStore', () => {
       firstTurnId,
       secondTurnId,
     ]);
+  });
+
+  it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', () => {
+    const channelId = 'api:tombstone-overscan';
+    const requestedLimits: number[] = [];
+    const basePort = createFilesystemTurnRecordStorePort(dir);
+    const countingStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: record => basePort.appendTurnRecord(record),
+        readRecentTurnRecords: (channel, limit) => {
+          requestedLimits.push(limit);
+          return basePort.readRecentTurnRecords(channel, limit);
+        },
+      },
+    });
+
+    const turnIds = Array.from({ length: 12 }, () => createTurnId());
+    turnIds.forEach((turnId, index) => {
+      countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
+    });
+
+    // One tombstoned turn near the tail: a single bounded overscan pass must
+    // satisfy the read without touching the whole archive (and never anything
+    // like Number.MAX_SAFE_INTEGER).
+    countingStore.redactTurn(channelId, turnIds[11], { actor: 'admin:test', reason: 'privacy request' });
+    requestedLimits.length = 0;
+    expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
+      .toEqual([turnIds[9], turnIds[10]]);
+    expect(requestedLimits).toEqual([8]);
+
+    // Enough tombstones that the first pass yields nothing: the overscan
+    // doubles once, then stops as soon as the archive is exhausted.
+    for (const turnId of turnIds.slice(3, 11)) {
+      countingStore.redactTurn(channelId, turnId, { actor: 'admin:test', reason: 'privacy request' });
+    }
+    requestedLimits.length = 0;
+    expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
+      .toEqual([turnIds[1], turnIds[2]]);
+    expect(requestedLimits).toEqual([8, 16]);
+  });
+
+  it('sees a sibling store instance\'s new turn tombstones without restart (fingerprint-gated fast path)', () => {
+    const channelId = 'api:cross-process-tombstones';
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+    const storeA = new SessionStore(dir);
+    storeA.append({ channelId, role: 'user', content: 'seed message', timestamp: 1_000 });
+    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
+    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
+
+    // A second process attaches to the same sessions dir and serves a read
+    // first, caching "no tombstones" plus the journal fingerprint.
+    const storeB = new SessionStore(dir);
+    expect(storeB.getRecentTurnRecords(channelId, 10)).toHaveLength(2);
+
+    // A (another process in production) tombstones a turn. B's cached zero is
+    // now stale; the fingerprint gate must force a reload before trusting it.
+    storeA.redactTurn(channelId, firstTurnId, { actor: 'admin:test', reason: 'privacy request', timestamp: 2_000 });
+    expect(storeB.getRecentTurnRecords(channelId, 10).map(record => record.turnId))
+      .toEqual([secondTurnId]);
+  });
+
+  it('serves count and session activity across a sibling instance\'s appends instead of a frozen cache', () => {
+    const channelId = 'api:cross-process-count';
+    const storeA = new SessionStore(dir);
+    storeA.append({ channelId, role: 'user', content: 'first message', timestamp: 1_000 });
+
+    // A second process attaches to the same sessions dir and fully loads the
+    // channel, so its cache carries a journal fingerprint.
+    const storeB = new SessionStore(dir);
+    expect(storeB.getRecent(channelId, 10)).toHaveLength(1);
+    expect(storeB.count(channelId)).toBe(1);
+
+    storeA.append({ channelId, role: 'assistant', content: 'second message', timestamp: 2_000 });
+    expect(storeB.count(channelId)).toBe(2);
+    const activity = storeB.getSessionActivity(channelId);
+    expect(activity?.messageCount).toBe(2);
+    expect(activity?.lastMessagePreview).toBe('second message');
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {

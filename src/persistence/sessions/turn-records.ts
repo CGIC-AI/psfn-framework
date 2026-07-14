@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
@@ -140,6 +141,7 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   const sourceMessageId = value.sourceMessageId;
   const authorId = value.authorId;
   const authorName = value.authorName;
+  const runtimeFallbackProvenance = value.runtimeFallbackProvenance;
 
   return {
     role,
@@ -156,6 +158,14 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
       : {}),
     ...(typeof authorName === 'string' && authorName.trim().length > 0
       ? { authorName: authorName.trim() }
+      : {}),
+    ...(runtimeFallbackProvenance !== undefined
+      ? {
+        runtimeFallbackProvenance: normalizeRuntimeFallbackProvenance(
+          runtimeFallbackProvenance,
+          `${fieldName}.runtimeFallbackProvenance`,
+        ),
+      }
       : {}),
   };
 }

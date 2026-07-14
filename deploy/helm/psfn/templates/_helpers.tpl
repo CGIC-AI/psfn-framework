@@ -396,11 +396,6 @@ group: cert-manager.io
   value: {{ .Values.runtime.characterCardPath | quote }}
 - name: PERSISTENCE_BACKEND
   value: postgres
-- name: POSTGRES_DATABASE_URL
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "psfn.databaseUrlSecretName" . }}
-      key: {{ include "psfn.databaseUrlSecretKey" . }}
 {{- if .Values.repositoryCheckout.enabled }}
 - name: GIT_REPO_ROOT
   value: {{ .Values.repositoryCheckout.mountPath | quote }}
@@ -444,6 +439,19 @@ group: cert-manager.io
   value: {{ .Values.psfnAppImage.previousGitCommit | default "" | quote }}
 - name: PSFN_REPOSITORY_DIR
   value: {{ ternary .Values.repositoryCheckout.mountPath (.Values.runtime.repositoryDir | default "") .Values.repositoryCheckout.enabled | quote }}
+{{- end -}}
+
+{{- define "psfn.postgresDatabaseUrlEnv" -}}
+- name: POSTGRES_DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "psfn.databaseUrlSecretName" . }}
+      key: {{ include "psfn.databaseUrlSecretKey" . }}
+{{- end -}}
+
+{{- define "psfn.postgresDatabaseUrlFileEnv" -}}
+- name: POSTGRES_DATABASE_URL_FILE
+  value: "/var/run/secrets/psfn-postgres/database-url"
 {{- end -}}
 
 {{- define "psfn.providerSecretEnv" -}}
@@ -602,18 +610,18 @@ group: cert-manager.io
     - |
       set -eu
       for attempt in $(seq 1 60); do
-        if pg_isready -d "$POSTGRES_DATABASE_URL"; then
+        if pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"; then
           exit 0
         fi
         sleep 2
       done
-      pg_isready -d "$POSTGRES_DATABASE_URL"
+      pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"
   env:
-    - name: POSTGRES_DATABASE_URL
-      valueFrom:
-        secretKeyRef:
-          name: {{ include "psfn.databaseUrlSecretName" $root }}
-          key: {{ include "psfn.databaseUrlSecretKey" $root }}
+    {{- include "psfn.postgresDatabaseUrlFileEnv" $root | nindent 4 }}
+  volumeMounts:
+    - name: postgres-database-url
+      mountPath: /var/run/secrets/psfn-postgres
+      readOnly: true
   securityContext:
     {{- toYaml $root.Values.securityContext | nindent 4 }}
 {{- end -}}
@@ -628,6 +636,12 @@ group: cert-manager.io
 - name: workspace
   persistentVolumeClaim:
     claimName: {{ include "psfn.fullname" . }}-workspace
+- name: postgres-database-url
+  secret:
+    secretName: {{ include "psfn.databaseUrlSecretName" . }}
+    items:
+      - key: {{ include "psfn.databaseUrlSecretKey" . }}
+        path: database-url
 - name: runtime
   persistentVolumeClaim:
     claimName: {{ include "psfn.fullname" . }}-runtime

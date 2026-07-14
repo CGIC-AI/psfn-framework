@@ -360,6 +360,8 @@ export interface MemoryEmbeddingSample {
 type Awaitable<T> = T | Promise<T>;
 
 interface MemoryStorePortBackend extends ScratchpadProvider {
+  /** Monotonic in-process signal for mutations that can change salience decay work. */
+  getSalienceMaintenanceRevision?(): number;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
   runInTransaction<T>(handler: () => T): Awaitable<T>;
@@ -451,6 +453,8 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
+  /** Postgres exposes this to let decay skip unchanged in-memory snapshots. */
+  getSalienceMaintenanceRevision?(): number;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
   runInTransaction<T>(handler: () => T): Promise<T>;
@@ -541,6 +545,9 @@ export interface CoreMemoryStorePort {
 
 export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStorePort {
   return {
+    ...(store.getSalienceMaintenanceRevision
+      ? { getSalienceMaintenanceRevision: () => store.getSalienceMaintenanceRevision!() }
+      : {}),
     insertMemory: async (memory, embedding) => {
       await store.insertMemory(memory, embedding);
     },

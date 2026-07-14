@@ -6,8 +6,9 @@ import {
   statSync,
   type Stats,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
+import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -35,6 +36,7 @@ const DEFAULT_HISTORY_LIMIT = 100;
 const MAX_HISTORY_LIMIT = 500;
 const MAX_SOURCE_SCAN = 2_000;
 const MAX_GARDEN_AUDIT_READ_BYTES = 16 * 1_024 * 1_024;
+const AUDIT_OPAQUE_ID_CONTEXT = 'psfn-garden-audit-opaque-id-v1';
 
 const TIME_RANGE_MS: Record<Exclude<AdminAuditTimeRange, 'all'>, number> = {
   '15m': 15 * 60 * 1_000,
@@ -237,17 +239,28 @@ function parseRecentGardenAuditEntries(
 
 export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
   private counter = 0;
+  private readonly activeOpaqueIdKey: string;
+  private readonly opaqueIdKeys: readonly string[];
 
   constructor(private readonly deps: {
     gardenStore: GardenAuditHistoryJsonlStore;
     gatewayReader?: GatewayAuditHistoryReader | null;
     chargeLedger?: Pick<RunChargeLedger, 'getData'> | null;
     scopeId: string;
+    opaqueIdKeyring: SessionHmacKeyring;
     now?: () => number;
   }) {
     if (!deps.scopeId.trim()) {
       throw new Error('Audit history scopeId is required.');
     }
+    const activeKeyValue: unknown = deps.opaqueIdKeyring.keys[deps.opaqueIdKeyring.activeVersion];
+    const activeKey = typeof activeKeyValue === 'string' ? activeKeyValue.trim() : '';
+    const configuredKeys = Object.values(deps.opaqueIdKeyring.keys).map(key => key.trim());
+    if (!activeKey || configuredKeys.length === 0 || configuredKeys.some(key => key.length === 0)) {
+      throw new Error('Audit history requires a valid server-side opaque-id keyring.');
+    }
+    this.activeOpaqueIdKey = activeKey;
+    this.opaqueIdKeys = [...new Set(configuredKeys)];
   }
 
   appendGardenEntry(input: {
@@ -280,17 +293,7 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     const filters = normalizeAuditHistoryFilters(query);
     const sinceMs = resolveSinceMs(filters.timeRange, this.now());
 
-    const gardenEntries = safeReadGardenEntries(this.deps.gardenStore);
-    const gateway = safeReadGatewayEntries(this.deps.gatewayReader ?? null, {
-      limit: MAX_SOURCE_SCAN,
-      ...(filters.decision !== 'all' ? { decision: toGatewayDecision(filters.decision) } : {}),
-      ...(sinceMs !== undefined ? { sinceMs } : {}),
-      ...(filters.query ? { query: filters.query } : {}),
-    });
-    const charge = await safeReadChargeEntries(this.deps.chargeLedger ?? null, {
-      limit: MAX_SOURCE_SCAN,
-      ...(sinceMs !== undefined ? { sinceMs } : {}),
-    });
+    const { gardenEntries, gateway, charge } = await this.readBoundedSourceWindow();
 
     const allEntries = [
       ...gardenEntries,
@@ -306,7 +309,7 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
 
     const pageEntries = allEntries
       .slice(filters.offset, filters.offset + filters.limit)
-      .map(entry => toAuditHistoryListEntry(entry, this.deps.scopeId));
+      .map(entry => toAuditHistoryListEntry(entry, this.deps.scopeId, this.activeOpaqueIdKey));
     return {
       entries: pageEntries,
       filters,
@@ -337,6 +340,26 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     if (!/^audit_[A-Za-z0-9_-]{43}$/.test(entryId)) {
       throw new AdminAuditHistoryEntryNotFoundError();
     }
+    const { gardenEntries, gateway, charge } = await this.readBoundedSourceWindow();
+    const entry = [...gardenEntries, ...gateway.entries, ...charge.entries]
+      .find(candidate => this.opaqueIdKeys.some(key => (
+        toOpaqueAuditEntryId(candidate, this.deps.scopeId, key) === entryId
+      )));
+    if (!entry) throw new AdminAuditHistoryEntryNotFoundError();
+    return {
+      entry: {
+        ...toAuditHistoryListEntry(entry, this.deps.scopeId, this.activeOpaqueIdKey),
+        id: entryId,
+      },
+      raw: entry.raw ?? null,
+    };
+  }
+
+  private async readBoundedSourceWindow(): Promise<{
+    gardenEntries: AdminAuditHistoryEntry[];
+    gateway: { available: boolean; entries: AdminAuditHistoryEntry[]; message?: string };
+    charge: { available: boolean; entries: AdminAuditHistoryEntry[]; message?: string };
+  }> {
     const gardenEntries = safeReadGardenEntries(this.deps.gardenStore);
     const gateway = safeReadGatewayEntries(this.deps.gatewayReader ?? null, {
       limit: MAX_SOURCE_SCAN,
@@ -344,13 +367,7 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     const charge = await safeReadChargeEntries(this.deps.chargeLedger ?? null, {
       limit: MAX_SOURCE_SCAN,
     });
-    const entry = [...gardenEntries, ...gateway.entries, ...charge.entries]
-      .find(candidate => toOpaqueAuditEntryId(candidate, this.deps.scopeId) === entryId);
-    if (!entry) throw new AdminAuditHistoryEntryNotFoundError();
-    return {
-      entry: toAuditHistoryListEntry(entry, this.deps.scopeId),
-      raw: entry.raw ?? null,
-    };
+    return { gardenEntries, gateway, charge };
   }
 
   private now(): number {
@@ -361,9 +378,10 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
 function toAuditHistoryListEntry(
   entry: AdminAuditHistoryEntry,
   scopeId: string,
+  opaqueIdKey: string,
 ): AdminAuditHistoryListEntry {
   return {
-    id: toOpaqueAuditEntryId(entry, scopeId),
+    id: toOpaqueAuditEntryId(entry, scopeId, opaqueIdKey),
     timestamp: entry.timestamp,
     source: entry.source,
     actionType: entry.actionType,
@@ -374,9 +392,15 @@ function toAuditHistoryListEntry(
   };
 }
 
-function toOpaqueAuditEntryId(entry: AdminAuditHistoryEntry, scopeId: string): string {
+function toOpaqueAuditEntryId(
+  entry: AdminAuditHistoryEntry,
+  scopeId: string,
+  opaqueIdKey: string,
+): string {
   const sourceIdentity = entry.sourceRecordId ?? entry.id;
-  const digest = createHash('sha256')
+  const digest = createHmac('sha256', opaqueIdKey)
+    .update(AUDIT_OPAQUE_ID_CONTEXT)
+    .update('\0')
     .update(scopeId)
     .update('\0')
     .update(entry.source)
@@ -479,11 +503,11 @@ function safeReadGatewayEntries(
       available: true,
       entries: page.entries.map(mapGatewayAuditEntry),
     };
-  } catch (error) {
+  } catch {
     return {
       available: false,
       entries: [],
-      message: error instanceof Error ? error.message : String(error),
+      message: 'Gateway audit history could not be read.',
     };
   }
 }
@@ -514,7 +538,7 @@ function mapGatewayAuditEntry(entry: AuditEntry): AdminAuditHistoryEntry {
   const decision = fromGatewayDecision(entry.decision);
   const details = [
     entry.durationMs !== null ? `durationMs=${entry.durationMs}` : null,
-    entry.error ? `error=${entry.error}` : null,
+    entry.error ? 'error=present' : null,
   ].filter((value): value is string => Boolean(value)).join(' ');
   return {
     id: `gateway-audit-${entry.id}`,
@@ -571,17 +595,6 @@ function fromGatewayDecision(decision: AuditEntry['decision']): AdminAuditDecisi
       return 'needs_approval';
     case 'DENY':
       return 'denied';
-  }
-}
-
-function toGatewayDecision(decision: AdminAuditDecision): AuditEntry['decision'] {
-  switch (decision) {
-    case 'allowed':
-      return 'ALLOW';
-    case 'needs_approval':
-      return 'NEEDS_APPROVAL';
-    case 'denied':
-      return 'DENY';
   }
 }
 

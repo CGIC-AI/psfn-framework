@@ -433,7 +433,7 @@ export function buildAdminOverviewRoutes(options: {
           sendJson(res, 503, { error: AUDIT_HISTORY_UNAVAILABLE_ERROR });
           return;
         }
-        auditHistoryService.getAuditHistoryDetail(params.entryId ?? '').then(
+        auditHistoryService.getAuditHistoryDetail(params.entryId).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => {
             if (error instanceof AdminAuditHistoryEntryNotFoundError) {

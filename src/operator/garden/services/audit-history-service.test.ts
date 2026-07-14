@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,11 @@ import {
   GardenAuditHistoryJsonlStore,
   type GatewayAuditHistoryReader,
 } from './audit-history-service.js';
+
+const TEST_OPAQUE_ID_KEYRING = {
+  activeVersion: 'v1',
+  keys: { v1: 'audit-history-test-secret-that-is-not-public' },
+};
 
 let tempDirs: string[] = [];
 
@@ -180,6 +185,7 @@ describe('AdminAuditHistoryDataService', () => {
       gatewayReader,
       chargeLedger,
       scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
       now: () => 1_700_000_000_500,
     });
 
@@ -221,6 +227,7 @@ describe('AdminAuditHistoryDataService', () => {
       gatewayReader: null,
       chargeLedger: null,
       scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
       now: () => 1_700_000_000_500,
     });
 
@@ -265,17 +272,21 @@ describe('AdminAuditHistoryDataService', () => {
         decision: 'ALLOW',
         paramsJson: '{"authorization":"partner-secret"}',
         durationMs: 4,
-        error: null,
+        error: 'upstream rejected partner-secret',
       }],
       total: 1,
       limit: 2_000,
       offset: 0,
     });
-    const makeService = (scopeId: string) => new AdminAuditHistoryDataService({
+    const makeService = (
+      scopeId: string,
+      opaqueIdKeyring = TEST_OPAQUE_ID_KEYRING,
+    ) => new AdminAuditHistoryDataService({
       gardenStore: new GardenAuditHistoryJsonlStore(join(dir, `${scopeId}.jsonl`)),
       gatewayReader,
       chargeLedger: null,
       scopeId,
+      opaqueIdKeyring,
       now: () => 1_700_000_000_500,
     });
     const service = makeService('companion-a');
@@ -290,12 +301,136 @@ describe('AdminAuditHistoryDataService', () => {
     expect(list.entries[0]?.id).toBe(repeatedList.entries[0]?.id);
     expect(list.entries[0]?.id).not.toBe(otherList.entries[0]?.id);
     expect(JSON.stringify(list)).not.toContain('partner-secret');
+    expect(list.entries[0]?.details).toBe('durationMs=4 error=present');
     expect(list.entries[0]).not.toHaveProperty('raw');
     expect(list.entries[0]).not.toHaveProperty('sourceRecordId');
 
     const detail = await service.getAuditHistoryDetail(list.entries[0]!.id);
     expect(detail.entry).toEqual(list.entries[0]);
-    expect(detail.raw).toMatchObject({ paramsJson: expect.stringContaining('partner-secret') });
+    expect(detail.raw).toMatchObject({
+      paramsJson: expect.stringContaining('partner-secret'),
+      error: expect.stringContaining('partner-secret'),
+    });
     await expect(otherCompanion.getAuditHistoryDetail(list.entries[0]!.id)).rejects.toThrow(/not found/i);
+
+    const otherKey = makeService('companion-a', {
+      activeVersion: 'v2',
+      keys: { v2: 'different-server-only-secret' },
+    });
+    const otherKeyList = await otherKey.getAuditHistory({ timeRange: 'all' });
+    expect(otherKeyList.entries[0]?.id).not.toBe(list.entries[0]?.id);
+    await expect(otherKey.getAuditHistoryDetail(list.entries[0]!.id)).rejects.toThrow(/not found/i);
+  });
+
+  it('fails closed without a usable server-side opaque-id key', () => {
+    const dir = makeTempDir();
+    expect(() => new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(dir, 'audit.jsonl')),
+      gatewayReader: null,
+      chargeLedger: null,
+      scopeId: 'companion-a',
+      opaqueIdKeyring: { activeVersion: 'missing', keys: {} },
+    })).toThrow(/opaque.*key/i);
+  });
+
+  it('does not permit offline derivation from predictable sequential source ids', async () => {
+    const dir = makeTempDir();
+    const service = new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(dir, 'audit.jsonl')),
+      gatewayReader: () => ({
+        entries: [7, 8].map(id => ({
+          id,
+          timestamp: id,
+          method: 'fs.read',
+          decision: 'ALLOW' as const,
+          paramsJson: '{}',
+          durationMs: 1,
+          error: null,
+        })),
+        total: 2,
+        limit: 2_000,
+        offset: 0,
+      }),
+      chargeLedger: null,
+      scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
+    });
+
+    const list = await service.getAuditHistory({ timeRange: 'all' });
+    const unkeyedOfflineGuess = `audit_${createHash('sha256')
+      .update('companion-a')
+      .update('\0')
+      .update('gateway')
+      .update('\0')
+      .update('7')
+      .digest('base64url')}`;
+
+    expect(new Set(list.entries.map(entry => entry.id)).size).toBe(2);
+    expect(list.entries.map(entry => entry.id)).not.toContain(unkeyedOfflineGuess);
+  });
+
+  it('does not expose arbitrary gateway reader failures in list-visible source status', async () => {
+    const dir = makeTempDir();
+    const service = new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(dir, 'audit.jsonl')),
+      gatewayReader: () => {
+        throw new Error('postgres password=partner-secret');
+      },
+      chargeLedger: null,
+      scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
+    });
+
+    const list = await service.getAuditHistory({ timeRange: 'all' });
+
+    expect(list.sources.gateway).toEqual({
+      available: false,
+      count: 0,
+      message: 'Gateway audit history could not be read.',
+    });
+    expect(JSON.stringify(list)).not.toContain('partner-secret');
+  });
+
+  it('filters only inside the same bounded unfiltered source window used by detail lookup', async () => {
+    const dir = makeTempDir();
+    const calls: Array<Record<string, unknown>> = [];
+    const recentAllowed = Array.from({ length: 2_000 }, (_, index) => ({
+      id: index + 1,
+      timestamp: 10_000 - index,
+      method: 'fs.read',
+      decision: 'ALLOW' as const,
+      paramsJson: '{}',
+      durationMs: 1,
+      error: null,
+    }));
+    const olderDenied = {
+      id: 2_001,
+      timestamp: 7_999,
+      method: 'fs.read',
+      decision: 'DENY' as const,
+      paramsJson: '{}',
+      durationMs: 1,
+      error: 'denied',
+    };
+    const gatewayReader: GatewayAuditHistoryReader = query => {
+      calls.push(query as Record<string, unknown>);
+      const entries = query.decision === 'DENY'
+        ? [olderDenied]
+        : recentAllowed.slice(0, query.limit);
+      return { entries, total: entries.length, limit: query.limit, offset: 0 };
+    };
+    const service = new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(dir, 'audit.jsonl')),
+      gatewayReader,
+      chargeLedger: null,
+      scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
+      now: () => 20_000,
+    });
+
+    const list = await service.getAuditHistory({ decision: 'denied', timeRange: 'all' });
+
+    expect(list.entries).toEqual([]);
+    expect(calls).toEqual([{ limit: 2_000 }]);
   });
 });

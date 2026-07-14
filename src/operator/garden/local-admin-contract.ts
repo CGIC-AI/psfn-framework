@@ -35,6 +35,7 @@ import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
+import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
@@ -121,6 +122,7 @@ import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 
 export interface InProcessGardenAdminContractOptions {
+  env?: NodeJS.ProcessEnv;
   apiBaseUrl?: string;
   apiHost?: string;
   apiPort?: number;
@@ -193,11 +195,16 @@ export function createInProcessGardenAdminContract(
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const auditOpaqueIdKeyring = createSessionHmacBoundaryService({
+    env: options.env,
+    credentialVault: options.config.credentialVault,
+  }).requireKeyring('Session HMAC keyring is required for Garden audit history opaque IDs.');
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
     chargeLedger,
     scopeId: options.config.companionId ?? companionDataDir,
+    opaqueIdKeyring: auditOpaqueIdKeyring,
   });
   registerAuditTimelineSources({
     eventBus: options.eventBus,

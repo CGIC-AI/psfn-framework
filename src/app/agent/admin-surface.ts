@@ -86,6 +86,7 @@ export async function startOptionalAdminTransportServer(
   };
   const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
   const services = createInProcessGardenAdminContract({
+    env,
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
     apiPort: options.apiPort,

@@ -165,6 +165,12 @@ export function decisionsToPostTurnActionCandidates(
             ...(decision.followUp.requiresActiveConcern === true
               ? { requiresActiveConcern: true }
               : {}),
+            ...(context.message.routing?.icpCorrelation?.rootInitiationId
+              ? {
+                  originIcpRootInitiationId:
+                    context.message.routing.icpCorrelation.rootInitiationId,
+                }
+              : {}),
           } satisfies IntentionOutboundMessageActionPayload,
           maxRetries: 1,
           ...(outboundRunAt !== undefined ? { runAt: outboundRunAt } : {}),
@@ -295,6 +301,9 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ? normalizeConcernIds(payload.concernIds.filter((id): id is string => typeof id === 'string'))
     : [];
   const requiresActiveConcern = payload.requiresActiveConcern === true;
+  const originIcpRootInitiationId = typeof payload.originIcpRootInitiationId === 'string'
+    ? payload.originIcpRootInitiationId.trim()
+    : '';
   const channelType = payload.channelType;
   if (!channelId || !content) return null;
   if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
@@ -308,6 +317,7 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
     ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
+    ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
   };
 }
 

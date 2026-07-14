@@ -39,6 +39,8 @@ import type { ParticipantTrendStorePort } from '../core/emotion/participant-tren
 import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
 import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
 import { PostgresCompanionPresenceStore } from './postgres/companion-presence-store.js';
+import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-candidate-store.js';
+import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 
@@ -67,6 +69,8 @@ export interface AgentPersistenceRuntime {
    * shared schema.
    */
   companionPresenceStore?: CompanionPresenceStorePort;
+  /** Companion-private durable ICP motivation; multi-companion only. */
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
@@ -122,6 +126,13 @@ export async function createAgentPersistenceRuntime(
   const companionPresenceStore = options.config.multiCompanion === true
     ? await PostgresCompanionPresenceStore.connect(databaseUrl)
     : undefined;
+  const icpInitiationCandidateStore = options.config.multiCompanion === true
+    ? await PostgresIcpInitiationCandidateStore.connect(databaseUrl, {
+        schema: schema ?? (() => {
+          throw new Error('Multi-companion ICP candidates require a companion-local postgresSchema');
+        })(),
+      })
+    : undefined;
 
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, { schema });
   return {
@@ -151,5 +162,6 @@ export async function createAgentPersistenceRuntime(
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema }),
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
+    ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
   };
 }

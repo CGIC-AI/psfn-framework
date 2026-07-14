@@ -110,6 +110,19 @@ export interface EventMap {
     reasonClass?: 'deferrable' | 'terminal';
     timestamp: number;
   };
+  /** Content-free companion-local candidate lifecycle projection. */
+  'icp.initiation.candidate.lifecycle': {
+    candidateId: string;
+    localCompanionId: string;
+    peerCompanionId: string;
+    source: import('./contracts/icp-autonomy.js').IcpInitiationSource;
+    previousStatus: 'pending' | 'deferred' | 'declined' | 'rejected' | 'permitted'
+      | 'consumed' | 'expired' | 'cancelled' | null;
+    status: 'pending' | 'deferred' | 'declined' | 'rejected' | 'permitted'
+      | 'consumed' | 'expired' | 'cancelled';
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    timestamp: number;
+  };
   'icp.permit.lifecycle': {
     candidateId: string;
     conversationId: string;

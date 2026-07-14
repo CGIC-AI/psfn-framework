@@ -84,6 +84,12 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
+import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
+import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiation-consent-evaluator.js';
+import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
+import { registerIcpCoLocationThoughtAdapter } from '../../core/icp/co-location-thought-adapter.js';
+import { CanonicalCompanionPeerValidationError } from '../../core/icp/agent-facing-autonomy.js';
+import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import {
   bootstrapAgentCoreRuntime,
@@ -454,6 +460,79 @@ async function main(): Promise<void> {
     socialGraphProposalStore,
     socialGraphWatermarkStore,
   });
+  const icpInitiationSourceRuntime = (
+    persistenceRuntime.icpInitiationCandidateStore
+    && coreRuntime.icpAutonomyRuntime
+    && config.companionId
+  )
+    ? createIcpInitiationSourceRuntime({
+        localCompanionId: config.companionId,
+        store: persistenceRuntime.icpInitiationCandidateStore,
+        peers: coreRuntime.icpAutonomyRuntime,
+        gateway,
+        consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
+        eventBus,
+      })
+    : undefined;
+  const icpWeightedThoughtCandidateAdapter = (
+    icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
+  )
+    ? {
+        submit: async ({ thought }: { thought: import('../../core/intention/weighted-thoughts.js').ThoughtWeight }) => {
+          const contactId = thought.contactId;
+          if (!contactId) return null;
+          try {
+            await coreRuntime.icpAutonomyRuntime!.resolveKnownPeer(contactId);
+          } catch (error) {
+            if (error instanceof CanonicalCompanionPeerValidationError) return null;
+            throw error;
+          }
+          const sourceChannelId = thought.provenance.sourceChannelId;
+          const parsedChannel = sourceChannelId
+            ? parseCompanionChannelId(sourceChannelId)
+            : null;
+          return await icpInitiationSourceRuntime.submit({
+            source: 'weighted_thought',
+            peerContactId: contactId,
+            preferredChannel: parsedChannel?.kind === 'room' ? 'current_room' : 'dm',
+            ...(parsedChannel?.kind === 'room' && sourceChannelId
+              ? { currentRoomChannelId: sourceChannelId }
+              : {}),
+            sourceRecordId: thought.id,
+            reasonSummary: thought.content.slice(0, 1_000),
+            cause: thought.provenance.icpRootInitiationId
+              ? {
+                  kind: 'icp_conversation',
+                  rootInitiationId: thought.provenance.icpRootInitiationId,
+                }
+              : { kind: 'independent' },
+          });
+        },
+      }
+    : undefined;
+  const icpIntentionCandidateAdapter = (
+    icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
+  )
+    ? createIcpIntentionCandidateAdapter({
+        sourceRuntime: icpInitiationSourceRuntime,
+        peers: coreRuntime.icpAutonomyRuntime,
+        pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+        concernStore: intentionRuntime.concernStore,
+      })
+    : undefined;
+  const unregisterIcpCoLocationThoughtAdapter = (
+    companionPresenceRuntime
+    && persistenceRuntime.weightedThoughtStore
+    && config.companionId
+  )
+    ? registerIcpCoLocationThoughtAdapter({
+        eventBus,
+        localCompanionId: config.companionId,
+        contactStore,
+        thoughtStore: persistenceRuntime.weightedThoughtStore,
+        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+      })
+    : () => undefined;
 
   const moduleLoader = new ModuleLoader({
     eventBus,
@@ -781,7 +860,9 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => {},
+    closeDatabase: async () => {
+      await persistenceRuntime.icpInitiationCandidateStore?.close();
+    },
     scheduler,
     moduleLoader,
     memoryExtractor,
@@ -796,6 +877,7 @@ async function main(): Promise<void> {
     ...(coreRuntime.icpAutonomyRuntime
       ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
       : {}),
+    ...(icpInitiationSourceRuntime ? { icpInitiationSourceRuntime } : {}),
   });
   // Control-plane tools are registered after module loading. Validate them
   // before restored durable actions can execute so a wiring-disabled notify
@@ -810,6 +892,7 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     detachCompanionEventForwarder();
+    unregisterIcpCoLocationThoughtAdapter();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
     // the read-side staleness TTL — see companion-presence-runtime.ts).
@@ -1005,6 +1088,9 @@ async function main(): Promise<void> {
         llmProvider,
         characterName: card.data.name,
       }),
+      ...(icpWeightedThoughtCandidateAdapter
+        ? { icpCandidateAdapter: icpWeightedThoughtCandidateAdapter }
+        : {}),
       channelPolicy: {
         ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
         primaryChannelType: 'discord',
@@ -1136,6 +1222,7 @@ async function main(): Promise<void> {
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),
       scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,
       episodicSynthesizer,

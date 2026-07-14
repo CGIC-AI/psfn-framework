@@ -123,6 +123,29 @@ describe('weighted-thought outreach initiation', () => {
     expect(persisted!.nudgeState).toBe('accepted');
   });
 
+  it('routes a companion-targeted thought through the ICP candidate adapter without the legacy nudge or outbound action', async () => {
+    const thought = {
+      ...strongThought('wt-peer'),
+      contactId: 'peer-contact',
+    };
+    const store = makeStore(thought);
+    const evaluator = acceptEvaluator('forbidden legacy message');
+    const submit = vi.fn().mockResolvedValue({
+      outcome: 'sent',
+      candidateId: '11111111-1111-4111-8111-111111111111',
+      status: 'consumed',
+    });
+    const result = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator, {
+      icpCandidateAdapter: { submit },
+    }), T0);
+
+    expect(submit).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(result.produced).toEqual([]);
+    expect(result.icpCandidates).toHaveLength(1);
+    expect((await store.getById('wt-peer'))?.nudgeState).toBe('accepted');
+  });
+
   it('produced action flows through the existing dispatcher policy gates (approve + deny)', async () => {
     const store = makeStore(strongThought());
     const result = await runWeightedThoughtOutreachOnce(baseDeps(store, acceptEvaluator('ping')), T0);

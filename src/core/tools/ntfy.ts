@@ -26,6 +26,7 @@ import {
   COMPANION_NOTIFY_TARGET_KIND,
   executeCompanionNotify,
 } from './notify-companion-handoff.js';
+import { executeCompanionCandidateConsider } from './notify-companion-candidate.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -122,10 +123,11 @@ export interface NotifyDispatcherOptions {
 }
 
 interface NotifyToolParams {
-  action: NotifyAction;
+  action: NotifyAction | 'consider';
   target_kind?: 'external' | 'companion';
   contact_id?: string;
   initiation_permit?: string;
+  reason_summary?: string;
   message?: string;
   title?: string;
   priority?: number;
@@ -629,6 +631,7 @@ export function createHttpNotificationPortFromEnv(
 export interface NotifyToolOptions {
   gatewayMode?: boolean;
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
+  companionCandidateEnabled?: boolean;
 }
 
 const notifyToolParameters = Type.Union([
@@ -670,6 +673,19 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
+    action: Type.Literal('consider'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    contact_id: Type.String({
+      minLength: 1,
+      description: 'Exact canonical contact ID from contact lookup.',
+    }),
+    reason_summary: Type.String({
+      minLength: 1,
+      maxLength: 1_000,
+      description: 'Private bounded reason for considering contact; never shared with the peer or gateway.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
     action: Type.Literal('approval_request'),
     approval_id: Type.String({ minLength: 1 }),
     approval_method: Type.String({ minLength: 1 }),
@@ -694,6 +710,7 @@ export function createNotifyTool(
     label: 'notify',
     description:
       'Unified notification surface for operator briefs, lightweight outbound sends, approval escalation, and permit-governed companion outreach. '
+      + 'To form private intent without sending, use {"action":"consider","target_kind":"companion","contact_id":"<exact contactId>","reason_summary":"<private reason>"}; it is evaluated only after the current turn reaches idle. '
       + 'For a known companion peer, use exactly {"action":"send","target_kind":"companion","contact_id":"<exact contactId from contact lookup>","initiation_permit":"<broker-issued UUID>"}. '
       + 'Companion outreach never accepts message content; the ordinary target-channel turn authors it.',
     parameters: notifyToolParameters,
@@ -702,6 +719,12 @@ export function createNotifyTool(
       rawParams: NotifyToolParams,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      if (rawParams.action === 'consider') {
+        return executeCompanionCandidateConsider(
+          rawParams,
+          options.companionCandidateEnabled === true,
+        );
+      }
       let action: NotifyAction;
       try {
         action = normalizeAction(rawParams.action);
@@ -775,6 +798,8 @@ export function createNotifyTool(
         }
         return ['external.discord', 'external.email'] as const;
       }
+      case 'consider':
+        return 'external.companion';
       case 'approval_request':
         return 'external.web';
       default:

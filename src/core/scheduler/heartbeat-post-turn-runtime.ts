@@ -962,7 +962,7 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
-      if (runtimeOptions.proactiveOutbound) {
+      if (runtimeOptions.proactiveOutbound || runtimeOptions.icpIntentionCandidateAdapter) {
         const proactiveOutbound = runtimeOptions.proactiveOutbound;
         runtimeOptions.postTurnActions.registerHandler(
           INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
@@ -1017,6 +1017,26 @@ export function wireHeartbeatPostTurnRuntime(
               });
               recordOutreachSessionAudit(action, payload, 'blocked', provenanceBlockReason);
               return { detail: `blocked:${provenanceBlockReason}` };
+            }
+            const icpCandidate = runtimeOptions.icpIntentionCandidateAdapter
+              ? await runtimeOptions.icpIntentionCandidateAdapter.submit({ action, payload })
+              : { kind: 'not_companion' as const };
+            if (icpCandidate.kind === 'blocked') {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'blocked',
+                reason: icpCandidate.reason,
+              });
+              recordOutreachSessionAudit(action, payload, 'blocked', icpCandidate.reason);
+              return { detail: `blocked:${icpCandidate.reason}` };
+            }
+            if (icpCandidate.kind === 'submitted') {
+              return {
+                detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,
+              };
+            }
+            if (!proactiveOutbound) {
+              throw new Error('Intention outbound action has no applicable delivery runtime');
             }
             const timeGate = evaluateProactiveOutboundTimeGate({
               nowMs: Date.now(),

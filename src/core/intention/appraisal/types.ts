@@ -187,6 +187,8 @@ export interface IntentionOutboundMessageActionPayload {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+  /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
+  originIcpRootInitiationId?: string;
 }
 
 export interface IntentionReminderActionPayload {
@@ -194,7 +196,7 @@ export interface IntentionReminderActionPayload {
 }
 
 export interface IntentionDecisionActionContext {
-  message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType'>;
+  message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType' | 'routing'>;
   fallbackAuthorId?: string;
   fallbackAuthorName?: string;
 }

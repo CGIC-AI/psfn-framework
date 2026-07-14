@@ -39,6 +39,7 @@ import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-ch
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
+import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -231,6 +232,7 @@ async function main(): Promise<void> {
     icpInitiationPolicyAuthority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
       fleet: config.companionFleet.companions,
       quietHours: startupHydration.schedulerConfig.episodicProcessing,
+      causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
     });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,

@@ -33,6 +33,8 @@ import {
   resolveCompanionOutreachOriginActivationSource,
   type DeferredCompanionOutreachAuthorizationRuntime,
 } from '../../core/tools/notify-companion-handoff.js';
+import { registerIcpInitiationCandidatePostTurnRuntime } from '../../core/tools/notify-companion-candidate.js';
+import type { IcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -52,7 +54,7 @@ export interface BuildAgentControlPlaneOptions {
   unregisterGatewayDisconnect: () => void;
   stopDebugObserver: () => void;
   writeGracefulShutdownMarkers: () => void;
-  closeDatabase: () => void;
+  closeDatabase: () => Promise<void> | void;
   scheduler: Scheduler;
   moduleLoader: ModuleLoader;
   memoryExtractor: MemoryExtractor;
@@ -65,6 +67,7 @@ export interface BuildAgentControlPlaneOptions {
   shutdownTargets: AgentControlPlaneShutdownTargets;
   postTurnActions: PostTurnActionRuntime;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
+  icpInitiationSourceRuntime?: IcpInitiationSourceRuntime;
 }
 
 export interface AgentControlPlaneRuntime {
@@ -97,6 +100,7 @@ export function buildAgentControlPlane(
     shutdownTargets,
     postTurnActions,
     icpAutonomyRuntime,
+    icpInitiationSourceRuntime,
   } = options;
   let stopPromise: Promise<void> | null = null;
   const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
@@ -117,6 +121,20 @@ export function buildAgentControlPlane(
         agentLoop,
         postTurnActions,
         runtime: icpAutonomyRuntime,
+        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+      })
+    : () => undefined;
+  const unregisterIcpInitiationCandidates = icpInitiationSourceRuntime
+    ? registerIcpInitiationCandidatePostTurnRuntime({
+        agentLoop,
+        postTurnActions,
+        runtime: icpInitiationSourceRuntime,
         resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
           deferredCompanionOutreachAuthorizationRuntime,
         ),
@@ -150,6 +168,7 @@ export function buildAgentControlPlane(
       );
       await runShutdownSequence([
         { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
+        { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
         { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
         { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
         { step: 'stop debug observer', action: () => stopDebugObserver() },
@@ -217,6 +236,7 @@ export function buildAgentControlPlane(
   }), {
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
+    companionCandidateEnabled: icpInitiationSourceRuntime !== undefined,
   }), 'extended');
 
   return { lifecycleNotifier, stopFn };

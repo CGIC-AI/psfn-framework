@@ -74,6 +74,7 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
@@ -897,11 +898,15 @@ export async function handleMessageForTurn(
     const {
       firstTokenAt,
       turnUsage,
-      responseText,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
       turnIntent,
     } = invocationResult;
+    // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
+    // applied where the model's turn text is accepted so persistence
+    // (recordAssistantMessage), channel dispatch (AgentResponse.content), and
+    // TTS all see clean output.
+    const responseText = stripLeadingHistoryStamps(invocationResult.responseText);
     const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
     // authored. A no_reply issued during internal follow-up continuation

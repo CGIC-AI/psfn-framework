@@ -628,10 +628,11 @@ describe('orientation context surface wiring', () => {
       const assembled = await assembleSessionHistoryForContextWithLlmSummary({
         entries: spanBound.entries,
         channelVisibility: 'private',
-        // History stamps ('[MM-DD-YY HH:mm] ' = 17 chars/tokens under the
-        // 1-token-per-char test tokenizer) inflate every rendered message, so
-        // the budget leaves the same relative summary headroom as before.
-        tokenBudget: 300,
+        // History stamps ('[Ddd MM-DD-YY HH:mm] ' = 21 chars/tokens under the
+        // 1-token-per-char test tokenizer) inflate rendered user/system
+        // messages only — assistant turns are unstamped (2x37.10) — so the
+        // budget leaves the same relative summary headroom as before.
+        tokenBudget: 220,
         characterName: 'Companion',
         renderGroupUserAttribution: false,
         channelId: 'api:main',

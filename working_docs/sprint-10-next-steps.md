@@ -142,17 +142,34 @@ preflight, claims fresh staging atomically, and cleans only paths claimed by the
 current invocation. Final regression evidence was 33/33 focused restore tests,
 including three real-Postgres tests and the prior lost-response/SIGKILL paths;
 `npm run lint`, `npm run build`, and `npm run verify:backup-restore` also passed.
-`wprg` is closed; parent `c337` remains open while credential hardening follow-up
-`psfn-framework-5s70` is still in flight.
+`wprg` is closed.
 
-Branch-local evidence so far: 224 focused tests, `npm run lint`, `npm run build`,
-`npm run verify:settings-contract`, and `npm run verify:backup-restore` pass.
-Repository hygiene still reports only the known identity-literal and shared-type-
-guard baselines. The full suite reports 7,671 passing and 3 skipped tests, with
-the two inherited scheduler-fixture assertion failures plus one load-only
-large-session timeout that passes in isolation (2.9 seconds); merge,
-combined-branch testing, and live runtime/real-Postgres certification remain
-pending.
+Restore credential hardening follow-up `psfn-framework-5s70` was integrated and
+pushed on this branch through merge `28c7cba4` on 2026-07-14 (implementation
+`76635cd9` and `677b4cdd`; review remediation `4e555d92`). Restore and backup
+subprocesses now reject unsupported libpq credential/indirect-auth channels,
+remove ambient credential sources from child environments, and pass only the
+explicitly approved URL password through `PGPASSWORD`. The single independent
+review found one IMPORTANT diagnostic-redaction gap: lowercasing the whole URI
+spelling leaked mixed-case percent-escape and form-encoded variants while it
+could over-redact unrelated lowercase literals. Remediation preserves literal
+case, varies only percent-escape hex case, independently covers `+` space form
+encoding, and adds warning/wrapped-error regressions. Final regression evidence
+was 77/77 focused connection/restore tests, including three real-Postgres tests;
+`npm run lint`, `npm run build`, and `npm run verify:backup-restore` passed.
+`5s70` is closed.
+
+The combined `28c7cba4` integration matrix passed 127/127 connection, restore,
+transaction, service, and fleet tests, including all three real-Postgres restore
+integrations. `npm run lint`, `npm run build` (including DTS), and
+`npm run verify:backup-restore` (`verified: true`) also passed. Both discovered
+security children of `c337` are therefore closed and pushed. Parent `c337`
+remains open only because its explicit `npm run verify:repository-hygiene`
+acceptance gate still fails on this feature branch: the already-completed
+identity-literal/shared-type-guard hygiene remediation in `a81cdd49` is not an
+ancestor of this branch. Integrate that commit (or the branch containing it) and
+rerun the hygiene gate before closing `c337`. The real flagship restore rehearsal
+in §2d remains a separate live-cutover gate.
 
 ## 1. Where things stand
 
@@ -235,9 +252,9 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10d4` | Future-idea: management capability tier above autonomy — deferred |
 | `psfn-framework-s10d5` | Future-idea: shared-wiki caretaker/meta layer detailed design — deferred |
 | `psfn-framework-s10d6` | Future-idea: voice subsystem rewrite — deferred |
-| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; rollback ownership follow-up `wprg` is closed @ `078f7bfe`, but credential follow-up `5s70` and combined/runtime certification remain open (§0.5) |
+| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; both restore-security children are closed and combined real-Postgres integration passes @ `28c7cba4`; remains open only for its repository-hygiene acceptance gate after integrating `a81cdd49` (§0.5) |
 | `psfn-framework-wprg` | Restore rollback ownership — integrated, independently reviewed, remediated, final-check approved, and closed @ `078f7bfe` (§0.5) |
-| `psfn-framework-5s70` | Restore credential-channel hardening — still in flight; continues to hold parent `c337` open |
+| `psfn-framework-5s70` | Restore credential-channel hardening — integrated, independently reviewed, remediated, combined-check approved, and closed through merge `28c7cba4` (§0.5) |
 | `psfn-framework-s10d7` | Fleet restore functions — code-complete with c337 on `feat/fleet-workspace-isolation`; real flagship restore rehearsal still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |

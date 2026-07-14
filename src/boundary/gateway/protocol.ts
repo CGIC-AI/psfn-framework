@@ -81,6 +81,7 @@ export interface GatewayCorrelationParams {
   process?: string;
   chargeLane?: ChargePolicyRuntimeLane;
   chargeSurface?: ChargePolicySurface;
+  chargeEventId?: string;
   chargeRunId?: string;
   chargeRootRunId?: string;
   chargeParentRunId?: string;

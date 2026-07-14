@@ -72,6 +72,7 @@ async function recordImageProviderAttempt(
       chargeSurface: providerAttempt.provider === 'fal'
         ? 'paidImageGeneration'
         : 'localImageGeneration',
+      ...(params.chargeEventId ? { chargeEventId: params.chargeEventId } : {}),
       ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
       ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
       ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),

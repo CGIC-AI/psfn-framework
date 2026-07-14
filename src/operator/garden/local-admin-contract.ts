@@ -80,6 +80,7 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminChargeCostReconciliationDataService } from './services/charge-cost-reconciliation-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
@@ -326,6 +327,13 @@ export function createInProcessGardenAdminContract(
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
+    chargeCosts: modelUsageStore && options.config.companionId
+      ? new AdminChargeCostReconciliationDataService(
+          chargeLedger,
+          modelUsageStore,
+          options.config.companionId,
+        )
+      : null,
     modelUsage,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,

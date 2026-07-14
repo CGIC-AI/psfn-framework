@@ -371,6 +371,7 @@ async function recordEmbeddingUsage(
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
       ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
+      ...(params.chargeEventId ? { chargeEventId: params.chargeEventId } : {}),
       ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
       ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
       ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),

@@ -50,7 +50,10 @@ function dimensionValue(row: ModelUsageExportRow, dimension: ModelUsageGroupDime
     case 'callKind': return row.callKind;
     case 'status': return row.status;
     case 'costSource': return row.costSource;
-    default: return row.attribution[dimension];
+    default: {
+      const value: unknown = row.attribution[dimension];
+      return typeof value === 'string' ? value : 'unknown';
+    }
   }
 }
 

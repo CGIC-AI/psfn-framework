@@ -1,4 +1,8 @@
 import type {
+  ChargeCostReconciliationData,
+  ChargeCostReconciliationQuery,
+} from '../../../../shared/telemetry/charge-cost-reconciliation.js';
+import type {
   RunChargeLedgerData,
   RunChargeLedgerQuery,
 } from '../../../../shared/telemetry/charge-ledger.js';
@@ -29,4 +33,10 @@ export interface AdminModelUsageService {
     query: ModelUsageQuery,
     format: ModelUsageExportFormat,
   ): Promise<SerializedModelUsageExport>;
+}
+
+export interface AdminChargeCostReconciliationService {
+  getChargeCostReconciliation(
+    query?: ChargeCostReconciliationQuery,
+  ): Promise<ChargeCostReconciliationData>;
 }

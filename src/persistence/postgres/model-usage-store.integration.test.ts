@@ -21,6 +21,7 @@ import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-a
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { AdminModelUsageDataService } from '../../operator/garden/services/model-usage-service.js';
+import { AdminChargeCostReconciliationDataService } from '../../operator/garden/services/charge-cost-reconciliation-service.js';
 import { AdminDashboardDataService } from '../../operator/garden/services/dashboard-service.js';
 import { startOfDashboardUtcDay } from '../../operator/garden/services/dashboard-cost-windows.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
@@ -36,6 +37,7 @@ import {
 import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import type { AdminModelUsageService } from '../../operator/garden/services/types.js';
+import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 
 const piMocks = vi.hoisted(() => ({
   completeSimple: vi.fn(),
@@ -305,6 +307,152 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect((await store.getUsageData({ ...query, provider: "provider-a' OR 1=1 --" })).totals.calls).toBe(0);
     } finally {
       await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('reconciles canonical PostgreSQL attempts with the original charge ledger after restart', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const writerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'charge-cost-reconciliation-writer',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const operatorPool = createPostgresPool(databaseUrl, {
+      applicationName: 'charge-cost-reconciliation-operator',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'charge-cost-reconciliation-'));
+    const ledgerPath = join(dataDir, 'charge-ledger.jsonl');
+    const nowMs = Date.UTC(2026, 6, 14, 12, 0, 0);
+    const writer = new PostgresModelUsageStore(writerPool, { companionId: 'companion-a' });
+    const firstLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    try {
+      firstLedger.recordChargeEvent({
+        eventId: 'charge-exact',
+        timestampMs: nowMs - 1_000,
+        lane: 'interactive',
+        surface: 'externalModelConsult',
+        amount: 3,
+        quota: 10,
+        spentAfter: 3,
+        remainingAfter: 7,
+        lineage: { runId: 'run-exact', rootRunId: 'root-exact' },
+        companionId: 'companion-a',
+        channelId: 'channel-a',
+      });
+      firstLedger.recordChargeEvent({
+        eventId: 'charge-non-model',
+        timestampMs: nowMs - 900,
+        lane: 'interactive',
+        surface: 'memoryRead',
+        amount: 2,
+        quota: 10,
+        spentAfter: 5,
+        remainingAfter: 5,
+        lineage: { runId: 'run-memory', rootRunId: 'root-memory' },
+        companionId: 'companion-a',
+        channelId: 'channel-a',
+      });
+      await writer.recordUsageEvent({
+        logicalCallId: 'usage-exact',
+        attempt: 1,
+        recordedAtMs: nowMs - 800,
+        status: 'success',
+        settlement: 'complete',
+        callKind: 'chat',
+        attribution: {
+          companionId: 'companion-a',
+          channelId: 'channel-a',
+          callType: 'chat',
+          purpose: 'reconciliation-test',
+          chargeEventId: 'charge-exact',
+          chargeLane: 'interactive',
+          chargeSurface: 'externalModelConsult',
+          chargeRunId: 'run-exact',
+          chargeRootRunId: 'root-exact',
+        },
+        provider: 'provider-a',
+        model: 'model-a',
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        providerCost: { total: 0.5 },
+        effectiveCost: { total: 0.5 },
+        costSource: 'provider',
+        currency: 'USD',
+      });
+      await writer.recordUsageEvent({
+        logicalCallId: 'usage-unmatched',
+        attempt: 1,
+        recordedAtMs: nowMs - 700,
+        status: 'success',
+        settlement: 'complete',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-a',
+          channelId: 'channel-a',
+          callType: 'background',
+          purpose: 'reconciliation-test',
+          chargeEventId: 'missing-charge',
+          chargeLane: 'background',
+          chargeSurface: 'externalModelConsult',
+          chargeRunId: 'run-missing',
+          chargeRootRunId: 'root-missing',
+        },
+        provider: 'provider-b',
+        model: 'model-b',
+        inputTokens: 4,
+        outputTokens: 1,
+        totalTokens: 5,
+        providerCost: { total: 0.3 },
+        effectiveCost: { total: 0.3 },
+        costSource: 'provider',
+        currency: 'USD',
+      });
+      firstLedger.close();
+
+      const restartedLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+      const operatorStore = new PostgresModelUsageStore(operatorPool, { companionId: 'companion-a' });
+      const service = new AdminChargeCostReconciliationDataService(
+        restartedLedger,
+        operatorStore,
+        'companion-a',
+      );
+      const data = await service.getChargeCostReconciliation({
+        sinceMs: nowMs - 2_000,
+        untilMs: nowMs,
+      });
+
+      expect(data.sourceTotals).toMatchObject({
+        chargeUnits: 5,
+        chargeEvents: 2,
+        calls: 2,
+        providerCostUsd: 0.8,
+        effectiveCostUsd: 0.8,
+      });
+      expect(data.buckets.attributable).toMatchObject({
+        chargeUnits: 3,
+        calls: 1,
+        effectiveCostUsd: 0.5,
+        dollarsPerChargeUnit: 0.166666666667,
+      });
+      expect(data.buckets.nonModelCharges).toMatchObject({ chargeUnits: 2, calls: 0 });
+      expect(data.buckets.usageWithoutCharge).toMatchObject({
+        chargeUnits: 0,
+        calls: 1,
+        effectiveCostUsd: 0.3,
+      });
+      expect(data.breakdowns.byModel).toEqual([
+        expect.objectContaining({ key: 'provider-a:model-a', chargeUnits: 3, calls: 1 }),
+      ]);
+      restartedLedger.close();
+    } finally {
+      firstLedger.close();
+      await writerPool.end();
+      await operatorPool.end();
+      rmSync(dataDir, { recursive: true, force: true });
     }
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -750,8 +898,10 @@ describe('PostgresModelUsageStore reconciliation', () => {
       }, 'chat', createTurnId(), 'vision-root-initiation');
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       const providerSurfaces: Array<string | undefined> = [];
+      const providerChargeEventIds: Array<string | undefined> = [];
       piMocks.completeSimple.mockImplementation(async () => {
         providerSurfaces.push(getRunChargeSnapshot()?.surface);
+        providerChargeEventIds.push(getRunChargeSnapshot()?.chargeEventId);
         return {
           content: [{ type: 'text', text: 'The image is clear and consistent.' }],
           model: 'vision-model',
@@ -807,6 +957,11 @@ describe('PostgresModelUsageStore reconciliation', () => {
         'externalModelConsult',
         'externalModelConsult',
       ]);
+      expect(providerChargeEventIds).toEqual([
+        expect.any(String),
+        expect.any(String),
+      ]);
+      expect(new Set(providerChargeEventIds).size).toBe(2);
       const usage = await store.getUsageData({ limit: 10 });
       expect(usage.totals.calls).toBe(2);
       expect(usage.recentEvents).toHaveLength(2);
@@ -817,7 +972,12 @@ describe('PostgresModelUsageStore reconciliation', () => {
         && event.attribution.conversationId === reset.newLogicalSessionId
         && event.attribution.rootInitiationId === 'vision-root-initiation'
         && event.attribution.chargeSurface === 'externalModelConsult'
+        && providerChargeEventIds.includes(event.attribution.chargeEventId)
       ))).toBe(true);
+      const exactChargeUsage = await store.getUsageEventsForReconciliation({
+        chargeEventId: providerChargeEventIds[0],
+      });
+      expect(exactChargeUsage).toHaveLength(1);
     } finally {
       await pool.end();
       rmSync(dataDir, { recursive: true, force: true });
@@ -1672,6 +1832,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
             'idx_model_usage_events_session_time',
             'idx_model_usage_events_channel_time',
             'idx_model_usage_events_charge_attribution_time',
+            'idx_model_usage_events_charge_event',
             'idx_model_usage_events_shard_time',
             'idx_model_usage_events_subagent_time',
             'idx_model_usage_events_conversation_time',
@@ -1684,6 +1845,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect(indexes.rows.map(row => row.indexname)).toEqual([
         'idx_model_usage_events_channel_time',
         'idx_model_usage_events_charge_attribution_time',
+        'idx_model_usage_events_charge_event',
         'idx_model_usage_events_companion_time',
         'idx_model_usage_events_conversation_time',
         'idx_model_usage_events_root_initiation_time',

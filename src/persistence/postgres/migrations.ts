@@ -1024,6 +1024,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     tool_call_id TEXT NOT NULL DEFAULT 'unknown',
     charge_lane TEXT NOT NULL DEFAULT 'unknown',
     charge_surface TEXT NOT NULL DEFAULT 'unknown',
+    charge_event_id TEXT NOT NULL DEFAULT 'unknown',
     charge_run_id TEXT NOT NULL DEFAULT 'unknown',
     charge_root_run_id TEXT NOT NULL DEFAULT 'unknown',
     charge_parent_run_id TEXT NOT NULL DEFAULT 'unknown',
@@ -1106,6 +1107,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS companion_id TEXT NOT NULL DEFAULT 'unknown',
     ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'unknown',
     ADD COLUMN IF NOT EXISTS channel_type TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS charge_event_id TEXT NOT NULL DEFAULT 'unknown',
     ADD COLUMN IF NOT EXISTS shard_id TEXT NOT NULL DEFAULT 'unknown',
     ADD COLUMN IF NOT EXISTS subagent_id TEXT NOT NULL DEFAULT 'unknown',
     ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT 'unknown',
@@ -1131,6 +1133,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     tool_call_id = COALESCE(NULLIF(BTRIM(tool_call_id), ''), 'unknown'),
     charge_lane = COALESCE(NULLIF(BTRIM(charge_lane), ''), 'unknown'),
     charge_surface = COALESCE(NULLIF(BTRIM(charge_surface), ''), 'unknown'),
+    charge_event_id = COALESCE(NULLIF(BTRIM(charge_event_id), ''), 'unknown'),
     charge_run_id = COALESCE(NULLIF(BTRIM(charge_run_id), ''), 'unknown'),
     charge_root_run_id = COALESCE(NULLIF(BTRIM(charge_root_run_id), ''), 'unknown'),
     charge_parent_run_id = COALESCE(NULLIF(BTRIM(charge_parent_run_id), ''), 'unknown'),
@@ -1159,6 +1162,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     OR COALESCE(BTRIM(tool_call_id), '') = ''
     OR COALESCE(BTRIM(charge_lane), '') = ''
     OR COALESCE(BTRIM(charge_surface), '') = ''
+    OR COALESCE(BTRIM(charge_event_id), '') = ''
     OR COALESCE(BTRIM(charge_run_id), '') = ''
     OR COALESCE(BTRIM(charge_root_run_id), '') = ''
     OR COALESCE(BTRIM(charge_parent_run_id), '') = ''
@@ -1188,6 +1192,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     ALTER COLUMN tool_call_id SET DEFAULT 'unknown', ALTER COLUMN tool_call_id SET NOT NULL,
     ALTER COLUMN charge_lane SET DEFAULT 'unknown', ALTER COLUMN charge_lane SET NOT NULL,
     ALTER COLUMN charge_surface SET DEFAULT 'unknown', ALTER COLUMN charge_surface SET NOT NULL,
+    ALTER COLUMN charge_event_id SET DEFAULT 'unknown', ALTER COLUMN charge_event_id SET NOT NULL,
     ALTER COLUMN charge_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_run_id SET NOT NULL,
     ALTER COLUMN charge_root_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_root_run_id SET NOT NULL,
     ALTER COLUMN charge_parent_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_parent_run_id SET NOT NULL,
@@ -1406,6 +1411,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_tool ON model_usage_events(tool_name, recorded_at_ms DESC) WHERE tool_name IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_request ON model_usage_events(request_id, turn_id, tool_call_id);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_charge ON model_usage_events(charge_root_run_id, charge_run_id, recorded_at_ms DESC) WHERE charge_root_run_id IS NOT NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_charge_event ON model_usage_events(companion_id, charge_event_id, recorded_at_ms DESC) WHERE charge_event_id <> 'unknown';`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_companion_time ON model_usage_events(companion_id, recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_session_time ON model_usage_events(companion_id, session_id, recorded_at_ms DESC) WHERE session_id <> 'unknown';`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_channel_time ON model_usage_events(companion_id, channel_type, channel_id, recorded_at_ms DESC) WHERE channel_id <> 'unknown';`,

@@ -37,6 +37,7 @@ const TEXT_FIELDS = [
   'turnId',
   'requestId',
   'toolCallId',
+  'chargeEventId',
   'chargeRunId',
   'chargeRootRunId',
   'chargeParentRunId',

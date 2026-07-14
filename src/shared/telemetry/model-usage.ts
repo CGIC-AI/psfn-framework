@@ -185,6 +185,7 @@ export interface ModelUsageQuery {
   toolCallId?: string;
   chargeLane?: ModelUsageChargeLane;
   chargeSurface?: ModelUsageChargeSurface;
+  chargeEventId?: string;
   chargeRunId?: string;
   chargeRootRunId?: string;
   chargeParentRunId?: string;
@@ -367,6 +368,13 @@ export interface ModelUsageExportData {
 
 export interface ModelUsageExportPort {
   exportUsageEvents(query?: ModelUsageQuery): Promise<ModelUsageExportData>;
+}
+
+export type ModelUsageReconciliationQuery = Omit<ModelUsageQuery, 'limit' | 'groupBy'>;
+
+/** Internal complete event read for reconciling the immutable usage and charge ledgers. */
+export interface ModelUsageReconciliationQueryPort {
+  getUsageEventsForReconciliation(query?: ModelUsageReconciliationQuery): Promise<ModelUsageEvent[]>;
 }
 
 export interface ModelUsageCostHydrationQueryPort extends ModelUsageQueryPort {

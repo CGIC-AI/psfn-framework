@@ -862,6 +862,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
       'consumed', 'expired', 'cancelled'
     )),
     reason_code TEXT,
+    initiation_permit_id UUID,
     revision BIGINT NOT NULL CHECK (revision >= 1),
     CHECK (local_companion_id <> peer_companion_id)
   );
@@ -870,6 +871,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     ON icp_initiation_candidates (status, expires_at_ms, created_at_ms, candidate_id);`,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_peer
     ON icp_initiation_candidates (peer_companion_id, status, created_at_ms, candidate_id);`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS initiation_permit_id UUID;`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

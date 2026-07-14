@@ -14,18 +14,26 @@ export function createIcpWeightedThoughtCandidateAdapter(input: {
   return {
     async submit({ thought }) {
       const contactId = thought.contactId;
-      if (!contactId) return null;
+      if (!contactId) return { kind: 'not_companion' };
       try {
         await input.peers.resolveKnownPeer(contactId);
       } catch (error) {
-        if (error instanceof CanonicalCompanionPeerValidationError) return null;
+        if (error instanceof CanonicalCompanionPeerValidationError) {
+          return { kind: 'not_companion' };
+        }
         throw error;
+      }
+      if (!thought.provenance.icpRootInitiationId && !thought.provenance.coLocationRef) {
+        // A peer-derived thought with a missing root must never be upgraded to
+        // an independent initiation merely because an adapter failed to stamp
+        // lineage. Co-location is the one production independent writer here.
+        return { kind: 'blocked', reason: 'recursive_trigger' };
       }
       const sourceChannelId = thought.provenance.sourceChannelId;
       const parsedChannel = sourceChannelId
         ? parseCompanionChannelId(sourceChannelId)
         : null;
-      return await input.sourceRuntime.submit({
+      const result = await input.sourceRuntime.submit({
         source: 'weighted_thought',
         peerContactId: contactId,
         preferredChannel: parsedChannel?.kind === 'room' ? 'current_room' : 'dm',
@@ -43,6 +51,7 @@ export function createIcpWeightedThoughtCandidateAdapter(input: {
             }
           : { kind: 'independent' },
       });
+      return { kind: 'submitted', result };
     },
   };
 }

@@ -46,6 +46,7 @@ function createStore(): IcpInitiationCandidateStorePort {
         ...current,
         status: input.status,
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+        ...(input.permitId ? { permitId: input.permitId } : {}),
         revision: current.revision + 1,
       };
       rows.set(next.candidateId, next);
@@ -189,6 +190,36 @@ describe('ICP initiation source runtime', () => {
     expect(replay).toMatchObject({ outcome: 'deduped', candidateId: sent.candidateId });
     expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
     expect(restartedDeps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('persists the permit before delivery and recovers an interrupted target turn after restart', async () => {
+    const store = createStore();
+    const firstDeps = dependencies({ store }).deps;
+    vi.mocked(firstDeps.peers.executeCompanionOutreach).mockRejectedValueOnce(
+      new Error('process interrupted after permit issue'),
+    );
+    const first = createIcpInitiationSourceRuntime(firstDeps);
+
+    await expect(first.submit(request('foreground'))).rejects.toThrow('process interrupted');
+    const candidateId = vi.mocked(firstDeps.gateway.companionIssueInitiationPermit)
+      .mock.calls[0]![0].candidate.candidateId;
+    await expect(store.getCandidate(candidateId)).resolves.toMatchObject({
+      status: 'permitted',
+      permitId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    const restartedDeps = dependencies({ store }).deps;
+    const restarted = createIcpInitiationSourceRuntime(restartedDeps);
+    await expect(restarted.submit(request('foreground'))).resolves.toMatchObject({
+      outcome: 'sent',
+      status: 'consumed',
+    });
+    expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledWith(
+      'peer-contact',
+      '33333333-3333-4333-8333-333333333333',
+    );
   });
 
   it('preserves an inherited MI root so recursive-only causality is rejected before consent', async () => {

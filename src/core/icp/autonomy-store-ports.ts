@@ -171,6 +171,8 @@ export interface IcpInitiationCandidateTransitionInput {
   expectedRevision: number;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
+  /** Bound only when the broker has issued the recovery-safe permit. */
+  permitId?: string;
 }
 
 export interface IcpInitiationCandidateStorePort {

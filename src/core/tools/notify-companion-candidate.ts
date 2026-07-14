@@ -192,7 +192,7 @@ export function inferIcpInitiationCandidateActions(
 
 export function registerIcpInitiationCandidatePostTurnRuntime(input: {
   agentLoop: {
-    registerPostTurnActionInferer?(
+    registerPostTurnActionInferer(
       inferer: (context: PostTurnInferenceContext) => PostTurnActionCandidate[],
     ): () => void;
   };
@@ -201,9 +201,9 @@ export function registerIcpInitiationCandidatePostTurnRuntime(input: {
   resolveOriginActivationSource(): CompanionNotifyOverlayActivationSource | null;
   isExecutionAuthorized(evidence: DeferredCompanionOutreachAuthorizationEvidence): boolean;
 }): () => void {
-  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.((context) => (
+  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer((context) => (
     inferIcpInitiationCandidateActions(context, input.resolveOriginActivationSource())
-  )) ?? (() => undefined);
+  ));
   const unregisterHandler = input.postTurnActions.registerHandler(
     ICP_INITIATION_CANDIDATE_ACTION_KIND,
     async action => {

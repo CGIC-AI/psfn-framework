@@ -103,7 +103,7 @@ describe('notify companion candidate action', () => {
     const runtime: IcpInitiationSourceRuntime = { submit: vi.fn().mockResolvedValue({ outcome: 'sent' }) };
     let handler: PostTurnActionHandler | undefined;
     registerIcpInitiationCandidatePostTurnRuntime({
-      agentLoop: {},
+      agentLoop: { registerPostTurnActionInferer: vi.fn(() => () => undefined) },
       postTurnActions: {
         registerHandler: vi.fn((_kind, callback, options) => {
           handler = callback;
@@ -141,7 +141,7 @@ describe('notify companion candidate action', () => {
       }),
     };
     registerIcpInitiationCandidatePostTurnRuntime({
-      agentLoop: {},
+      agentLoop: { registerPostTurnActionInferer: vi.fn(() => () => undefined) },
       postTurnActions,
       runtime,
       resolveOriginActivationSource: () => null,

@@ -46,8 +46,11 @@ describe('ICP weighted-thought candidate adapter', () => {
         }),
       },
     });
-    await expect(adapter.submit({ thought: thought(), weight: 1, nowMs: 1 }))
-      .resolves.toMatchObject({ status: 'deferred' });
+    await expect(adapter.submit({ thought: thought() }))
+      .resolves.toMatchObject({
+        kind: 'submitted',
+        result: { status: 'deferred' },
+      });
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       source: 'weighted_thought',
       sourceRecordId: 'thought-1:r0',
@@ -60,7 +63,7 @@ describe('ICP weighted-thought candidate adapter', () => {
     }));
   });
 
-  it('returns null for a human contact without touching the candidate broker', async () => {
+  it('preserves the human lane for a non-companion contact', async () => {
     const submit = vi.fn();
     const adapter = createIcpWeightedThoughtCandidateAdapter({
       sourceRuntime: { submit },
@@ -70,8 +73,61 @@ describe('ICP weighted-thought candidate adapter', () => {
         ),
       },
     });
-    await expect(adapter.submit({ thought: thought(), weight: 1, nowMs: 1 }))
-      .resolves.toBeNull();
+    await expect(adapter.submit({ thought: thought() }))
+      .resolves.toEqual({ kind: 'not_companion' });
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a peer-derived thought with no inherited root or co-location provenance', async () => {
+    const submit = vi.fn();
+    const adapter = createIcpWeightedThoughtCandidateAdapter({
+      sourceRuntime: { submit },
+      peers: {
+        resolveKnownPeer: vi.fn().mockResolvedValue({
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        }),
+      },
+    });
+    const missingRoot = {
+      ...thought(),
+      provenance: { sourceChannelId: 'companion-room:kitchen' },
+    };
+
+    await expect(adapter.submit({ thought: missingRoot }))
+      .resolves.toEqual({ kind: 'blocked', reason: 'recursive_trigger' });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('treats co-location provenance as the only independent weighted-thought source', async () => {
+    const submit = vi.fn().mockResolvedValue({
+      outcome: 'deferred',
+      candidateId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      status: 'deferred',
+    });
+    const adapter = createIcpWeightedThoughtCandidateAdapter({
+      sourceRuntime: { submit },
+      peers: {
+        resolveKnownPeer: vi.fn().mockResolvedValue({
+          contactId: 'peer-contact',
+          displayName: 'Peer',
+          peerCompanionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        }),
+      },
+    });
+    const coLocated = {
+      ...thought(),
+      provenance: {
+        sourceChannelId: 'companion-room:kitchen',
+        coLocationRef: 'presence:kitchen:peer-contact',
+      },
+    };
+
+    await expect(adapter.submit({ thought: coLocated }))
+      .resolves.toMatchObject({ kind: 'submitted' });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      cause: { kind: 'independent' },
+    }));
   });
 });

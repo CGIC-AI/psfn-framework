@@ -647,6 +647,13 @@ describe('ICP autonomy Postgres persistence', () => {
         revision: 1,
       });
       expect(await storeB.getCandidate(CANDIDATE_ID)).toBeNull();
+      await storeA.transitionCandidate({
+        candidateId: CANDIDATE_ID,
+        expectedStatus: 'pending',
+        expectedRevision: 1,
+        status: 'permitted',
+        permitId: PERMIT_ID,
+      });
     } finally {
       await storeA.close();
       await storeB.close();
@@ -656,8 +663,12 @@ describe('ICP autonomy Postgres persistence', () => {
       schema: 'companion_a',
     });
     try {
-      expect((await restarted.getCandidate(CANDIDATE_ID))?.reasonSummary)
-        .toContain('Private motivation');
+      expect(await restarted.getCandidate(CANDIDATE_ID)).toMatchObject({
+        reasonSummary: expect.stringContaining('Private motivation'),
+        status: 'permitted',
+        permitId: PERMIT_ID,
+        revision: 2,
+      });
     } finally {
       await restarted.close();
     }

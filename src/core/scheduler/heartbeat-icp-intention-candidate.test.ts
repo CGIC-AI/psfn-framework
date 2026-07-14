@@ -4,9 +4,18 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
+import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
+import type {
+  PostTurnActionHandler,
+  PostTurnActionRuntime,
+} from '../agent/post-turn-action-runtime.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../intention/appraisal.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
+import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
 import { Scheduler } from './scheduler.js';
 
 const TEMP_DIRS: string[] = [];
@@ -16,8 +25,6 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-type ActionHandler = (action: any) => Promise<any> | any;
 
 function pendingFollowUp(): PendingFollowUp {
   return {
@@ -39,7 +46,7 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
   TEMP_DIRS.push(dataDir);
   const eventBus = new EventBus();
   const scheduler = new Scheduler(eventBus, { tickIntervalMs: 50, heartbeatIntervalMs: 1_000 });
-  const handlers = new Map<string, ActionHandler>();
+  const handlers = new Map<string, PostTurnActionHandler>();
   const dispatch = vi.fn().mockResolvedValue({ outcome: 'sent' });
   const submit = vi.fn().mockResolvedValue(
     kind === 'submitted'
@@ -65,30 +72,35 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
     listQuarantined: vi.fn(),
   };
   const postTurnActions = {
-    registerHandler: vi.fn((actionKind: string, handler: ActionHandler) => {
+    registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
       return () => undefined;
     }),
     listQueued: vi.fn().mockReturnValue([]),
     getStatus: vi.fn(),
+  } as unknown as PostTurnActionRuntime;
+  const agentLoop: HeartbeatAgent = {
+    handleMessage: vi.fn(),
+    followUp: vi.fn(),
+    registerPostTurnActionInferer: vi.fn(() => () => undefined),
+  };
+  const llmProvider: LLMProviderPort = {
+    stream: vi.fn(),
+    complete: vi.fn(),
   };
   void wireHeartbeatRuntime(
     { registerTool: vi.fn() },
     scheduler,
-    {
-      handleMessage: vi.fn(),
-      followUp: vi.fn(),
-      registerPostTurnActionInferer: vi.fn(() => () => undefined),
-    } as any,
+    agentLoop,
     { send: vi.fn() },
     dataDir,
     undefined,
     {
       eventBus,
-      postTurnActions: postTurnActions as any,
-      llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
-      pendingFollowUpStore: pendingFollowUpStore as any,
-      proactiveOutbound: { dispatch } as any,
+      postTurnActions,
+      llmProvider,
+      pendingFollowUpStore: pendingFollowUpStore as unknown as PendingFollowUpStorePort,
+      proactiveOutbound: { dispatch } as unknown as ProactiveOutboundDispatcher,
       icpIntentionCandidateAdapter: { submit },
     },
   );
@@ -99,16 +111,18 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
 
 const ACTION = {
   id: 'action-1',
+  kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   dedupeKey: 'intention.outbound_message:message-1:hash',
   channelId: 'discord:primary',
   sourceMessageId: 'message-1',
+  inferredAt: Date.now(),
   payload: {
     channelId: 'discord:primary',
     channelType: 'discord',
     content: 'Peer-visible draft',
     pendingFollowUpId: 'follow-up-1',
   },
-};
+} satisfies InferredPostTurnAction;
 
 describe('heartbeat ICP intention candidate integration', () => {
   it('routes a live peer intention to the candidate broker and never dispatches draft text', async () => {

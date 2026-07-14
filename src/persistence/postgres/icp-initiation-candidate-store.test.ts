@@ -19,6 +19,7 @@ const CANDIDATE_ROW = {
   expires_at_ms: '70000',
   status: 'pending',
   reason_code: null,
+  initiation_permit_id: null,
   revision: '1',
 };
 
@@ -116,5 +117,40 @@ describe('PostgresIcpInitiationCandidateStore', () => {
       status: 'pending',
     })).rejects.toThrow('Invalid ICP candidate status transition');
     expect(mocks.queryOne).not.toHaveBeenCalled();
+  });
+
+  it('requires and persists a permit binding before entering permitted recovery state', async () => {
+    mocks.queryOne.mockResolvedValue({
+      ...CANDIDATE_ROW,
+      status: 'permitted',
+      initiation_permit_id: '22222222-2222-4222-8222-222222222222',
+      revision: '2',
+    });
+    const store = await PostgresIcpInitiationCandidateStore.connect('postgres://example', {
+      schema: 'companion_artemis',
+    });
+
+    await expect(store.transitionCandidate({
+      candidateId: CANDIDATE_ROW.candidate_id,
+      expectedStatus: 'pending',
+      expectedRevision: 1,
+      status: 'permitted',
+    })).rejects.toThrow('requires a recovery permit binding');
+
+    const permitted = await store.transitionCandidate({
+      candidateId: CANDIDATE_ROW.candidate_id,
+      expectedStatus: 'pending',
+      expectedRevision: 1,
+      status: 'permitted',
+      permitId: '22222222-2222-4222-8222-222222222222',
+    });
+    const [, sql, params] = mocks.queryOne.mock.calls[0] as [unknown, string, unknown[]];
+    expect(sql).toContain('initiation_permit_id = COALESCE');
+    expect(params[5]).toBe('22222222-2222-4222-8222-222222222222');
+    expect(permitted).toMatchObject({
+      status: 'permitted',
+      permitId: '22222222-2222-4222-8222-222222222222',
+      revision: 2,
+    });
   });
 });

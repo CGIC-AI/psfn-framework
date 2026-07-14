@@ -64,7 +64,7 @@ export function registerIcpCoLocationThoughtAdapter(input: {
       provenance: {
         coLocationRef: `${event.companionId}:${event.siteId}:${event.placeId}:${event.since}`,
         sourceChannelId: composeCompanionRoomChannelId(event.placeId),
-        sourceChannelType: 'terminal',
+        sourceChannelType: 'companion',
       },
     }, now());
   });

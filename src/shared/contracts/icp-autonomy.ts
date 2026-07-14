@@ -32,6 +32,18 @@ export const ICP_INITIATION_SOURCES = [
 ] as const;
 export type IcpInitiationSource = typeof ICP_INITIATION_SOURCES[number];
 
+export const ICP_INITIATION_CANDIDATE_STATUSES = [
+  'pending',
+  'deferred',
+  'declined',
+  'rejected',
+  'permitted',
+  'consumed',
+  'expired',
+  'cancelled',
+] as const;
+export type IcpInitiationCandidateStatus = typeof ICP_INITIATION_CANDIDATE_STATUSES[number];
+
 export const ICP_CONVERSATION_STATUSES = [
   'invited',
   'active',

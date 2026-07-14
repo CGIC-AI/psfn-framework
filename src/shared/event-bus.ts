@@ -18,6 +18,7 @@ import type {
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
+import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -118,8 +119,7 @@ export interface EventMap {
     source: import('./contracts/icp-autonomy.js').IcpInitiationSource;
     previousStatus: 'pending' | 'deferred' | 'declined' | 'rejected' | 'permitted'
       | 'consumed' | 'expired' | 'cancelled' | null;
-    status: 'pending' | 'deferred' | 'declined' | 'rejected' | 'permitted'
-      | 'consumed' | 'expired' | 'cancelled';
+    status: IcpInitiationCandidateStatus;
     reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
     timestamp: number;
   };

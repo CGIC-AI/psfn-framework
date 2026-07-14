@@ -171,12 +171,14 @@ export interface WeightedThoughtOutreachDeps {
 }
 
 export interface IcpWeightedThoughtCandidateAdapter {
-  /** null means the thought targets a non-companion contact; use the existing lane. */
+  /** Non-companion preserves the human lane; blocked is a terminal fail-closed source check. */
   submit(input: {
     thought: ThoughtWeight;
-    weight: number;
-    nowMs: number;
-  }): Promise<IcpInitiationSourceResult | null>;
+  }): Promise<
+    | { kind: 'not_companion' }
+    | { kind: 'blocked'; reason: 'recursive_trigger' | 'stale_provenance' }
+    | { kind: 'submitted'; result: IcpInitiationSourceResult }
+  >;
 }
 
 export interface OutreachActionProduced {
@@ -248,14 +250,21 @@ export async function runWeightedThoughtOutreachOnce(
 
     // Companion-targeted thoughts converge on the ICP candidate broker before
     // the legacy human channel resolver or nudge evaluator. The adapter returns
-    // null for non-companion contacts, preserving the existing path exactly.
+    // not_companion for human contacts, preserving the existing path exactly.
     if (deps.icpCandidateAdapter && view.thought.contactId) {
-      const icpResult = await deps.icpCandidateAdapter.submit({
-        thought: view.thought,
-        weight: view.weight,
-        nowMs,
-      });
-      if (icpResult) {
+      const adapterResult = await deps.icpCandidateAdapter.submit({ thought: view.thought });
+      if (adapterResult.kind === 'blocked') {
+        const dampened = applyDeclineDampening(view.thought, deps.lifecycleConfig, nowMs);
+        await deps.store.save(dampened);
+        result.declined.push({
+          thoughtId: view.thought.id,
+          reason: adapterResult.reason,
+          dampenedWeight: dampened.accumulatedWeight,
+        });
+        continue;
+      }
+      if (adapterResult.kind === 'submitted') {
+        const icpResult = adapterResult.result;
         result.icpCandidates.push({ thoughtId: view.thought.id, result: icpResult });
         if (icpResult.status === 'consumed' || icpResult.status === 'permitted') {
           await deps.store.save(markThoughtAccepted(view.thought, nowMs));

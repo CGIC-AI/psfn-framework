@@ -61,6 +61,7 @@ describe('ICP co-location thought adapter', () => {
       reinforcementCount: 1,
       provenance: {
         sourceChannelId: 'companion-room:kitchen',
+        sourceChannelType: 'companion',
       },
     });
     expect(thoughts[0]!.accumulatedWeight).toBeLessThan(CONFIG.classes.trivial.baseWeight);

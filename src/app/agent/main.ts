@@ -54,8 +54,6 @@ import {
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
-import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
-import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveDriftReviewCardsPath,
   resolveIntakeQuarantinePath,
@@ -84,11 +82,8 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
-import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
-import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiation-consent-evaluator.js';
-import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
-import { registerIcpCoLocationThoughtAdapter } from '../../core/icp/co-location-thought-adapter.js';
-import { createIcpWeightedThoughtCandidateAdapter } from '../../core/icp/weighted-thought-candidate-adapter.js';
+import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import {
   bootstrapAgentCoreRuntime,
@@ -331,35 +326,13 @@ async function main(): Promise<void> {
     toolConformanceRunner,
   } = coreRuntime;
 
-  // Wire cross-companion presence into the turn path (same late-wiring pattern
-  // as memory/contacts providers). Null flag-off: turns are byte-identical.
-  agentLoop.companionPresence = companionPresenceRuntime;
-
-  // Co-location → room-entry note (W6): an observed arrival appends the W5
-  // system-only entry note to the place's companion-room channel session.
-  // Context only, never a triggered turn (no auto-greeting loops); flag-off
-  // the event never fires and nothing is registered.
-  if (companionPresenceRuntime) {
-    registerCompanionRoomEntryNotes({
-      eventBus,
-      sink: sessionManager,
-      placesRegistry: placesRegistryConfig,
-      coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
-    });
-    log.info('Companion room-entry notes wired to co-location events');
-
-    // Presence-windowed private-room delivery (bead s10rm): the
-    // session layer serves a private companion-room channel only from this
-    // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
-    // never sees pre-join content in context. Public places and every other
-    // channel resolve unwindowed (byte-identical). Flag-off, the port is
-    // never set and the session layer is untouched.
-    sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
-      placesRegistry: placesRegistryConfig,
-      presence: companionPresenceRuntime,
-    }));
-    log.info('Presence-windowed room content gate wired to session manager');
-  }
+  wireCompanionPresenceContext({
+    agentLoop,
+    presenceRuntime: companionPresenceRuntime,
+    eventBus,
+    sessionManager,
+    placesRegistry: placesRegistryConfig,
+  });
 
   // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
   // Screens tool outputs at session-entry recording time so persisted context
@@ -459,51 +432,25 @@ async function main(): Promise<void> {
     socialGraphProposalStore,
     socialGraphWatermarkStore,
   });
-  const icpInitiationSourceRuntime = (
-    persistenceRuntime.icpInitiationCandidateStore
-    && coreRuntime.icpAutonomyRuntime
-    && config.companionId
-  )
-    ? createIcpInitiationSourceRuntime({
-        localCompanionId: config.companionId,
-        store: persistenceRuntime.icpInitiationCandidateStore,
-        peers: coreRuntime.icpAutonomyRuntime,
-        gateway,
-        consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
-        eventBus,
-      })
-    : undefined;
-  const icpWeightedThoughtCandidateAdapter = (
-    icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
-  )
-    ? createIcpWeightedThoughtCandidateAdapter({
-        sourceRuntime: icpInitiationSourceRuntime,
-        peers: coreRuntime.icpAutonomyRuntime,
-      })
-    : undefined;
-  const icpIntentionCandidateAdapter = (
-    icpInitiationSourceRuntime && coreRuntime.icpAutonomyRuntime
-  )
-    ? createIcpIntentionCandidateAdapter({
-        sourceRuntime: icpInitiationSourceRuntime,
-        peers: coreRuntime.icpAutonomyRuntime,
-        pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
-        concernStore: intentionRuntime.concernStore,
-      })
-    : undefined;
-  const unregisterIcpCoLocationThoughtAdapter = (
-    companionPresenceRuntime
-    && persistenceRuntime.weightedThoughtStore
-    && config.companionId
-  )
-    ? registerIcpCoLocationThoughtAdapter({
-        eventBus,
-        localCompanionId: config.companionId,
-        contactStore,
-        thoughtStore: persistenceRuntime.weightedThoughtStore,
-        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
-      })
-    : () => undefined;
+  const {
+    sourceRuntime: icpInitiationSourceRuntime,
+    weightedThoughtCandidateAdapter: icpWeightedThoughtCandidateAdapter,
+    intentionCandidateAdapter: icpIntentionCandidateAdapter,
+    unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
+  } = wireIcpInitiationSources({
+    localCompanionId: config.companionId,
+    candidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    peers: coreRuntime.icpAutonomyRuntime,
+    gateway,
+    llmProvider,
+    eventBus,
+    pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+    concernStore: intentionRuntime.concernStore,
+    presenceEnabled: companionPresenceRuntime !== null,
+    contactStore,
+    weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
+    lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+  });
 
   const moduleLoader = new ModuleLoader({
     eventBus,

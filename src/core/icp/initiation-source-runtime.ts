@@ -197,13 +197,13 @@ function terminalOutcome(candidate: IcpInitiationCandidate): IcpInitiationSource
       return result('deduped', candidate, candidate.reasonCode ?? 'candidate_declined');
     case 'rejected':
       return result('deduped', candidate, candidate.reasonCode);
-    case 'permitted':
     case 'consumed':
     case 'expired':
     case 'cancelled':
       return result('deduped', candidate, candidate.reasonCode);
     case 'pending':
     case 'deferred':
+    case 'permitted':
       return null;
   }
 }
@@ -328,6 +328,14 @@ export function createIcpInitiationSourceRuntime(
       const expired = await transition(candidate, 'expired', 'candidate_expired');
       return result('deduped', expired, 'candidate_expired');
     }
+    if (candidate.status === 'permitted') {
+      if (!candidate.permitId) {
+        throw new Error(`Permitted ICP candidate ${candidate.candidateId} has no recovery permit binding`);
+      }
+      await dependencies.peers.executeCompanionOutreach(peer.contactId, candidate.permitId);
+      const consumed = await transition(candidate, 'consumed');
+      return result('sent', consumed);
+    }
     if (candidate.status === 'deferred') {
       candidate = await transition(candidate, 'pending');
     }
@@ -370,11 +378,18 @@ export function createIcpInitiationSourceRuntime(
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
     }
 
+    const permitted = await dependencies.store.transitionCandidate({
+      candidateId: candidate.candidateId,
+      expectedStatus: candidate.status,
+      expectedRevision: candidate.revision,
+      status: 'permitted',
+      permitId: permitResult.permit.permitId,
+    });
+    await emitLifecycle(permitted, candidate.status);
     await dependencies.peers.executeCompanionOutreach(
       peer.contactId,
       permitResult.permit.permitId,
     );
-    const permitted = await transition(candidate, 'permitted');
     const consumed = await transition(permitted, 'consumed');
     return result('sent', consumed);
   };

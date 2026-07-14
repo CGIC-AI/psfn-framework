@@ -1,10 +1,15 @@
 import {
   ICP_AUTONOMY_REASON_CODES,
+  ICP_INITIATION_CANDIDATE_STATUSES,
   ICP_INITIATION_SOURCES,
   parseIcpProvenanceHandle,
   type IcpAutonomyReasonCode,
+  type IcpInitiationCandidateStatus,
   type IcpInitiationSource,
 } from '../../shared/contracts/icp-autonomy.js';
+
+export { ICP_INITIATION_CANDIDATE_STATUSES } from '../../shared/contracts/icp-autonomy.js';
+export type { IcpInitiationCandidateStatus } from '../../shared/contracts/icp-autonomy.js';
 import {
   assertNoUnknownKeys,
   isRecord,
@@ -27,25 +32,15 @@ export interface IcpInitiationCandidate {
   expiresAtMs: number;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
+  /** Private recovery binding for a permit issued before target-turn delivery. */
+  permitId?: string;
   revision: number;
 }
-
-export const ICP_INITIATION_CANDIDATE_STATUSES = [
-  'pending',
-  'deferred',
-  'declined',
-  'rejected',
-  'permitted',
-  'consumed',
-  'expired',
-  'cancelled',
-] as const;
-export type IcpInitiationCandidateStatus = typeof ICP_INITIATION_CANDIDATE_STATUSES[number];
 
 /** The only candidate projection allowed to cross into shared arbitration state. */
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
-  'peerContactId' | 'reasonSummary'
+  'peerContactId' | 'reasonSummary' | 'permitId'
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -54,7 +49,7 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
-  'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'revision',
+  'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId', 'revision',
 ] as const;
 const SHARED_CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
@@ -129,6 +124,9 @@ export function parseIcpInitiationCandidate(
   const reasonCode = value.reasonCode === undefined
     ? undefined
     : requireEnum(value.reasonCode, ICP_AUTONOMY_REASON_CODES, 'ICP candidate.reasonCode');
+  const permitId = value.permitId === undefined
+    ? undefined
+    : requireUuid(value.permitId, 'ICP candidate.permitId');
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
     throw new Error('ICP candidate.revision must be a positive safe integer');
@@ -159,6 +157,7 @@ export function parseIcpInitiationCandidate(
       'ICP candidate.status',
     ),
     ...(reasonCode !== undefined ? { reasonCode } : {}),
+    ...(permitId !== undefined ? { permitId } : {}),
     revision,
   };
 }

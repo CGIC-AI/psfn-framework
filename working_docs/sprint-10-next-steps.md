@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12 and §0.4 added 2026-07-13** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12 and §0.4 refreshed 2026-07-14** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -32,9 +32,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
-- **Partially advanced**: `cam.1` accounting capture is code-complete and
-  validated on `feat/cost-accounting`; the parent `cam` epic and `cam.2`–`.6`
-  remain open, and none of this branch is on `main` yet. It still blocks ICP
+- **Partially advanced**: `cam.1` accounting capture and `cam.2` typed
+  attribution are code-complete and validated on `feat/cost-accounting`; the
+  parent `cam` epic and `cam.3`–`.6` remain open, and none of this branch is on
+  `main` yet. It still blocks ICP
   `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -91,29 +92,37 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
-### 0.4 2026-07-13 accounting capture status
+### 0.4 2026-07-14 accounting capture and attribution status
 
-`psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`
-and independently approved. The branch now records immutable physical provider
-attempts under stable logical-call identity across completion, streaming,
-fallback/retry, embedding, and image paths; normalizes input, cache-read,
-cache-write, and output token economics; preserves provider and estimated cost
-evidence with explicit effective-cost/component/currency reconciliation; and
-persists the canonical events through the Postgres model-usage store. The final
-review correction made budget-block telemetry parsing fail closed.
+`psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,
+and `psfn-framework-cam.2` is delivered through implementation head
+`9a3f57a1` (`61097e33..9a3f57a1`). CAM.1 records immutable physical provider
+attempts with reconciled token and cost economics. CAM.2 adds the typed
+companion, channel, call, origin, service/process, provider/model/slot, tool,
+charge-lineage, shard/subagent/conversation, workload, status, and cost-source
+dimensions; explicit unknown coverage; strict filters and groups; indexed
+Postgres persistence; and fail-closed Garden tenancy with explicit fleet
+aggregation. This status update is the documentation finalization immediately
+after that implementation head on `feat/cost-accounting`.
 
-Final branch evidence: 14 focused files / 254 tests passed; real Postgres
-model-usage integration 1 file / 4 tests passed; `verify:model-usage-capture`,
-`npm run build`, `npm run lint`, and `git diff --check` passed. Independent
-review approved the final head after the `56997ede` parser correction.
+CAM.2 validation at `9a3f57a1`: the broad accounting suite passed 22 files / 311
+tests; Docker-backed real local PostgreSQL integration passed 1 file / 10 tests,
+including concurrent pristine migration and the 21-group Garden ranking case;
+`npm run lint`, `npm run build`, `npm run verify:model-usage-capture`, and
+`git diff --check` passed. The proportional full suite passed 704 files / 7,732
+tests, with only the two inherited scheduler fixtures that omit
+`minPartnerIdleMinutes` while the loader supplies the default `60`; those files
+are outside the CAM.2 diff. Repository hygiene passed public sanitization before
+stopping on existing identity-literal allowlist drift; CAM.2 introduced none of
+the reported literals. Settings owner files were not touched, so the settings
+contract gate was not applicable.
 
-This is a feature-branch completion boundary, not a `main` completion claim.
-The branch is pending the operator's morning merge and combined testing. The
-`psfn-framework-cam` parent remains open, with these children still pending:
+This is a feature-branch completion boundary, not a `main` or whole-accounting
+completion claim. The `psfn-framework-cam` parent remains open, with these
+children still pending:
 
 | Bead | Remaining scope | Status |
 |---|---|---|
-| `psfn-framework-cam.2` | Persist/query companion, channel, origin, tool, lane, lineage, and workload attribution | open |
 | `psfn-framework-cam.3` | Replace in-memory dashboard cost samples with durable live model-usage queries | open |
 | `psfn-framework-cam.4` | Calendar/custom ranges, time buckets, multidimensional breakdowns, sorting, and export | open |
 | `psfn-framework-cam.5` | Operator charge-unit to dollar reconciliation by lane, surface, and run | open |

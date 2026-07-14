@@ -2,6 +2,31 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
+## Governing PSFN Charter
+
+Satellite Hub is a boundary component of PSFN. Work that affects companion
+identity, authorship, channel semantics, system-message presentation, trust,
+memory, or other companion-facing behavior must follow the canonical
+[PSFN Project Charter](https://github.com/CGIC-AI/psfn-framework/blob/main/docs/PSFN_PROJECT_CHARTER.md).
+In the standard sibling-checkout layout, read the local current copy at
+`../psfn-framework/docs/PSFN_PROJECT_CHARTER.md` before designing or changing
+cross-repository behavior.
+
+Operational consequences include:
+
+- Hub endpoints, bridges, and transports do not own companion identity or the
+  right to author companion speech.
+- Never fabricate, replace, or persist developer-authored or system-authored
+  text as companion speech. Companion-facing semantics must remain truthful.
+- Internal diagnostics, policy corrections, and runtime failures must retain
+  explicit system provenance; they must not masquerade as companion or partner
+  speech.
+- When behavior belongs to Companion Core, Gateway policy, prompt assembly,
+  memory, or another framework-owned concern, inspect and track the change in
+  the owning `psfn-framework` repository rather than creating a parallel Hub
+  implementation.
+- If a locally convenient change conflicts with the charter, the charter wins.
+
 ## Quick Reference
 
 ```bash

@@ -6,8 +6,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { Context } from '@mariozechner/pi-ai';
-import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
-import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import type { CanonicalModelRegistry, CompletionPurpose, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
+import {
+  deriveChildIcpConversationCostCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   createEnvCredentialVault,
@@ -213,13 +216,13 @@ describe('LLMClient ICP conversation cost admission', () => {
         icpCostBreaker: policy,
       },
     });
-    const chat = config.modelRegistry?.models.find(entry => entry.id === 'chat');
-    if (!chat) throw new Error('test chat model registry entry missing');
-    chat.cost = {
-      inputPer1MUsd: 1,
-      outputPer1MUsd: 2,
-      currency: 'USD',
-    };
+    for (const entry of config.modelRegistry?.models ?? []) {
+      entry.cost = {
+        inputPer1MUsd: 1,
+        outputPer1MUsd: 2,
+        currency: 'USD',
+      };
+    }
     return config;
   }
 
@@ -383,6 +386,144 @@ describe('LLMClient ICP conversation cost admission', () => {
       event: { reason: 'hard_limit_exceeded' },
     });
     expect(mocks.streamSimple).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    costPurpose: IcpConversationCorrelation['costPurpose'];
+    costOriginStage: IcpConversationCorrelation['costOriginStage'];
+    completionPurpose: CompletionPurpose;
+  }>([
+    { costPurpose: 'summary', costOriginStage: 'post_turn', completionPurpose: 'summary' },
+    { costPurpose: 'extraction', costOriginStage: 'post_turn', completionPurpose: 'extraction' },
+    { costPurpose: 'sidecar', costOriginStage: 'post_turn', completionPurpose: 'background' },
+    { costPurpose: 'tool', costOriginStage: 'reply', completionPurpose: 'reasoning' },
+  ])('reserves and hard-suppresses $costPurpose descendants in the parent conversation', async ({
+    costPurpose,
+    costOriginStage,
+    completionPurpose,
+  }) => {
+    const child = deriveChildIcpConversationCostCorrelation(correlation, {
+      requestId: `${correlation.requestId}:${costPurpose}`,
+      costPurpose,
+      costOriginStage,
+    });
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: {
+        ...projection(2),
+        enforcementState: 'hard_stop',
+      },
+    }));
+    const client = new LLMClient(makeIcpConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      icpConversationCostAccounting: {
+        reserveIcpConversationCost,
+        getIcpConversationCostProjection: vi.fn(async () => projection(2)),
+      },
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Run descendant work' }],
+      correlation: {
+        requestId: child.requestId,
+        turnId: child.turnId,
+        channelId: child.channelId,
+        callType: costPurpose === 'tool' ? 'tool' : 'background',
+        originType: costPurpose === 'tool' ? 'tool' : 'background',
+        originStage: `test.${costPurpose}`,
+        icpCorrelation: child,
+      },
+    }, completionPurpose, { disableRetry: true })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+
+    expect(reserveIcpConversationCost).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: expect.objectContaining({
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+        localCompanionId: correlation.localCompanionId,
+        peerCompanionId: correlation.peerCompanionId,
+        peerContactId: correlation.peerContactId,
+        requestId: child.requestId,
+        costPurpose,
+        costOriginStage,
+      }),
+    }));
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('includes cache-write exposure in near-hard admission before completion provider I/O', async () => {
+    const config = makeIcpConfig();
+    if (!config.modelRegistry) throw new Error('test model registry missing');
+    config.modelRegistry.promptCaching = {
+      enabled: true,
+      retention: 'short',
+      scope: 'channel',
+    };
+    for (const entry of config.modelRegistry.models) {
+      entry.cost = {
+        inputPer1MUsd: 0,
+        outputPer1MUsd: 0,
+        cacheReadPer1MUsd: 0,
+        cacheWritePer1MUsd: 1_000,
+        currency: 'USD',
+      };
+    }
+    const child = deriveChildIcpConversationCostCorrelation(correlation, {
+      requestId: `${correlation.requestId}:cache-write-summary`,
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+    });
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: {
+        ...projection(2),
+        enforcementState: 'hard_stop',
+      },
+    }));
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      icpConversationCostAccounting: {
+        reserveIcpConversationCost,
+        getIcpConversationCostProjection: vi.fn(async () => projection(2)),
+      },
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'Cacheable system prompt',
+      messages: [{ role: 'user', content: 'Summarize this near-hard conversation' }],
+      correlation: {
+        requestId: child.requestId,
+        turnId: child.turnId,
+        channelId: child.channelId,
+        callType: 'summary',
+        originType: 'summary',
+        originStage: 'test.cache-write-summary',
+        icpCorrelation: child,
+      },
+    }, 'summary', { disableRetry: true })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+
+    expect(reserveIcpConversationCost).toHaveBeenCalledWith(expect.objectContaining({
+      projectedCostUsd: expect.any(Number),
+      correlation: child,
+    }));
+    expect(reserveIcpConversationCost.mock.calls[0]?.[0].projectedCostUsd).toBeGreaterThan(0);
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
 });
 

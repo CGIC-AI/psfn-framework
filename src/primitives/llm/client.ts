@@ -690,12 +690,14 @@ export class LLMClient {
     correlation: ResolvedCorrelationMetadata | undefined,
     logicalCallId: string,
     attempt: number,
+    promptCacheEngaged: boolean,
   ): Promise<void> {
     try {
       await this.icpConversationCostBreaker.reservePhysicalAttempt({
         candidate,
         purpose,
         estimatedInputTokens,
+        promptCacheEngaged,
         logicalCallId,
         attempt,
         correlation,
@@ -1010,6 +1012,7 @@ export class LLMClient {
               correlation,
               logicalCallId,
               usageAttempt,
+              promptCaching?.engaged === true,
             );
             let attemptFirstTokenAtMs: number | undefined;
             const markFirstToken = (): void => {
@@ -1449,6 +1452,7 @@ export class LLMClient {
             correlation,
             logicalCallId,
             attempt,
+            promptCaching?.engaged === true,
           );
           let response: Awaited<ReturnType<typeof completeSimple>>;
           try {

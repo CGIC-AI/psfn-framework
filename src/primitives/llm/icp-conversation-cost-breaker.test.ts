@@ -57,6 +57,8 @@ function makeConfig(options: {
   includeRates?: boolean;
   inputRateUsd?: number;
   outputRateUsd?: number;
+  cacheReadRateUsd?: number;
+  cacheWriteRateUsd?: number;
 } = {}): SubstrateConfig {
   return {
     chargePolicy: {
@@ -75,6 +77,12 @@ function makeConfig(options: {
               cost: {
                 inputPer1MUsd: options.inputRateUsd ?? 1,
                 outputPer1MUsd: options.outputRateUsd ?? 2,
+                ...(options.cacheReadRateUsd !== undefined
+                  ? { cacheReadPer1MUsd: options.cacheReadRateUsd }
+                  : {}),
+                ...(options.cacheWriteRateUsd !== undefined
+                  ? { cacheWritePer1MUsd: options.cacheWriteRateUsd }
+                  : {}),
                 currency: 'USD' as const,
               },
             }),
@@ -192,6 +200,61 @@ describe('IcpConversationCostBreaker', () => {
     expect(reserve).toHaveBeenCalledWith(expect.objectContaining({
       projectedCostUsd: 1.000000000001,
     }));
+  });
+
+  it('projects the full prompt across every potentially billable cache bucket', async () => {
+    const reserve = vi.fn<IcpConversationCostAccountingPort['reserveIcpConversationCost']>(async input => ({
+      allowed: true,
+      replayed: false,
+      reason: 'below_warning',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: projection(),
+    }));
+    const breaker = new IcpConversationCostBreaker(
+      makeConfig({
+        inputRateUsd: 1,
+        outputRateUsd: 0,
+        cacheReadRateUsd: 0.2,
+        cacheWriteRateUsd: 3,
+      }),
+      accountingPort(reserve),
+    );
+
+    await breaker.reservePhysicalAttempt({
+      candidate: { ...CANDIDATE, maxTokens: 0 },
+      purpose: 'chat',
+      estimatedInputTokens: 1_000,
+      promptCacheEngaged: true,
+      logicalCallId: 'cache-envelope',
+      attempt: 1,
+      correlation: { icpCorrelation: CORRELATION },
+    });
+
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({
+      projectedCostUsd: 0.004200000001,
+    }));
+  });
+
+  it('fails closed when an engaged cache has an unpriced billable bucket', async () => {
+    const reserve = vi.fn<IcpConversationCostAccountingPort['reserveIcpConversationCost']>();
+    const breaker = new IcpConversationCostBreaker(
+      makeConfig({ cacheReadRateUsd: 0.2 }),
+      accountingPort(reserve),
+    );
+
+    await expect(breaker.reservePhysicalAttempt({
+      candidate: CANDIDATE,
+      purpose: 'chat',
+      estimatedInputTokens: 1_000,
+      promptCacheEngaged: true,
+      logicalCallId: 'cache-missing-write-price',
+      attempt: 1,
+      correlation: { icpCorrelation: CORRELATION },
+    })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'missing_cost_metadata' },
+    });
+    expect(reserve).not.toHaveBeenCalled();
   });
 
   it('fails closed before accounting when model pricing is missing', async () => {

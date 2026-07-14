@@ -15,6 +15,7 @@ export interface IcpConversationCostPhysicalAttempt {
   candidate: RoutingCandidate;
   purpose: RoutingPurpose;
   estimatedInputTokens: number;
+  promptCacheEngaged?: boolean;
   logicalCallId: string;
   attempt: number;
   correlation?: Partial<CorrelationMetadata>;
@@ -108,14 +109,23 @@ export class IcpConversationCostBreaker {
       input.candidate.maxTokens,
       'candidate.maxTokens',
     );
+    const estimatedCacheReadTokens = input.promptCacheEngaged === true
+      ? estimatedInputTokens
+      : 0;
+    const estimatedCacheWriteTokens = input.promptCacheEngaged === true
+      ? estimatedInputTokens
+      : 0;
 
     const rates = resolveModelUsageCostRates(this.config, input.candidate, input.purpose);
     const projected = estimateConservativeModelUsageCostUsd({
       inputTokens: estimatedInputTokens,
       outputTokens: estimatedOutputTokens,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: estimatedInputTokens + estimatedOutputTokens,
+      cacheReadTokens: estimatedCacheReadTokens,
+      cacheWriteTokens: estimatedCacheWriteTokens,
+      totalTokens: estimatedInputTokens
+        + estimatedOutputTokens
+        + estimatedCacheReadTokens
+        + estimatedCacheWriteTokens,
     }, rates);
     if (projected === undefined) {
       const event = blockedEvent(input, 'missing_cost_metadata', timestampMs);

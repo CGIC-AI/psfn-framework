@@ -15,6 +15,7 @@ import {
 import type {
   AdminActionPipeService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminDashboardService,
   AdminModelUsageService,
@@ -34,9 +35,11 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 import { parseModelUsageQuery } from './model-usage-query.js';
+import { parseChargeCostQuery } from './charge-cost-query.js';
 
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
+const CHARGE_COST_UNAVAILABLE_ERROR = 'Charge-cost reconciliation unavailable';
 const MODEL_USAGE_UNAVAILABLE_ERROR = 'Model usage telemetry backend unavailable';
 const OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR = 'Observer eval sidecar backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
@@ -191,6 +194,7 @@ export function buildAdminOverviewRoutes(options: {
   dashboardService: AdminDashboardService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  chargeCostReconciliationService?: AdminChargeCostReconciliationService | null;
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
@@ -201,6 +205,7 @@ export function buildAdminOverviewRoutes(options: {
     dashboardService,
     auditHistoryService,
     chargeLedgerService,
+    chargeCostReconciliationService,
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
@@ -462,6 +467,36 @@ export function buildAdminOverviewRoutes(options: {
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load charge ledger data'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/charge-costs'),
+      handle: (req, res) => {
+        if (!chargeCostReconciliationService) {
+          sendJson(res, 503, { error: CHARGE_COST_UNAVAILABLE_ERROR });
+          return;
+        }
+        const url = parseRequestUrl(req, '/api/admin/charge-costs');
+        const query = parseChargeCostQuery(url.searchParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
+          return;
+        }
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Charge-cost query is outside this Garden tenant.' });
+          return;
+        }
+        chargeCostReconciliationService.getChargeCostReconciliation(query.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to reconcile charge and model-usage telemetry'),
           }),
         );
       },

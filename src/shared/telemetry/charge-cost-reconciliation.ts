@@ -1,4 +1,7 @@
-import type { ChargePolicySurface } from '../contracts/charge-policy.js';
+import type {
+  ChargePolicyRuntimeLane,
+  ChargePolicySurface,
+} from '../contracts/charge-policy.js';
 import type { RunChargeLedgerEntry } from './charge-ledger.js';
 import type { ModelUsageEvent } from './model-usage.js';
 import { roundModelUsageUsd } from './model-usage-accounting.js';
@@ -85,8 +88,8 @@ export interface ChargeCostReconciliationQuery {
   untilMs?: number;
   companionId?: string;
   channelId?: string;
-  lane?: string;
-  surface?: string;
+  lane?: ChargePolicyRuntimeLane;
+  surface?: ChargePolicySurface;
   runId?: string;
   rootRunId?: string;
 }

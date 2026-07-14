@@ -25,6 +25,7 @@ import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminConcernService,
@@ -164,6 +165,7 @@ export interface GardenAdminDomainServices {
   images: AdminImagesService;
   auditHistory: AdminAuditHistoryService;
   charges?: AdminChargeLedgerService | null;
+  chargeCosts?: AdminChargeCostReconciliationService | null;
   modelUsage?: AdminModelUsageService | null;
   observerEvalSidecar?: AdminObserverEvalSidecarService | null;
   actionPipe?: AdminActionPipeService | null;

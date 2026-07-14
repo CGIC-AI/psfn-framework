@@ -34,6 +34,8 @@ export interface RunChargeLedgerQuery {
   runId?: string;
 }
 
+export type RunChargeReconciliationQuery = Pick<RunChargeLedgerQuery, 'sinceMs' | 'untilMs'>;
+
 export interface RunChargeBreakdown {
   key: string;
   amount: number;
@@ -499,6 +501,18 @@ export class RunChargeLedger {
       .filter(entry => matchesQuery(entry, query))
       .sort((left, right) => right.event.timestampMs - left.event.timestampMs)
       .slice(0, limit)
+      .map(entry => ({
+        ...entry,
+        event: cloneChargeEvent(entry.event),
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      }));
+  }
+
+  /** Complete internal read for aggregate reconciliation; unlike listEntries, this is not display-limited. */
+  listReconciliationEntries(query: RunChargeReconciliationQuery = {}): RunChargeLedgerEntry[] {
+    return this.entries
+      .filter(entry => matchesQuery(entry, query))
+      .sort((left, right) => left.event.timestampMs - right.event.timestampMs || left.eventId.localeCompare(right.eventId))
       .map(entry => ({
         ...entry,
         event: cloneChargeEvent(entry.event),

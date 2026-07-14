@@ -48,7 +48,10 @@ import {
   CERTIFICATION_PRIVATE_ROOM,
 } from './constants.js';
 import { composeCompanionDmChannelId } from '../../../shared/contracts/companion-channels.js';
-import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import {
+  deriveIcpTransportMessageId,
+  parseIcpConversationCorrelation,
+} from '../../../shared/contracts/icp-autonomy.js';
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import { createPersonaPreambleService } from '../../../core/identity/persona-preamble.js';
 
@@ -539,10 +542,45 @@ async function main(): Promise<void> {
           if (!candidateId) throw new Error('Free-time candidate was not persisted');
           const candidate = await candidateStore.getCandidate(candidateId);
           if (!candidate) throw new Error('Free-time candidate disappeared after persistence');
+          let senderExchange: Record<string, string> | undefined;
+          if (candidate.deliveryDisposition === 'delivered') {
+            const channelId = composeCompanionDmChannelId(
+              companionId,
+              candidate.peerCompanionId,
+            );
+            const sourceMessageId = `icp-initiation:${candidate.candidateId}`;
+            const observation = await agent.findIcpDeliveryObservation(channelId, sourceMessageId);
+            const response = observation?.recoveryResponse;
+            if (!response?.content.trim() || !response.metadata.icpCorrelation) {
+              throw new Error('Delivered free-time candidate is missing its durable sender response');
+            }
+            const correlation = parseIcpConversationCorrelation(
+              response.metadata.icpCorrelation,
+            );
+            const senderRecord = sessionRuntime.sessionStore.findTurnRecord(
+              channelId,
+              correlation.turnId,
+            );
+            if (!senderRecord || senderRecord.requestId !== correlation.requestId) {
+              throw new Error('Delivered free-time candidate is missing its durable sender record');
+            }
+            senderExchange = {
+              channelId,
+              conversationId: correlation.conversationId,
+              rootInitiationId: correlation.rootInitiationId,
+              senderRequestId: senderRecord.requestId,
+              senderTurnId: senderRecord.turnId,
+              recipientRequestId: deriveIcpTransportMessageId(correlation),
+            };
+          }
           reply({
             id: raw.id,
             ok: true,
-            result: { ...projectCandidate(candidate), postTurnStatus: status?.state },
+            result: {
+              ...projectCandidate(candidate),
+              postTurnStatus: status?.state,
+              ...(senderExchange ? { senderExchange } : {}),
+            },
           });
           return;
         }

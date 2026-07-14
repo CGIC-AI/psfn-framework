@@ -69,6 +69,22 @@ interface TurnRecordsSnapshot {
   }>;
 }
 
+interface FreeTimeNotificationResult {
+  candidateId: string;
+  deliveryDisposition: string;
+  postTurnStatus: string;
+  rootInitiationId: string;
+  senderExchange: {
+    channelId: string;
+    conversationId: string;
+    recipientRequestId: string;
+    rootInitiationId: string;
+    senderRequestId: string;
+    senderTurnId: string;
+  };
+  status: string;
+}
+
 async function readProviderDispatchCounts(databaseUrl: string): Promise<ProviderDispatchCount[]> {
   const pool = createPostgresPool(databaseUrl, {
     applicationName: 'psfn-icp-certification-provider-dispatch-assertions',
@@ -485,11 +501,25 @@ describe('ICP certification real process harness', () => {
     expect(senderBefore.summaries.length).toBeGreaterThan(0);
     expect(recipientBefore.summaries.length).toBeGreaterThan(0);
 
+    const recipientTurnsBefore = await agentB.turnRecordsSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as TurnRecordsSnapshot;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
+    const notification = await agentA.runFreeTimeNotification() as unknown as
+      FreeTimeNotificationResult;
+    expect(notification).toMatchObject({
       status: 'consumed',
       deliveryDisposition: 'delivered',
       postTurnStatus: 'succeeded',
+      rootInitiationId: expect.any(String),
+      senderExchange: {
+        channelId: CERTIFICATION_DM_CHANNEL,
+        conversationId: expect.any(String),
+        recipientRequestId: `companion-initiation-${notification.candidateId}`,
+        rootInitiationId: notification.rootInitiationId,
+        senderRequestId: `icp-initiation:${notification.candidateId}`,
+        senderTurnId: expect.any(String),
+      },
     });
     const [senderAfter, recipientAfter] = await Promise.all([
       waitForChannelEntries(agentA, senderBefore.entries.length + 1),
@@ -512,26 +542,25 @@ describe('ICP certification real process harness', () => {
     const recipientTurns = await agentB.turnRecordsSnapshot(
       CERTIFICATION_DM_CHANNEL,
     ) as unknown as TurnRecordsSnapshot;
-    const completedRecipientTurns = recipientTurns.records.filter(record => (
-      record.status === 'completed'
-      && record.hasAssistantMessage
-      && record.correlation?.channelId === CERTIFICATION_DM_CHANNEL
-      && record.correlation.localCompanionId === CERTIFICATION_COMPANION_B
-      && record.correlation.peerCompanionId === CERTIFICATION_COMPANION_A
-    ));
-    expect(completedRecipientTurns).toHaveLength(1);
-    const [completedRecipientTurn] = completedRecipientTurns;
+    expect(recipientTurns.records.slice(0, recipientTurnsBefore.records.length)).toEqual(
+      recipientTurnsBefore.records,
+    );
+    const newRecipientTurns = recipientTurns.records.slice(recipientTurnsBefore.records.length);
+    expect(newRecipientTurns).toHaveLength(1);
+    const [completedRecipientTurn] = newRecipientTurns;
     expect(completedRecipientTurn).toMatchObject({
-      requestId: expect.any(String),
+      status: 'completed',
+      hasAssistantMessage: true,
+      requestId: notification.senderExchange.recipientRequestId,
       turnId: expect.any(String),
       correlation: {
-        channelId: CERTIFICATION_DM_CHANNEL,
-        conversationId: expect.any(String),
+        channelId: notification.senderExchange.channelId,
+        conversationId: notification.senderExchange.conversationId,
         fatigueDecision: 'allow',
         localCompanionId: CERTIFICATION_COMPANION_B,
         peerCompanionId: CERTIFICATION_COMPANION_A,
-        requestId: completedRecipientTurn.requestId,
-        rootInitiationId: expect.any(String),
+        requestId: notification.senderExchange.recipientRequestId,
+        rootInitiationId: notification.rootInitiationId,
         turnId: completedRecipientTurn.turnId,
       },
     });

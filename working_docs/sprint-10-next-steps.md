@@ -35,9 +35,9 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Completed feature branch**: `cam.1`–`cam.6` accounting capture,
   attribution, durable dashboard accounting, canonical analytics,
   charge-to-cost reconciliation, migration/certification, and `574y` operator
-  accounting UX are complete and validated on the pushed
-  `feat/cost-accounting` branch at `271b6609`; the `cam` epic and all seven
-  accepted-scope children are closed. The branch is not on `main` yet; its
+  accounting UX are complete and validated at implementation fixed point
+  `271b6609` on the pushed `feat/cost-accounting` branch; the `cam` epic and all
+  seven accepted-scope children are closed. The branch is not on `main` yet; its
   tracker dependency no longer blocks ICP `6.7` breaker or `6.9`
   certification. Other
   deliberately deferred work: `lpro` kube lane (operator

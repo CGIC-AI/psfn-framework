@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { brotliCompressSync, gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
 
 export interface HttpLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -177,19 +178,142 @@ export async function readJsonBodyWithLimit<T = unknown>(
   };
 }
 
+/**
+ * Associates the inbound request with its response so the shared JSON responder
+ * (`sendJson`) can negotiate compression and conditional requests without every
+ * call site having to thread `req` through. Bound at the route dispatch seam;
+ * responses without a bound request keep the legacy uncompressed behavior.
+ */
+const boundRequestsByResponse = new WeakMap<ServerResponse, IncomingMessage>();
+
+export function bindRequestForResponse(res: ServerResponse, req: IncomingMessage): void {
+  boundRequestsByResponse.set(res, req);
+}
+
 export function sendJson(
   res: ServerResponse,
   status: number,
   body: unknown,
   headers?: Record<string, string>,
 ): void {
-  res.writeHead(status, { 'Content-Type': 'application/json', ...(headers ?? {}) });
-  res.end(JSON.stringify(body));
+  const req = boundRequestsByResponse.get(res);
+  if (!req) {
+    // No bound request (non-admin callers): preserve legacy uncompressed behavior.
+    res.writeHead(status, { 'Content-Type': 'application/json', ...(headers ?? {}) });
+    res.end(JSON.stringify(body));
+    return;
+  }
+  writeNegotiatedJson(req, res, status, body, headers);
 }
 
 type JsonCompressionEncoding = 'br' | 'gzip';
 
 const MIN_COMPRESSED_JSON_BYTES = 1024;
+
+// Cap synchronous brotli to a fast quality so multi-MB admin payloads do not
+// block the event loop; quality 4 keeps a strong ratio at a fraction of the CPU
+// cost of the default (11). gzip has no comparable cliff and stays at default.
+const FAST_BROTLI_OPTIONS = {
+  params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+} as const;
+
+function computeWeakEtag(payload: string, byteLength: number): string {
+  const hash = createHash('sha1').update(payload).digest('base64url');
+  return `W/"${byteLength.toString(16)}-${hash}"`;
+}
+
+function cacheControlForbidsStorage(headers: Record<string, string> | undefined): boolean {
+  if (!headers) return false;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === 'cache-control') {
+      return /(^|,)\s*no-store\s*(,|$)/i.test(value);
+    }
+  }
+  return false;
+}
+
+function ifNoneMatchSatisfied(header: string | string[] | undefined, etag: string): boolean {
+  if (!header) return false;
+  const raw = Array.isArray(header) ? header.join(',') : header;
+  for (const part of raw.split(',')) {
+    const candidate = part.trim();
+    if (candidate === '*') return true;
+    // Weak comparison: strip an optional W/ prefix on both sides before matching.
+    const normalizedCandidate = candidate.replace(/^W\//, '');
+    const normalizedEtag = etag.replace(/^W\//, '');
+    if (normalizedCandidate === normalizedEtag) return true;
+  }
+  return false;
+}
+
+function mergeVaryAcceptEncoding(existing: string | undefined): string {
+  if (!existing) return 'Accept-Encoding';
+  const parts = existing.split(',').map(part => part.trim()).filter(Boolean);
+  if (parts.some(part => part.toLowerCase() === 'accept-encoding')) return existing;
+  return [...parts, 'Accept-Encoding'].join(', ');
+}
+
+/**
+ * Shared responder for request-bound JSON responses. Negotiates gzip/brotli
+ * compression (>=1KB, honoring Accept-Encoding) and — for cacheable GET 200
+ * responses — emits a weak ETag and answers matching If-None-Match with a 304.
+ * Mutation responses (non-GET) and no-store responses never receive an ETag.
+ */
+function writeNegotiatedJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> | undefined,
+): void {
+  const payload = JSON.stringify(body);
+  const byteLength = Buffer.byteLength(payload);
+  const responseHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(headers ?? {}),
+    Vary: mergeVaryAcceptEncoding(headers?.Vary),
+  };
+
+  const method = (req.method ?? 'GET').toUpperCase();
+  const isCacheable = method === 'GET' && status === 200 && !cacheControlForbidsStorage(headers);
+
+  if (isCacheable) {
+    const etag = computeWeakEtag(payload, byteLength);
+    responseHeaders.ETag = etag;
+    if (ifNoneMatchSatisfied(req.headers['if-none-match'], etag)) {
+      const notModifiedHeaders: Record<string, string> = {
+        ETag: etag,
+        Vary: responseHeaders.Vary,
+      };
+      if (responseHeaders['Cache-Control']) {
+        notModifiedHeaders['Cache-Control'] = responseHeaders['Cache-Control'];
+      }
+      res.writeHead(304, notModifiedHeaders);
+      res.end();
+      return;
+    }
+  }
+
+  const encoding = byteLength >= MIN_COMPRESSED_JSON_BYTES
+    ? selectJsonCompressionEncoding(req)
+    : null;
+
+  if (!encoding) {
+    res.writeHead(status, responseHeaders);
+    res.end(payload);
+    return;
+  }
+
+  const compressed = encoding === 'br'
+    ? brotliCompressSync(Buffer.from(payload), FAST_BROTLI_OPTIONS)
+    : gzipSync(Buffer.from(payload));
+  res.writeHead(status, {
+    ...responseHeaders,
+    'Content-Encoding': encoding,
+    'Content-Length': String(compressed.length),
+  });
+  res.end(compressed);
+}
 
 function selectJsonCompressionEncoding(req: IncomingMessage): JsonCompressionEncoding | null {
   const rawHeader = req.headers['accept-encoding'];
@@ -222,31 +346,7 @@ export function sendCompressedJson(
   body: unknown,
   headers?: Record<string, string>,
 ): void {
-  const payload = JSON.stringify(body);
-  const responseHeaders = {
-    'Content-Type': 'application/json',
-    Vary: 'Accept-Encoding',
-    ...(headers ?? {}),
-  };
-  const encoding = Buffer.byteLength(payload) >= MIN_COMPRESSED_JSON_BYTES
-    ? selectJsonCompressionEncoding(req)
-    : null;
-
-  if (!encoding) {
-    res.writeHead(status, responseHeaders);
-    res.end(payload);
-    return;
-  }
-
-  const compressed = encoding === 'br'
-    ? brotliCompressSync(Buffer.from(payload))
-    : gzipSync(Buffer.from(payload));
-  res.writeHead(status, {
-    ...responseHeaders,
-    'Content-Encoding': encoding,
-    'Content-Length': String(compressed.length),
-  });
-  res.end(compressed);
+  writeNegotiatedJson(req, res, status, body, headers);
 }
 
 export function sendText(

@@ -19,8 +19,14 @@ class FakeRedisClient implements RedisClientLike {
   isOpen = false;
   connectCount = 0;
   failNextIncr = false;
+  /** Test hook: observe/mutate state as each command arrives (race injection). */
+  onCommand: ((args: string[]) => void) | null = null;
   private zsets = new Map<string, Map<string, number>>();
   private strings = new Map<string, string>();
+
+  setStringValue(key: string, value: string): void {
+    this.strings.set(key, value);
+  }
 
   async connect(): Promise<unknown> {
     this.isOpen = true;
@@ -63,6 +69,7 @@ class FakeRedisClient implements RedisClientLike {
   }
 
   async sendCommand(args: string[]): Promise<unknown> {
+    this.onCommand?.(args);
     const [command, key, ...rest] = args;
     switch (command) {
       case 'GET':
@@ -160,7 +167,7 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const cache = makeCache(client, 3);
 
     for (let id = 1; id <= 5; id += 1) {
-      await cache.appendRow('ch-1', messageRow(id));
+      await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(id));
     }
 
     expect(client.connectCount).toBe(1);
@@ -173,8 +180,8 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 8);
 
-    await cache.appendRow('ch-a', messageRow(1));
-    await cache.appendRow('ch-b', messageRow(1));
+    await cache.appendRow('ch-a', await cache.getEpoch('ch-a'), messageRow(1));
+    await cache.appendRow('ch-b', await cache.getEpoch('ch-b'), messageRow(1));
 
     expect(client.membersInRankOrder(`${SESSION_TAIL_KEY_PREFIX}${SCOPE}:ch-a:e0`)).toHaveLength(1);
     expect(client.membersInRankOrder(`${SESSION_TAIL_KEY_PREFIX}${SCOPE}:ch-b:e0`)).toHaveLength(1);
@@ -186,8 +193,8 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const first = makeCache(client, 8, 'companion-one');
     const second = makeCache(client, 8, 'companion-two');
 
-    await first.appendRow('shared-channel', messageRow(1, 'first scope content'));
-    await second.appendRow('shared-channel', messageRow(1, 'second scope content'));
+    await first.appendRow('shared-channel', await first.getEpoch('shared-channel'), messageRow(1, 'first scope content'));
+    await second.appendRow('shared-channel', await second.getEpoch('shared-channel'), messageRow(1, 'second scope content'));
 
     const firstTail = await first.getTail('shared-channel');
     const secondTail = await second.getTail('shared-channel');
@@ -206,8 +213,8 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 8);
 
-    await cache.appendRow('ch-1', messageRow(1));
-    await cache.appendRow('ch-1', messageRow(2));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(2));
     expect(tailIds(await cache.getTail('ch-1'))).toEqual([1, 2]);
 
     const epoch = await cache.bumpEpoch('ch-1');
@@ -223,14 +230,14 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     expect(await otherProcess.getTail('ch-1')).toEqual([]);
 
     // Writes after the bump land under the new epoch and are readable again.
-    await cache.appendRow('ch-1', messageRow(3));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(3));
     expect(tailIds(await otherProcess.getTail('ch-1'))).toEqual([3]);
   });
 
   it('bumpEpoch throws on INCR failure (fail-closed redaction)', async () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 8);
-    await cache.appendRow('ch-1', messageRow(1));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
 
     client.failNextIncr = true;
     await expect(cache.bumpEpoch('ch-1')).rejects.toThrow(/fake INCR failure/);
@@ -241,7 +248,7 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
   it('bumpEpoch garbage-collects the previous epoch key', async () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 8);
-    await cache.appendRow('ch-1', messageRow(1));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
     expect(client.zsetKeys()).toContain(`${SESSION_TAIL_KEY_PREFIX}${SCOPE}:ch-1:e0`);
 
     await cache.bumpEpoch('ch-1');
@@ -252,9 +259,9 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 8);
 
-    await cache.appendRow('ch-1', messageRow(7));
-    await cache.appendRow('ch-1', messageRow(5));
-    await cache.appendRow('ch-1', messageRow(6));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(7));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(5));
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(6));
 
     const { messages } = validateSessionTailWindow(await cache.getTail('ch-1'));
     expect(messages.map(entry => entry.id)).toEqual([5, 6, 7]);
@@ -264,12 +271,12 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 2);
 
-    await cache.appendRow('ch-1', messageRow(1));
-    await cache.replaceTail('ch-1', [messageRow(10), messageRow(11), messageRow(12)]);
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
+    await cache.replaceTail('ch-1', await cache.getEpoch('ch-1'), [messageRow(10), messageRow(11), messageRow(12)]);
 
     expect(tailIds(await cache.getTail('ch-1'))).toEqual([11, 12]);
 
-    await cache.replaceTail('ch-1', []);
+    await cache.replaceTail('ch-1', await cache.getEpoch('ch-1'), []);
     expect(await cache.getTail('ch-1')).toEqual([]);
   });
 
@@ -277,8 +284,8 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
     const client = new FakeRedisClient();
     const cache = makeCache(client, 4);
 
-    await cache.appendRow('ch-1', messageRow(1));
-    await cache.invalidateChannel('ch-1');
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
+    await cache.invalidateChannel('ch-1', await cache.getEpoch('ch-1'));
 
     expect(await cache.getTail('ch-1')).toEqual([]);
   });
@@ -295,11 +302,53 @@ describe('RedisSessionTailCache (psfn-framework-hgw3.5)', () => {
       } as unknown as SessionEntry,
     };
 
-    await cache.appendRow('ch-1', tainted);
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), tainted);
 
     const [member] = client.membersInRankOrder(`${SESSION_TAIL_KEY_PREFIX}${SCOPE}:ch-1:e0`);
     expect(member).not.toContain('_hmac');
     expect((await cache.getTail('ch-1'))[0]).toEqual(messageRow(1));
+  });
+
+  it('getTail treats an epoch change between the range read and the re-read as a miss (TOCTOU)', async () => {
+    const client = new FakeRedisClient();
+    const cache = makeCache(client, 8);
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(1));
+
+    // Race injection: a concurrent rewrite fence (epoch bump in another
+    // process) lands while this reader is between its first GET and its
+    // ZRANGE. The double-read MUST reject the rows it fetched from the
+    // superseded epoch and report a miss.
+    client.onCommand = (args) => {
+      if (args[0] === 'ZRANGE') {
+        client.setStringValue(`${SESSION_TAIL_EPOCH_KEY_PREFIX}${SCOPE}:ch-1`, '1');
+      }
+    };
+    expect(await cache.getTail('ch-1')).toEqual([]);
+
+    // With no concurrent bump the same read serves the rows again.
+    client.onCommand = null;
+    client.setStringValue(`${SESSION_TAIL_EPOCH_KEY_PREFIX}${SCOPE}:ch-1`, '0');
+    expect(tailIds(await cache.getTail('ch-1'))).toEqual([1]);
+  });
+
+  it('a write carrying a captured (pre-bump) epoch lands under the superseded key, never the new one', async () => {
+    const client = new FakeRedisClient();
+    const cache = makeCache(client, 8);
+
+    // A writer captures the epoch with its data, then a rewrite fence lands
+    // before the write executes (delayed queued write). The write must go to
+    // the captured epoch's key — unreadable garbage — not the current one.
+    const capturedEpoch = await cache.getEpoch('ch-1');
+    await cache.bumpEpoch('ch-1');
+    await cache.appendRow('ch-1', capturedEpoch, messageRow(1, 'stale pre-rewrite content'));
+    await cache.replaceTail('ch-1', capturedEpoch, [messageRow(2, 'stale repopulation')]);
+
+    expect(await cache.getTail('ch-1')).toEqual([]);
+    expect(client.zsetKeys()).not.toContain(`${SESSION_TAIL_KEY_PREFIX}${SCOPE}:ch-1:e1`);
+
+    // A write carrying the CURRENT epoch is readable as usual.
+    await cache.appendRow('ch-1', await cache.getEpoch('ch-1'), messageRow(3));
+    expect(tailIds(await cache.getTail('ch-1'))).toEqual([3]);
   });
 
   it('fails closed on corrupt members', async () => {

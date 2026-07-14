@@ -10,6 +10,7 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createTurnId } from '../../core/turns/id.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
 
 // In-memory fake of the tail port (no live Redis in unit tests). Mirrors the
 // Redis implementation's epoch fencing: rows live under a per-channel/epoch
@@ -20,7 +21,7 @@ class FakeSessionTailCache implements SessionTailCachePort {
   readonly maxEntriesPerChannel: number;
   epochs = new Map<string, number>();
   rowsByEpochSlot = new Map<string, SessionTailRow[]>();
-  calls = { getTail: 0, appendRow: 0, replaceTail: 0, invalidateChannel: 0, bumpEpoch: 0 };
+  calls = { getTail: 0, getEpoch: 0, appendRow: 0, replaceTail: 0, invalidateChannel: 0, bumpEpoch: 0 };
   failNextAppend = false;
   failNextBumpEpoch = false;
 
@@ -32,8 +33,13 @@ class FakeSessionTailCache implements SessionTailCachePort {
     return JSON.parse(JSON.stringify(row)) as SessionTailRow;
   }
 
-  private slot(channelKey: string): string {
-    return `${channelKey}@e${this.epochs.get(channelKey) ?? 0}`;
+  private slot(channelKey: string, epoch = this.epochs.get(channelKey) ?? 0): string {
+    return `${channelKey}@e${epoch}`;
+  }
+
+  /** Test accessor: rows written under an EXPLICIT epoch slot. */
+  rowsAtEpoch(channelKey: string, epoch: number): SessionTailRow[] {
+    return (this.rowsByEpochSlot.get(this.slot(channelKey, epoch)) ?? []).map(row => this.clone(row));
   }
 
   /** Test accessor: rows visible at the CURRENT epoch. */
@@ -58,29 +64,35 @@ class FakeSessionTailCache implements SessionTailCachePort {
     return this.currentRows(channelKey);
   }
 
-  async appendRow(channelKey: string, row: SessionTailRow): Promise<void> {
+  async getEpoch(channelKey: string): Promise<number> {
+    this.calls.getEpoch += 1;
+    return this.epochs.get(channelKey) ?? 0;
+  }
+
+  async appendRow(channelKey: string, epoch: number, row: SessionTailRow): Promise<void> {
     this.calls.appendRow += 1;
     if (this.failNextAppend) {
       this.failNextAppend = false;
       throw new Error('fake tail append failure');
     }
-    const rows = this.rowsByEpochSlot.get(this.slot(channelKey)) ?? [];
+    const slot = this.slot(channelKey, epoch);
+    const rows = this.rowsByEpochSlot.get(slot) ?? [];
     rows.push(this.clone(row));
     rows.sort((left, right) => sessionTailRowId(left) - sessionTailRowId(right));
-    this.rowsByEpochSlot.set(this.slot(channelKey), rows.slice(-this.maxEntriesPerChannel));
+    this.rowsByEpochSlot.set(slot, rows.slice(-this.maxEntriesPerChannel));
   }
 
-  async replaceTail(channelKey: string, rows: readonly SessionTailRow[]): Promise<void> {
+  async replaceTail(channelKey: string, epoch: number, rows: readonly SessionTailRow[]): Promise<void> {
     this.calls.replaceTail += 1;
     this.rowsByEpochSlot.set(
-      this.slot(channelKey),
+      this.slot(channelKey, epoch),
       rows.slice(-this.maxEntriesPerChannel).map(row => this.clone(row)),
     );
   }
 
-  async invalidateChannel(channelKey: string): Promise<void> {
+  async invalidateChannel(channelKey: string, epoch: number): Promise<void> {
     this.calls.invalidateChannel += 1;
-    this.rowsByEpochSlot.delete(this.slot(channelKey));
+    this.rowsByEpochSlot.delete(this.slot(channelKey, epoch));
   }
 
   async bumpEpoch(channelKey: string): Promise<number> {
@@ -151,6 +163,7 @@ describe('SessionStore session tail integration (psfn-framework-hgw3.5)', () => 
       await plain.flushSessionTailWrites();
       expect(untouched.calls).toEqual({
         getTail: 0,
+        getEpoch: 0,
         appendRow: 0,
         replaceTail: 0,
         invalidateChannel: 0,
@@ -321,6 +334,70 @@ describe('SessionStore session tail integration (psfn-framework-hgw3.5)', () => 
 
     tail.failNextBumpEpoch = true;
     await expect(store.reloadChannelFromDisk('ch-heal-fail')).rejects.toThrow(/epoch bump failed/);
+  });
+
+  it('a queued tail write binds to the epoch captured at enqueue, never the epoch at execution', async () => {
+    // The append enqueues a tail write that captures epoch 0 with the row
+    // data. Before the queued write executes, a rewrite fence lands
+    // (another process's redaction bumping the shared epoch). The row MUST
+    // go to the superseded epoch-0 slot — resolving the epoch at execution
+    // time would resurrect pre-rewrite content under the new epoch.
+    const id = appendMessage(store, 'ch-enqueue-bind', 'user', 'pre-rewrite content', 1_000);
+    tail.epochs.set('ch-enqueue-bind', 1);
+    await store.flushSessionTailWrites();
+
+    expect(tail.currentRows('ch-enqueue-bind')).toEqual([]);
+    expect(tail.rowsAtEpoch('ch-enqueue-bind', 0).map(row => sessionTailRowId(row))).toEqual([id]);
+  });
+
+  it('the second fence still lands when a step AFTER the journal rewrite throws (exception-safe post bump)', async () => {
+    const caseId = 'cogsec_20260701T000000Z_postfence';
+    const dirtyId = appendMessage(store, 'ch-postfence', 'user', 'payload to tombstone', 1_000);
+    await store.flushSessionTailWrites();
+
+    const eventStore = new CogSecEventStore(join(dir, 'cogsec-events.json'));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'ch-postfence',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+
+    const bumpsBefore = tail.calls.bumpEpoch;
+    // Event bookkeeping runs AFTER the journal rewrite landed; its failure
+    // must NOT leave the stale-epoch repopulation race open.
+    await expect(store.applyCogSecTombstones({
+      channelId: 'ch-postfence',
+      caseId,
+      eventStore: {
+        getEvent: id => eventStore.getEvent(id),
+        updateEvent: () => {
+          throw new Error('event bookkeeping failed after the rewrite');
+        },
+      },
+      forensicArchive: {
+        sealArtifact: () => ({
+          ref: `${caseId}/fixture-artifact`,
+          artifactId: 'fixture-artifact',
+          caseId,
+          kind: 'l0_rows',
+          sha256: 'sha256:fixture',
+          byteLength: 1,
+          createdAt: '2026-07-01T00:00:00.000Z',
+        }),
+      },
+      messageIds: [dirtyId],
+    })).rejects.toThrow(/event bookkeeping failed/);
+
+    // The rewrite itself was durable (tombstone landed in the journal)...
+    expect(store.getRecent('ch-postfence', 10).map(entry => entry.content))
+      .toEqual([`[CogSec redaction: ${caseId}]`]);
+    // ...so BOTH fences must have run: pre-rewrite and (exception-safe)
+    // post-rewrite. Without the post fence a sibling's stale repopulation
+    // could resurrect the pre-rewrite tail under the bumped epoch.
+    expect(tail.calls.bumpEpoch - bumpsBefore).toBe(2);
+    expect(tail.epochs.get('ch-postfence')).toBe(2);
   });
 
   it('a corrupt tail (duplicate ids) fails closed to the journal path', async () => {

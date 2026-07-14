@@ -19,7 +19,7 @@ class FakeSessionTailCache implements SessionTailCachePort {
   readonly maxEntriesPerChannel: number;
   epochs = new Map<string, number>();
   rowsByEpochSlot = new Map<string, SessionTailRow[]>();
-  calls = { getTail: 0, appendRow: 0, replaceTail: 0, invalidateChannel: 0, bumpEpoch: 0 };
+  calls = { getTail: 0, getEpoch: 0, appendRow: 0, replaceTail: 0, invalidateChannel: 0, bumpEpoch: 0 };
 
   constructor(maxEntriesPerChannel = 512) {
     this.maxEntriesPerChannel = maxEntriesPerChannel;
@@ -29,8 +29,8 @@ class FakeSessionTailCache implements SessionTailCachePort {
     return JSON.parse(JSON.stringify(row)) as SessionTailRow;
   }
 
-  private slot(channelKey: string): string {
-    return `${channelKey}@e${this.epochs.get(channelKey) ?? 0}`;
+  private slot(channelKey: string, epoch = this.epochs.get(channelKey) ?? 0): string {
+    return `${channelKey}@e${epoch}`;
   }
 
   currentRows(channelKey: string): SessionTailRow[] {
@@ -52,25 +52,31 @@ class FakeSessionTailCache implements SessionTailCachePort {
     return this.currentRows(channelKey);
   }
 
-  async appendRow(channelKey: string, row: SessionTailRow): Promise<void> {
-    this.calls.appendRow += 1;
-    const rows = this.rowsByEpochSlot.get(this.slot(channelKey)) ?? [];
-    rows.push(this.clone(row));
-    rows.sort((left, right) => sessionTailRowId(left) - sessionTailRowId(right));
-    this.rowsByEpochSlot.set(this.slot(channelKey), rows.slice(-this.maxEntriesPerChannel));
+  async getEpoch(channelKey: string): Promise<number> {
+    this.calls.getEpoch += 1;
+    return this.epochs.get(channelKey) ?? 0;
   }
 
-  async replaceTail(channelKey: string, rows: readonly SessionTailRow[]): Promise<void> {
+  async appendRow(channelKey: string, epoch: number, row: SessionTailRow): Promise<void> {
+    this.calls.appendRow += 1;
+    const slot = this.slot(channelKey, epoch);
+    const rows = this.rowsByEpochSlot.get(slot) ?? [];
+    rows.push(this.clone(row));
+    rows.sort((left, right) => sessionTailRowId(left) - sessionTailRowId(right));
+    this.rowsByEpochSlot.set(slot, rows.slice(-this.maxEntriesPerChannel));
+  }
+
+  async replaceTail(channelKey: string, epoch: number, rows: readonly SessionTailRow[]): Promise<void> {
     this.calls.replaceTail += 1;
     this.rowsByEpochSlot.set(
-      this.slot(channelKey),
+      this.slot(channelKey, epoch),
       rows.slice(-this.maxEntriesPerChannel).map(row => this.clone(row)),
     );
   }
 
-  async invalidateChannel(channelKey: string): Promise<void> {
+  async invalidateChannel(channelKey: string, epoch: number): Promise<void> {
     this.calls.invalidateChannel += 1;
-    this.rowsByEpochSlot.delete(this.slot(channelKey));
+    this.rowsByEpochSlot.delete(this.slot(channelKey, epoch));
   }
 
   async bumpEpoch(channelKey: string): Promise<number> {

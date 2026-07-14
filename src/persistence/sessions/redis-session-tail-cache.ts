@@ -23,9 +23,12 @@ const log = createComponentLogger('RedisSessionTailCache');
  *   SessionTailRow JSON (no `_hmac`).
  *
  * Because the tail key embeds the epoch, readers resolve the current epoch
- * (one GET alongside the range read) and a bumped epoch makes every
- * pre-rewrite row structurally unreadable in every process: the new-epoch key
- * is empty, which is a miss + full repopulation at the current epoch. Stale
+ * (GET before the range read, re-GET after it — a changed epoch is a miss)
+ * and a bumped epoch makes every pre-rewrite row structurally unreadable in
+ * every process: the new-epoch key is empty, which is a miss + full
+ * repopulation at the current epoch. Writers pass the epoch they CAPTURED
+ * when they captured their data (never resolved at write-execution time), so
+ * a delayed write can only ever land under an already-superseded key. Stale
  * epoch keys are DELed on bump and additionally expire via TTL so leaked
  * keys (a straggler write racing a bump) are garbage collected.
  *
@@ -112,7 +115,7 @@ export class RedisSessionTailCache implements SessionTailCachePort {
   }
 
   /** Current epoch for a channel; a missing key reads as epoch 0. */
-  private async readEpoch(channelKey: string): Promise<number> {
+  async getEpoch(channelKey: string): Promise<number> {
     const reply = await this.send(['GET', this.buildEpochKey(channelKey)]);
     if (reply === null || reply === undefined) return 0;
     if (typeof reply !== 'string' || !/^\d+$/.test(reply)) {
@@ -122,12 +125,19 @@ export class RedisSessionTailCache implements SessionTailCachePort {
   }
 
   async getTail(channelKey: string): Promise<SessionTailRow[]> {
-    const epoch = await this.readEpoch(channelKey);
+    const epoch = await this.getEpoch(channelKey);
     const reply = await this.send(['ZRANGE', this.buildTailKey(channelKey, epoch), '0', '-1']);
     if (reply === null || reply === undefined) return [];
     if (!Array.isArray(reply)) {
       throw new Error('Redis session tail ZRANGE returned a non-array reply');
     }
+    // Double-read validation: GET epoch + ZRANGE is a TOCTOU pair. If a
+    // rewrite fence (epoch bump) landed between the two, the rows above came
+    // from a superseded epoch and may contain pre-rewrite content. Re-resolve
+    // the epoch and treat any change as a miss (empty window) — the caller
+    // degrades to the journal path and repopulates at the current epoch.
+    const epochAfterRead = await this.getEpoch(channelKey);
+    if (epochAfterRead !== epoch) return [];
     return reply.map((member) => {
       if (typeof member !== 'string') {
         throw new Error('Redis session tail ZRANGE returned a non-string member');
@@ -136,16 +146,14 @@ export class RedisSessionTailCache implements SessionTailCachePort {
     });
   }
 
-  async appendRow(channelKey: string, row: SessionTailRow): Promise<void> {
-    const epoch = await this.readEpoch(channelKey);
+  async appendRow(channelKey: string, epoch: number, row: SessionTailRow): Promise<void> {
     const key = this.buildTailKey(channelKey, epoch);
     await this.send(['ZADD', key, String(sessionTailRowId(row)), serializeSessionTailRow(row)]);
     await this.send(['ZREMRANGEBYRANK', key, '0', String(-(this.maxEntriesPerChannel + 1))]);
     await this.send(['PEXPIRE', key, String(SESSION_TAIL_KEY_TTL_MS)]);
   }
 
-  async replaceTail(channelKey: string, rows: readonly SessionTailRow[]): Promise<void> {
-    const epoch = await this.readEpoch(channelKey);
+  async replaceTail(channelKey: string, epoch: number, rows: readonly SessionTailRow[]): Promise<void> {
     const key = this.buildTailKey(channelKey, epoch);
     await this.send(['DEL', key]);
     const bounded = rows.slice(-this.maxEntriesPerChannel);
@@ -158,8 +166,7 @@ export class RedisSessionTailCache implements SessionTailCachePort {
     await this.send(['PEXPIRE', key, String(SESSION_TAIL_KEY_TTL_MS)]);
   }
 
-  async invalidateChannel(channelKey: string): Promise<void> {
-    const epoch = await this.readEpoch(channelKey);
+  async invalidateChannel(channelKey: string, epoch: number): Promise<void> {
     await this.send(['DEL', this.buildTailKey(channelKey, epoch)]);
   }
 

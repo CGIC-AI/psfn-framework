@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { CogSecEventStore, CogSecAction } from '../../core/cogsec/events.js';
@@ -256,6 +256,7 @@ export class SessionStore implements TranscriptSearchPort {
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private channelIndexFingerprint: string | null = null;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
@@ -298,6 +299,30 @@ export class SessionStore implements TranscriptSearchPort {
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
     this.backfillTranscriptProjectionFromDisk();
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
+  }
+  private fingerprintChannelIndex(): string | null {
+    try {
+      const stats = statSync(this.channelIndexPath);
+      return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(':');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  private refreshChannelIndexFromDisk(): void {
+    const observed = this.fingerprintChannelIndex();
+    if (observed === this.channelIndexFingerprint) return;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refreshed = new Map<string, ChannelIndexEntry>();
+      loadChannelIndex(this.channelIndexPath, refreshed);
+      const afterRead = this.fingerprintChannelIndex();
+      if (afterRead !== observed && attempt === 0) continue;
+      this.channelIndex = refreshed;
+      this.channelIndexFingerprint = afterRead;
+      return;
+    }
   }
   private ensureChannelIndexEntry(sessionId: string, channelId: string, filePath: string): ChannelIndexEntry {
     return ensureChannelIndexEntry({
@@ -318,6 +343,7 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
     upsertChannelIndex(channelId, entry, this.channelIndexPath, this.channelIndex);
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
   }
   private resolveSessionId(lookupKey: string): string | null {
     return resolvePrimarySessionId(lookupKey, this.channelIndex);
@@ -530,11 +556,13 @@ export class SessionStore implements TranscriptSearchPort {
     filePath: string,
     beforeId: number,
     limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
     return this.journalRuntime.readEntriesBefore(
       this.journalRuntime.openArchive(channelId, filePath),
       beforeId,
       limit,
+      tombstones,
     );
   }
   private fingerprintArchive(cache: ChannelCache): string | null {
@@ -813,6 +841,7 @@ export class SessionStore implements TranscriptSearchPort {
     if (cache.fullyLoaded) return;
     const previousFingerprint = this.buildRecentEntriesFingerprint(cache);
     cache.activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
+    cache.turnTombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
     cache.nextId = (normalizeOptionalNonNegativeNumber(indexEntry.maxId) ?? 0) + 1;
     cache.lastHmac = indexEntry.lastHmac ?? null;
     cache.lastExtractionCoveredUpTo = normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0;
@@ -1015,6 +1044,7 @@ export class SessionStore implements TranscriptSearchPort {
     this.backfillTranscriptProjectionFromDisk();
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
     if (limit <= 0) return [];
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
@@ -1098,6 +1128,7 @@ export class SessionStore implements TranscriptSearchPort {
     return entries[entries.length - 1];
   }
   getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
     if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
     const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
     const normalizedLimit = Math.max(0, Math.floor(limit));
@@ -1122,9 +1153,11 @@ export class SessionStore implements TranscriptSearchPort {
     if (cached) this.syncLightweightCacheFromIndexEntry(cached, indexEntry);
     if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) return [];
 
-    // Active tombstones require global turn state; preserve the existing
-    // fail-closed projection by replaying the archive before slicing.
-    if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
+    const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
+    const indexedTurnTombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
+    // Legacy/incomplete tombstone metadata cannot safely drive a bounded
+    // privacy filter. Fall back to canonical replay only for that stale shape.
+    if (activeTurnTombstoneCount > 0 && indexedTurnTombstones.size !== activeTurnTombstoneCount) {
       const full = this.ensureChannelFullyLoaded(channelId);
       if (!full) return [];
       const eligible = full.entries.filter(entry => entry.id < normalizedBeforeId);
@@ -1136,6 +1169,7 @@ export class SessionStore implements TranscriptSearchPort {
       resolved.filePath,
       normalizedBeforeId,
       normalizedLimit,
+      indexedTurnTombstones,
     );
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
@@ -1434,6 +1468,7 @@ export class SessionStore implements TranscriptSearchPort {
     return new Set(ids);
   }
   count(channelId: string): number {
+    this.refreshChannelIndexFromDisk();
     let cached = this.getLoadedCache(channelId);
     // Frozen fullyLoaded caches must not serve counts across a sibling
     // process's journal rewrite (same fingerprint gate as entry reads).
@@ -1447,6 +1482,7 @@ export class SessionStore implements TranscriptSearchPort {
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
+    this.refreshChannelIndexFromDisk();
     // Compaction projection still requires canonical full-archive replay.
     // Garden's older-page requests use messagesOnly and skip this method; a
     // bounded compaction index belongs with the future L0 segment writer/index
@@ -1455,6 +1491,7 @@ export class SessionStore implements TranscriptSearchPort {
     return cache ? [...cache.compactions] : [];
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
+    this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     let cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     // Same fingerprint gate as count(): a frozen fullyLoaded cache must not

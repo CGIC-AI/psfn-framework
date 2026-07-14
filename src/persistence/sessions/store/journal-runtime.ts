@@ -463,11 +463,22 @@ export class SessionJournalRuntime {
     archive: SessionArchiveHandle,
     beforeId: number,
     limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
+    const boundedMessageLimit = tombstones.size > 0
+      ? Math.max(limit * 4, limit + tombstones.size * 4)
+      : limit;
     const window = this.archivePort.readJournalEntriesBefore(archive, {
       beforeId,
-      messageLimit: limit,
+      messageLimit: boundedMessageLimit,
       includeBoundaryEntry: true,
+      ...(this.integrityProvider
+        ? {
+          trustSeekEntry: (entry: JournalEntry, previousHmac: string | null): boolean => (
+            this.integrityProvider?.verify(entry, previousHmac).verified === true
+          ),
+        }
+        : {}),
     });
     if (window.quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(
@@ -485,7 +496,7 @@ export class SessionJournalRuntime {
     }
     if (messageIndexes.length === 0) return [];
 
-    const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - limit)];
+    const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - boundedMessageLimit)];
     let previousHmacCandidates: Array<string | null> = [null];
     if (oldestMessageIndex > 0) {
       const boundaryEntry = window.entries[oldestMessageIndex - 1];
@@ -514,6 +525,7 @@ export class SessionJournalRuntime {
       return eligible.length <= limit ? eligible : eligible.slice(-limit);
     }
 
-    return messages.length <= limit ? messages : messages.slice(-limit);
+    const visibleMessages = applyTurnTombstonesToSessionEntries(messages, tombstones);
+    return visibleMessages.length <= limit ? visibleMessages : visibleMessages.slice(-limit);
   }
 }

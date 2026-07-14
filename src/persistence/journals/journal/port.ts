@@ -1,4 +1,4 @@
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { buildMessageJournalEntry } from './entries.js';
@@ -15,6 +15,7 @@ import type {
 export type { JournalFileMetadata } from './types.js';
 import {
   appendJournalEntry,
+  fingerprintJournalArchive,
   quarantineSidecarPath,
   readJournalFile,
   readJournalFirstEntry,
@@ -157,14 +158,7 @@ export function createFilesystemSessionArchivePort(
     fingerprintArchive: (handle) => {
       const { filePath } = requireFilesystemHandle(handle);
       try {
-        const stats = statSync(filePath);
-        return [
-          stats.dev,
-          stats.ino,
-          stats.size,
-          stats.mtimeMs,
-          stats.ctimeMs,
-        ].join(':');
+        return fingerprintJournalArchive(filePath);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') return null;

@@ -4,6 +4,7 @@ export {
 
 export {
   appendJournalEntry,
+  fingerprintJournalArchive,
   parseJournalText,
   persistQuarantinedEntries,
   quarantineSidecarPath,

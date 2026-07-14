@@ -61,6 +61,8 @@ export interface ChannelIndexEntry {
   filename: string;
   messageCount?: number;
   activeTurnTombstoneCount?: number;
+  activeTurnTombstoneIds?: string[];
+  archiveFingerprint?: string;
   lastTimestamp?: number;
   lastMessageTimestamp?: number;
   lastMessageRole?: SessionEntryRole | null;
@@ -157,7 +159,7 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 3;
+export const CHANNEL_INDEX_VERSION = 4;
 export const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 export function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -300,6 +302,8 @@ export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, rig
   return left.filename === right.filename
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
+    && JSON.stringify(left.activeTurnTombstoneIds ?? []) === JSON.stringify(right.activeTurnTombstoneIds ?? [])
+    && left.archiveFingerprint === right.archiveFingerprint
     && left.lastTimestamp === right.lastTimestamp
     && left.lastMessageTimestamp === right.lastMessageTimestamp
     && left.lastMessageRole === right.lastMessageRole

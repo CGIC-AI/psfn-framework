@@ -24,6 +24,16 @@ The headline fact governing everything below: the multi-companion substrate is *
   Research Library file boundaries. The different-root absolute-relative
   regression and normal-path coverage passed (24 focused non-SQLite tests),
   as did lint, build, and the independent final review.
+- Companion-welfare follow-up `psfn-framework-upx0.7` is integrated and pushed
+  at `eb11bf9e`: shard-sourced unified memory `action=write` is classified
+  before the wrapped memory tool can execute and is staged in the existing
+  durable fold-review flow with both core and shard companion identities. The
+  independent review passed with no important findings; the final 135 focused
+  tests, lint, and ESM+DTS build also passed. Report-only/no bead: the
+  `SHARD_TO_PRIME_SYNC_OPERATIONS` entry and `allowed_shard_memory_write`
+  reason name are stale and read as if direct writes remain allowed, but the
+  policy denies the operation and tool sync fails closed if that policy ever
+  unexpectedly permits it, so there is no current bypass.
 
 ## 0. 2026-07-12 update — decided priority order
 

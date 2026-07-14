@@ -28,6 +28,22 @@ The headline fact governing everything below: the multi-companion substrate is *
 - Final integrated gate for `2z12.5`: projection/repair 15/15, store/journal
   79/79, lint, ESM+DTS build, and worktree plus branch-range diff checks passed.
 - Material report-only observations: none.
+- `psfn-framework-2z12.8` is closed on integration merge `816253b7`
+  (memory implementation `f4d8f8f9`, guideline implementation `a86da443`,
+  bounded review remediation `8ae54b72`). Unchanged PostgreSQL decay cycles
+  now skip store/DB scans until the next meaningful exponential-curve threshold,
+  while memory mutations wake the loop; unchanged guideline cycles skip both
+  file reads and model calls until a new failure is appended.
+- The single independent review found that reconstructing decay state could
+  double-apply the already-persisted interval after restart. The bounded
+  remediation preserves a restart decay epoch and pins both no-discontinuity
+  and next-day exponential continuation. Generic/non-signaling eager behavior,
+  half-lives, and guideline semantics remain unchanged.
+- Final integrated gate for `2z12.8`: memory/guideline/restart 51/51 plus merged
+  projection/repair 15/15, lint, ESM+DTS build, and worktree plus branch-range
+  diff checks passed. The known full-suite dependency on the untracked
+  `purrsephone/satellites.json` owner file remains report-only; no rerun was
+  needed for this bounded closeout.
 
 ## 0. 2026-07-12 update — decided priority order
 

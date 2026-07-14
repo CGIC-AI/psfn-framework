@@ -154,6 +154,28 @@ describe('ICP initiation source runtime', () => {
     },
   );
 
+  it('stops before consent when live authority is narrowed during preflight', async () => {
+    let enabled = true;
+    const { deps, consent } = dependencies({
+      isExternalCompanionAuthorized: vi.fn(() => enabled),
+      gateway: {
+        companionInitiationPreflight: vi.fn(async () => {
+          enabled = false;
+          return { eligible: true };
+        }),
+        companionIssueInitiationPermit: vi.fn(),
+      },
+    });
+    const runtime = createIcpInitiationSourceRuntime(deps);
+
+    const result = await runtime.submit(request('weighted_thought'));
+
+    expect(result).toMatchObject({ outcome: 'rejected', reasonCode: 'policy_denied' });
+    expect(consent.evaluate).not.toHaveBeenCalled();
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
   it('uses the canonical owner policy for candidate, retry, and permit leases', async () => {
     const nowMs = 1_700_000_000_000;
     const { deps } = dependencies({

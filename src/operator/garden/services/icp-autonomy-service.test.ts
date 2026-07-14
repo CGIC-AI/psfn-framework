@@ -196,6 +196,46 @@ describe('AdminIcpAutonomyDataService', () => {
     expect(order).toEqual(['revoke', 'candidate']);
   });
 
+  it('can cancel a permitted candidate whose permit was already safely revoked by DND', async () => {
+    const order: string[] = [];
+    const shared = sharedStore(order);
+    vi.mocked(shared.getPermitByCandidate).mockResolvedValue({
+      permitId: PERMIT_ID,
+      candidateId: CANDIDATE_ID,
+      conversationId: CONVERSATION_ID,
+      senderCompanionId: LOCAL_ID,
+      recipientCompanionId: PEER_ID,
+      channelId: `companion:${LOCAL_ID}:${PEER_ID}`,
+      provenanceRef: PROVENANCE,
+      issuedAtMs: 1_000,
+      expiresAtMs: 50_000,
+      status: 'revoked',
+      revokedAtMs: 2_000,
+      reasonCode: 'peer_do_not_disturb',
+      revision: 3,
+    });
+    const candidates = candidateStore(candidate('permitted'));
+    vi.mocked(candidates.transitionCandidate).mockImplementation(async input => {
+      order.push('candidate');
+      return { ...candidate('permitted'), status: input.status, revision: 4 };
+    });
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(shared),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 3_000,
+    });
+
+    await expect(service.cancelCandidate({
+      candidateId: CANDIDATE_ID,
+      expectedRevision: 3,
+    })).resolves.toMatchObject({ ok: true, revokedPermitCount: 0 });
+    expect(order).toEqual(['candidate']);
+  });
+
   it('publishes local operator DND through the invalidating store primitive', async () => {
     const shared = sharedStore();
     const service = new AdminIcpAutonomyDataService({

@@ -167,16 +167,21 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
     let revokedPermitCount = 0;
     if (candidate.status === 'permitted') {
       const permit = await projectionStore.shared.getPermitByCandidate(candidate.candidateId);
-      if (!permit || permit.status !== 'issued') {
-        throw new Error('ICP permitted candidate has no revocable issued permit');
+      if (!permit) {
+        throw new Error('ICP permitted candidate has no durable permit');
       }
-      await projectionStore.shared.revokePermit(
-        permit.permitId,
-        permit.revision,
-        this.now(),
-        'operator_cancelled',
-      );
-      revokedPermitCount = 1;
+      if (permit.status === 'consumed') {
+        throw new Error('ICP permitted candidate permit was already consumed');
+      }
+      if (permit.status === 'issued') {
+        await projectionStore.shared.revokePermit(
+          permit.permitId,
+          permit.revision,
+          this.now(),
+          'operator_cancelled',
+        );
+        revokedPermitCount = 1;
+      }
     }
     await candidateStore.transitionCandidate({
       candidateId: candidate.candidateId,

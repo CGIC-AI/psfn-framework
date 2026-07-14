@@ -42,6 +42,10 @@ runtime:
   mode: split
   layoutMode: production
   nodeEnv: production
+  # IANA timezone for the companion's clock, scheduler wall-clock windows, and
+  # temporal prompt signals. settings.json activeTimezone (when set) still wins
+  # over this env-level value at runtime.
+  timezone: America/New_York
   systemDataDir: /app/system-data
   companionDataDir: /app/companion-data
   workspacePath: /app/workspace

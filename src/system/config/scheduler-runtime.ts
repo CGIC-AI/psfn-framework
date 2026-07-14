@@ -42,6 +42,7 @@ export function resolveRuntimeSchedulerConfig(
     socialGraphBuilder: { ...persisted.socialGraphBuilder },
     temporalWakeup: {
       enabled: persisted.temporalWakeup.enabled,
+      activeChannelLookbackHours: persisted.temporalWakeup.activeChannelLookbackHours,
       morningWake: { ...persisted.temporalWakeup.morningWake },
       idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
       wakeSummary: { ...persisted.temporalWakeup.wakeSummary },

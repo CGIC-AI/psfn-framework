@@ -69,6 +69,6 @@ Memory context note:
 
 <relevant_memories>
 Relevant memories for this person:
-- [semantic] Offsite venue shortlist for the townsquare group
-- [semantic] Alice raise negotiation target is 12 percent
+- [semantic] Offsite venue shortlist for the townsquare group (today)
+- [semantic] Alice raise negotiation target is 12 percent (today)
 </relevant_memories>

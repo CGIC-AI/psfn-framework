@@ -39,6 +39,18 @@ import {
 import { resolveSessionEntryRoleEnvelopePreview } from './turn-provenance.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 
+// Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
+// from live clocks; strip them so content assertions stay deterministic.
+// Exact stamp semantics are pinned in context-support.test.ts.
+const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
+function stripHistoryStamps(content: string): string {
+  return content
+    .split('\n')
+    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .join('\n');
+}
+
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
     primaryModel: 'test-model',
@@ -238,7 +250,7 @@ describe('SessionManager', () => {
   it('buildContext preserves group speaker labels when the current channel is explicitly not a DM', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
-    mgr.recordUserMessage('discord:guild:room', 'first group message', 'vega-id', 'Vega');
+    mgr.recordUserMessage('discord:guild:room', 'first group message', 'asha-id', 'Asha');
     mgr.recordUserMessage('discord:guild:room', 'second group message', 'iku-id', 'Iku');
 
     const ctx = await mgr.buildContext(
@@ -251,8 +263,9 @@ describe('SessionManager', () => {
     );
 
     expect(ctx.messages).toHaveLength(1);
-    expect(ctx.messages[0]?.content).toBe([
-      'Vega (discord:vega-id): first group message',
+    expect(ctx.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(stripHistoryStamps(ctx.messages[0]?.content ?? '')).toBe([
+      'Asha (discord:asha-id): first group message',
       'Iku (discord:iku-id): second group message',
     ].join('\n'));
   });
@@ -781,20 +794,20 @@ describe('SessionManager', () => {
     expect(ctx.messages).toHaveLength(2);
     expect(ctx.messages[0]).toMatchObject({
       role: 'user',
-      content: 'Search for the latest log',
       provenance: {
         kind: 'user_direct',
         safeAsPartnerSpeech: true,
       },
     });
+    expect(stripHistoryStamps(ctx.messages[0]?.content ?? '')).toBe('Search for the latest log');
     expect(ctx.messages[1]).toMatchObject({
       role: 'assistant',
-      content: 'I found the relevant logs.',
       provenance: {
         kind: 'companion_direct',
         safeAsPartnerSpeech: false,
       },
     });
+    expect(stripHistoryStamps(ctx.messages[1]?.content ?? '')).toBe('I found the relevant logs.');
     expect(ctx.messages.map(message => message.content).join('\n')).not.toContain('[Tool result: search_logs]');
   });
 
@@ -849,14 +862,16 @@ describe('SessionManager', () => {
     const context = await mgr.buildContext('api:role-envelope-preview', 'System prompt', '');
     const assembledContext = [context.systemPrompt, ...context.messages.map(message => message.content)].join('\n');
 
-    expect(context.messages).toEqual(expect.arrayContaining([expect.objectContaining({
+    const previewMessage = context.messages.find(
+      message => stripHistoryStamps(message.content) === 'Queued a quiet follow-up reminder.',
+    );
+    expect(previewMessage).toMatchObject({
       role: 'assistant',
-      content: 'Queued a quiet follow-up reminder.',
-      provenance: expect.objectContaining({
+      provenance: {
         kind: 'companion_direct',
         safeAsPartnerSpeech: false,
-      }),
-    })]));
+      },
+    });
     expect(assembledContext).not.toContain(hiddenBody);
 
     await expect(searchableStore.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
@@ -1454,7 +1469,7 @@ describe('SessionManager', () => {
         temporalTurn,
       );
 
-      expect(snapshotContext.messages.map(message => message.content)).toEqual([
+      expect(snapshotContext.messages.map(message => stripHistoryStamps(message.content))).toEqual([
         'same-day image question before midnight',
         'same-day answer before midnight',
       ]);
@@ -1739,7 +1754,7 @@ describe('SessionManager', () => {
       );
 
       expect(context.messages).toHaveLength(1);
-      expect(context.messages[0]?.content).toBe('what time is it?');
+      expect(stripHistoryStamps(context.messages[0]?.content ?? '')).toBe('what time is it?');
       expect(JSON.stringify(context.messages)).not.toContain('I mentioned a deadline a week ago.');
       expect(JSON.stringify(context.messages)).not.toContain('We reviewed that deadline a week ago.');
     } finally {
@@ -2890,28 +2905,31 @@ describe('SessionManager', () => {
     expect(context.messages).toHaveLength(3);
     expect(context.messages[0]).toMatchObject({
       role: 'user',
-      content: 'Please keep tomorrow afternoon in view.',
       provenance: {
         kind: 'user_direct',
         safeAsPartnerSpeech: true,
       },
     });
+    expect(stripHistoryStamps(context.messages[0]?.content ?? ''))
+      .toBe('Please keep tomorrow afternoon in view.');
     expect(context.messages[1]).toMatchObject({
       role: 'system',
-      content: '[SYSTEM: Quiet Planner] Queued a private follow-up reminder.',
       provenance: {
         kind: 'system_note',
         safeAsPartnerSpeech: false,
       },
     });
+    expect(stripHistoryStamps(context.messages[1]?.content ?? ''))
+      .toBe('[SYSTEM: Quiet Planner] Queued a private follow-up reminder.');
     expect(context.messages[2]).toMatchObject({
       role: 'assistant',
-      content: 'I will keep an eye on tomorrow afternoon.',
       provenance: {
         kind: 'companion_direct',
         safeAsPartnerSpeech: false,
       },
     });
+    expect(stripHistoryStamps(context.messages[2]?.content ?? ''))
+      .toBe('I will keep an eye on tomorrow afternoon.');
   });
 
   it('getRecentMessages filters internal system notes while persistence retains them', () => {

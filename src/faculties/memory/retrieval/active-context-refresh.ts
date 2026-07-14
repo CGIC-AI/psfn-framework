@@ -277,6 +277,9 @@ function applyActiveMemoryContextRefresh(
     episodicChains,
     refreshSerial,
     maxEntries,
+    ...(target.fingerprint
+      ? { completedRefreshFingerprint: { ...target.fingerprint } }
+      : {}),
   });
   void deps.eventBus?.emit('memory.active_context.refresh', {
     channelId: target.request.channelId,

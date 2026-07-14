@@ -4,6 +4,7 @@ import type {
   LLMProviderPort,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
+import { createHash } from 'node:crypto';
 import type {
   ContactProfileArtifact,
   MemoryStorePort,
@@ -64,6 +65,7 @@ import {
 import {
   cloneActiveMemorySnapshot,
   type ActiveMemoryRefreshLoop,
+  type ActiveMemoryRefreshFingerprint,
   type ActiveMemoryRefreshTarget,
   type ActiveMemoryState,
 } from './retrieval/active-state.js';
@@ -196,6 +198,16 @@ export interface MemoryRetrieverConfig {
 
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
   return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
+}
+
+function activeMemoryRefreshFingerprintsEqual(
+  left: ActiveMemoryRefreshFingerprint | undefined,
+  right: ActiveMemoryRefreshFingerprint | undefined,
+): boolean {
+  return left !== undefined
+    && right !== undefined
+    && left.contextHash === right.contextHash
+    && left.corpusVersion === right.corpusVersion;
 }
 
 type ProactiveRecallRuntimeConfig = SubstrateConfig & {
@@ -334,16 +346,24 @@ export class MemoryRetriever implements MemoryProvider {
 
   refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
     const identity = resolveActiveMemoryContextIdentity(request);
+    const fingerprint = this.resolveActiveMemoryRefreshFingerprint(request.contextText);
     const existing = this.activeMemoryRefreshLoops.get(identity.key);
     if (existing) {
-      existing.latestRequest = request;
+      if (
+        activeMemoryRefreshFingerprintsEqual(existing.runningFingerprint, fingerprint)
+        || activeMemoryRefreshFingerprintsEqual(existing.latestWork?.fingerprint, fingerprint)
+      ) {
+        return existing.running;
+      }
+      existing.latestWork = { request, fingerprint };
       return existing.running;
     }
 
     const loop: ActiveMemoryRefreshLoop = {
+      ...(fingerprint ? { runningFingerprint: fingerprint } : {}),
       running: Promise.resolve(null),
     };
-    loop.running = this.runActiveMemoryRefreshLoop(identity.key, request)
+    loop.running = this.runActiveMemoryRefreshLoop(identity.key, { request, fingerprint })
       .finally(() => {
         if (this.activeMemoryRefreshLoops.get(identity.key) === loop) {
           this.activeMemoryRefreshLoops.delete(identity.key);
@@ -355,16 +375,23 @@ export class MemoryRetriever implements MemoryProvider {
 
   private async runActiveMemoryRefreshLoop(
     key: string,
-    initialRequest: ActiveMemoryContextRequest,
+    initialWork: {
+      request: ActiveMemoryContextRequest;
+      fingerprint?: ActiveMemoryRefreshFingerprint;
+    },
   ): Promise<ActiveMemoryContextSnapshot | null> {
-    let nextRequest: ActiveMemoryContextRequest | undefined = initialRequest;
+    let nextWork: typeof initialWork | undefined = initialWork;
     let latestSnapshot: ActiveMemoryContextSnapshot | null = null;
-    while (nextRequest) {
-      latestSnapshot = await this.performActiveMemoryRefresh(nextRequest);
+    while (nextWork) {
+      const activeLoop = this.activeMemoryRefreshLoops.get(key);
+      if (activeLoop) {
+        activeLoop.runningFingerprint = nextWork.fingerprint;
+      }
+      latestSnapshot = await this.performActiveMemoryRefresh(nextWork.request, nextWork.fingerprint);
       const loop = this.activeMemoryRefreshLoops.get(key);
-      nextRequest = loop?.latestRequest;
+      nextWork = loop?.latestWork;
       if (loop) {
-        delete loop.latestRequest;
+        delete loop.latestWork;
       }
     }
     return latestSnapshot;
@@ -372,8 +399,16 @@ export class MemoryRetriever implements MemoryProvider {
 
   private async performActiveMemoryRefresh(
     request: ActiveMemoryContextRequest,
+    fingerprint: ActiveMemoryRefreshFingerprint | undefined,
   ): Promise<ActiveMemoryContextSnapshot | null> {
     const identity = resolveActiveMemoryContextIdentity(request);
+    const existing = this.activeMemoryContexts.get(identity.key);
+    if (
+      existing?.snapshot.refreshStatus === 'ready'
+      && activeMemoryRefreshFingerprintsEqual(existing.completedRefreshFingerprint, fingerprint)
+    ) {
+      return cloneActiveMemorySnapshot(existing.snapshot);
+    }
     const startedAt = Date.now();
     this.markActiveMemoryRefreshing(identity.key, startedAt);
 
@@ -409,12 +444,26 @@ export class MemoryRetriever implements MemoryProvider {
           request,
           startedAt,
           identity,
+          fingerprint,
         },
       );
       return cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
     } catch (error) {
       return this.markActiveMemoryDegraded(identity.key, request.channelId, startedAt, error);
     }
+  }
+
+  private resolveActiveMemoryRefreshFingerprint(
+    contextText: string,
+  ): ActiveMemoryRefreshFingerprint | undefined {
+    const corpusVersion = this.memoryStore.getRetrievalCorpusVersion?.();
+    if (!Number.isSafeInteger(corpusVersion) || (corpusVersion ?? -1) < 0) {
+      return undefined;
+    }
+    return {
+      contextHash: createHash('sha256').update(contextText, 'utf8').digest('hex'),
+      corpusVersion,
+    };
   }
 
   private markActiveMemoryRefreshing(key: string, startedAt: number): void {

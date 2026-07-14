@@ -362,6 +362,8 @@ type Awaitable<T> = T | Promise<T>;
 interface MemoryStorePortBackend extends ScratchpadProvider {
   /** Monotonic in-process signal for mutations that can change salience decay work. */
   getSalienceMaintenanceRevision?(): number;
+  /** Monotonic in-process signal for mutations that can change retrieval output. */
+  getRetrievalCorpusVersion?(): number;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
   runInTransaction<T>(handler: () => T): Awaitable<T>;
@@ -455,6 +457,8 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
 export interface MemoryStorePort extends ScratchpadProvider {
   /** Postgres exposes this to let decay skip unchanged in-memory snapshots. */
   getSalienceMaintenanceRevision?(): number;
+  /** Postgres exposes this to let active retrieval skip an unchanged corpus. */
+  getRetrievalCorpusVersion?(): number;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
   runInTransaction<T>(handler: () => T): Promise<T>;
@@ -547,6 +551,9 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
   return {
     ...(store.getSalienceMaintenanceRevision
       ? { getSalienceMaintenanceRevision: () => store.getSalienceMaintenanceRevision!() }
+      : {}),
+    ...(store.getRetrievalCorpusVersion
+      ? { getRetrievalCorpusVersion: () => store.getRetrievalCorpusVersion!() }
       : {}),
     insertMemory: async (memory, embedding) => {
       await store.insertMemory(memory, embedding);

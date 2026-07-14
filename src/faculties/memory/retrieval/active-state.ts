@@ -40,16 +40,27 @@ export interface ActiveMemoryState {
   episodicChains: EpisodicRetrievalChain[];
   refreshSerial: number;
   maxEntries: number;
+  completedRefreshFingerprint?: ActiveMemoryRefreshFingerprint;
+}
+
+export interface ActiveMemoryRefreshFingerprint {
+  contextHash: string;
+  corpusVersion: number;
 }
 
 export interface ActiveMemoryRefreshTarget {
   request: ActiveMemoryContextRequest;
   startedAt: number;
   identity: ReturnType<typeof resolveActiveMemoryContextIdentity>;
+  fingerprint?: ActiveMemoryRefreshFingerprint;
 }
 
 export interface ActiveMemoryRefreshLoop {
-  latestRequest?: ActiveMemoryContextRequest;
+  runningFingerprint?: ActiveMemoryRefreshFingerprint;
+  latestWork?: {
+    request: ActiveMemoryContextRequest;
+    fingerprint?: ActiveMemoryRefreshFingerprint;
+  };
   running: Promise<ActiveMemoryContextSnapshot | null>;
 }
 

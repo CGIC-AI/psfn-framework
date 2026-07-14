@@ -34,6 +34,19 @@ The headline fact governing everything below: the multi-companion substrate is *
   reason name are stale and read as if direct writes remain allowed, but the
   policy denies the operation and tool sync fails closed if that policy ever
   unexpectedly permits it, so there is no current bypass.
+- Credential-boundary follow-up `psfn-framework-upx0.6` is integrated and
+  pushed at `eb5ba082` (implementation `73fb7646`, review remediation
+  `8cdc6f5d`). The local split launcher now gives the agent a one-shot inherited
+  descriptor instead of the raw Postgres DSN in its environment; kube/Helm
+  agents receive only a Secret-mounted path; and `CoreSubstrateConfig` strips
+  the credential before core construction. The single independent review's
+  mandatory recovery-chart digest finding was remediated and its final check
+  passed. Integrated validation passed 75 credential/startup tests, Helm and
+  Kustomize deployment gates, startup/settings/repository-hygiene verifiers,
+  lint, ESM+DTS build, and the prior shard/path regression sets. Report-only/no
+  bead: explicitly setting projected Secret `defaultMode: 0440` would document
+  least-privilege intent more clearly than relying on Kubernetes defaults plus
+  pod `fsGroup: 999`; no current multi-user pod exposure was identified.
 
 ## 0. 2026-07-12 update — decided priority order
 

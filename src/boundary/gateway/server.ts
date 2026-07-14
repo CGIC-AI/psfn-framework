@@ -276,6 +276,15 @@ export class GatewayServer {
       );
     }
     if (this.multiCompanion.enabled) {
+      const missingWorkspaceRoots = this.multiCompanion.fleetCompanionIds.filter(
+        companionId => !this.multiCompanion.personalWorkspaceByCompanionId[companionId]?.trim(),
+      );
+      if (missingWorkspaceRoots.length > 0) {
+        throw new Error(
+          'Multi-companion gateway requires one resolved Personal Workspace per fleet companion; '
+          + `missing: ${missingWorkspaceRoots.join(', ')}`,
+        );
+      }
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
         discordAccounts: this.multiCompanion.discordAccounts,
@@ -386,6 +395,8 @@ export class GatewayServer {
   }
 
   private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
+    const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
+    const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -398,8 +409,9 @@ export class GatewayServer {
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
       ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
       ...(this.options.visionIntake ? { visionIntake: this.options.visionIntake } : {}),
-      policyConfig: this.options.policyConfig,
-      workspacePath: this.options.policyConfig.workspacePath,
+      get policyConfig() { return resolvePolicyConfig(); },
+      get workspacePath() { return resolveWorkspacePath(); },
+      personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
@@ -458,6 +470,44 @@ export class GatewayServer {
       await this.dispatchCompanionEventPublish(params);
       return null;
     });
+  }
+
+  private resolveConnectionWorkspacePath(conn: GatewayRpcConnection): string {
+    if (!this.multiCompanion.enabled) {
+      return this.options.policyConfig.workspacePath;
+    }
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    if (!companionId) {
+      throw new Error('Multi-companion workspace access requires an authenticated companion connection');
+    }
+    const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
+    if (!workspacePath?.trim()) {
+      throw new Error(`No Personal Workspace is resolved for companion ${companionId}`);
+    }
+    return workspacePath;
+  }
+
+  private resolveConnectionPolicyConfig(conn: GatewayRpcConnection): PolicyConfig {
+    if (!this.multiCompanion.enabled) {
+      return this.options.policyConfig;
+    }
+    // Method registration inspects policy feature flags before the connection
+    // can authenticate. Request dispatch still rejects every non-identify RPC
+    // from an unidentified connection; return the base config only for that
+    // registration phase and bind the personal policy after identify.
+    if (!this.connectionStatuses.get(conn)?.companionId) {
+      return this.options.policyConfig;
+    }
+    const workspacePath = this.resolveConnectionWorkspacePath(conn);
+    const { fullCodebaseReadRoot: _ignoredReadRoot, ...basePolicy } = this.options.policyConfig;
+    return {
+      ...basePolicy,
+      workspacePath,
+      allowedReadPaths: [workspacePath],
+      ...(basePolicy.shellExec
+        ? { shellExec: { ...basePolicy.shellExec, allowedCwd: [workspacePath] } }
+        : {}),
+    };
   }
 
   /**

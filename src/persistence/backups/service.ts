@@ -738,6 +738,8 @@ export interface FleetBackupCompanionUnit {
   companionDataDir: string;
   /** Absolute path to this companion's session JSONL directory. */
   sessionsDir: string;
+  /** Canonical Personal Workspace captured only in this companion slice. */
+  personalWorkspacePath: string;
   characterCardPath?: string;
   characterCardHistoryPath?: string;
   memoriesJournalPath?: string;
@@ -750,6 +752,8 @@ export interface FleetBackupRunOptions {
   companions: FleetBackupCompanionUnit[];
   /** System-data root captured into the cluster (or group) artifact. */
   systemDataDir: string;
+  /** Governed Shared Companion Workspace captured only in cluster/group artifacts. */
+  sharedWorkspacePath: string;
   /** System-level recovery artifact, captured only by cluster/group units. */
   kubernetesHelm?: KubernetesHelmBackupConfig;
   /** Shared world schema dumped into the cluster artifact. Defaults to `shared`. */
@@ -766,6 +770,8 @@ export interface FleetBackupRunOptions {
    * `groupMode` is set.
    */
   groupCompanionDataDir?: string;
+  /** Canonical workspaces parent captured whole only in group mode. */
+  groupWorkspacesRoot?: string;
   maxRotatingBackups?: number;
   maxWeeklyBackups?: number;
   maxMonthlyBackups?: number;
@@ -841,6 +847,7 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
       systemConfig: 'system-config/ + manifest — system-data owner files',
       helmRecovery: 'helm-recovery/ + manifest when running under Helm — content-bound recovery chart and non-secret release/workload-image descriptor',
       companionTree: 'companion-tree/ — the whole companion-data parent, i.e. every companion\'s files',
+      workspaces: 'workspace-tree/ — the whole fleet workspaces parent (personal slices plus governed shared artifacts)',
       restore: 'pg_restore the whole-database dump into a fresh cluster; unpack companion-tree into companion-data and system-config into system-data',
     };
   }
@@ -849,9 +856,11 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
     companionArtifact: `${FLEET_COMPANIONS_DIR_NAME}/<companionId>/<timestamp>/`,
     companionDatabase: 'database/<db>.<schema>.dump — pg_dump --schema=<postgresSchema> (pure companion slice, restorable into any cluster)',
     companionTree: 'companion-tree/ + manifest, sessions/, notes/, companion/ (character card) — this companion\'s files only',
+    companionWorkspace: 'workspace-tree/ + manifest — exactly this companion\'s Personal Workspace',
     clusterArtifact: `${FLEET_CLUSTER_DIR_NAME}/<timestamp>/`,
     clusterDatabase: 'database/<db>.<sharedSchema>.dump — pg_dump --schema=<sharedSchema> (shared world data)',
     clusterSystemConfig: 'system-config/ + manifest — system-data owner files',
+    clusterSharedWorkspace: 'workspace-tree/ + manifest — governed Shared Companion Workspace only',
     clusterHelmRecovery: 'helm-recovery/ + authenticated contents marker when running under Helm — stored only in the cluster artifact, never companion slices',
     restore: 'restore a companion slice by pg_restore of its schema dump into a target cluster + unpacking companion-tree into companion-data/<companionId>; restore shared+system from the cluster artifact',
   };
@@ -944,12 +953,18 @@ export async function runFleetBackupCycle(
         'Group backup mode requires groupCompanionDataDir (the common companion-data parent root)',
       );
     }
+    const groupWorkspacesRoot = options.groupWorkspacesRoot?.trim();
+    if (!groupWorkspacesRoot) {
+      throw new Error('Group backup mode requires groupWorkspacesRoot');
+    }
     await runUnit(
       { kind: 'group' },
       {
         postgres: basePostgres,
         companionDataDir: groupCompanionDataDir,
         systemDataDir: options.systemDataDir,
+        workspacePath: groupWorkspacesRoot,
+        workspaceProtectedPaths: [groupCompanionDataDir, options.systemDataDir],
         ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_GROUP_DIR_NAME),
@@ -970,6 +985,15 @@ export async function runFleetBackupCycle(
           },
           companionDataDir: companion.companionDataDir,
           sessionsDir: companion.sessionsDir,
+          workspacePath: companion.personalWorkspacePath,
+          workspaceProtectedPaths: [
+            options.systemDataDir,
+            options.sharedWorkspacePath,
+            ...options.companions.map(unit => unit.companionDataDir),
+            ...options.companions
+              .filter(unit => unit.companionId !== companion.companionId)
+              .map(unit => unit.personalWorkspacePath),
+          ],
           ...(companion.characterCardPath ? { characterCardPath: companion.characterCardPath } : {}),
           ...(companion.characterCardHistoryPath ? { characterCardHistoryPath: companion.characterCardHistoryPath } : {}),
           ...(companion.memoriesJournalPath ? { memoriesJournalPath: companion.memoriesJournalPath } : {}),
@@ -987,6 +1011,12 @@ export async function runFleetBackupCycle(
       {
         postgres: { ...basePostgres, schema: sharedSchema },
         systemDataDir: options.systemDataDir,
+        workspacePath: options.sharedWorkspacePath,
+        workspaceProtectedPaths: [
+          options.systemDataDir,
+          ...options.companions.map(unit => unit.companionDataDir),
+          ...options.companions.map(unit => unit.personalWorkspacePath),
+        ],
         ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_CLUSTER_DIR_NAME),

@@ -292,7 +292,13 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
   const companionFleet = rawCompanionFleet
-    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir)
+    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir, [
+      { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
+      { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
+      { label: 'logsDir', path: runtimePathLayout.logsDir },
+      { label: 'tempDir', path: runtimePathLayout.tempDir },
+      { label: 'backupsDir', path: runtimePathLayout.backupsDir },
+    ])
     : undefined;
   const companionRuntimeIdentity = companionFleet
     ? resolveCompanionRuntimeIdentity({
@@ -301,6 +307,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       companionDataDir: configuredCompanionDataDir,
       characterCardPath: configuredCharacterCardPath,
       postgresSchema: configuredPostgresSchema,
+      workspacePath: env.WORKSPACE_PATH,
+      requireWorkspaceBinding: mode !== 'gateway',
     })
     : undefined;
   const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
@@ -352,7 +360,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
-    workspacePath: runtimePathLayout.workspacePath,
+    workspacePath: companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+    ...(companionFleet ? { sharedWorkspacePath: companionFleet.sharedWorkspacePath } : {}),
     dataDir,
     databasePath,
     persistenceBackend,

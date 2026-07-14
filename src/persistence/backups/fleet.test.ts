@@ -125,12 +125,22 @@ function makeCompanion(
 ): FleetBackupCompanionUnit {
   const companionDataDir = join(root, 'companion-data', companionId);
   const sessionsDir = join(companionDataDir, 'state', 'sessions');
+  const personalWorkspacePath = join(root, 'workspaces', 'personal', companionId);
   mkdirSync(sessionsDir, { recursive: true });
   mkdirSync(join(companionDataDir, 'vault'), { recursive: true });
+  mkdirSync(join(personalWorkspacePath, 'journal'), { recursive: true });
   writeFileSync(join(companionDataDir, 'companion.json'), `{"id":"${companionId}"}\n`, 'utf-8');
   writeFileSync(join(companionDataDir, 'vault', 'note.md'), `note for ${companionId}\n`, 'utf-8');
   writeFileSync(join(sessionsDir, 'channel.jsonl'), '{"id":1}\n', 'utf-8');
-  return { companionId, postgresSchema, companionDataDir, sessionsDir };
+  writeFileSync(join(personalWorkspacePath, 'journal', 'personal.md'), `private ${companionId}\n`, 'utf-8');
+  return { companionId, postgresSchema, companionDataDir, sessionsDir, personalWorkspacePath };
+}
+
+function makeSharedWorkspace(root: string): string {
+  const sharedWorkspacePath = join(root, 'workspaces', 'shared');
+  mkdirSync(join(sharedWorkspacePath, 'artifacts'), { recursive: true });
+  writeFileSync(join(sharedWorkspacePath, 'artifacts', 'world.md'), 'shared world\n', 'utf-8');
+  return sharedWorkspacePath;
 }
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
@@ -159,11 +169,13 @@ describe('runFleetBackupCycle', () => {
       makeCompanion(root, COMPANION_A, 'companion_alpha'),
       makeCompanion(root, COMPANION_B, 'companion_beta'),
     ];
+    const sharedWorkspacePath = makeSharedWorkspace(root);
 
     const result = await runFleetBackupCycle({
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary: stubPath },
       companions,
       systemDataDir,
+      sharedWorkspacePath,
       kubernetesHelm,
       backupRootDir,
       now: FIXED_NOW,
@@ -187,6 +199,7 @@ describe('runFleetBackupCycle', () => {
       expect(existsSync(join(artifactDir, 'companion-tree', 'vault', 'note.md'))).toBe(true);
       expect(existsSync(join(artifactDir, 'sessions', 'channel.jsonl'))).toBe(true);
       expect(existsSync(join(artifactDir, 'system-config'))).toBe(false);
+      expect(existsSync(join(artifactDir, 'workspace-tree', 'journal', 'personal.md'))).toBe(true);
       expect(existsSync(join(artifactDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(false);
     }
 
@@ -197,6 +210,7 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(join(clusterDir, 'system-config', 'settings.json'))).toBe(true);
     expect(existsSync(join(clusterDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(clusterDir, 'companion-tree'))).toBe(false);
+    expect(existsSync(join(clusterDir, 'workspace-tree', 'artifacts', 'world.md'))).toBe(true);
 
     // Per-schema dump args: one dump per companion schema + the shared schema.
     const dumped = readFileSync(logPath, 'utf-8').trim().split('\n').map(line => line.split('\t')[0]).sort();
@@ -228,15 +242,18 @@ describe('runFleetBackupCycle', () => {
       makeCompanion(root, COMPANION_A, 'companion_alpha'),
       makeCompanion(root, COMPANION_B, 'companion_beta'),
     ];
+    const sharedWorkspacePath = makeSharedWorkspace(root);
 
     const result = await runFleetBackupCycle({
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary: stubPath },
       companions,
       systemDataDir,
+      sharedWorkspacePath,
       kubernetesHelm,
       backupRootDir,
       groupMode: true,
       groupCompanionDataDir: join(root, 'companion-data'),
+      groupWorkspacesRoot: join(root, 'workspaces'),
       now: FIXED_NOW,
     });
 
@@ -252,6 +269,8 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_A, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_B, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'system-config', 'settings.json'))).toBe(true);
+    expect(existsSync(join(groupDir, 'workspace-tree', 'personal', COMPANION_A, 'journal', 'personal.md'))).toBe(true);
+    expect(existsSync(join(groupDir, 'workspace-tree', 'shared', 'artifacts', 'world.md'))).toBe(true);
     expect(existsSync(join(groupDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
 
     // Exactly one whole-database dump; no per-schema slices.
@@ -271,18 +290,21 @@ describe('runFleetBackupCycle', () => {
     const { stubPath } = writeSchemaLoggingStubPgDump(root);
 
     const good = makeCompanion(root, COMPANION_A, 'companion_alpha');
+    const sharedWorkspacePath = makeSharedWorkspace(root);
     // Second companion's data dir is never created — its tree capture must fail.
     const broken: FleetBackupCompanionUnit = {
       companionId: COMPANION_B,
       postgresSchema: 'companion_beta',
       companionDataDir: join(root, 'companion-data', COMPANION_B),
       sessionsDir: join(root, 'companion-data', COMPANION_B, 'state', 'sessions'),
+      personalWorkspacePath: join(root, 'workspaces', 'personal', COMPANION_B),
     };
 
     await expect(runFleetBackupCycle({
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary: stubPath },
       companions: [good, broken],
       systemDataDir,
+      sharedWorkspacePath,
       backupRootDir,
       now: FIXED_NOW,
     })).rejects.toBeInstanceOf(FleetBackupPartialFailureError);
@@ -305,6 +327,7 @@ describe('runFleetBackupCycle', () => {
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn' },
       companions: [],
       systemDataDir: join(root, 'system-data'),
+      sharedWorkspacePath: join(root, 'workspaces', 'shared'),
       backupRootDir: join(root, 'backups'),
       now: FIXED_NOW,
     })).rejects.toThrow('at least one companion');
@@ -317,6 +340,7 @@ describe('runFleetBackupCycle', () => {
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn' },
       companions: [makeCompanion(root, COMPANION_A, 'companion_alpha')],
       systemDataDir: join(root, 'system-data'),
+      sharedWorkspacePath: makeSharedWorkspace(root),
       backupRootDir: join(root, 'backups'),
       groupMode: true,
       now: FIXED_NOW,

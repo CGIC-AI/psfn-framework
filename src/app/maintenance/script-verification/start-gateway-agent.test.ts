@@ -436,10 +436,12 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).toBe(
         [
           `11111111-1111-4111-8111-111111111111\t${workDir}/alpha\t${workDir}/alpha/card.json\tcompanion_alpha`
+          + `\t${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock\t10061`,
           `22222222-2222-4222-8222-222222222222\t${workDir}/beta\t${workDir}/beta/card.json\tcompanion_beta`
+          + `\t${workDir}/workspaces/personal/22222222-2222-4222-8222-222222222222`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock\t-`,

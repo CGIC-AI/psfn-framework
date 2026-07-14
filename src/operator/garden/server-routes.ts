@@ -149,6 +149,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       subsystemHealthService: deps.services.subsystemHealth ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,
+      sharedWorkspaceService: deps.services.sharedWorkspace ?? null,
       intakeQuarantineService: deps.services.intakeQuarantine,
       driftReviewService: deps.services.driftReviews,
       identityService: deps.services.identity,

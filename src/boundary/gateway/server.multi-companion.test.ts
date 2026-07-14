@@ -12,6 +12,9 @@ import {
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -219,17 +222,25 @@ function multiCompanion(
     fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
     channelRouting,
     discordAccounts,
+    personalWorkspaceByCompanionId: {
+      'comp-a': '/workspace/comp-a',
+      'comp-b': '/workspace/comp-b',
+      'comp-c': '/workspace/comp-c',
+    },
   };
 }
 
 function resolvedFleet(companionIds: readonly string[]) {
   return {
     persistenceRoot: '/runtime',
+    workspacesRoot: '/runtime/workspaces',
+    sharedWorkspacePath: '/runtime/workspaces/shared',
     companions: companionIds.map((companionId, index) => ({
       companionId,
       companionDataDir: `/runtime/companions/${index}`,
       characterCardPath: `/runtime/companions/${index}/companion.json`,
       postgresSchema: `companion_${index}`,
+      personalWorkspacePath: `/runtime/workspaces/personal/${companionId}`,
     })),
   };
 }
@@ -311,6 +322,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {},
     });
   });
 
@@ -327,6 +339,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {
+        'comp-a': '/runtime/workspaces/personal/comp-a',
+        'comp-b': '/runtime/workspaces/personal/comp-b',
+      },
+      sharedWorkspacePath: '/runtime/workspaces/shared',
     });
   });
 
@@ -360,6 +377,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: {},
       discordAccounts: { 'acct-a': 'comp-a', 'acct-b': 'comp-b' },
+      personalWorkspaceByCompanionId: {
+        'comp-a': '/runtime/workspaces/personal/comp-a',
+        'comp-b': '/runtime/workspaces/personal/comp-b',
+      },
+      sharedWorkspacePath: '/runtime/workspaces/shared',
     });
   });
 
@@ -506,6 +528,42 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('confines filesystem reads and writes to the authenticated Personal Workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-isolation-'));
+    const personalA = join(root, 'personal', 'comp-a');
+    const personalB = join(root, 'personal', 'comp-b');
+    mkdirSync(personalA, { recursive: true });
+    mkdirSync(personalB, { recursive: true });
+    writeFileSync(join(personalA, 'note.txt'), 'alpha');
+    writeFileSync(join(personalB, 'note.txt'), 'beta');
+    try {
+      const routing = multiCompanion({});
+      routing.personalWorkspaceByCompanionId = {
+        'comp-a': personalA,
+        'comp-b': personalB,
+        'comp-c': join(root, 'personal', 'comp-c'),
+      };
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: routing,
+        capabilityTierProvider: () => 'autonomous',
+      });
+      const conn = await connect();
+      await identifyAgent(conn, 'comp-a', 1);
+
+      expect((await invokeRpc(conn, 2, 'fs.read', { path: 'note.txt' })).result.content)
+        .toBe('alpha');
+      expect((await invokeRpc(conn, 3, 'fs.read', { path: join(personalB, 'note.txt') })).error)
+        .toBeDefined();
+      expect((await invokeRpc(conn, 4, 'fs.write', {
+        path: join(personalB, 'intrusion.txt'),
+        content: 'nope',
+      })).error).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects agent identify without a companionId', async () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),

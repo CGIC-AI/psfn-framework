@@ -119,6 +119,7 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 
 export interface InProcessGardenAdminContractOptions {
   apiBaseUrl?: string;
@@ -427,6 +428,9 @@ export function createInProcessGardenAdminContract(
       ? new AdminConcernDataService(options.concernStore)
       : null,
     settings: settingsService,
+    sharedWorkspace: options.config.sharedWorkspacePath
+      ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
+      : null,
     intakeQuarantine,
     driftReviews,
     identity: new AdminIdentityDataService({

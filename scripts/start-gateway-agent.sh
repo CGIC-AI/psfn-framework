@@ -475,15 +475,17 @@ export_companion_env() {
   local companion_data_dir="$2"
   local character_card_path="$3"
   local postgres_schema="$4"
-  local companion_auth_token="$5"
-  local session_integrity_auth_token="$6"
-  local admin_transport_socket="$7"
-  local garden_port="$8"
+  local personal_workspace_path="$5"
+  local companion_auth_token="$6"
+  local session_integrity_auth_token="$7"
+  local admin_transport_socket="$8"
+  local garden_port="$9"
 
   export COMPANION_ID="${companion_id}"
   export COMPANION_DATA_DIR="${companion_data_dir}"
   export CHARACTER_CARD_PATH="${character_card_path}"
   export COMPANION_PG_SCHEMA="${postgres_schema}"
+  export WORKSPACE_PATH="${personal_workspace_path}"
   export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
   export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
   export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"
@@ -600,12 +602,12 @@ resolve_single_companion_auth() {
 }
 
 print_supervisor_plan() {
-  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
   echo "[supervisor]   gateway: ${SOCKET_PATH}"
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
-    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} card=${character_card_path} adminSocket=${admin_transport_socket}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} workspace=${personal_workspace_path} card=${character_card_path} adminSocket=${admin_transport_socket}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor]   operator: companionId=${companion_id} gardenPort=${garden_port} adminSocket=${admin_transport_socket}"
     else
@@ -615,14 +617,14 @@ print_supervisor_plan() {
 }
 
 supervise_companion_agents() {
-  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
     echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
-    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor] starting operator for companion ${companion_id} (gardenPort=${garden_port}, adminSocket=${admin_transport_socket})"
-      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
+      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     fi
   done
 

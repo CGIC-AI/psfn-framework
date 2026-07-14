@@ -105,23 +105,25 @@ documents, journal, personal knowledge base, authored skills, modules,
 experiments, downloads, images, and other personal durable files. It is not a
 runtime-state root and not a general shared-files root.
 
-The target multi-companion layout has one validated Personal Workspace per
+The multi-companion layout has one validated Personal Workspace per
 companion plus an installation-owned **Shared Companion Workspace** for
 explicitly published collaboration artifacts and common reference material. The
 shared-world wiki remains a narrower, site-scoped operator-owned knowledge
 surface—not a general shared filesystem.
 
-Current fleet wiring has no per-entry workspace path and forwards one inherited
-`WORKSPACE_PATH` to all fleet agents. This means personal workspace isolation is
-not shipped under multi-companion yet. Do not add a `SHARED_WORKSPACE_PATH` env
-setting, derive paths ad hoc, or claim workspace tenancy until the owner-file,
-path-containment, gateway-policy, backup, and tests contracts land together.
+Fleet wiring deterministically derives personal roots from the runtime root and
+companion UUID, provisions them before process startup, and injects exactly one
+resolved Personal Workspace into each agent and Garden. The authenticated
+gateway connection selects the same root for filesystem, shell, image, beads,
+and channel attachment surfaces. There is no `SHARED_WORKSPACE_PATH` env setting
+or manifest override.
 
-When implemented, personal and shared workspace roots must be canonicalized,
+Personal and shared workspace roots are canonicalized,
 non-overlapping with each other and with system/companion/runtime roots, and
-contained beneath the configured runtime root. Shared writes require explicit
+contained beneath the configured runtime root. Garden-mediated shared writes require explicit
 actor and provenance records, review policy, atomic writes, containment checks,
-and CogSec screening before shared material can reach prompts, wikis, or memory.
+and CogSec approval. Shared material does not automatically reach prompts,
+wikis, memory, skills, or modules.
 
 ## Artifact Ownership
 

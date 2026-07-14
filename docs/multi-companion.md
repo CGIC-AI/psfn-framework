@@ -174,16 +174,21 @@ The target layout is:
   files, and shared material must never auto-load as an executable skill or
   module merely because it is visible.
 
-In single-companion mode, bootstrap should seed that companion's Personal
-Workspace from the approved Companion Library/Seed Bundle. In fleet mode, every
-companion needs its own Personal Workspace alongside the governed shared one.
+Fleet workspace wiring derives this layout from the canonical runtime root and
+the companion UUIDs in `companions.json`; workspace paths are not mutable
+manifest fields. The launcher provisions every root before starting a process,
+then injects only `workspaces/personal/<uuid>` as that process's
+`WORKSPACE_PATH`. Missing, overlapping, symlink-escaping, or tuple-mismatched
+roots fail startup.
 
-**Current limitation:** this layout is not wired yet. The supervisor forwards
-one inherited `WORKSPACE_PATH` to every fleet agent; `companions.json` and the
-spawn plan have no workspace field. Therefore journals, personal wikis, managed
-skills, modules, and other workspace files are shared filesystem state in a
-current fleet. Do not treat them as tenant-isolated until validated per-companion
-workspace wiring and a governed shared-workspace surface land.
+The Shared Companion Workspace is exposed through authenticated Garden routes,
+not through an environment variable or the normal companion filesystem tools.
+Companions are read-only by policy. Operator publication requires an actor,
+provenance, a content revision, an independent reviewer, and an approved CogSec
+decision; writes are contained and atomic. Shared content is stored only below
+`artifacts/`, accepts non-executable text formats, and is never auto-loaded into
+skills, modules, prompts, wikis, or memory. The versioned Companion Library seed
+lands under `docs/companion-library/` and uses no-overwrite copies.
 
 ## Per-companion channels (Discord)
 

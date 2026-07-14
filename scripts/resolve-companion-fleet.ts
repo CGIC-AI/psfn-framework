@@ -20,8 +20,8 @@
  *     The launcher reads empty stdout as "stay in single-agent mode".
  *   - Multi-companion topology: one line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
- *     companionAuthToken, sessionIntegrityAuthToken, adminTransportSocket,
- *     gardenPort. gardenPort is "-" when the companion has
+ *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
+ *     adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
  *     no Garden operator surface configured (companions.json gardenPort absent).
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
@@ -44,6 +44,7 @@ import {
 } from '../src/operator/garden/transport-paths.js';
 import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
 import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
+import { provisionFleetWorkspaces } from '../src/persistence/workspaces/provisioning.js';
 
 const FIELD_SEPARATOR = '\t';
 const NO_GARDEN_PORT_SENTINEL = '-';
@@ -69,6 +70,7 @@ function formatPlanLine(
     ['companionDataDir', entry.companionDataDir],
     ['characterCardPath', entry.characterCardPath],
     ['postgresSchema', entry.postgresSchema],
+    ['personalWorkspacePath', entry.personalWorkspacePath],
     ['companionAuthToken', companionAuthToken],
     ['sessionIntegrityAuthToken', sessionIntegrityAuthToken],
     ['adminTransportSocket', adminTransportSocket],
@@ -113,7 +115,16 @@ function main(): void {
     // single-agent behavior byte-identically.
     return;
   }
-  const fleet = resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir);
+  const fleet = resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir, [
+    { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
+    { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
+    { label: 'logsDir', path: runtimePathLayout.logsDir },
+    { label: 'tempDir', path: runtimePathLayout.tempDir },
+    { label: 'backupsDir', path: runtimePathLayout.backupsDir },
+  ]);
+  // Provision before the supervisor starts any process so no agent or Garden
+  // can race workspace creation or observe a partially seeded fleet.
+  provisionFleetWorkspaces(fleet);
 
   // Per-companion Gardens bind one admin transport socket per agent process;
   // a single shared network admin transport cannot serve N agents. Fail closed

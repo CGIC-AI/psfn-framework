@@ -8,7 +8,7 @@ import {
   resolveSessionsDir,
 } from '../layout.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
-import type { CompanionsFleetConfig } from '../../system/config/companions-config.js';
+import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
@@ -142,7 +142,7 @@ export function resolveGroupCompanionDataDir(
 }
 
 export interface BuildFleetBackupRunOptionsParams {
-  fleet: CompanionsFleetConfig;
+  fleet: ResolvedCompanionsFleetConfig;
   ownCompanionId: string | undefined;
   /** This process's already-resolved absolute companion-data dir (path snapshot). */
   ownResolvedCompanionDataDir: string;
@@ -167,18 +167,21 @@ export function buildFleetBackupRunOptions(
       `Fleet backup: this process's companion id ${JSON.stringify(ownCompanionId)} is not present in the fleet manifest`,
     );
   }
-  const anchor = deriveFleetAnchorDir(ownEntry.companionDataDir, ownResolvedCompanionDataDir);
+  if (resolve(ownEntry.companionDataDir) !== resolve(ownResolvedCompanionDataDir)) {
+    throw new Error(
+      `Fleet backup: resolved companion-data path mismatch for ${ownEntry.companionId}`,
+    );
+  }
 
   const companions: FleetBackupCompanionUnit[] = fleet.companions.map(entry => {
-    const companionDataDir = resolve(anchor, entry.companionDataDir);
-    const characterCardPath = isAbsolute(entry.characterCardPath)
-      ? entry.characterCardPath
-      : resolve(anchor, entry.characterCardPath);
+    const companionDataDir = entry.companionDataDir;
+    const characterCardPath = entry.characterCardPath;
     return {
       companionId: entry.companionId,
       postgresSchema: entry.postgresSchema,
       companionDataDir,
       sessionsDir: resolveSessionsDir(companionDataDir),
+      personalWorkspacePath: entry.personalWorkspacePath,
       characterCardPath,
       characterCardHistoryPath: resolveCharacterCardHistoryPath(companionDataDir),
       memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
@@ -208,10 +211,12 @@ export function buildFleetBackupRunOptions(
     postgres,
     companions,
     systemDataDir,
+    sharedWorkspacePath: fleet.sharedWorkspacePath,
     ...(params.kubernetesHelm ? { kubernetesHelm: params.kubernetesHelm } : {}),
     backupRootDir: backupConfig.rootDir,
     groupMode,
     ...(groupCompanionDataDir ? { groupCompanionDataDir } : {}),
+    ...(groupMode ? { groupWorkspacesRoot: fleet.workspacesRoot } : {}),
     maxRotatingBackups: backupConfig.maxRotatingBackups,
     maxWeeklyBackups: backupConfig.maxWeeklyBackups,
     maxMonthlyBackups: backupConfig.maxMonthlyBackups,

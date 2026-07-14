@@ -143,6 +143,8 @@ export interface SubstrateConfig {
   systemDataDir?: string;
   companionDataDir?: string;
   workspacePath?: string;
+  /** Governed fleet-shared workspace. Never inherited from environment. */
+  sharedWorkspacePath?: string;
   dataDir: string;
   databasePath: string;
   persistenceBackend?: PersistenceBackend;

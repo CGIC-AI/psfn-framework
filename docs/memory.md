@@ -103,11 +103,9 @@ byte-identical to a pre-scope document. The non-personal scope is
 `shared_world:<siteId>`: world knowledge tied to a place-registry site, shared
 across the companions on a cluster.
 
-- **Personal wiki is intended to be per-companion and companion-writable.** It
-  lives under that companion's `WORKSPACE_PATH/knowledge/wiki/`. This is already
-  true in single-companion mode, but current fleet wiring forwards one shared
-  `WORKSPACE_PATH` to all agents; do not claim fleet isolation for workspace
-  files until Personal Workspace wiring lands.
+- **Personal wiki is per-companion and companion-writable.** It lives under
+  that companion's canonical `WORKSPACE_PATH/knowledge/wiki/`; fleet launcher
+  and gateway policy bind the same isolated root to the authenticated companion.
 - **Shared-world wiki is operator-owned.** Companions read the shared scope and
   *propose* entries through the normal wiki pass; they never write it directly.
   The personal `WikiStore` rejects any non-personal write fail-closed

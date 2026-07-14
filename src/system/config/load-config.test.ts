@@ -88,7 +88,7 @@ describe('loadConfig path defaults', () => {
     process.env.PSFN_RUNTIME_ROOT = root;
     process.env.SYSTEM_DATA_DIR = systemDataDir;
     process.env.COMPANION_DATA_DIR = dataDir;
-    process.env.WORKSPACE_PATH = join(root, 'workspace');
+    process.env.WORKSPACE_PATH = join(root, 'workspaces', 'personal', companionId);
     process.env.COMPANION_ID = companionId;
     process.env.CHARACTER_CARD_PATH = cardPath;
     process.env.COMPANION_PG_SCHEMA = postgresSchema;
@@ -436,7 +436,11 @@ describe('loadConfig path defaults', () => {
       companionDataDir: expected.dataDir,
       characterCardPath: expected.cardPath,
       postgresSchema: expected.postgresSchema,
+      personalWorkspacePath: join(expected.root, 'workspaces', 'personal', expected.companionId),
     });
+    expect(config.workspacePath).toBe(
+      join(expected.root, 'workspaces', 'personal', expected.companionId),
+    );
     expect(config.gatewayCompanionAuthToken).toBe('v1.agent-token');
     expect(config.gatewaySessionIntegrityAuthToken).toBe('v1.worker-token');
   });
@@ -453,6 +457,10 @@ describe('loadConfig path defaults', () => {
     configureMultiCompanionEnv();
     process.env.COMPANION_PG_SCHEMA = 'companion_other';
     expect(() => loadAgentConfig()).toThrow(/COMPANION_PG_SCHEMA/);
+
+    configureMultiCompanionEnv();
+    process.env.WORKSPACE_PATH = join(expected.root, 'workspaces', 'personal', 'other');
+    expect(() => loadAgentConfig()).toThrow(/WORKSPACE_PATH/);
   });
 
   it('requires both role-bound gateway credentials for multi-companion agents', () => {

@@ -45,6 +45,7 @@ import {
   resolveContactBlockListPath,
   resolveGeneratedImagesDir,
 } from '../../persistence/layout.js';
+import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
@@ -149,7 +150,11 @@ async function main(): Promise<void> {
   if (bootstrap.gatewayRpcEndpoint.kind === 'unix') {
     mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
   }
-  ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  if (config.companionFleet) {
+    provisionFleetWorkspaces(config.companionFleet);
+  } else {
+    ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  }
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
       workspaceRoot: bootstrap.workspaceRoot,

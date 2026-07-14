@@ -48,6 +48,27 @@ function listDiscordAdapters(surfaces: GatewayChannelSurfaces): DiscordAdapter[]
   return surfaces.discordAccounts?.map(account => account.adapter) ?? [surfaces.discord];
 }
 
+function resolvePersonalFilesDir(
+  bootstrap: GatewayBootstrapInput,
+  companionId: CompanionId | undefined,
+  surface: string,
+): string {
+  if (!bootstrap.server.multiCompanion.enabled) {
+    return bootstrap.workspaceRoot;
+  }
+  if (!companionId) {
+    throw new Error(`Multi-companion ${surface} surface is missing companionId routing`);
+  }
+  const personalFilesDir =
+    bootstrap.server.multiCompanion.personalWorkspaceByCompanionId[companionId];
+  if (!personalFilesDir?.trim()) {
+    throw new Error(
+      `Multi-companion ${surface} surface has no resolved Personal Workspace for ${companionId}`,
+    );
+  }
+  return personalFilesDir;
+}
+
 export interface LoadGatewayChannelSurfacesInput {
   config: SubstrateConfig;
   bootstrap: GatewayBootstrapInput;
@@ -97,7 +118,11 @@ export async function loadGatewayChannelSurfaces(
         config: input.config,
         eventBus: input.eventBus,
         eligibilityGate: input.eligibilityGate,
-        personalFilesDir: input.bootstrap.workspaceRoot,
+        personalFilesDir: resolvePersonalFilesDir(
+          input.bootstrap,
+          account.companionId,
+          `discord account ${account.accountId}`,
+        ),
         intakeScreening: input.intakeScreening,
         allowedBotUserIds: account.allowedBotUserIds,
         account: {
@@ -119,7 +144,11 @@ export async function loadGatewayChannelSurfaces(
         discordConfig: discordChannelConfig,
         eventBus: input.eventBus,
         eligibilityGate: input.eligibilityGate,
-        personalFilesDir: input.bootstrap.workspaceRoot,
+        personalFilesDir: resolvePersonalFilesDir(
+          input.bootstrap,
+          discordChannelConfig.companionId,
+          'discord',
+        ),
         intakeScreening: input.intakeScreening,
       }),
     ];
@@ -128,7 +157,11 @@ export async function loadGatewayChannelSurfaces(
     createTelegramChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.telegram,
       eventBus: input.eventBus,
-      personalFilesDir: input.bootstrap.workspaceRoot,
+      personalFilesDir: resolvePersonalFilesDir(
+        input.bootstrap,
+        input.bootstrap.channelsConfig.telegram.companionId,
+        'telegram',
+      ),
       intakeScreening: input.intakeScreening,
     }),
   ]);

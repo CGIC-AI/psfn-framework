@@ -875,4 +875,6 @@ export const GatewayErrors = {
   // leaked into egress (prompt leak / hijack tripwire). The error message is
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
+  /** Retained image reference was absent, expired, evicted, or outside its request scope. */
+  INLINE_IMAGE_RETENTION_MISS: -32015,
 } as const;

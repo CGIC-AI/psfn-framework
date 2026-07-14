@@ -595,7 +595,7 @@ describe('SessionStore', () => {
     ]);
   });
 
-  it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', () => {
+  it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {
     const channelId = 'api:tombstone-overscan';
     const requestedLimits: number[] = [];
     const basePort = createFilesystemTurnRecordStorePort(dir);
@@ -617,7 +617,7 @@ describe('SessionStore', () => {
     // One tombstoned turn near the tail: a single bounded overscan pass must
     // satisfy the read without touching the whole archive (and never anything
     // like Number.MAX_SAFE_INTEGER).
-    countingStore.redactTurn(channelId, turnIds[11], { actor: 'admin:test', reason: 'privacy request' });
+    await countingStore.redactTurn(channelId, turnIds[11], { actor: 'admin:test', reason: 'privacy request' });
     requestedLimits.length = 0;
     expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
       .toEqual([turnIds[9], turnIds[10]]);
@@ -626,7 +626,7 @@ describe('SessionStore', () => {
     // Enough tombstones that the first pass yields nothing: the overscan
     // doubles once, then stops as soon as the archive is exhausted.
     for (const turnId of turnIds.slice(3, 11)) {
-      countingStore.redactTurn(channelId, turnId, { actor: 'admin:test', reason: 'privacy request' });
+      await countingStore.redactTurn(channelId, turnId, { actor: 'admin:test', reason: 'privacy request' });
     }
     requestedLimits.length = 0;
     expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
@@ -634,7 +634,7 @@ describe('SessionStore', () => {
     expect(requestedLimits).toEqual([8, 16]);
   });
 
-  it('sees a sibling store instance\'s new turn tombstones without restart (fingerprint-gated fast path)', () => {
+  it('sees a sibling store instance\'s new turn tombstones without restart (fingerprint-gated fast path)', async () => {
     const channelId = 'api:cross-process-tombstones';
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -650,7 +650,7 @@ describe('SessionStore', () => {
 
     // A (another process in production) tombstones a turn. B's cached zero is
     // now stale; the fingerprint gate must force a reload before trusting it.
-    storeA.redactTurn(channelId, firstTurnId, { actor: 'admin:test', reason: 'privacy request', timestamp: 2_000 });
+    await storeA.redactTurn(channelId, firstTurnId, { actor: 'admin:test', reason: 'privacy request', timestamp: 2_000 });
     expect(storeB.getRecentTurnRecords(channelId, 10).map(record => record.turnId))
       .toEqual([secondTurnId]);
   });

@@ -22,6 +22,7 @@ describe('visibility-aware page adoption', () => {
     'cognitive-security/drift/+page.svelte',
     'scheduler/+page.svelte',
     'chat/+page.svelte',
+    'subsystem-health/+page.svelte',
   ])('%s uses visibility-aware network polling', (relativePath) => {
     const source = routeSource(relativePath);
     expect(source).toContain("from '$lib/polling/visibility-aware-poller'");

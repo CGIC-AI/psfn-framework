@@ -17,6 +17,11 @@ class FakeVisibilityDocument implements VisibilityDocument {
   removeEventListener(_type: 'visibilitychange', listener: () => void): void {
     this.listeners.delete(listener);
   }
+
+  setHidden(hidden: boolean): void {
+    this.hidden = hidden;
+    for (const listener of this.listeners) listener();
+  }
 }
 
 class FakeGardenBus implements GardenQueueRefreshBus {
@@ -122,5 +127,69 @@ describe('createGardenQueueRefresh', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(refresh).toHaveBeenCalledTimes(3);
     expect(bus.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches exactly once after reconnect and leaves the fallback timer stopped', async () => {
+    const bus = new FakeGardenBus();
+    const documentRef = new FakeVisibilityDocument();
+    const refresh = vi.fn();
+    const controller = createGardenQueueRefresh({
+      bus,
+      documentRef,
+      intervalMs: 15_000,
+      queue: 'intake-quarantine',
+      refresh,
+    });
+
+    controller.start();
+    await flushRefresh();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    bus.setConnected(false);
+    await flushRefresh();
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+
+    // A queue mutation may land after the last fallback poll but before the
+    // socket reconnects, so reconnect itself must invalidate the snapshot.
+    bus.setConnected(true);
+    await flushRefresh();
+    expect(refresh).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
+
+  it('defers the reconnect refetch while hidden and performs it once on visibility', async () => {
+    const bus = new FakeGardenBus();
+    const documentRef = new FakeVisibilityDocument();
+    const refresh = vi.fn();
+    const controller = createGardenQueueRefresh({
+      bus,
+      documentRef,
+      intervalMs: 15_000,
+      queue: 'confirmations',
+      refresh,
+    });
+
+    controller.start();
+    await flushRefresh();
+    bus.setConnected(false);
+    await flushRefresh();
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    documentRef.setHidden(true);
+    bus.setConnected(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    documentRef.setHidden(false);
+    await flushRefresh();
+    expect(refresh).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 });

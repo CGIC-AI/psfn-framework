@@ -67,6 +67,7 @@ export function createGardenQueueRefresh(
   };
   const poller: VisibilityAwarePoller = createVisibilityAwarePoller(pollerOptions);
   let running = false;
+  let disconnectedWhileRunning = false;
   let unsubscribeEvents: (() => void) | undefined;
   let unsubscribeConnection: (() => void) | undefined;
 
@@ -80,6 +81,12 @@ export function createGardenQueueRefresh(
       { types: ['garden.queue.changed'] },
     );
     unsubscribeConnection = bus.subscribeConnection((connected) => {
+      if (!connected) {
+        disconnectedWhileRunning = true;
+      } else if (disconnectedWhileRunning) {
+        disconnectedWhileRunning = false;
+        poller.requestRefresh();
+      }
       poller.setPollingEnabled(!connected);
     });
     bus.connect();
@@ -90,6 +97,7 @@ export function createGardenQueueRefresh(
   function stop(): void {
     if (!running) return;
     running = false;
+    disconnectedWhileRunning = false;
     unsubscribeEvents?.();
     unsubscribeEvents = undefined;
     unsubscribeConnection?.();

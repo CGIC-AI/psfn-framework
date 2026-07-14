@@ -11,6 +11,7 @@ import {
 } from './types.js';
 import { MemoryWriter } from './writer.js';
 import { buildHighImpactLowConfidenceReviewInput } from './maintenance-review.js';
+import { SalienceDecay } from './decay.js';
 
 const postgresMocks = vi.hoisted(() => ({
   activePool: null as any,
@@ -547,6 +548,55 @@ afterEach(() => {
 });
 
 describe('postgres memory store unit coverage', () => {
+  it('does no Postgres or store scan work on idle decay cycles before the next exp-curve threshold', async () => {
+    const now = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const pool = new FakeMemoryPool();
+      postgresMocks.activePool = pool;
+      const store = await createPostgresMemoryStore('postgres://unused', 4);
+      await store.insertMemory(makeMemory('pg-idle-decay', 'Idle decay memory', {
+        type: 'episodic',
+        salience: 1,
+        extractedAt: now - 7 * 24 * 60 * 60_000,
+        lastAccessed: now - 7 * 24 * 60 * 60_000,
+      }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+
+      const decay = new SalienceDecay(store);
+      await decay.run();
+      const firstObserved = await store.getById('pg-idle-decay');
+      expect(firstObserved?.salience).toBeCloseTo(0.5, 10);
+
+      const listSpy = vi.spyOn(store, 'listActiveMemories');
+      const querySpy = vi.spyOn(pool, 'query');
+      nowSpy.mockReturnValue(now + 60_000);
+      await decay.run();
+
+      expect(listSpy).not.toHaveBeenCalled();
+      expect(querySpy).not.toHaveBeenCalled();
+      const idleObserved = await store.getById('pg-idle-decay');
+      const expectedIdleSalience = Math.exp(
+        (-Math.LN2 * (7 * 24 * 60 * 60_000 + 60_000)) / (7 * 24 * 60 * 60_000),
+      );
+      expect(idleObserved?.salience).toBeCloseTo(expectedIdleSalience, 2);
+
+      await store.insertMemory(makeMemory('pg-decay-invalidation', 'Mutation invalidates idle decay', {
+        type: 'episodic',
+        salience: 1,
+        extractedAt: now - 7 * 24 * 60 * 60_000,
+        lastAccessed: now - 7 * 24 * 60 * 60_000,
+      }), new Float32Array([0.4, 0.3, 0.2, 0.1]));
+      listSpy.mockClear();
+      querySpy.mockClear();
+      await decay.run();
+
+      expect(listSpy).toHaveBeenCalled();
+      expect(querySpy).toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = postgresMemoryMigrationSql();
     expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector;');

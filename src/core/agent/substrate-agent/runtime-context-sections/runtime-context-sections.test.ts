@@ -533,6 +533,7 @@ describe('charge producer', () => {
         lane: 'interactive',
         chargeEventId: 'charge-event-operator-only',
         quotaSpentByLane: { interactive: 5 },
+        rollingWindow: { windowMs: 24 * 60 * 60_000, spentByLane: {}, entryCount: 0 },
       } as RunChargeSnapshot,
       analysisWorkbenchAvailable: true,
     });

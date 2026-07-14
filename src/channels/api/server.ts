@@ -89,6 +89,7 @@ import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
   handleCompanionEventsStream,
+  handleCompanionTouchStimulus,
   matchCompanionRelayRoute,
   type CompanionRelayHttpDeps,
 } from './server/companion-relay-routes.js';
@@ -648,6 +649,7 @@ export class ApiServer implements ChannelAdapterPort {
       principal,
       ...(this.satelliteRegistry ? { registry: this.satelliteRegistry } : {}),
       ...(clientCert ? { clientCert } : {}),
+      companionId: this.modelName,
       deps: this.companionRelay,
     };
     if (route.route === 'events') {
@@ -659,6 +661,15 @@ export class ApiServer implements ChannelAdapterPort {
         log.error('Companion approval decision handler failed', { error: toErrorMessage(error) });
         if (canWriteResponse(res)) {
           sendApiError(res, 500, 'internal_error', 'Approval decision failed');
+        }
+      });
+      return;
+    }
+    if (route.route === 'touch_stimulus') {
+      void handleCompanionTouchStimulus(ctx).catch((error) => {
+        log.error('Companion touch stimulus handler failed', { error: toErrorMessage(error) });
+        if (canWriteResponse(res)) {
+          sendApiError(res, 500, 'internal_error', 'Touch stimulus delivery failed');
         }
       });
       return;

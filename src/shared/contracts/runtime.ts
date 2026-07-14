@@ -16,6 +16,10 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type {
+  CompanionTouchRegion,
+  CompanionTouchStimulusKind,
+} from './companion-relay.js';
 
 // ── Channel-agnostic message types ──
 
@@ -277,6 +281,15 @@ export interface MessageRoutingMetadata {
    *  channel identity resolution. Allows Garden admin chat to route to the correct
    *  contact (with nickname etc.) regardless of API auth principal identity. */
   canonicalContactId?: string;
+  /** Server-authored physical interaction metadata; caller prose is never accepted. */
+  stimulus?: {
+    schemaVersion: 1;
+    kind: CompanionTouchStimulusKind;
+    region: CompanionTouchRegion;
+    count: number;
+    durationMs: number;
+    deviceId: string;
+  };
   /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
   generated?: GeneratedMessageProvenanceMetadata;
   /**

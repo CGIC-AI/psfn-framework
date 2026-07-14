@@ -6,20 +6,30 @@ import type { SpriteState } from './types.js';
 export function CompanionSprite({
   animated,
   label,
+  onHeadpat,
+  petted,
   state,
 }: {
   animated: boolean;
   label: string;
+  onHeadpat: () => void;
+  petted: boolean;
   state: SpriteState;
 }) {
   return (
     <button
-      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'}`}
+      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'} ${petted ? 'petted' : ''}`}
       type="button"
-      aria-label={`${label} sprite, ${state}`}
-      title={label}
+      aria-label={`Give ${label} a headpat; currently ${state}`}
+      title={`Give ${label} a headpat`}
+      onClick={onHeadpat}
     >
       <span className="sprite-aura" aria-hidden />
+      <span className="sprite-hearts" aria-hidden>
+        <span className="sprite-heart first">♥</span>
+        <span className="sprite-heart second">♥</span>
+        <span className="sprite-heart third">♥</span>
+      </span>
       <span className="sprite-face" aria-hidden>
         <span className="sprite-ear left" />
         <span className="sprite-ear right" />

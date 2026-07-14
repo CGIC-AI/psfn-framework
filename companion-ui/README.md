@@ -55,7 +55,7 @@ deviceName: PSFN Satellite Mobile Chat App
 ```
 
 Default capabilities are text input; text, subtitle, artifact, and
-tool-activity output; interrupt, presence, session-attach, and approvals
+tool-activity output; interrupt, presence, session-attach, approvals, and touch
 control; and confirmation-required plus local-only safety. The hub only relays
 the approval, artifact, and tool-activity families to satellites that advertise
 them, so absent an ack those surfaces stay fail-closed.
@@ -141,6 +141,7 @@ Client to hub messages currently used by this UI include:
 - `ping`
 - `approval.decision`
 - `artifact.preview`
+- `touch.interaction`
 
 Hub to client messages consumed by the UI include:
 
@@ -174,7 +175,9 @@ conversation lists, sidebars, top banners, or always-visible debug panels.
 - Composer: one rounded surface with a plus button, multiline text input, mic
   control, and send button.
 - Floating sprite: reflects high-level local state such as attentive, speaking,
-  listening, thinking, tool-use, or error.
+  listening, thinking, tool-use, or error. Tapping her gives immediate local
+  headpat feedback; taps are coalesced for three seconds and sent as one bounded
+  typed interaction through Satellite Hub.
 - Contextual toast layer: holds errors and any future approval/artifact cards
   above the composer.
 

@@ -781,6 +781,34 @@ button:focus-visible {
   background: radial-gradient(ellipse, rgba(234, 244, 255, 0.78), rgba(255, 253, 248, 0.18) 68%);
 }
 
+.sprite-hearts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.sprite-heart {
+  position: absolute;
+  top: 16px;
+  color: #e37798;
+  font-size: 1rem;
+  opacity: 0;
+  text-shadow: 0 2px 8px rgba(227, 119, 152, 0.3);
+}
+
+.sprite-heart.first {
+  left: 4px;
+}
+
+.sprite-heart.second {
+  left: 50%;
+}
+
+.sprite-heart.third {
+  right: 3px;
+}
+
 .sprite-face {
   position: relative;
   width: 74px;
@@ -874,6 +902,47 @@ button:focus-visible {
 
 .companion-sprite.animated .sprite-face {
   animation: breathe 3.6s ease-in-out infinite;
+}
+
+.companion-sprite.petted .sprite-face {
+  box-shadow:
+    inset 13px 0 15px -13px rgba(227, 119, 152, 0.7),
+    inset -13px 0 15px -13px rgba(227, 119, 152, 0.7),
+    0 10px 24px rgba(72, 52, 24, 0.16);
+  transform: translateY(2px) scale(1.04);
+}
+
+.companion-sprite.petted .sprite-eye {
+  height: 7px;
+  border-radius: 0 0 50% 50%;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 #218be0;
+}
+
+.companion-sprite.petted .sprite-heart {
+  animation: heart-float 900ms ease-out forwards;
+}
+
+.companion-sprite.petted .sprite-heart.second {
+  animation-delay: 90ms;
+}
+
+.companion-sprite.petted .sprite-heart.third {
+  animation-delay: 180ms;
+}
+
+@keyframes heart-float {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.6);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px) scale(1.15);
+  }
 }
 
 .companion-sprite.speaking .sprite-mouth {

@@ -22,6 +22,7 @@ import {
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
+import { HeadpatCoalescer } from '../lib/touch-interactions.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
@@ -47,11 +48,24 @@ export function App() {
   const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
+  const [spritePetted, setSpritePetted] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
   const storeRef = useRef<HubStreamStore | null>(null);
+  const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
+  const headpatReactionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const coalescer = new HeadpatCoalescer({
+      emit: (interaction) => {
+        try {
+          storeRef.current?.sendTouchInteraction(interaction);
+        } catch {
+          // Connection and capability failures surface through the Hub client.
+        }
+      },
+    });
+    headpatCoalescerRef.current = coalescer;
     try {
       const config = readCompanionUiRuntimeConfig();
       setHubUrl(config.hubWsUrl);
@@ -60,6 +74,11 @@ export function App() {
     }
 
     return () => {
+      coalescer.destroy();
+      headpatCoalescerRef.current = null;
+      if (headpatReactionTimerRef.current !== null) {
+        window.clearTimeout(headpatReactionTimerRef.current);
+      }
       storeRef.current?.destroy();
       storeRef.current = null;
     };
@@ -157,6 +176,20 @@ export function App() {
     storeRef.current?.sendUserText(text, { interrupt: true });
   }
 
+  function giveHeadpat() {
+    setSpritePetted(true);
+    if (headpatReactionTimerRef.current !== null) {
+      window.clearTimeout(headpatReactionTimerRef.current);
+    }
+    headpatReactionTimerRef.current = window.setTimeout(() => {
+      setSpritePetted(false);
+      headpatReactionTimerRef.current = null;
+    }, 900);
+    if (canSend) {
+      headpatCoalescerRef.current?.tap();
+    }
+  }
+
   function stopGeneration() {
     storeRef.current?.interrupt();
   }
@@ -216,6 +249,8 @@ export function App() {
           state={spriteState}
           animated={spriteAnimations}
           label={identityLabel}
+          onHeadpat={giveHeadpat}
+          petted={spritePetted}
         />
       )}
 

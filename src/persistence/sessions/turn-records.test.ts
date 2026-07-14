@@ -78,4 +78,26 @@ describe('turn-records', () => {
     expect(read).toEqual([record]);
     expect(read[0]).not.toHaveProperty('location');
   });
+
+  it('round-trips assistant runtime fallback provenance', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-runtime-fallback-'));
+    const record = createTurnRecord({
+      assistantMessage: {
+        role: 'assistant',
+        content: 'The image reader failed before I could inspect the attachment.',
+        timestamp: 1_742_000_000_500,
+        runtimeFallbackProvenance: {
+          schemaVersion: 1,
+          authoredBy: 'runtime',
+          model: 'runtime-fallback',
+          strategy: 'runtime_nonfabricating_notice',
+        },
+      },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
+  });
 });

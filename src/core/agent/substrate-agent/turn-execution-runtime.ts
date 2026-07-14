@@ -367,6 +367,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
+    runtimeFallbackProvenance?: import('../../../shared/contracts/runtime.js').RuntimeFallbackProvenance,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {
@@ -900,6 +901,7 @@ export async function handleMessageForTurn(
       responseText,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
+      runtimeFallbackProvenance,
       turnIntent,
     } = invocationResult;
     const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
@@ -1059,7 +1061,7 @@ export async function handleMessageForTurn(
     }
 
     if (!broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
-      assistantSessionEntryId = runtime.recordAssistantMessage(
+      const assistantPersistenceArgs = [
         message,
         turnId,
         requestId,
@@ -1067,7 +1069,10 @@ export async function handleMessageForTurn(
         trustLevel,
         continuitySubjectKey,
         preTurnState.emotionSnapshot,
-      );
+      ] as const;
+      assistantSessionEntryId = runtimeFallbackProvenance
+        ? runtime.recordAssistantMessage(...assistantPersistenceArgs, runtimeFallbackProvenance)
+        : runtime.recordAssistantMessage(...assistantPersistenceArgs);
     }
 
     if (runtime.skillsRuntime) {
@@ -1130,6 +1135,7 @@ export async function handleMessageForTurn(
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,
         durationMs: completedAt - startTime,
+        ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),
         internalState: cloneComputedInternalStateForResponse(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),

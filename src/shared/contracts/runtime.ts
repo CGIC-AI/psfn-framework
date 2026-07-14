@@ -27,6 +27,17 @@ export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
+export type RuntimeFallbackStrategy =
+  | 'runtime_nonfabricating_notice'
+  | 'runtime_datetime_contradiction_refusal';
+
+export interface RuntimeFallbackProvenance {
+  schemaVersion: 1;
+  authoredBy: 'runtime';
+  model: 'runtime-fallback';
+  strategy: RuntimeFallbackStrategy;
+}
+
 export interface TurnRecordMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -35,6 +46,7 @@ export interface TurnRecordMessage {
   sourceMessageId?: string;
   authorId?: string;
   authorName?: string;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }
 
 export interface TurnRecordToolCall {
@@ -514,6 +526,7 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;

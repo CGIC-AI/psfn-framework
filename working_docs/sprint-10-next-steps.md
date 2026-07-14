@@ -4,6 +4,11 @@ Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — d
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
+## Feature branch status — 2026-07-14
+
+- `feat/public-release-hardening`: `psfn-framework-upx0.3` is closed at implementation tip `fd817576` (`60fddadd` implementation plus `fd817576` review remediation). The final integrated gate passed 20 focused offline tests, `verify:public-sanitize`, Helm verification, four shell syntax checks, lint, proportional systemd parsing, and exact tracked-fingerprint greps. The branch is pushed but intentionally unmerged; parent epic `psfn-framework-upx0` remains open.
+- Report-only, non-blocking observations: the pre-existing repository-hygiene identity-allowlist backlog remains outside this bead; the completed review also noted lesser CIDR-pattern coverage and private config-locality considerations. These did not affect the core public-sanitization acceptance criteria and were not escalated into another review loop.
+
 ## 0. 2026-07-12 update — decided priority order
 
 Outcome of the 2026-07-12 triage + grilling session. Tracker was reconciled the

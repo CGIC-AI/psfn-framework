@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import {
+  createSanitizedPostgresChildEnv,
   redactPostgresCredential,
   sanitizePostgresConnection,
 } from './postgres-connection.js';
@@ -46,7 +47,7 @@ async function executeMarkerSql(
       connectionArg,
       '--command',
       sql,
-    ], { env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env });
+    ], { env: createSanitizedPostgresChildEnv(password) });
     return stdout.trim();
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);

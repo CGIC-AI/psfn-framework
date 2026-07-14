@@ -61,6 +61,7 @@ import { applyTieredRetention, type TieredRetentionResult } from './retention.js
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
+  createSanitizedPostgresChildEnv,
   redactPostgresCredential,
   sanitizePostgresConnection,
 } from './postgres-connection.js';
@@ -334,7 +335,7 @@ async function dumpPostgresDatabase(
       `--file=${dumpPath}`,
       connectionArg,
     ], {
-      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: createSanitizedPostgresChildEnv(password),
     });
   } catch (error) {
     throw new Error(`pg_dump failed: ${redactPostgresCredential(describeExecError(error), password)}`);

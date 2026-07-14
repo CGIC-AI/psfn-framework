@@ -42,6 +42,7 @@ import {
   type StagedRestoreTree,
 } from './fleet-restore-transaction.js';
 import {
+  createSanitizedPostgresChildEnv,
   redactPostgresCredential,
   sanitizePostgresConnection,
 } from './postgres-connection.js';
@@ -256,7 +257,7 @@ async function restorePostgresDump(
       connectionArg,
       dumpPath,
     ], {
-      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: createSanitizedPostgresChildEnv(password),
     });
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
@@ -374,7 +375,7 @@ async function readTargetSchemaState(
       '--command',
       query,
     ], {
-      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: createSanitizedPostgresChildEnv(password),
       maxBuffer: POSTGRES_COMMAND_MAX_BUFFER_BYTES,
     }));
   } catch (error) {

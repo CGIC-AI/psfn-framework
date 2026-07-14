@@ -244,12 +244,14 @@ describe('companion relay routes', () => {
       observer: {
         onEnqueued: (entry) => {
           void eventBus.emit('companion.approval.requested', {
+            companionId: DEFAULT_COMPANION_ID,
             payload: redactApprovalRequested(entry),
             timestamp: Date.now(),
           });
         },
         onResolved: (outcome) => {
           void eventBus.emit('companion.approval.resolved', {
+            companionId: DEFAULT_COMPANION_ID,
             payload: redactApprovalResolved(outcome),
             timestamp: Date.now(),
           });

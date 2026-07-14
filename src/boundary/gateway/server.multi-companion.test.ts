@@ -12,6 +12,7 @@ import {
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
+import { EventBus } from '../../shared/event-bus.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -114,6 +115,7 @@ function createMinimalOptions(): GatewayServerOptions {
     },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
+    eventBus: new EventBus(),
   };
 }
 
@@ -713,6 +715,31 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 });
 
 describe('GatewayServer multi-companion routing (flag on)', () => {
+  it('routes confirmation queue invalidations only to the authenticated companion', async () => {
+    const eventBus = new EventBus();
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      eventBus,
+      capabilityTierProvider: () => 'apprentice',
+      multiCompanion: multiCompanion({}),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+
+    const queued = await invokeRpc(connA, 3, 'fs.write', {
+      path: '/tmp/comp-a-needs-approval.txt',
+      content: 'held',
+    });
+
+    expect(queued.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+    expect(methodFrames(connA, 'garden.queue.changed')).toEqual([
+      expect.objectContaining({ params: { queue: 'confirmations' } }),
+    ]);
+    expect(methodFrames(connB, 'garden.queue.changed')).toHaveLength(0);
+  });
+
   it('delivers inbound channel messages to exactly the routed companion', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),

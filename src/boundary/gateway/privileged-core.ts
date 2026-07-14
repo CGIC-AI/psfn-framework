@@ -21,6 +21,7 @@ import { GatewayServer } from './server.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -108,6 +109,11 @@ export async function buildGatewayPrivilegedCore(
     // credentials (providers.json openrouter apiBaseUrl + apiKeyRef, key
     // resolved through the credential vault with process-env fallback).
     screenerBackend: resolveIntakeScreenerBackend(input.config),
+    onQuarantineHeld: () => emitGardenQueueChanged(
+      eventBus,
+      'intake-quarantine',
+      input.config.companionId,
+    ),
   });
 
   // htm9.18: durable CogSec event store for the canary egress tripwire. Shares

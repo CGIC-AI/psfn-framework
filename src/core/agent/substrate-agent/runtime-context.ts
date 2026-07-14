@@ -16,6 +16,7 @@ import {
   buildResponseStylePromptState,
   buildTrustPromptState,
   classifyChannelEnvelope,
+  isVoiceResponseChannel,
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
@@ -375,7 +376,10 @@ export function buildDynamicPromptTemplateVariables(
       availableExtendedCount: input.extendedTools.length,
     }),
     ...buildTrustPromptState(input.trustLevel),
-    ...buildResponseStylePromptState(input.responseStyle ?? 'concise'),
+    ...buildResponseStylePromptState(input.responseStyle ?? 'concise', isVoiceResponseChannel(
+      input.message.channelId,
+      input.channelType,
+    )),
     ...buildEmotionalAffectPromptVariables({
       trustLevel: input.trustLevel,
       emotionSnapshot,

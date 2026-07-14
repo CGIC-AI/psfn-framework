@@ -3801,6 +3801,30 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(guildPrompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
   });
 
+  it('adds spoken-only delivery guidance to concise satellite voice turns', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      id: 'style-satellite-voice',
+      channelId: 'satellite:voice-only:bedroom',
+      channelType: 'api',
+      routing: {
+        source: 'api',
+        responseStyle: 'concise',
+      },
+    }));
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain('<style>concise</style>');
+    expect(prompt).toContain('<voice_delivery>This is a voice channel.');
+    expect(prompt).toContain('do not narrate or emote actions');
+    expect(prompt).toContain('keep replies concise for voice chat');
+  });
+
   it('honors routing responseStyle overrides ahead of channel defaults', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
@@ -3822,6 +3846,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('<style>concise</style>');
     expect(prompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
+    expect(prompt).not.toContain('<voice_delivery>');
   });
 
   it('honors config responseStyleOverrides for channelType defaults', async () => {

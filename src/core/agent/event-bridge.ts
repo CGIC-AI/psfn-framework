@@ -29,7 +29,7 @@ export interface EventBridge {
  * Create a persistent bridge from pi-agent-core Agent events to our EventBus.
  *
  * Maps:
- * - message_update (text_delta) → agent.stream.delta
+ * - message_update (text_start/text_delta) → agent.stream.delta
  * - message_update (thinking_delta) → agent.stream.thinking
  * - message_update (toolcall_start) → agent.toolcall.start
  * - message_update (toolcall_delta) → agent.toolcall.delta
@@ -82,7 +82,15 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     switch (event.type) {
       case 'message_update': {
         const delta = event.assistantMessageEvent;
-        if (delta.type === 'text_delta') {
+        if (delta.type === 'text_start') {
+          const text = getTextFromPartial(delta.partial, delta.contentIndex);
+          if (text.length === 0) break;
+          eventBus.emit('agent.stream.delta', {
+            channelId,
+            text,
+            ...withCorrelation('chat', 'stream_text_delta'),
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+        } else if (delta.type === 'text_delta') {
           eventBus.emit('agent.stream.delta', {
             channelId,
             text: delta.delta,
@@ -211,6 +219,14 @@ function getToolCallFromPartial(partial: { content?: unknown[] }, contentIndex: 
   if (!block || typeof block !== 'object') return undefined;
   if ((block as { type?: string }).type !== 'toolCall') return undefined;
   return block as ToolCall;
+}
+
+function getTextFromPartial(partial: { content?: unknown[] }, contentIndex: number): string {
+  const block = partial.content?.[contentIndex];
+  if (!block || typeof block !== 'object') return '';
+  if ((block as { type?: unknown }).type !== 'text') return '';
+  const text = (block as { text?: unknown }).text;
+  return typeof text === 'string' ? text : '';
 }
 
 function hasToolResultError(result: unknown): boolean {

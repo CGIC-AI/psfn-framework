@@ -66,6 +66,51 @@ describe('createEventBridge', () => {
     expect(deltas).toEqual(['Hello', ' world']);
   });
 
+  it('preserves the complete opening text from text_start events', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('satellite:voice-only:bedroom');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: 'Hello' }] },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', delta: ' world' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual(['Hello', ' world']);
+  });
+
+  it('preserves a one-chunk reply emitted only as text_start', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('satellite:voice-only:bedroom');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: 'Goodnight.' }] },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas).toEqual(['Goodnight.']);
+  });
+
   it('emits agent.toolcall.start/delta/end for toolcall message events', async () => {
     const bridge = createEventBridge(agent, eventBus);
     const starts: any[] = [];

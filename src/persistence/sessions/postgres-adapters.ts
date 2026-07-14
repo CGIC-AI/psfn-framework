@@ -24,9 +24,19 @@ import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 100;
 
-interface ProjectionMessageRow {
+interface ProjectionMessageMetadataRow {
   channel_id: string;
-  message_id: number;
+  message_count: number | string;
+  max_message_id: number | string | null;
+}
+
+interface ProjectionMessageMetadata {
+  count: number;
+  maxMessageId: number | null;
+}
+
+interface ProjectionUpsertResultRow {
+  inserted: boolean;
 }
 
 interface ProjectionDriftRow {
@@ -113,20 +123,31 @@ function toProjectionRecord(
   };
 }
 
-async function preloadMessageIds(pool: Pool): Promise<Map<string, Set<number>>> {
-  const rows = await queryRows<ProjectionMessageRow>(
+async function preloadProjectionMessageMetadata(
+  pool: Pool,
+): Promise<Map<string, ProjectionMessageMetadata>> {
+  const rows = await queryRows<ProjectionMessageMetadataRow>(
     pool,
     `
-      SELECT channel_id, message_id
+      SELECT
+        channel_id,
+        COUNT(*) AS message_count,
+        MAX(message_id) AS max_message_id
       FROM session_messages_projection
-      ORDER BY channel_id ASC, message_id ASC
+      GROUP BY channel_id
+      ORDER BY channel_id ASC
     `,
   );
-  const byChannel = new Map<string, Set<number>>();
+  const byChannel = new Map<string, ProjectionMessageMetadata>();
   for (const row of rows) {
-    const existing = byChannel.get(row.channel_id) ?? new Set<number>();
-    existing.add(Math.floor(row.message_id));
-    byChannel.set(row.channel_id, existing);
+    const count = Number(row.message_count);
+    const maxMessageId = row.max_message_id === null ? null : Number(row.max_message_id);
+    byChannel.set(row.channel_id, {
+      count: Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0,
+      maxMessageId: maxMessageId !== null && Number.isFinite(maxMessageId)
+        ? Math.floor(maxMessageId)
+        : null,
+    });
   }
   return byChannel;
 }
@@ -151,8 +172,8 @@ async function preloadDrift(pool: Pool): Promise<Map<string, TranscriptProjectio
   return drift;
 }
 
-async function upsertProjectionRecord(client: PoolClient, record: ProjectionRecord): Promise<void> {
-  await client.query(
+async function upsertProjectionRecord(client: PoolClient, record: ProjectionRecord): Promise<boolean> {
+  const result = await client.query<ProjectionUpsertResultRow>(
     `
       INSERT INTO session_messages_projection (
         channel_id,
@@ -172,6 +193,7 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
         content = EXCLUDED.content,
         timestamp = EXCLUDED.timestamp,
         channel_visibility = EXCLUDED.channel_visibility
+      RETURNING (xmax = 0) AS inserted
     `,
     [
       record.channelId,
@@ -184,31 +206,33 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
       record.channelVisibility,
     ],
   );
+  return result.rows[0]?.inserted === true;
 }
 
-async function deleteProjectionRecord(client: PoolClient, channelId: string, messageId: number): Promise<void> {
-  await client.query(
+async function deleteProjectionRecord(client: PoolClient, channelId: string, messageId: number): Promise<boolean> {
+  const result = await client.query(
     `
       DELETE FROM session_messages_projection
       WHERE channel_id = $1 AND message_id = $2
     `,
     [channelId, messageId],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 class PostgresTranscriptProjection implements KeywordSearchableTranscriptProjection {
   private readonly pool: Pool;
-  private readonly messageIdsByChannel: Map<string, Set<number>>;
+  private readonly messageMetadataByChannel: Map<string, ProjectionMessageMetadata>;
   private readonly driftByChannel: Map<string, TranscriptProjectionDrift>;
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     pool: Pool,
-    messageIdsByChannel: Map<string, Set<number>>,
+    messageMetadataByChannel: Map<string, ProjectionMessageMetadata>,
     driftByChannel: Map<string, TranscriptProjectionDrift>,
   ) {
     this.pool = pool;
-    this.messageIdsByChannel = messageIdsByChannel;
+    this.messageMetadataByChannel = messageMetadataByChannel;
     this.driftByChannel = driftByChannel;
   }
 
@@ -234,8 +258,67 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     });
   }
 
+  private getMessageMetadata(channelId: string): ProjectionMessageMetadata {
+    const existing = this.messageMetadataByChannel.get(channelId);
+    if (existing) return existing;
+    const created = { count: 0, maxMessageId: null };
+    this.messageMetadataByChannel.set(channelId, created);
+    return created;
+  }
+
+  private predictProjectionUpsert(channelId: string, messageId: number): boolean {
+    const metadata = this.getMessageMetadata(channelId);
+    const predictedInserted = metadata.maxMessageId === null || messageId > metadata.maxMessageId;
+    if (predictedInserted) {
+      metadata.count += 1;
+      metadata.maxMessageId = messageId;
+    }
+    return predictedInserted;
+  }
+
+  private reconcileProjectionUpsert(
+    channelId: string,
+    messageId: number,
+    predictedInserted: boolean,
+    inserted: boolean,
+  ): void {
+    const metadata = this.getMessageMetadata(channelId);
+    if (inserted && !predictedInserted) metadata.count += 1;
+    if (!inserted && predictedInserted) metadata.count = Math.max(0, metadata.count - 1);
+    if (inserted && (metadata.maxMessageId === null || messageId > metadata.maxMessageId)) {
+      metadata.maxMessageId = messageId;
+    }
+  }
+
+  private predictProjectionDelete(channelId: string, messageId: number): boolean {
+    const metadata = this.getMessageMetadata(channelId);
+    const predictedDeleted = metadata.count > 0
+      && metadata.maxMessageId !== null
+      && messageId <= metadata.maxMessageId;
+    if (predictedDeleted) metadata.count -= 1;
+    return predictedDeleted;
+  }
+
+  private reconcileProjectionDelete(
+    channelId: string,
+    predictedDeleted: boolean,
+    deleted: boolean,
+  ): void {
+    const metadata = this.getMessageMetadata(channelId);
+    if (deleted && !predictedDeleted) metadata.count = Math.max(0, metadata.count - 1);
+    if (!deleted && predictedDeleted) metadata.count += 1;
+  }
+
   private replaceCachedChannel(channelId: string, messageIds: readonly number[]): void {
-    this.messageIdsByChannel.set(channelId, new Set(messageIds.map(id => Math.floor(id))));
+    const normalizedIds = messageIds.map(id => Math.floor(id));
+    let maxMessageId: number | null = null;
+    for (const messageId of normalizedIds) {
+      if (maxMessageId === null || messageId > maxMessageId) maxMessageId = messageId;
+    }
+    this.messageMetadataByChannel.set(channelId, {
+      count: normalizedIds.length,
+      maxMessageId,
+    });
   }
 
   upsertSessionEntry(
@@ -244,39 +327,46 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
   ): void {
     const channelId = options.channelId ?? entry.channelId;
     if (isCogSecTombstoneSessionEntry(entry)) {
-      const messageIds = this.messageIdsByChannel.get(channelId) ?? new Set<number>();
-      messageIds.delete(entry.id);
-      this.messageIdsByChannel.set(channelId, messageIds);
-      this.driftByChannel.delete(channelId);
+      const predictedDeleted = this.predictProjectionDelete(channelId, entry.id);
+      const clearTrackedDrift = this.driftByChannel.delete(channelId);
 
       this.enqueueWrite(channelId, async (client) => {
-        await deleteProjectionRecord(client, channelId, entry.id);
-        await client.query(
-          `
-            DELETE FROM session_projection_drift
-            WHERE channel_id = $1
-          `,
-          [channelId],
-        );
+        const deleted = await deleteProjectionRecord(client, channelId, entry.id);
+        this.reconcileProjectionDelete(channelId, predictedDeleted, deleted);
+        if (clearTrackedDrift) {
+          await client.query(
+            `
+              DELETE FROM session_projection_drift
+              WHERE channel_id = $1
+            `,
+            [channelId],
+          );
+        }
       });
       return;
     }
 
     const record = toProjectionRecord(entry, options);
-    const messageIds = this.messageIdsByChannel.get(record.channelId) ?? new Set<number>();
-    messageIds.add(record.messageId);
-    this.messageIdsByChannel.set(record.channelId, messageIds);
-    this.driftByChannel.delete(record.channelId);
+    const predictedInserted = this.predictProjectionUpsert(record.channelId, record.messageId);
+    const clearTrackedDrift = this.driftByChannel.delete(record.channelId);
 
     this.enqueueWrite(record.channelId, async (client) => {
-      await upsertProjectionRecord(client, record);
-      await client.query(
-        `
-          DELETE FROM session_projection_drift
-          WHERE channel_id = $1
-        `,
-        [record.channelId],
+      const inserted = await upsertProjectionRecord(client, record);
+      this.reconcileProjectionUpsert(
+        record.channelId,
+        record.messageId,
+        predictedInserted,
+        inserted,
       );
+      if (clearTrackedDrift) {
+        await client.query(
+          `
+            DELETE FROM session_projection_drift
+            WHERE channel_id = $1
+          `,
+          [record.channelId],
+        );
+      }
     });
   }
 
@@ -288,7 +378,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
       .filter(entry => !isCogSecTombstoneSessionEntry(entry))
       .map(entry => toProjectionRecord(entry, { channelId }));
     this.replaceCachedChannel(channelId, records.map(record => record.messageId));
-    this.driftByChannel.delete(channelId);
+    const clearTrackedDrift = this.driftByChannel.delete(channelId);
 
     this.enqueueWrite(channelId, async (client) => {
       await client.query(
@@ -301,18 +391,20 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
       for (const record of records) {
         await upsertProjectionRecord(client, record);
       }
-      await client.query(
-        `
-          DELETE FROM session_projection_drift
-          WHERE channel_id = $1
-        `,
-        [channelId],
-      );
+      if (clearTrackedDrift) {
+        await client.query(
+          `
+            DELETE FROM session_projection_drift
+            WHERE channel_id = $1
+          `,
+          [channelId],
+        );
+      }
     });
   }
 
   countProjectedMessages(channelId: string): number {
-    return this.messageIdsByChannel.get(channelId)?.size ?? 0;
+    return this.messageMetadataByChannel.get(channelId)?.count ?? 0;
   }
 
   markProjectionDrift(channelId: string, reason?: string): void {
@@ -421,11 +513,11 @@ export async function createPostgresTranscriptProjection(
     allowExitOnIdle: true,
   });
   await ensurePostgresSchema(pool, POSTGRES_TRANSCRIPT_MIGRATIONS);
-  const [messageIdsByChannel, driftByChannel] = await Promise.all([
-    preloadMessageIds(pool),
+  const [messageMetadataByChannel, driftByChannel] = await Promise.all([
+    preloadProjectionMessageMetadata(pool),
     preloadDrift(pool),
   ]);
-  return new PostgresTranscriptProjection(pool, messageIdsByChannel, driftByChannel);
+  return new PostgresTranscriptProjection(pool, messageMetadataByChannel, driftByChannel);
 }
 
 export async function createDefaultPostgresSessionAdapters(

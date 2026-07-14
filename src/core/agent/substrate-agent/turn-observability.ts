@@ -52,8 +52,10 @@ export function buildTurnCorrelation(
   const subagentId = message.channelId.startsWith('subagent:')
     ? message.channelId.slice('subagent:'.length).trim() || undefined
     : undefined;
+  const icpCorrelation = message.routing?.icpCorrelation;
   return {
     sessionId,
+    ...(icpCorrelation ? { companionId: icpCorrelation.localCompanionId } : {}),
     turnId,
     requestId,
     channelId: message.channelId,
@@ -62,13 +64,11 @@ export function buildTurnCorrelation(
     purpose: 'agent.turn',
     originType: callType,
     originStage: 'agent.turn',
-    ...(message.routing?.icpCorrelation
-      ? { icpCorrelation: message.routing.icpCorrelation }
-      : {}),
+    ...(icpCorrelation ? { icpCorrelation, chargeLane: icpCorrelation.chargeLane } : {}),
     service: 'agent',
     process: 'substrate-agent',
-    conversationId: sessionId,
-    rootInitiationId,
+    conversationId: icpCorrelation?.conversationId ?? sessionId,
+    rootInitiationId: icpCorrelation?.rootInitiationId ?? rootInitiationId,
     ...(shardId ? { shardId, workloadType: 'shard', workloadId: shardId } : {}),
     ...(subagentId ? { subagentId, workloadType: 'subagent', workloadId: subagentId } : {}),
   };

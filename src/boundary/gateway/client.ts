@@ -167,6 +167,7 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
+import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
@@ -211,7 +212,10 @@ function buildOutboundUsageCorrelation(
   companionId: string | undefined,
   correlation: Partial<CorrelationMetadata> | undefined,
 ): GatewayCorrelationParams {
-  const declaredCompanionId = correlation?.companionId?.trim();
+  const resolvedCorrelation = correlation?.icpCorrelation
+    ? resolveCorrelationMetadata(correlation, undefined, 'background')
+    : correlation;
+  const declaredCompanionId = resolvedCorrelation?.companionId?.trim();
   if (companionId && declaredCompanionId && declaredCompanionId !== companionId) {
     throw new Error(
       `Gateway usage correlation companionId ${JSON.stringify(declaredCompanionId)} does not match `
@@ -221,43 +225,44 @@ function buildOutboundUsageCorrelation(
   const charge = getRunChargeSnapshot();
   return {
     ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
-    ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
-    ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-    ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-    ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
-    ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
-    ...(correlation?.callType ? { callType: correlation.callType } : {}),
-    ...(correlation?.originType ? { originType: correlation.originType } : {}),
-    ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
-    ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-    ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
-    ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
-    ...(correlation?.service ? { service: correlation.service } : {}),
-    ...(correlation?.process ? { process: correlation.process } : {}),
-    ...(charge?.lane ? { chargeLane: charge.lane } : (correlation?.chargeLane
-      ? { chargeLane: correlation.chargeLane }
+    ...(resolvedCorrelation?.sessionId ? { sessionId: resolvedCorrelation.sessionId } : {}),
+    ...(resolvedCorrelation?.turnId ? { turnId: resolvedCorrelation.turnId } : {}),
+    ...(resolvedCorrelation?.requestId ? { requestId: resolvedCorrelation.requestId } : {}),
+    ...(resolvedCorrelation?.channelId ? { channelId: resolvedCorrelation.channelId } : {}),
+    ...(resolvedCorrelation?.channelType ? { channelType: resolvedCorrelation.channelType } : {}),
+    ...(resolvedCorrelation?.callType ? { callType: resolvedCorrelation.callType } : {}),
+    ...(resolvedCorrelation?.originType ? { originType: resolvedCorrelation.originType } : {}),
+    ...(resolvedCorrelation?.originStage ? { originStage: resolvedCorrelation.originStage } : {}),
+    ...(resolvedCorrelation?.toolName ? { toolName: resolvedCorrelation.toolName } : {}),
+    ...(resolvedCorrelation?.toolCallId ? { toolCallId: resolvedCorrelation.toolCallId } : {}),
+    ...(resolvedCorrelation?.purpose ? { purpose: resolvedCorrelation.purpose } : {}),
+    ...(resolvedCorrelation?.service ? { service: resolvedCorrelation.service } : {}),
+    ...(resolvedCorrelation?.process ? { process: resolvedCorrelation.process } : {}),
+    ...(charge?.lane ? { chargeLane: charge.lane } : (resolvedCorrelation?.chargeLane
+      ? { chargeLane: resolvedCorrelation.chargeLane }
       : {})),
     ...(charge?.surface
       ? { chargeSurface: charge.surface }
-      : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),
+      : (resolvedCorrelation?.chargeSurface ? { chargeSurface: resolvedCorrelation.chargeSurface } : {})),
     ...(charge?.chargeEventId
       ? { chargeEventId: charge.chargeEventId }
-      : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
+      : (resolvedCorrelation?.chargeEventId ? { chargeEventId: resolvedCorrelation.chargeEventId } : {})),
     ...(charge?.lineage.runId
       ? { chargeRunId: charge.lineage.runId }
-      : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
+      : (resolvedCorrelation?.chargeRunId ? { chargeRunId: resolvedCorrelation.chargeRunId } : {})),
     ...(charge?.lineage.rootRunId
       ? { chargeRootRunId: charge.lineage.rootRunId }
-      : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
+      : (resolvedCorrelation?.chargeRootRunId ? { chargeRootRunId: resolvedCorrelation.chargeRootRunId } : {})),
     ...(charge?.lineage.parentRunId
       ? { chargeParentRunId: charge.lineage.parentRunId }
-      : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
-    ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
-    ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
-    ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
-    ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
-    ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
-    ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+      : (resolvedCorrelation?.chargeParentRunId ? { chargeParentRunId: resolvedCorrelation.chargeParentRunId } : {})),
+    ...(resolvedCorrelation?.shardId ? { shardId: resolvedCorrelation.shardId } : {}),
+    ...(resolvedCorrelation?.subagentId ? { subagentId: resolvedCorrelation.subagentId } : {}),
+    ...(resolvedCorrelation?.conversationId ? { conversationId: resolvedCorrelation.conversationId } : {}),
+    ...(resolvedCorrelation?.rootInitiationId ? { rootInitiationId: resolvedCorrelation.rootInitiationId } : {}),
+    ...(resolvedCorrelation?.workloadType ? { workloadType: resolvedCorrelation.workloadType } : {}),
+    ...(resolvedCorrelation?.workloadId ? { workloadId: resolvedCorrelation.workloadId } : {}),
+    ...(resolvedCorrelation?.icpCorrelation ? { icpCorrelation: resolvedCorrelation.icpCorrelation } : {}),
   };
 }
 
@@ -441,7 +446,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
-    const requestId = context.correlation?.requestId?.trim() || `req-${++this.requestCounter}`;
+    const requestId = context.correlation?.requestId?.trim()
+      || context.correlation?.icpCorrelation?.requestId.trim()
+      || `req-${++this.requestCounter}`;
     const callType = context.correlation?.callType
       ?? context.correlation?.originType
       ?? 'chat';

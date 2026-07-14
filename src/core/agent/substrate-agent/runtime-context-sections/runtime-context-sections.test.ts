@@ -171,6 +171,7 @@ const TEST_CHARGE_POLICY: ChargePolicyConfig = {
     premium_cloud: 4,
   },
   referenceModelClassPricingRationales: {},
+  icpCostBreaker: { enabled: false },
   fatigue: makeTestFatiguePolicyConfig(),
 } as ChargePolicyConfig;
 

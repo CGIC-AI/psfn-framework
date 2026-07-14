@@ -74,6 +74,9 @@ function getDefaultSeedPolicy() {
       cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
       premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
     },
+    icpCostBreaker: {
+      enabled: false,
+    },
     fatigue: makeTestFatiguePolicyConfig(),
   };
 }
@@ -211,6 +214,95 @@ describe('charge policy config', () => {
         seed.fatigue.channelSettingLimits.busy_human_group.maxHardCap,
       );
       expect(seed.fatigue.overcharge.reserveResponses).toBe(2);
+      expect(seed.icpCostBreaker).toEqual({ enabled: false });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts an explicitly enabled ICP breaker with a fully reserved warning band', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-icp-cost-breaker-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+
+    try {
+      const saved = saveChargePolicyConfig(dataDir, {
+        ...getDefaultSeedPolicy(),
+        icpCostBreaker: {
+          enabled: true,
+          warningThresholdUsd: 0.42,
+          hardLimitUsd: 0.5,
+          finalCloseoutReserveUsd: 0.08,
+          pendingReservationStaleAfterMs: 900_000,
+          includedCostPurposes: {
+            conversation_turn: true,
+            tool: true,
+            summary: true,
+            extraction: true,
+            sidecar: true,
+          },
+        },
+      });
+
+      expect(saved.icpCostBreaker).toEqual({
+        enabled: true,
+        warningThresholdUsd: 0.42,
+        hardLimitUsd: 0.5,
+        finalCloseoutReserveUsd: 0.08,
+        pendingReservationStaleAfterMs: 900_000,
+        includedCostPurposes: {
+          conversation_turn: true,
+          tool: true,
+          summary: true,
+          extraction: true,
+          sidecar: true,
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing thresholds', { enabled: true }],
+    ['unknown field', { enabled: false, hardLimitUsd: 1 }],
+    ['warning reserve gap', {
+      enabled: true,
+      warningThresholdUsd: 0.4,
+      hardLimitUsd: 0.6,
+      finalCloseoutReserveUsd: 0.1,
+      pendingReservationStaleAfterMs: 900_000,
+      includedCostPurposes: {
+        conversation_turn: true,
+        tool: true,
+        summary: true,
+        extraction: true,
+        sidecar: true,
+      },
+    }],
+    ['direct turn excluded', {
+      enabled: true,
+      warningThresholdUsd: 0.4,
+      hardLimitUsd: 0.5,
+      finalCloseoutReserveUsd: 0.1,
+      pendingReservationStaleAfterMs: 900_000,
+      includedCostPurposes: {
+        conversation_turn: false,
+        tool: true,
+        summary: true,
+        extraction: true,
+        sidecar: true,
+      },
+    }],
+  ])('fails closed on malformed ICP cost-breaker policy: %s', (_label, icpCostBreaker) => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-invalid-icp-cost-breaker-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    try {
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...getDefaultSeedPolicy(),
+        icpCostBreaker,
+      })).toThrow(/Invalid charge policy/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

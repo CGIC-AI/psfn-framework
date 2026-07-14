@@ -157,6 +157,9 @@ export function makeTestChargePolicyConfig(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    icpCostBreaker: {
+      enabled: false,
+    },
     fatigue: makeTestFatiguePolicyConfig(),
   };
 }

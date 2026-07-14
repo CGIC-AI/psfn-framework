@@ -101,6 +101,34 @@ export type FatigueRegulationState = (typeof FATIGUE_REGULATION_STATE_VALUES)[nu
 
 export type ChargePolicyRationaleMap<T extends string> = Partial<Record<T, string>>;
 
+export const ICP_COST_PURPOSE_VALUES = [
+  'conversation_turn',
+  'tool',
+  'summary',
+  'extraction',
+  'sidecar',
+] as const;
+export type IcpCostPurpose = (typeof ICP_COST_PURPOSE_VALUES)[number];
+
+export type IcpCostBreakerConfig =
+  | {
+      /** Disabled until an owner selects thresholds from verified prices and observed usage. */
+      enabled: false;
+    }
+  | {
+      enabled: true;
+      /** Ordinary ICP work may not reserve into this threshold's closeout band. */
+      warningThresholdUsd: number;
+      /** Absolute projected conversation ceiling; no importance signal can bypass it. */
+      hardLimitUsd: number;
+      /** Exact hard-limit band reserved for fatigue-authorized final closeout turns. */
+      finalCloseoutReserveUsd: number;
+      /** Pending reservations older than this remain charged but project as stale for operators. */
+      pendingReservationStaleAfterMs: number;
+      /** Explicit owner declaration of which canonical ICP work classes share the ceiling. */
+      includedCostPurposes: Record<IcpCostPurpose, boolean>;
+    };
+
 export interface FatiguePolicyResponseBudget {
   softTarget: number;
   hardCap: number;
@@ -174,5 +202,6 @@ export interface ChargePolicyConfig {
   };
   referenceModelClassPricing: Record<ChargePolicyReferenceModelClass, number>;
   referenceModelClassPricingRationales?: ChargePolicyRationaleMap<ChargePolicyReferenceModelClass>;
+  icpCostBreaker: IcpCostBreakerConfig;
   fatigue: FatiguePolicyConfig;
 }

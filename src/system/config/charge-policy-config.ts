@@ -15,6 +15,7 @@ import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SEED_FILE_NAME,
   CHARGE_POLICY_SURFACE_VALUES,
+  ICP_COST_PURPOSE_VALUES,
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
@@ -27,6 +28,7 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
 
 export {
@@ -35,6 +37,7 @@ export {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SEED_FILE_NAME,
   CHARGE_POLICY_SURFACE_VALUES,
+  ICP_COST_PURPOSE_VALUES,
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
@@ -48,6 +51,8 @@ export {
   type FatiguePolicyIntent,
   type FatiguePolicyRelationshipClass,
   type FatiguePolicyState,
+  type IcpCostBreakerConfig,
+  type IcpCostPurpose,
 } from '../../shared/contracts/charge-policy.js';
 
 interface ChargePolicyLoadOptions {
@@ -81,6 +86,14 @@ function parseNonNegativeNumber(
     throw new Error(`Invalid charge policy: ${fieldPath} must be a finite number >= 0`);
   }
   return value;
+}
+
+function parsePositiveNumber(value: unknown, fieldPath: string): number {
+  const parsed = parseNonNegativeNumber(value, fieldPath);
+  if (parsed === 0) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be a finite number > 0`);
+  }
+  return parsed;
 }
 
 function parseNonNegativeInteger(
@@ -121,6 +134,66 @@ function parseBoolean(
     throw new Error(`Invalid charge policy: ${fieldPath} must be a boolean`);
   }
   return value;
+}
+
+function parseIcpCostBreakerConfig(
+  raw: unknown,
+  fieldPath: string,
+): IcpCostBreakerConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  const enabled = parseBoolean(raw.enabled, `${fieldPath}.enabled`);
+  if (!enabled) {
+    assertNoUnknownKeys(raw, ['enabled'], fieldPath);
+    return { enabled: false };
+  }
+
+  assertNoUnknownKeys(raw, [
+    'enabled',
+    'warningThresholdUsd',
+    'hardLimitUsd',
+    'finalCloseoutReserveUsd',
+    'pendingReservationStaleAfterMs',
+    'includedCostPurposes',
+  ], fieldPath);
+  const warningThresholdUsd = parsePositiveNumber(
+    raw.warningThresholdUsd,
+    `${fieldPath}.warningThresholdUsd`,
+  );
+  const hardLimitUsd = parsePositiveNumber(raw.hardLimitUsd, `${fieldPath}.hardLimitUsd`);
+  const finalCloseoutReserveUsd = parsePositiveNumber(
+    raw.finalCloseoutReserveUsd,
+    `${fieldPath}.finalCloseoutReserveUsd`,
+  );
+  if (Math.abs((warningThresholdUsd + finalCloseoutReserveUsd) - hardLimitUsd) > 1e-9) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.warningThresholdUsd + `
+      + `${fieldPath}.finalCloseoutReserveUsd must equal ${fieldPath}.hardLimitUsd`,
+    );
+  }
+  const includedCostPurposes = parseFixedObjectMap(
+    raw.includedCostPurposes,
+    `${fieldPath}.includedCostPurposes`,
+    ICP_COST_PURPOSE_VALUES,
+    parseBoolean,
+  );
+  if (!includedCostPurposes.conversation_turn) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.includedCostPurposes.conversation_turn must be true`,
+    );
+  }
+  return {
+    enabled: true,
+    warningThresholdUsd,
+    hardLimitUsd,
+    finalCloseoutReserveUsd,
+    pendingReservationStaleAfterMs: parsePositiveInteger(
+      raw.pendingReservationStaleAfterMs,
+      `${fieldPath}.pendingReservationStaleAfterMs`,
+    ),
+    includedCostPurposes,
+  };
 }
 
 function parseFixedNumericMap<T extends string>(
@@ -495,6 +568,7 @@ function validateChargePolicyConfig(
       'moa',
       'referenceModelClassPricing',
       'referenceModelClassPricingRationales',
+      'icpCostBreaker',
       'fatigue',
     ],
     sourcePath,
@@ -548,6 +622,10 @@ function validateChargePolicyConfig(
     `${sourcePath}.referenceModelClassPricingRationales`,
   );
   const fatigue = parseFatiguePolicyConfig(raw.fatigue, `${sourcePath}.fatigue`);
+  const icpCostBreaker = parseIcpCostBreakerConfig(
+    raw.icpCostBreaker,
+    `${sourcePath}.icpCostBreaker`,
+  );
   if (
     fatigue.socialRegulation.marginalChargeUnits !==
     surfaceCosts.companionSocialContinuation
@@ -573,6 +651,7 @@ function validateChargePolicyConfig(
     ...(referenceModelClassPricingRationales !== undefined
       ? { referenceModelClassPricingRationales }
       : {}),
+    icpCostBreaker,
     fatigue,
   };
 }

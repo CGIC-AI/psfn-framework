@@ -109,6 +109,8 @@ export interface GatewayCorrelationParams {
   rootInitiationId?: string;
   workloadType?: string;
   workloadId?: string;
+  /** Validated, content-free ICP episode and cost classification. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface LLMChatParams extends GatewayCorrelationParams {

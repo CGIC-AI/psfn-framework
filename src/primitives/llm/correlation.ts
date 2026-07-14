@@ -1,4 +1,5 @@
 import type { CompletionPurpose, CorrelationMetadata, ModelPurpose, ObservabilityCallType } from '../../shared/contracts/runtime.js';
+import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
   'chat',
@@ -65,17 +66,51 @@ export function resolveCorrelationMetadata(
     ...(optionCorrelation ?? {}),
   };
 
+  const rawIcpCorrelation = optionCorrelation?.icpCorrelation
+    ?? contextCorrelation?.icpCorrelation;
+  const icpCorrelation = rawIcpCorrelation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(rawIcpCorrelation);
+  const requireIcpMatch = (
+    field: string,
+    declared: string | undefined,
+    expected: string,
+  ): string => {
+    const normalized = normalizeCorrelationValue(declared);
+    if (normalized !== undefined && normalized !== expected) {
+      throw new Error(
+        `ICP conversation correlation ${field} conflicts with flattened correlation metadata`,
+      );
+    }
+    return expected;
+  };
+
+  if (icpCorrelation && (merged.shardId !== undefined || merged.subagentId !== undefined)) {
+    throw new Error('ICP conversation correlation cannot share shard or subagent budget scope');
+  }
+
   const turnId = normalizeCorrelationValue(merged.turnId);
-  const companionId = normalizeCorrelationValue(merged.companionId);
+  const companionId = icpCorrelation
+    ? requireIcpMatch('companionId', merged.companionId, icpCorrelation.localCompanionId)
+    : normalizeCorrelationValue(merged.companionId);
   const sessionId = normalizeCorrelationValue(merged.sessionId);
-  const channelId = normalizeCorrelationValue(merged.channelId);
+  const channelId = icpCorrelation
+    ? requireIcpMatch('channelId', merged.channelId, icpCorrelation.channelId)
+    : normalizeCorrelationValue(merged.channelId);
   const channelType = normalizeCorrelationValue(merged.channelType) as typeof merged.channelType;
-  const requestId = normalizeCorrelationValue(merged.requestId) ?? turnId ?? 'unknown';
+  const resolvedTurnId = icpCorrelation
+    ? requireIcpMatch('turnId', turnId, icpCorrelation.turnId)
+    : turnId;
+  const requestId = icpCorrelation
+    ? requireIcpMatch('requestId', merged.requestId, icpCorrelation.requestId)
+    : (normalizeCorrelationValue(merged.requestId) ?? resolvedTurnId ?? 'unknown');
   const toolName = normalizeCorrelationValue(merged.toolName);
   const toolCallId = normalizeCorrelationValue(merged.toolCallId);
   const service = normalizeCorrelationValue(merged.service);
   const process = normalizeCorrelationValue(merged.process);
-  const chargeLane = normalizeCorrelationValue(merged.chargeLane) as typeof merged.chargeLane;
+  const chargeLane = icpCorrelation
+    ? requireIcpMatch('chargeLane', merged.chargeLane, icpCorrelation.chargeLane) as typeof merged.chargeLane
+    : normalizeCorrelationValue(merged.chargeLane) as typeof merged.chargeLane;
   const chargeSurface = normalizeCorrelationValue(merged.chargeSurface) as typeof merged.chargeSurface;
   const chargeEventId = normalizeCorrelationValue(merged.chargeEventId);
   const chargeRunId = normalizeCorrelationValue(merged.chargeRunId);
@@ -83,8 +118,12 @@ export function resolveCorrelationMetadata(
   const chargeParentRunId = normalizeCorrelationValue(merged.chargeParentRunId);
   const shardId = normalizeCorrelationValue(merged.shardId);
   const subagentId = normalizeCorrelationValue(merged.subagentId);
-  const conversationId = normalizeCorrelationValue(merged.conversationId);
-  const rootInitiationId = normalizeCorrelationValue(merged.rootInitiationId);
+  const conversationId = icpCorrelation
+    ? requireIcpMatch('conversationId', merged.conversationId, icpCorrelation.conversationId)
+    : normalizeCorrelationValue(merged.conversationId);
+  const rootInitiationId = icpCorrelation
+    ? requireIcpMatch('rootInitiationId', merged.rootInitiationId, icpCorrelation.rootInitiationId)
+    : normalizeCorrelationValue(merged.rootInitiationId);
   const workloadType = normalizeCorrelationValue(merged.workloadType);
   const workloadId = normalizeCorrelationValue(merged.workloadId);
 
@@ -104,7 +143,7 @@ export function resolveCorrelationMetadata(
   return {
     ...(companionId ? { companionId } : {}),
     ...(sessionId ? { sessionId } : {}),
-    ...(turnId ? { turnId } : {}),
+    ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
     requestId,
     ...(channelId ? { channelId } : {}),
     ...(channelType ? { channelType } : {}),
@@ -128,6 +167,7 @@ export function resolveCorrelationMetadata(
     ...(rootInitiationId ? { rootInitiationId } : {}),
     ...(workloadType ? { workloadType } : {}),
     ...(workloadId ? { workloadId } : {}),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
   };
 }
 

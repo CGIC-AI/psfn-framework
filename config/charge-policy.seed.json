@@ -51,6 +51,9 @@
     "cheap_cloud": "Cheap cloud models are lightly priced to keep them available for routine use.",
     "premium_cloud": "Premium cloud models are intentionally more expensive to reserve for high-value calls."
   },
+  "icpCostBreaker": {
+    "enabled": false
+  },
   "fatigue": {
     "relationshipBudgets": {
       "non_machine_intelligence": {

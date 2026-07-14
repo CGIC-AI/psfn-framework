@@ -32,10 +32,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
-- **Partially advanced**: `cam.1` accounting capture and `cam.2` typed
-  attribution are code-complete and validated on `feat/cost-accounting`; the
-  parent `cam` epic and `cam.3`–`.6` remain open, and none of this branch is on
-  `main` yet. It still blocks ICP
+- **Partially advanced**: `cam.1` accounting capture, `cam.2` typed
+  attribution, and `cam.3` durable dashboard accounting are code-complete and
+  validated on `feat/cost-accounting`; the parent `cam` epic and
+  `cam.4`–`.6` remain open, and none of this branch is on `main` yet. It still blocks ICP
   `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -92,30 +92,36 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
-### 0.4 2026-07-14 accounting capture and attribution status
+### 0.4 2026-07-14 accounting capture, attribution, and dashboard status
 
 `psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,
 and `psfn-framework-cam.2` is delivered through implementation head
-`9a3f57a1` (`61097e33..9a3f57a1`). CAM.1 records immutable physical provider
-attempts with reconciled token and cost economics. CAM.2 adds the typed
-companion, channel, call, origin, service/process, provider/model/slot, tool,
-charge-lineage, shard/subagent/conversation, workload, status, and cost-source
-dimensions; explicit unknown coverage; strict filters and groups; indexed
-Postgres persistence; and fail-closed Garden tenancy with explicit fleet
-aggregation. This status update is the documentation finalization immediately
-after that implementation head on `feat/cost-accounting`.
+`9a3f57a1` (`61097e33..9a3f57a1`). `psfn-framework-cam.3` is delivered by
+`43c76a32` and `825eef8c`, making `825eef8c` the current implementation head.
+CAM.1 records immutable physical provider attempts with reconciled token and
+cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
+strict filters and groups, indexed Postgres persistence, and fail-closed Garden
+tenancy with explicit fleet aggregation. CAM.3 replaces the main dashboard's
+in-memory cost samples with canonical Today/Week/Month Postgres queries,
+complete call/token/cache/provider/estimated/effective totals, a 15-second
+bounded poll, race-safe range switching, and explicit fresh/stale/unavailable
+states while keeping live context-pressure and TTFT telemetry transient.
 
-CAM.2 validation at `9a3f57a1`: the broad accounting suite passed 22 files / 311
-tests; Docker-backed real local PostgreSQL integration passed 1 file / 10 tests,
-including concurrent pristine migration and the 21-group Garden ranking case;
-`npm run lint`, `npm run build`, `npm run verify:model-usage-capture`, and
-`git diff --check` passed. The proportional full suite passed 704 files / 7,732
-tests, with only the two inherited scheduler fixtures that omit
-`minPartnerIdleMinutes` while the loader supplies the default `60`; those files
-are outside the CAM.2 diff. Repository hygiene passed public sanitization before
-stopping on existing identity-literal allowlist drift; CAM.2 introduced none of
-the reported literals. Settings owner files were not touched, so the settings
-contract gate was not applicable.
+CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
+Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
+dashboard tests passed 11/11; the split Garden operator socket/mTLS/API and
+model-usage reachability suite passed 17/17; and Docker-backed real local
+PostgreSQL reconciliation passed 12/12, including separate writer/operator
+processes, cross-process refresh, operator restart, and actual database
+outage/recovery/stale-cache transitions. `npm run lint`, `npm run build`,
+`npm --prefix admin-ui run build`, `npm run verify:model-usage-capture`, and
+`git diff --check` passed. The proportional full suite passed 704 files / 7,742
+tests, with only the same two inherited scheduler fixtures that omit
+`minPartnerIdleMinutes` while the loader supplies the default `60`; both files
+are outside the CAM.3 diff. `npm --prefix admin-ui run check` still reports the
+seven pre-CAM.3 flat `ModelUsageEvent` reads in the unchanged Charge/Budget
+renderer; that repair is tracked separately by open bead
+`psfn-framework-at95`, not attributed to CAM.3.
 
 This is a feature-branch completion boundary, not a `main` or whole-accounting
 completion claim. The `psfn-framework-cam` parent remains open, with these
@@ -123,10 +129,9 @@ children still pending:
 
 | Bead | Remaining scope | Status |
 |---|---|---|
-| `psfn-framework-cam.3` | Replace in-memory dashboard cost samples with durable live model-usage queries | open |
 | `psfn-framework-cam.4` | Calendar/custom ranges, time buckets, multidimensional breakdowns, sorting, and export | open |
 | `psfn-framework-cam.5` | Operator charge-unit to dollar reconciliation by lane, surface, and run | open |
-| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification | open |
+| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by CAM.4, CAM.5, and `574y` | blocked |
 
 ## 1. Where things stand
 

@@ -6,13 +6,21 @@ The headline fact governing everything below: the multi-companion substrate is *
 
 ## 2026-07-13 branch handoff — orphan/stub/bugfix lane
 
-- Branch `fix/orphans-stubs-bugfixes`, implementation commit `a81cdd49`.
+- Branch `fix/orphans-stubs-bugfixes`, pushed fixed point `3efa251c` (initial
+  hygiene implementation `a81cdd49`).
 - Closed `psfn-framework-jcic` and canonical identity-hygiene bead
   `psfn-framework-rbqo`; closed `psfn-framework-3d9r` as an exact duplicate of
-  `rbqo`. The current orphan set was audited one bead at a time; `mihm`,
-  `vinz.19`, `vinz.20`, `vinz.21`, `vinz.29`, `i698`, and `7ang` remain open
-  with evidence comments because their acceptance is incomplete or still
-  requires operator/live validation. Active ICP work was excluded.
+  `rbqo`. The current orphan set was audited one bead at a time. A 2026-07-14
+  reconciliation also closed `psfn-framework-mihm` (bounded fail-closed
+  empty-argument retry/provenance shipped at `7243616b`) and
+  `psfn-framework-i698` (settings-owned active timezone and Intl scheduler
+  slots shipped at `80b14103`) instead of holding completed implementations
+  open for later validation. The important non-Pi runtime verification left
+  from `mihm` is now isolated as `psfn-framework-h7g9.1` under fix-wave epic
+  `psfn-framework-h7g9`. `vinz.19`, `vinz.20`, `vinz.21`, `vinz.29`, and
+  `7ang` remain genuinely open; `vinz.29` still lacks its formal twin mapping
+  on the Garden surface, and `7ang` still has live feature children. Active
+  ICP work was excluded.
 - Validation: 69 focused tests passed; `npm run lint`, `npm run build`,
   `npm run verify:shared-type-guards`, `npm run verify:identity-literals`,
   `npm run verify:repository-hygiene`, and `git diff --check` passed. Separate
@@ -122,7 +130,7 @@ was dependency-wired end to end, and the release path got tracker structure.
 5. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
    one activity with the `s10mc.8` live demo)
 6. Operator-only queue: `efc2` psfn-test preview review (committed
-   ~2026-07-19), `kz0i`/`i698` morning live observations, `lpro.1` reboot.
+   ~2026-07-19), `kz0i` morning live observation, `lpro.1` reboot.
 
 **ICP chain (wired):** `6.1` → `6.2` broker ∥ `6.6` fatigue/social-charge →
 `6.3` target-channel turns (← `s10rm`) → `6.4` tools → `6.5` source adapters →

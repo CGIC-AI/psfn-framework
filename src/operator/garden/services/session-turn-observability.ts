@@ -22,17 +22,17 @@ import type {
   ContextMessage,
   LLMProviderWireMessage,
   PromptSectionTelemetry,
+  ToolSchema,
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
-import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
   serializePromptPlanForProvider,
   serializePromptPlanSystemPrompt,
+  type PromptPlan,
 } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
-import { rebuildProviderWireMessagesForPrompt } from '../../../core/agent/substrate-agent/turn-execution/prompt-invocation-history.js';
-import { contextMessagesToPiMessages } from '../../../primitives/llm/message-conversion.js';
+import { deriveProviderWireMessagesForTurnSnapshot } from '../../../core/agent/substrate-agent/turn-execution/prompt-invocation-history.js';
 
 /**
  * Truncation-point inventory (bead u9jo.2).
@@ -116,12 +116,11 @@ function buildRecordedRoleEnvelopeRefs(record: AdminSessionTurnData['record']): 
 
 /**
  * Reconstruct the provider wire messages from the canonical PromptPlan the same
- * way the runtime did at write time (agent-invocation.ts): serialize the plan
- * for the recorded transport to seed the system lane, convert plan.messages into
- * the provider history exactly as `contextMessagesToPiMessages` produced it, and
- * append the current turn from `promptContext.currentTurnInput`. Reuses the
- * runtime's own `rebuildProviderWireMessagesForPrompt`, so the read-time
- * projection cannot drift from the write-time capture.
+ * way the runtime did at write time. Delegates to the runtime's own
+ * `deriveProviderWireMessagesForTurnSnapshot` — the SAME function the persist
+ * path uses to decide whether the embedded copy is byte-derivable (bead
+ * hgw3.3) — so the read-time projection cannot drift from the write-time
+ * slimming decision.
  *
  * Returns [] when the plan or the recorded system-role transport is unavailable
  * (nothing canonical to derive from).
@@ -130,14 +129,30 @@ function deriveProviderWireMessages(snapshot: AdminTurnSnapshotData | null): LLM
   const plan = snapshot?.plan ?? null;
   const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
   if (!plan || !transport) return [];
-  const seededWireMessages = serializePromptPlanForProvider(plan, transport).providerWireMessages;
-  const historyMessages = contextMessagesToPiMessages(plan.messages);
-  const currentPromptMessage: AgentMessage = {
-    role: 'user',
-    content: snapshot?.promptContext?.currentTurnInput ?? '',
-    timestamp: 0,
-  };
-  return rebuildProviderWireMessagesForPrompt(seededWireMessages, historyMessages, currentPromptMessage);
+  return deriveProviderWireMessagesForTurnSnapshot({
+    plan,
+    transport,
+    currentTurnInput: snapshot?.promptContext?.currentTurnInput,
+  });
+}
+
+/**
+ * Fail-closed guard for content-addressed tool definitions (bead hgw3.3): the
+ * persistence read path resolves `toolDefinitionsRef` back into inline
+ * `plan.toolDefinitions` before a record ever reaches Garden. A plan that
+ * still carries an unresolved ref here means a reader bypassed the resolving
+ * store — surface that loudly instead of rendering a silent empty tool list.
+ */
+function requireResolvedPlanToolDefinitions(plan: PromptPlan): ToolSchema[] {
+  if (!Array.isArray(plan.toolDefinitions)) {
+    const danglingRef = (plan as unknown as Record<string, unknown>).toolDefinitionsRef;
+    throw new Error(
+      typeof danglingRef === 'string'
+        ? `Turn snapshot plan carries unresolved toolDefinitionsRef "${danglingRef}"; records must be read through the resolving turn-record store`
+        : 'Turn snapshot plan is missing toolDefinitions',
+    );
+  }
+  return plan.toolDefinitions;
 }
 
 /**
@@ -158,7 +173,8 @@ function resolveProviderMessages(snapshot: AdminTurnSnapshotData | null): AdminP
  * activeTools at write time (agent-invocation.ts binds the same array to both).
  */
 function resolveActiveTools(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['activeTools'] {
-  const tools = snapshot?.toolContext?.activeTools ?? snapshot?.plan?.toolDefinitions ?? [];
+  const tools = snapshot?.toolContext?.activeTools
+    ?? (snapshot?.plan ? requireResolvedPlanToolDefinitions(snapshot.plan) : []);
   return tools.map(tool => ({
     ...tool,
     inputSchema: cloneUnknownValue(tool.inputSchema),
@@ -357,7 +373,7 @@ function buildProviderWireData(
       systemRoleTransport: transport,
       systemPrompt: payload.systemPrompt,
       messages: payload.providerWireMessages.map(message => ({ ...message })),
-      toolDefinitions: plan.toolDefinitions.map(tool => cloneUnknownValue(tool)),
+      toolDefinitions: requireResolvedPlanToolDefinitions(plan).map(tool => cloneUnknownValue(tool)),
     };
   }
   return {

@@ -160,7 +160,13 @@ export interface TurnPromptContextSnapshot {
 }
 
 export interface TurnToolContextSnapshot {
-  activeTools: ToolSchema[];
+  /**
+   * Resolved tool schemas bound to the turn. Live captures always carry it;
+   * SLIM persisted turn snapshots omit it when byte-identical to
+   * plan.toolDefinitions (bead hgw3.3) — readers fall back to the plan.
+   * Preserve absence; never coerce a missing list to [].
+   */
+  activeTools?: ToolSchema[];
   adaptiveSnapshot?: AdaptiveToolSnapshotTelemetry;
 }
 
@@ -239,7 +245,11 @@ export function cloneProviderObservability(
   return {
     ...observability,
     systemRole: { ...observability.systemRole },
-    providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })),
+    // Preserve absence: slim persisted snapshots omit the wire capture and the
+    // Garden read path derives it from the plan; [] would mean "captured empty".
+    ...(observability.providerWireMessages
+      ? { providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })) }
+      : {}),
   };
 }
 

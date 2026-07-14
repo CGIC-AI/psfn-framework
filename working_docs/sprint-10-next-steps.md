@@ -66,6 +66,15 @@ The headline fact governing everything below: the multi-companion substrate is *
   remediation now rejects raw non-string Discord IDs before enqueue, and the
   same reviewer final check passed. Final integrated validation passed all 30
   focused schedule/tool-call tests, `npm run lint`, and the ESM+DTS build.
+- Shard control-plane honesty fix `psfn-framework-upx0.10` is integrated at
+  implementation fixed point `b3946dbd`. Model-facing catalogs and descriptions
+  no longer advertise the unregistered shard tool; the duplicate subagent port,
+  dead shard adapter/tool, and uncalled post-turn registration are removed.
+  `SubagentFaculty` remains the sole model-facing subagent path, while
+  `ShardExecutionPort` and Wyoming delegation remain wired. The single
+  independent review passed with no IMPORTANT or material report-only findings.
+  Final integrated validation passed 9 files / 127 tests, `npm run lint`, and
+  the ESM+DTS build. Parent `psfn-framework-upx0` remains open.
 
 ## 0. 2026-07-12 update — decided priority order
 

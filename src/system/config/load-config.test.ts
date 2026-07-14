@@ -3,7 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadAgentConfig, loadConfig, loadOperatorConfig } from './load-config.js';
-import { createDefaultObserverEvalSidecarSettings } from './runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
+} from './runtime-config-contracts.js';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -332,6 +335,7 @@ describe('loadConfig path defaults', () => {
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
     expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
     expect(config.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
+    expect(config.sessionTailCache).toEqual(createDefaultSessionTailCacheSettings());
     expect(config.deepgramModel).toBeUndefined();
     expect(config.deepgramSttEndpoint).toBeUndefined();
     expect(config.deepgramListenEndpoint).toBeUndefined();

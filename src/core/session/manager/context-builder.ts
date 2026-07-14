@@ -618,6 +618,9 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
+    ...(collected.storeWindowMaxEntryId !== undefined
+      ? { storeWindowMaxEntryId: collected.storeWindowMaxEntryId }
+      : {}),
     ...(roomWindowGated
       ? {
         roomWindowFloorMs: roomWindowFloor,

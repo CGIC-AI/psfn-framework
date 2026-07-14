@@ -4,6 +4,25 @@ Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — d
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
+## 2026-07-14 feature status — `feat/garden-wan-performance`
+
+- `psfn-framework-t5z7.4` is closed at `af553dc0` (server/API slice
+  `118890bd`, client/UI slice `af553dc0`). The sessions index is now one
+  contact-free request carrying only bounded channel/session identity,
+  activity, and counts; `listSessionRoutes` no longer recursively calls
+  `listSessions`.
+- Contact linkage resolves only after the operator selects one session, through
+  a focused detail endpoint that exposes the prior id/display-name fields but
+  not contact notes, trust, relationship, or privacy data. Repeat SPA navigation
+  paints the Garden-session cache immediately and performs one conditional
+  ETag-compatible revalidation; selection detail survives list refreshes.
+- The single independent review passed at fixed point `af553dc0` with no
+  important findings and no remediation. Final integrated gate: service/routes
+  27/27, admin endpoint/client/loader 17/17, Garden build, root ESM+DTS build,
+  lint, and worktree plus branch-range diff checks passed. The two known,
+  untouched prompt-monitor Svelte diagnostics remain report-only. Parent epic
+  `psfn-framework-t5z7` remains open for its other children.
+
 ## 0. 2026-07-12 update — decided priority order
 
 Outcome of the 2026-07-12 triage + grilling session. Tracker was reconciled the

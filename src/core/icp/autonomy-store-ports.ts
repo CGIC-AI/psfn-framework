@@ -115,6 +115,8 @@ export interface IcpInitiationPermitStorePort {
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
   }): Promise<IcpInitiationPermit>;
   getPermit(permitId: string): Promise<IcpInitiationPermit | null>;
+  /** Idempotency owner for response-loss reconciliation at permit issue. */
+  getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null>;
   consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult>;
   revokePermit(
     permitId: string,

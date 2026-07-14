@@ -15,7 +15,10 @@ import type {
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
-import type { KnownCompanionPeer } from './agent-facing-autonomy.js';
+import type {
+  IcpCompanionOutreachExecutionResult,
+  KnownCompanionPeer,
+} from './agent-facing-autonomy.js';
 import type { IcpInitiationCandidateStorePort } from './autonomy-store-ports.js';
 import {
   MAX_ICP_CANDIDATE_TTL_MS,
@@ -67,7 +70,7 @@ export interface IcpInitiationSourcePeerPort {
     contactId: string,
     permitId: string,
     isExecutionAuthorized?: () => boolean,
-  ): Promise<void>;
+  ): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
 export interface IcpInitiationSourceGatewayPort {
@@ -88,12 +91,15 @@ export interface IcpInitiationSourceRuntimeDependencies {
   peers: IcpInitiationSourcePeerPort;
   gateway: IcpInitiationSourceGatewayPort;
   consent: IcpInitiationConsentEvaluator;
+  /** Canonical capability-tier authorization. Required for every source. */
+  isExternalCompanionAuthorized(): boolean;
   eventBus?: EventBus;
   now?: () => number;
 }
 
 export type IcpInitiationSourceOutcome =
   | 'sent'
+  | 'suppressed'
   | 'deferred'
   | 'declined'
   | 'rejected'
@@ -197,12 +203,13 @@ function terminalOutcome(candidate: IcpInitiationCandidate): IcpInitiationSource
       return result('deduped', candidate, candidate.reasonCode ?? 'candidate_declined');
     case 'rejected':
       return result('deduped', candidate, candidate.reasonCode);
+    case 'deferred':
+      return result('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
     case 'consumed':
     case 'expired':
     case 'cancelled':
       return result('deduped', candidate, candidate.reasonCode);
     case 'pending':
-    case 'deferred':
     case 'permitted':
       return null;
   }
@@ -324,6 +331,13 @@ export function createIcpInitiationSourceRuntime(
     }
     const terminal = terminalOutcome(candidate);
     if (terminal) return terminal;
+    if (!dependencies.isExternalCompanionAuthorized()) {
+      if (candidate.status === 'pending') {
+        const rejected = await transition(candidate, 'rejected', 'policy_denied');
+        return result('rejected', rejected, 'policy_denied');
+      }
+      throw new Error(`Cannot execute unauthorized ICP candidate from ${candidate.status}`);
+    }
     if (candidate.expiresAtMs <= currentNow) {
       const expired = await transition(candidate, 'expired', 'candidate_expired');
       return result('deduped', expired, 'candidate_expired');
@@ -332,12 +346,16 @@ export function createIcpInitiationSourceRuntime(
       if (!candidate.permitId) {
         throw new Error(`Permitted ICP candidate ${candidate.candidateId} has no recovery permit binding`);
       }
-      await dependencies.peers.executeCompanionOutreach(peer.contactId, candidate.permitId);
+      if (!dependencies.isExternalCompanionAuthorized()) {
+        throw new Error('companion outreach authorization is unavailable during permit recovery');
+      }
+      const execution = await dependencies.peers.executeCompanionOutreach(
+        peer.contactId,
+        candidate.permitId,
+        dependencies.isExternalCompanionAuthorized,
+      );
       const consumed = await transition(candidate, 'consumed');
-      return result('sent', consumed);
-    }
-    if (candidate.status === 'deferred') {
-      candidate = await transition(candidate, 'pending');
+      return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
     }
 
     const channelId = resolveChannelId(
@@ -350,20 +368,24 @@ export function createIcpInitiationSourceRuntime(
       candidate: projection,
       channelId,
     });
-    if (!preflight.eligible) {
+    const reconcilingCommittedPermit = !preflight.eligible
+      && preflight.reasonCode === 'invitation_outstanding';
+    if (!preflight.eligible && !reconcilingCommittedPermit) {
       const denied = transitionReason(preflight);
       const transitioned = await transition(candidate, denied.status, denied.reasonCode);
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
     }
 
-    const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
-    if (consent.action === 'defer') {
-      const deferred = await transition(candidate, 'deferred', 'candidate_deferred');
-      return result('deferred', deferred, 'candidate_deferred');
-    }
-    if (consent.action === 'decline') {
-      const declined = await transition(candidate, 'declined', 'candidate_declined');
-      return result('declined', declined, 'candidate_declined');
+    if (!reconcilingCommittedPermit) {
+      const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
+      if (consent.action === 'defer') {
+        const deferred = await transition(candidate, 'deferred', 'candidate_deferred');
+        return result('deferred', deferred, 'candidate_deferred');
+      }
+      if (consent.action === 'decline') {
+        const declined = await transition(candidate, 'declined', 'candidate_declined');
+        return result('declined', declined, 'candidate_declined');
+      }
     }
 
     projection = toIcpInitiationCandidateSharedMetadata(candidate);
@@ -386,12 +408,13 @@ export function createIcpInitiationSourceRuntime(
       permitId: permitResult.permit.permitId,
     });
     await emitLifecycle(permitted, candidate.status);
-    await dependencies.peers.executeCompanionOutreach(
+    const execution = await dependencies.peers.executeCompanionOutreach(
       peer.contactId,
       permitResult.permit.permitId,
+      dependencies.isExternalCompanionAuthorized,
     );
     const consumed = await transition(permitted, 'consumed');
-    return result('sent', consumed);
+    return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
   };
 
   return {

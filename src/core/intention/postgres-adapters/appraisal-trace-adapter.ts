@@ -5,6 +5,7 @@ import { queryOne, queryRows } from './connection.js';
 import {
   DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP,
   isPendingFollowUpExpired,
+  normalizeOptionalIcpRootInitiationId,
   resolvePendingFollowUpDueAtForWrite,
   resolvePendingFollowUpEnqueueResolution,
   type PendingFollowUp,
@@ -133,7 +134,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         SELECT
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
         FROM intention_pending_follow_ups
       `,
     );
@@ -162,6 +164,9 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const sourceMessageId = normalizeContactId(input.sourceMessageId);
     const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
     const wakeConditions = encodeWakeConditions(input.wakeConditions);
+    const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
+      input.originIcpRootInitiationId,
+    );
 
     const row = await queryOne<PendingFollowUpRow>(
       this.pool,
@@ -169,14 +174,15 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         INSERT INTO intention_pending_follow_ups (
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions
+          context_summary, wake_conditions, origin_icp_root_initiation_id
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
         )
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
       `,
       [
         id,
@@ -193,6 +199,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         sourceMessageId ?? null,
         contextSummary ?? null,
         wakeConditions,
+        originIcpRootInitiationId ?? null,
       ],
     );
 
@@ -249,7 +256,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         SELECT
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
         FROM intention_pending_follow_ups
         WHERE id = $1
       `,
@@ -297,7 +305,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         SELECT
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
         FROM intention_pending_follow_ups
         ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''}
         ORDER BY created_at ASC, id ASC
@@ -330,7 +339,8 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
       `,
       [normalizedId, activatedAt, activationReason ?? null],
     );
@@ -430,6 +440,9 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const sourceMessageId = normalizeContactId(input.sourceMessageId);
     const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
     const wakeConditions = encodeWakeConditions(input.wakeConditions);
+    const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
+      input.originIcpRootInitiationId,
+    );
 
     const row = await queryOne<PendingFollowUpRow>(
       this.pool,
@@ -447,12 +460,14 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           contact_id = $10,
           source_message_id = $11,
           context_summary = $12,
-          wake_conditions = $13
+          wake_conditions = $13,
+          origin_icp_root_initiation_id = $14
         WHERE id = $1 AND activated_at IS NULL
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
-          context_summary, wake_conditions, activated_at, activation_reason
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason
       `,
       [
         normalizedId,
@@ -468,6 +483,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         sourceMessageId ?? null,
         contextSummary ?? null,
         wakeConditions,
+        originIcpRootInitiationId ?? null,
       ],
     );
     if (!row) {

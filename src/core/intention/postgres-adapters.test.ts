@@ -45,6 +45,7 @@ interface PendingFollowUpRow {
   wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 interface PendingFollowUpQuarantineRow {
@@ -272,6 +273,7 @@ class FakeIntentionPool {
         sourceMessageId,
         contextSummary,
         wakeConditions,
+        originIcpRootInitiationId,
       ] = values as [
         string,
         string,
@@ -282,6 +284,7 @@ class FakeIntentionPool {
         string,
         string,
         string,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -303,6 +306,7 @@ class FakeIntentionPool {
         source_message_id: sourceMessageId,
         context_summary: contextSummary,
         wake_conditions: wakeConditions,
+        origin_icp_root_initiation_id: originIcpRootInitiationId,
         activated_at: null,
         activation_reason: null,
       });
@@ -384,6 +388,7 @@ class FakeIntentionPool {
           sourceMessageId,
           contextSummary,
           wakeConditions,
+          originIcpRootInitiationId,
         ] = values as [
           string,
           string,
@@ -394,6 +399,7 @@ class FakeIntentionPool {
           string,
           string,
           string,
+          string | null,
           string | null,
           string | null,
           string | null,
@@ -415,6 +421,7 @@ class FakeIntentionPool {
         row.source_message_id = sourceMessageId;
         row.context_summary = contextSummary;
         row.wake_conditions = wakeConditions;
+        row.origin_icp_root_initiation_id = originIcpRootInitiationId;
         return { rows: [row as Row] };
       }
       const [id, activatedAt, activationReason] = values as [string, string, string | null];
@@ -700,6 +707,7 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       dueAt: '2026-03-28T03:00:00.000Z',
     });
     expect(followUp).toMatchObject({
@@ -708,11 +716,19 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const pending = await ports.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);
     expect(pending[0]?.id).toBe(followUp.id);
+
+    const restartedPorts = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:30:00.000Z'),
+    });
+    await expect(restartedPorts.pendingFollowUpStore.peek(followUp.id)).resolves.toMatchObject({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
 
     const activated = await ports.pendingFollowUpStore.dequeue(followUp.id, {
       activationReason: 'post_turn_action',

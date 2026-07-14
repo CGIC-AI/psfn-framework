@@ -69,7 +69,7 @@ function dependencies(overrides: Partial<IcpInitiationSourceRuntimeDependencies>
         displayName: 'Peer',
         peerCompanionId: PEER,
       }),
-      executeCompanionOutreach: vi.fn().mockResolvedValue(undefined),
+      executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
     },
     gateway: {
       companionInitiationPreflight: vi.fn().mockResolvedValue({ eligible: true }),
@@ -91,6 +91,7 @@ function dependencies(overrides: Partial<IcpInitiationSourceRuntimeDependencies>
       })),
     },
     consent,
+    isExternalCompanionAuthorized: vi.fn().mockReturnValue(true),
     now: () => 1_700_000_000_000,
     ...overrides,
   };
@@ -132,6 +133,27 @@ describe('ICP initiation source runtime', () => {
         reasonSummary: `private ${source} motivation`,
         peerContactId: 'peer-contact',
       });
+    },
+  );
+
+  it.each(['free_time', 'weighted_thought', 'intention', 'foreground'] as const)(
+    'denies %s without external.companion before consent, permit, or target execution',
+    async (source) => {
+      const { deps, consent } = dependencies({
+        isExternalCompanionAuthorized: vi.fn().mockReturnValue(false),
+      });
+
+      const result = await createIcpInitiationSourceRuntime(deps).submit(request(source));
+
+      expect(result).toMatchObject({
+        outcome: 'rejected',
+        status: 'rejected',
+        reasonCode: 'policy_denied',
+      });
+      expect(consent.evaluate).not.toHaveBeenCalled();
+      expect(deps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+      expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+      expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
     },
   );
 
@@ -177,6 +199,39 @@ describe('ICP initiation source runtime', () => {
     );
   });
 
+  it('dedupes a deferred source without repeating consent or broker calls', async () => {
+    const store = createStore();
+    const firstDeps = dependencies({
+      store,
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockResolvedValue({ eligible: true }),
+        companionIssueInitiationPermit: vi.fn(),
+      },
+      consent: { evaluate: vi.fn().mockResolvedValue({ action: 'defer' }) },
+    }).deps;
+    const first = await createIcpInitiationSourceRuntime(firstDeps).submit(request('intention'));
+    const restartedDeps = dependencies({ store }).deps;
+
+    const replay = await createIcpInitiationSourceRuntime(restartedDeps)
+      .submit(request('intention'));
+
+    expect(first).toMatchObject({ outcome: 'deferred', status: 'deferred' });
+    expect(replay).toMatchObject({ outcome: 'deduped', status: 'deferred' });
+    expect(restartedDeps.consent.evaluate).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+  });
+
+  it('propagates a suppressed target disposition instead of reporting sent', async () => {
+    const { deps } = dependencies();
+    vi.mocked(deps.peers.executeCompanionOutreach).mockResolvedValue({
+      disposition: 'suppressed',
+    });
+
+    await expect(createIcpInitiationSourceRuntime(deps).submit(request('foreground')))
+      .resolves.toMatchObject({ outcome: 'suppressed', status: 'consumed' });
+  });
+
   it('dedupes the same durable source across runtime restart and does not repeat sent outreach', async () => {
     const store = createStore();
     const firstDeps = dependencies({ store }).deps;
@@ -219,7 +274,59 @@ describe('ICP initiation source runtime', () => {
     expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledWith(
       'peer-contact',
       '33333333-3333-4333-8333-333333333333',
+      restartedDeps.isExternalCompanionAuthorized,
     );
+  });
+
+  it('reconciles a committed permit after the issue response is lost without repeating consent', async () => {
+    const store = createStore();
+    const permit = {
+      permitId: '33333333-3333-4333-8333-333333333333',
+      candidateId: '',
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      senderCompanionId: LOCAL,
+      recipientCompanionId: PEER,
+      channelId: `companion-dm:${LOCAL}:${PEER}`,
+      provenanceRef: '',
+      issuedAtMs: 1_700_000_000_000,
+      expiresAtMs: 1_700_000_300_000,
+      status: 'issued' as const,
+      revision: 1,
+    };
+    let committedPermit: typeof permit | undefined;
+    const firstDeps = dependencies({ store }).deps;
+    vi.mocked(firstDeps.gateway.companionIssueInitiationPermit)
+      .mockImplementationOnce(async ({ candidate }) => {
+        committedPermit = {
+          ...permit,
+          candidateId: candidate.candidateId,
+          provenanceRef: candidate.provenanceRef,
+        };
+        throw new Error('gateway response lost after commit');
+      });
+    await expect(createIcpInitiationSourceRuntime(firstDeps).submit(request('foreground')))
+      .rejects.toThrow('response lost');
+
+    const restartedDeps = dependencies({
+      store,
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockResolvedValue({
+          eligible: false,
+          reasonCode: 'invitation_outstanding',
+          reasonClass: 'deferrable',
+        }),
+        companionIssueInitiationPermit: vi.fn().mockImplementation(async () => ({
+          decision: { eligible: true },
+          permit: committedPermit,
+        })),
+      },
+    }).deps;
+
+    await expect(createIcpInitiationSourceRuntime(restartedDeps).submit(request('foreground')))
+      .resolves.toMatchObject({ outcome: 'sent', status: 'consumed' });
+    expect(restartedDeps.consent.evaluate).not.toHaveBeenCalled();
+    expect(restartedDeps.gateway.companionIssueInitiationPermit).toHaveBeenCalledOnce();
+    expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledOnce();
   });
 
   it('preserves an inherited MI root so recursive-only causality is rejected before consent', async () => {

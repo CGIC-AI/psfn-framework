@@ -9,12 +9,17 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
   PostTurnActionHandler,
+  PostTurnActionQueueStatus,
   PostTurnActionRuntime,
 } from '../agent/post-turn-action-runtime.js';
-import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../intention/appraisal.js';
+import {
+  INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+} from '../intention/appraisal.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
-import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
 import { Scheduler } from './scheduler.js';
 
@@ -41,13 +46,47 @@ function pendingFollowUp(): PendingFollowUp {
   };
 }
 
+function emptyQueueStatus(): PostTurnActionQueueStatus {
+  return {
+    timestamp: 1,
+    processing: false,
+    queueDepth: 0,
+    maxQueueDepth: 4,
+    availableSlots: 4,
+    saturated: false,
+    readyCount: 0,
+    scheduledCount: 0,
+    retryScheduledCount: 0,
+    runningCount: 0,
+    lanes: [],
+    queued: [],
+    backPressure: { droppedCount: 0, recentDrops: [] },
+    failures: { failedCount: 0, recentFailures: [] },
+    terminal: { cancelledCount: 0, acknowledgedCount: 0, recentTerminals: [] },
+    completions: { completedCount: 0, recentCompletions: [] },
+    quarantine: { count: 0, persisted: true, entries: [] },
+    persistence: {
+      enabled: false,
+      loadState: 'not_configured',
+      loadedEntries: 0,
+      quarantinedEntries: 0,
+      quarantinePersisted: false,
+    },
+  };
+}
+
 function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-intention-'));
   TEMP_DIRS.push(dataDir);
   const eventBus = new EventBus();
   const scheduler = new Scheduler(eventBus, { tickIntervalMs: 50, heartbeatIntervalMs: 1_000 });
   const handlers = new Map<string, PostTurnActionHandler>();
-  const dispatch = vi.fn().mockResolvedValue({ outcome: 'sent' });
+  const proactiveOutbound = new ProactiveOutboundDispatcher({
+    sender: { send: vi.fn() },
+    rateLimiter: new ExternalCommunicationRateLimiter(),
+    isApprovedPrimaryChannel: () => true,
+  });
+  const dispatch = vi.spyOn(proactiveOutbound, 'dispatch');
   const submit = vi.fn().mockResolvedValue(
     kind === 'submitted'
       ? {
@@ -63,7 +102,7 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
         : { kind: 'not_companion' },
   );
   const pending = pendingFollowUp();
-  const pendingFollowUpStore = {
+  const pendingFollowUpStore: PendingFollowUpStorePort = {
     enqueue: vi.fn(),
     peek: vi.fn(async () => pending),
     dequeue: vi.fn(),
@@ -71,14 +110,17 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
     list: vi.fn(),
     listQuarantined: vi.fn(),
   };
-  const postTurnActions = {
+  const postTurnActions: PostTurnActionRuntime = {
     registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
       return () => undefined;
     }),
     listQueued: vi.fn().mockReturnValue([]),
-    getStatus: vi.fn(),
-  } as unknown as PostTurnActionRuntime;
+    cancel: vi.fn().mockReturnValue(false),
+    acknowledge: vi.fn().mockReturnValue(false),
+    getActionStatus: vi.fn(),
+    getStatus: vi.fn().mockReturnValue(emptyQueueStatus()),
+  };
   const agentLoop: HeartbeatAgent = {
     handleMessage: vi.fn(),
     followUp: vi.fn(),
@@ -99,14 +141,14 @@ function wire(kind: 'submitted' | 'blocked' | 'not_companion') {
       eventBus,
       postTurnActions,
       llmProvider,
-      pendingFollowUpStore: pendingFollowUpStore as unknown as PendingFollowUpStorePort,
-      proactiveOutbound: { dispatch } as unknown as ProactiveOutboundDispatcher,
+      pendingFollowUpStore,
+      proactiveOutbound,
       icpIntentionCandidateAdapter: { submit },
     },
   );
   const handler = handlers.get(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
   if (!handler) throw new Error('intention outbound handler was not registered');
-  return { handler, submit, dispatch };
+  return { handler, submit, dispatch, handlers, agentLoop };
 }
 
 const ACTION = {
@@ -125,6 +167,32 @@ const ACTION = {
 } satisfies InferredPostTurnAction;
 
 describe('heartbeat ICP intention candidate integration', () => {
+  it('carries a resurfaced ICP root onto the generated follow-up turn', async () => {
+    const { handlers, agentLoop } = wire('submitted');
+    const handler = handlers.get(INTENTION_FOLLOW_UP_ACTION_KIND);
+    if (!handler) throw new Error('intention follow-up handler was not registered');
+
+    await handler({
+      ...ACTION,
+      id: 'follow-up-action',
+      kind: INTENTION_FOLLOW_UP_ACTION_KIND,
+      payload: {
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        content: 'Reconsider peer outreach.',
+        originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    });
+
+    expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
+      routing: {
+        originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    }));
+  });
+
   it('routes a live peer intention to the candidate broker and never dispatches draft text', async () => {
     const { handler, submit, dispatch } = wire('submitted');
     await expect(handler(ACTION)).resolves.toEqual({

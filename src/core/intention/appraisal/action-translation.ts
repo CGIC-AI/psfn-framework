@@ -6,6 +6,7 @@ import {
   type PostTurnActionCandidate,
   type SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
+import { isRfc4122Uuid } from '../../../shared/utils/types.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
 import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
 import { evaluateProactiveOutboundTimeGate } from '../proactive-time-gate.js';
@@ -127,6 +128,18 @@ function normalizeConcernIds(value: readonly string[] | undefined): string[] {
   return ids;
 }
 
+function resolveOriginIcpRootInitiationId(
+  message: IntentionDecisionActionContext['message'],
+): string | undefined {
+  const value = message.routing?.icpCorrelation?.rootInitiationId
+    ?? message.routing?.originIcpRootInitiationId;
+  if (value === undefined) return undefined;
+  if (!isRfc4122Uuid(value)) {
+    throw new Error('Generated intention message has malformed ICP root lineage');
+  }
+  return value;
+}
+
 export function decisionsToPostTurnActionCandidates(
   decisions: readonly IntentionActionDecision[],
   context: IntentionDecisionActionContext,
@@ -134,6 +147,7 @@ export function decisionsToPostTurnActionCandidates(
 ): PostTurnActionCandidate[] {
   const candidates: PostTurnActionCandidate[] = [];
   const now = options.now ?? Date.now();
+  const originIcpRootInitiationId = resolveOriginIcpRootInitiationId(context.message);
 
   for (const decision of decisions) {
     if (decision.type === 'followUp') {
@@ -165,12 +179,7 @@ export function decisionsToPostTurnActionCandidates(
             ...(decision.followUp.requiresActiveConcern === true
               ? { requiresActiveConcern: true }
               : {}),
-            ...(context.message.routing?.icpCorrelation?.rootInitiationId
-              ? {
-                  originIcpRootInitiationId:
-                    context.message.routing.icpCorrelation.rootInitiationId,
-                }
-              : {}),
+            ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
           } satisfies IntentionOutboundMessageActionPayload,
           maxRetries: 1,
           ...(outboundRunAt !== undefined ? { runAt: outboundRunAt } : {}),
@@ -190,6 +199,7 @@ export function decisionsToPostTurnActionCandidates(
           ...(decision.followUp?.pendingFollowUpId
             ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
             : {}),
+          ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         } satisfies IntentionFollowUpActionPayload,
         maxRetries: 1,
         ...(runAt !== undefined ? { runAt } : {}),
@@ -255,6 +265,9 @@ export function pendingFollowUpsToPostTurnActionCandidates(
         authorName: followUp.authorName,
         content,
         pendingFollowUpId: followUp.id,
+        ...(followUp.originIcpRootInitiationId
+          ? { originIcpRootInitiationId: followUp.originIcpRootInitiationId }
+          : {}),
       } satisfies IntentionFollowUpActionPayload,
       maxRetries: 1,
     });
@@ -271,9 +284,15 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
   const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
     ? payload.pendingFollowUpId.trim()
     : '';
+  const originIcpRootInitiationId = payload.originIcpRootInitiationId;
   const channelType = payload.channelType;
   if (!channelId || !authorId || !authorName || !content) return null;
   if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
+    return null;
+  }
+  if (originIcpRootInitiationId !== undefined
+    && (typeof originIcpRootInitiationId !== 'string'
+      || !isRfc4122Uuid(originIcpRootInitiationId))) {
     return null;
   }
 
@@ -284,6 +303,9 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     authorName,
     content,
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(typeof originIcpRootInitiationId === 'string'
+      ? { originIcpRootInitiationId }
+      : {}),
   };
 }
 
@@ -301,12 +323,15 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ? normalizeConcernIds(payload.concernIds.filter((id): id is string => typeof id === 'string'))
     : [];
   const requiresActiveConcern = payload.requiresActiveConcern === true;
-  const originIcpRootInitiationId = typeof payload.originIcpRootInitiationId === 'string'
-    ? payload.originIcpRootInitiationId.trim()
-    : '';
+  const originIcpRootInitiationId = payload.originIcpRootInitiationId;
   const channelType = payload.channelType;
   if (!channelId || !content) return null;
   if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
+    return null;
+  }
+  if (originIcpRootInitiationId !== undefined
+    && (typeof originIcpRootInitiationId !== 'string'
+      || !isRfc4122Uuid(originIcpRootInitiationId))) {
     return null;
   }
   return {
@@ -317,7 +342,9 @@ export function normalizeIntentionOutboundMessageActionPayload(
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
     ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
-    ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
+    ...(typeof originIcpRootInitiationId === 'string'
+      ? { originIcpRootInitiationId }
+      : {}),
   };
 }
 

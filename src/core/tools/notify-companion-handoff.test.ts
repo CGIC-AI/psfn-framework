@@ -39,7 +39,7 @@ function runtime(): AgentFacingIcpAutonomyRuntime {
     publishOwnAvailability: vi.fn(),
     clearOwnAvailability: vi.fn(),
     prepareCompanionOutreach: vi.fn().mockResolvedValue(undefined),
-    executeCompanionOutreach: vi.fn().mockResolvedValue(undefined),
+    executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' }),
   };
 }
 

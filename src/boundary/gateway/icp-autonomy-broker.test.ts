@@ -236,6 +236,10 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return this.permits.get(permitId) ?? null;
   }
 
+  async getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null> {
+    return [...this.permits.values()].find(permit => permit.candidateId === candidateId) ?? null;
+  }
+
   async consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult> {
     await this.beforeConsumePermit?.();
     const permit = this.permits.get(input.permitId);
@@ -618,6 +622,26 @@ describe('GatewayIcpAutonomyBroker', () => {
       permitId: issued.permit!.permitId,
       peerContactId: 'peer-contact-a',
     })).resolves.toEqual({ authorized: false, reasonCode: 'permit_mismatch' });
+  });
+
+  it('reconciles permit issue idempotently by candidate after a response is lost', async () => {
+    const { broker, store, eventBus } = makeBroker();
+    await makeAvailable(store);
+    const lifecycle = vi.fn();
+    eventBus.on('icp.permit.lifecycle', lifecycle);
+    const input = {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    };
+
+    const committed = await broker.issuePermit(A, input);
+    const reconciled = await broker.issuePermit(A, input);
+
+    expect(reconciled).toEqual(committed);
+    expect(store.permits.size).toBe(1);
+    expect(store.episodes.size).toBe(1);
+    expect(lifecycle).toHaveBeenCalledOnce();
   });
 
   it.each([

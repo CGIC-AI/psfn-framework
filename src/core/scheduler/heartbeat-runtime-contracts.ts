@@ -123,6 +123,7 @@ export interface HeartbeatRuntimeOptions {
     channelType: SubstrateMessage['channelType'];
     canonicalContactKey?: string;
     sourceMessageId: string;
+    originIcpRootInitiationId?: string;
   }) => Promise<string | undefined> | string | undefined;
   getPendingFollowUpsForResurfacing?: (input: {
     channelId: string;

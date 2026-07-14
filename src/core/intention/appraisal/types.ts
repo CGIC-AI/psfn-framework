@@ -177,6 +177,7 @@ export interface IntentionFollowUpActionPayload {
   authorName: string;
   content: string;
   pendingFollowUpId?: string;
+  originIcpRootInitiationId?: string;
 }
 
 export interface IntentionOutboundMessageActionPayload {

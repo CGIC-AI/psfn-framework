@@ -442,6 +442,7 @@ async function main(): Promise<void> {
     candidateStore: persistenceRuntime.icpInitiationCandidateStore,
     peers: coreRuntime.icpAutonomyRuntime,
     gateway,
+    isExternalCompanionAuthorized: () => capabilityRuntime.has('external.companion'),
     llmProvider,
     eventBus,
     pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,

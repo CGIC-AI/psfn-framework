@@ -4,7 +4,11 @@ import {
   ensurePostgresSchemaExists,
   runPostgresMigrations,
 } from '../postgres.js';
-import { POSTGRES_CONTACT_MIGRATIONS } from './migrations.js';
+import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
+import {
+  POSTGRES_CONTACT_MIGRATIONS,
+  POSTGRES_INTENTION_MIGRATIONS,
+} from './migrations.js';
 import { bootstrapSharedSchema, ensureSharedSchema } from './shared-schema.js';
 import {
   startPostgresTestHarness,
@@ -112,6 +116,52 @@ describe('Postgres schema tenancy plumbing', () => {
       } finally {
         await poolA.end();
         await poolB.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'preserves pending follow-up ICP lineage across a PostgreSQL runtime restart',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-intention-lineage-restart',
+        allowExitOnIdle: true,
+        max: 1,
+        schema: 'companion_lineage',
+      });
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_lineage',
+        });
+        const firstRuntime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'follow-up-lineage',
+        });
+        const created = await firstRuntime.pendingFollowUpStore.enqueue({
+          content: 'Reconsider reaching out to the peer.',
+          priority: 'medium',
+          timing: 'immediate',
+          channelId: 'api:test',
+          channelType: 'api',
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          contactId: 'peer-contact',
+          sourceMessageId: 'icp-origin-turn',
+          originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        });
+        expect(created).not.toBeNull();
+
+        const restartedRuntime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:01:00.000Z'),
+        });
+        await expect(restartedRuntime.pendingFollowUpStore.peek('follow-up-lineage'))
+          .resolves.toMatchObject({
+            originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          });
+      } finally {
+        await pool.end();
       }
     },
     INTEGRATION_TIMEOUT_MS,

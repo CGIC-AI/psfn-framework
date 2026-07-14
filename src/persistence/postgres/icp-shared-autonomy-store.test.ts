@@ -152,6 +152,19 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(lease.revision).toBe(1);
   });
 
+  it('looks up the original permit by candidate for issue-response reconciliation', async () => {
+    mocks.queryOne.mockResolvedValue(PERMIT_ROW);
+    const store = await connect();
+
+    await expect(store.getPermitByCandidate(PERMIT_ROW.candidate_id)).resolves.toMatchObject({
+      permitId: PERMIT_ROW.permit_id,
+      candidateId: PERMIT_ROW.candidate_id,
+    });
+    const [, sql, values] = mocks.queryOne.mock.calls.at(-1) as [unknown, string, unknown[]];
+    expect(sql).toContain('WHERE candidate_id = $1');
+    expect(values).toEqual([PERMIT_ROW.candidate_id]);
+  });
+
   it('atomically prevents a companion clear from deleting an active operator lease', async () => {
     const store = await connect();
     mocks.executeQuery.mockClear();

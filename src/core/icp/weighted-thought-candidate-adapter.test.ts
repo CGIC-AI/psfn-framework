@@ -69,7 +69,10 @@ describe('ICP weighted-thought candidate adapter', () => {
       sourceRuntime: { submit },
       peers: {
         resolveKnownPeer: vi.fn().mockRejectedValue(
-          new CanonicalCompanionPeerValidationError('not a peer'),
+          new CanonicalCompanionPeerValidationError(
+            'not_machine_intelligence',
+            'not a peer',
+          ),
         ),
       },
     });
@@ -77,6 +80,25 @@ describe('ICP weighted-thought candidate adapter', () => {
       .resolves.toEqual({ kind: 'not_companion' });
     expect(submit).not.toHaveBeenCalled();
   });
+
+  it.each(['invalid_companion_identity', 'reverse_identity_mismatch'] as const)(
+    'blocks %s instead of falling through to legacy human dispatch',
+    async (reason) => {
+      const submit = vi.fn();
+      const adapter = createIcpWeightedThoughtCandidateAdapter({
+        sourceRuntime: { submit },
+        peers: {
+          resolveKnownPeer: vi.fn().mockRejectedValue(
+            new CanonicalCompanionPeerValidationError(reason, 'invalid MI identity'),
+          ),
+        },
+      });
+
+      await expect(adapter.submit({ thought: thought() }))
+        .resolves.toEqual({ kind: 'blocked', reason: 'stale_provenance' });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects a peer-derived thought with no inherited root or co-location provenance', async () => {
     const submit = vi.fn();

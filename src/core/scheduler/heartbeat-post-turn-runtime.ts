@@ -614,6 +614,17 @@ export function wireHeartbeatPostTurnRuntime(
               channelType: context.message.channelType,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
+              ...(context.message.routing?.icpCorrelation?.rootInitiationId
+                ? {
+                    originIcpRootInitiationId:
+                      context.message.routing.icpCorrelation.rootInitiationId,
+                  }
+                : context.message.routing?.originIcpRootInitiationId
+                  ? {
+                      originIcpRootInitiationId:
+                        context.message.routing.originIcpRootInitiationId,
+                    }
+                  : {}),
             });
             if (pendingFollowUpId) {
               if (!decision.followUp) {
@@ -955,6 +966,9 @@ export function wireHeartbeatPostTurnRuntime(
             authorName: payload.authorName,
             content: payload.content,
             timestamp: new Date(),
+            ...(payload.originIcpRootInitiationId
+              ? { routing: { originIcpRootInitiationId: payload.originIcpRootInitiationId } }
+              : {}),
           });
         },
         {

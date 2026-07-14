@@ -176,7 +176,7 @@ export interface IcpWeightedThoughtCandidateAdapter {
     thought: ThoughtWeight;
   }): Promise<
     | { kind: 'not_companion' }
-    | { kind: 'blocked'; reason: 'recursive_trigger' | 'stale_provenance' }
+    | { kind: 'blocked'; reason: 'recursive_trigger' | 'stale_provenance' | 'ambiguous_contact' }
     | { kind: 'submitted'; result: IcpInitiationSourceResult }
   >;
 }
@@ -268,11 +268,11 @@ export async function runWeightedThoughtOutreachOnce(
         result.icpCandidates.push({ thoughtId: view.thought.id, result: icpResult });
         if (icpResult.status === 'consumed' || icpResult.status === 'permitted') {
           await deps.store.save(markThoughtAccepted(view.thought, nowMs));
-        } else if (
+        } else if (icpResult.outcome !== 'deduped' && (
           icpResult.status === 'deferred'
           || icpResult.status === 'declined'
           || icpResult.status === 'rejected'
-        ) {
+        )) {
           const dampened = applyDeclineDampening(view.thought, deps.lifecycleConfig, nowMs);
           await deps.store.save(dampened);
           result.declined.push({

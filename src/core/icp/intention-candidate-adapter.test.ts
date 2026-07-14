@@ -58,7 +58,10 @@ function harness(input: {
     peers: {
       resolveKnownPeer: vi.fn().mockImplementation(async contactId => {
         if (input.nonCompanion) {
-          throw new CanonicalCompanionPeerValidationError('not an MI peer');
+          throw new CanonicalCompanionPeerValidationError(
+            'not_machine_intelligence',
+            'not an MI peer',
+          );
         }
         return {
           contactId,
@@ -75,6 +78,7 @@ function harness(input: {
     },
     now: () => NOW,
   });
+
   return { adapter, submit };
 }
 
@@ -85,6 +89,35 @@ const action = {
 };
 
 describe('ICP intention candidate adapter', () => {
+  it.each(['invalid_companion_identity', 'reverse_identity_mismatch'] as const)(
+    'blocks %s without legacy dispatch eligibility',
+    async (reason) => {
+      const submit = vi.fn();
+      const blockedAdapter = createIcpIntentionCandidateAdapter({
+        sourceRuntime: { submit },
+        peers: {
+          resolveKnownPeer: vi.fn().mockRejectedValue(
+            new CanonicalCompanionPeerValidationError(reason, 'invalid MI identity'),
+          ),
+        },
+        pendingFollowUpStore: { peek: vi.fn().mockResolvedValue(followUp()) },
+        concernStore: { getById: vi.fn().mockResolvedValue(concern()) },
+        now: () => NOW,
+      });
+
+      await expect(blockedAdapter.submit({
+        action,
+        payload: {
+          channelId: 'human-dm',
+          channelType: 'discord',
+          content: 'Hi',
+          pendingFollowUpId: 'follow-up-1',
+        },
+      })).resolves.toEqual({ kind: 'blocked', reason: 'ambiguous_contact' });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
   it('submits one shared private candidate for a live peer follow-up', async () => {
     const { adapter, submit } = harness();
     await expect(adapter.submit({

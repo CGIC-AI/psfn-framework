@@ -117,8 +117,7 @@ export interface EventMap {
     localCompanionId: string;
     peerCompanionId: string;
     source: import('./contracts/icp-autonomy.js').IcpInitiationSource;
-    previousStatus: 'pending' | 'deferred' | 'declined' | 'rejected' | 'permitted'
-      | 'consumed' | 'expired' | 'cancelled' | null;
+    previousStatus: IcpInitiationCandidateStatus | null;
     status: IcpInitiationCandidateStatus;
     reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
     timestamp: number;

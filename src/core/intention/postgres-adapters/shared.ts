@@ -8,7 +8,11 @@ import {
   type ActiveConcernOwner,
   type ActiveConcernSensitivity,
 } from '../concerns.js';
-import type { PendingFollowUp, PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
+import {
+  normalizeOptionalIcpRootInitiationId,
+  type PendingFollowUp,
+  type PendingFollowUpWakeCondition,
+} from '../pending-follow-ups.js';
 import type { BehavioralPatternSample, BehavioralStrategySummary } from '../patterns.js';
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
 
@@ -52,6 +56,7 @@ export interface PendingFollowUpRow {
   wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 export interface BehavioralPatternRow {
@@ -472,6 +477,9 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp 
   const activationReason = row.activation_reason === null
     ? undefined
     : normalizeOptionalText(row.activation_reason, 'activation_reason', MAX_PENDING_REASON_CHARS);
+  const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
+    row.origin_icp_root_initiation_id,
+  );
   return {
     id: normalizeRequiredText(row.id, 'id', MAX_PENDING_ID_CHARS),
     content: normalizeRequiredText(row.content, 'content', MAX_PENDING_TEXT_CHARS),
@@ -489,6 +497,7 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp 
     ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
+    ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
   };
 }
 

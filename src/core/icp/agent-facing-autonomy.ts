@@ -23,12 +23,24 @@ export interface KnownCompanionPeerAvailability extends KnownCompanionPeer {
   availability: IcpPeerAvailabilityResult;
 }
 
+export type CanonicalCompanionPeerValidationReason =
+  | 'not_machine_intelligence'
+  | 'invalid_companion_identity'
+  | 'reverse_identity_mismatch';
+
 /** Expected canonical-peer validation failure; infrastructure failures must propagate. */
 export class CanonicalCompanionPeerValidationError extends Error {
-  constructor(message: string) {
+  constructor(
+    readonly reason: CanonicalCompanionPeerValidationReason,
+    message: string,
+  ) {
     super(message);
     this.name = 'CanonicalCompanionPeerValidationError';
   }
+}
+
+export interface IcpCompanionOutreachExecutionResult {
+  disposition: 'delivered' | 'suppressed';
 }
 
 export interface IcpAgentGatewayPort {
@@ -55,7 +67,7 @@ export interface IcpTargetChannelCommandPort {
     permit: IcpInitiationPermit;
     rootInitiationId: string;
     peerContactId: string;
-  }): Promise<unknown>;
+  }): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
 export interface AgentFacingIcpAutonomyRuntime {
@@ -74,7 +86,7 @@ export interface AgentFacingIcpAutonomyRuntime {
     contactId: string,
     permitId: string,
     isExecutionAuthorized?: () => boolean,
-  ): Promise<void>;
+  ): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
 function displayName(contact: Contact): string {
@@ -102,12 +114,14 @@ async function resolveCanonicalKnownPeer(
 ): Promise<KnownCompanionPeer> {
   if (!contact.isMachineIntelligence) {
     throw new CanonicalCompanionPeerValidationError(
+      'not_machine_intelligence',
       'contact is not a canonical machine-intelligence peer',
     );
   }
   const companionIds = collectCompanionIds(contact);
   if (companionIds.length !== 1 || !isRfc4122Uuid(companionIds[0])) {
     throw new CanonicalCompanionPeerValidationError(
+      'invalid_companion_identity',
       'contact does not have exactly one canonical companion identity',
     );
   }
@@ -115,6 +129,7 @@ async function resolveCanonicalKnownPeer(
   const reverse = await contactStore.getByChannelIdentity('companion', peerCompanionId);
   if (!reverse || reverse.id !== contact.id || !reverse.isMachineIntelligence) {
     throw new CanonicalCompanionPeerValidationError(
+      'reverse_identity_mismatch',
       'contact companion identity does not reverse-resolve canonically',
     );
   }
@@ -213,7 +228,7 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
       if (isExecutionAuthorized && !isExecutionAuthorized()) {
         throw new Error('companion outreach authorization changed during broker preparation');
       }
-      await input.command.execute({
+      return await input.command.execute({
         permit: handoff.permit,
         rootInitiationId: handoff.rootInitiationId,
         peerContactId: peer.contactId,

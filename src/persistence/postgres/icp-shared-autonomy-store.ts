@@ -819,6 +819,15 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     return row ? mapPermit(row) : null;
   }
 
+  async getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null> {
+    const row = await queryOne<PermitRow>(this.pool, `
+      SELECT ${PERMIT_COLUMNS}
+      FROM icp_initiation_permits
+      WHERE candidate_id = $1
+    `, [requireUuid(candidateId, 'candidateId')]);
+    return row ? mapPermit(row) : null;
+  }
+
   async consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult> {
     validateConsumptionBinding(input);
     return await withPostgresClient(this.pool, async client => {

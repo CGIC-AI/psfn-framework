@@ -74,6 +74,7 @@ export interface IntentionAppraisalHooks {
     channelType: ChannelType;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    originIcpRootInitiationId?: string;
   }): Promise<string | undefined>;
   getPendingFollowUpsForResurfacing(input: {
     channelId: string;
@@ -187,6 +188,7 @@ export function createIntentionAppraisalHooks(
       channelType,
       canonicalContactKey,
       sourceMessageId,
+      originIcpRootInitiationId,
     }) => {
       if (decision.type !== 'followUp') {
         return undefined;
@@ -206,6 +208,7 @@ export function createIntentionAppraisalHooks(
         ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
+        ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         ...(decision.followUp?.contextSummary
           ? { contextSummary: decision.followUp.contextSummary }
           : {}),

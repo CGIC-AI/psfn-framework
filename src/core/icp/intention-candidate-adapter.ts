@@ -85,7 +85,9 @@ export function createIcpIntentionCandidateAdapter(input: {
         await input.peers.resolveKnownPeer(contactId!);
       } catch (error) {
         if (error instanceof CanonicalCompanionPeerValidationError) {
-          return { kind: 'not_companion' };
+          return error.reason === 'not_machine_intelligence'
+            ? { kind: 'not_companion' }
+            : { kind: 'blocked', reason: 'ambiguous_contact' };
         }
         throw error;
       }

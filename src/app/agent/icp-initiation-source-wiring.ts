@@ -15,6 +15,7 @@ export interface IcpInitiationSourceWiringInput {
   candidateStore: SourceRuntimeOptions['store'] | undefined;
   peers: SourceRuntimeOptions['peers'] | undefined;
   gateway: SourceRuntimeOptions['gateway'];
+  isExternalCompanionAuthorized: SourceRuntimeOptions['isExternalCompanionAuthorized'];
   llmProvider: ConsentEvaluatorOptions['llmProvider'];
   eventBus: EventBus;
   pendingFollowUpStore: IntentionAdapterOptions['pendingFollowUpStore'];
@@ -45,6 +46,7 @@ export function wireIcpInitiationSources(
         peers: input.peers,
         gateway: input.gateway,
         consent: createLlmIcpInitiationConsentEvaluator({ llmProvider: input.llmProvider }),
+        isExternalCompanionAuthorized: input.isExternalCompanionAuthorized,
         eventBus: input.eventBus,
       })
     : undefined;

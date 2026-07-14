@@ -771,6 +771,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     source_message_id TEXT,
     context_summary TEXT,
     wake_conditions TEXT,
+    origin_icp_root_initiation_id UUID,
     activated_at TEXT,
     activation_reason TEXT,
     CHECK (priority IN ('low', 'medium', 'high')),
@@ -780,6 +781,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS context_summary TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS wake_conditions TEXT;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active ON intention_pending_follow_ups (activated_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);`,
   `

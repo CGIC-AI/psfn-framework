@@ -178,6 +178,7 @@ describe('wireIntentionRuntime', () => {
       text: 'Follow up on medication: Ping tomorrow morning',
     });
 
+    const enqueueSpy = vi.spyOn(runtime.pendingFollowUpStore, 'enqueue');
     const pendingFollowUpId = await hooks.onIntentionFollowUpDecision({
       decision: {
         type: 'followUp',
@@ -196,8 +197,12 @@ describe('wireIntentionRuntime', () => {
       channelType: 'api',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-3',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(pendingFollowUpId).toBeTruthy();
+    expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    }));
 
     const pending = await runtime.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);

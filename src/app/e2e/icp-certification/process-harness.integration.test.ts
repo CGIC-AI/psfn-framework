@@ -129,14 +129,20 @@ async function waitForExtractionMarker(
   marker: 'A' | 'B',
 ): Promise<ChannelSnapshot> {
   const deadline = Date.now() + 20_000;
+  let lastSnapshot: ChannelSnapshot | undefined;
   while (Date.now() < deadline) {
     const snapshot = await agent.channelSnapshot(CERTIFICATION_PRIVATE_ROOM) as unknown as ChannelSnapshot;
+    lastSnapshot = snapshot;
     if (snapshot.memories.some(memory => memory.text.includes(`Certification ${marker} extraction marker`))) {
       return snapshot;
     }
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
   }
-  throw new Error(`Timed out waiting for Certification ${marker} extraction marker`);
+  throw new Error(
+    `Timed out waiting for Certification ${marker} extraction marker: ${JSON.stringify(
+      lastSnapshot?.memories.map(memory => memory.text) ?? [],
+    )}`,
+  );
 }
 
 async function waitForModelRequestQuiescence(
@@ -367,32 +373,36 @@ describe('ICP certification real process harness', () => {
     });
     try {
       const trust = await pool.query<{
-        discord_user_id: string;
+        companion_user_id: string;
         is_machine_intelligence: boolean;
         relationship_type: string;
         schema_name: string;
         trust_level: string;
       }>(`
-        SELECT $1::text AS schema_name, discord_user_id, trust_level,
-          relationship_type, is_machine_intelligence
-        FROM ${CERTIFICATION_SCHEMA_A}.contacts
+        SELECT $1::text AS schema_name, identity.channel_user_id AS companion_user_id,
+          contact.trust_level, contact.relationship_type, contact.is_machine_intelligence
+        FROM ${CERTIFICATION_SCHEMA_A}.contacts AS contact
+        INNER JOIN ${CERTIFICATION_SCHEMA_A}.contact_channel_ids AS identity
+          ON identity.contact_id = contact.id AND identity.channel = 'companion'
         UNION ALL
-        SELECT $2::text AS schema_name, discord_user_id, trust_level,
-          relationship_type, is_machine_intelligence
-        FROM ${CERTIFICATION_SCHEMA_B}.contacts
+        SELECT $2::text AS schema_name, identity.channel_user_id AS companion_user_id,
+          contact.trust_level, contact.relationship_type, contact.is_machine_intelligence
+        FROM ${CERTIFICATION_SCHEMA_B}.contacts AS contact
+        INNER JOIN ${CERTIFICATION_SCHEMA_B}.contact_channel_ids AS identity
+          ON identity.contact_id = contact.id AND identity.channel = 'companion'
         ORDER BY schema_name
       `, [CERTIFICATION_SCHEMA_A, CERTIFICATION_SCHEMA_B]);
       expect(trust.rows).toEqual([
         {
           schema_name: CERTIFICATION_SCHEMA_A,
-          discord_user_id: CERTIFICATION_COMPANION_B,
+          companion_user_id: CERTIFICATION_COMPANION_B,
           trust_level: 'trusted',
           relationship_type: 'ai_companion',
           is_machine_intelligence: true,
         },
         {
           schema_name: CERTIFICATION_SCHEMA_B,
-          discord_user_id: CERTIFICATION_COMPANION_A,
+          companion_user_id: CERTIFICATION_COMPANION_A,
           trust_level: 'trusted',
           relationship_type: 'ai_companion',
           is_machine_intelligence: true,
@@ -431,7 +441,11 @@ describe('ICP certification real process harness', () => {
       CERTIFICATION_PRIVATE_ROOM,
     ) as unknown as ChannelSnapshot;
     expect(restartedBefore.summaries.length).toBeGreaterThan(0);
-    await expect(agentA.runRoomWeightedThoughtScheduler()).resolves.toMatchObject({
+    const restartedCandidate = await agentA.runRoomWeightedThoughtScheduler();
+    if (restartedCandidate.status !== 'consumed') {
+      throw new Error(`Restarted room candidate was not consumed: ${JSON.stringify(restartedCandidate)}`);
+    }
+    expect(restartedCandidate).toMatchObject({
       preferredChannel: 'current_room',
       status: 'consumed',
       deliveryDisposition: 'delivered',

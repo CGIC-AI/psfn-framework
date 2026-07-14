@@ -64,9 +64,12 @@ function renderChatResponse(
 }
 
 function renderExtractionXml(promptText: string): string {
-  const companionMarker = promptText.includes('you are certification a.')
+  const normalizedPromptText = promptText.toLowerCase();
+  const companionMarker = normalizedPromptText.includes("i'm certification a's")
+    || normalizedPromptText.includes('you are certification a.')
     ? 'A'
-    : promptText.includes('you are certification b.')
+    : normalizedPromptText.includes("i'm certification b's")
+      || normalizedPromptText.includes('you are certification b.')
       ? 'B'
       : 'unknown';
   return [

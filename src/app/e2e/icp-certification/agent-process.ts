@@ -49,6 +49,8 @@ import {
 } from './constants.js';
 import { composeCompanionDmChannelId } from '../../../shared/contracts/companion-channels.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
+import { createPersonaPreambleService } from '../../../core/identity/persona-preamble.js';
 
 type AgentProcessCommand = {
   id: number;
@@ -182,6 +184,11 @@ async function main(): Promise<void> {
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const identity = composeIdentity(startup.config);
+  const characterPromptVariables = buildCharacterPromptTemplateVariables(identity.card);
+  const personaPreamble = createPersonaPreambleService({
+    registry: { getByKey: () => undefined },
+    personaVariables: () => characterPromptVariables,
+  });
   const fatigue = composeFatigueBudgetRuntime({
     config: startup.config,
     eventBus: startup.eventBus,
@@ -193,6 +200,7 @@ async function main(): Promise<void> {
     sessionManager: sessionRuntime.sessionManager,
     systemPrompt: identity.systemPrompt,
     characterName: identity.card.data.name,
+    characterPromptVariables,
     config: startup.coreConfig,
     runtimeMode: 'gateway',
     fatigueBudget: fatigue.fatigueBudget,
@@ -220,6 +228,7 @@ async function main(): Promise<void> {
     config: startup.config,
     contactStore,
     episodicStore: persistence.episodicStore,
+    personaPreamble,
   });
   let failNextCompanionTurn = false;
   let failureObservationCount = 0;

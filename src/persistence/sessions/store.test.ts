@@ -350,7 +350,11 @@ describe('SessionStore', () => {
     expect(readFileSync(turnFile, 'utf-8').trim().split('\n')).toHaveLength(1);
   });
 
-  it('fails closed on malformed turn records', () => {
+  it('quarantines malformed turn records loudly instead of failing the whole read', () => {
+    // Policy (bead hgw3.4): a malformed line is preserved as evidence in the
+    // .quarantine sidecar and warned about, while surrounding valid records
+    // stay readable — reported, never silently skipped, never bricking the
+    // channel's records.
     const channelId = 'api:bad-turn-record';
     const turnDir = join(dir, '_turn_records');
     mkdirSync(turnDir, { recursive: true });
@@ -379,7 +383,9 @@ describe('SessionStore', () => {
       provenanceRefs: [],
     })}\n`);
 
-    expect(() => store.getRecentTurnRecords(channelId, 10)).toThrow();
+    expect(store.getRecentTurnRecords(channelId, 10)).toEqual([]);
+    const quarantine = readFileSync(`${turnFile}.quarantine`, 'utf-8').trim();
+    expect(JSON.parse(quarantine)).toMatchObject({ channelId });
   });
 
   it('applies append-only turn tombstones to session reads and supports deterministic restore', () => {

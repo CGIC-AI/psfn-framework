@@ -3,15 +3,14 @@
 Voice and embodiment hub for PSFN.
 
 This repo is the middleware layer between endpoint hardware, embodiment clients,
-and a PSFN-compatible agent runtime. It currently has three integration paths:
+and PSFN Framework. It currently has three integration paths:
 
 - a custom TypeScript realtime websocket path for Pi-class devices that can do smooth bidirectional conversation
 - a Voxta-compatible SignalR facade for VaM / AcidBubbles-style plugin clients
 - an ESPHome Native API fallback path for stock ESPHome voice devices and `linux-voice-assistant`
 
-The current testing target is direct PSFN deployment first, with Hermes available
-through its OpenAI-compatible API server via `AGENT_RUNTIME=hermes`. Treat this
-repo as a bridge into an agent runtime, not as a scoped local brain.
+PSFN Framework is the sole agent backend. Treat this repo as the transport and
+embodiment bridge into that runtime, not as a scoped local brain.
 
 ## What This Repo Does
 
@@ -20,13 +19,13 @@ The hub in this repo does the heavy lifting:
 - accepts a custom realtime voice client, a Voxta/VaM client, or an ESPHome voice device
 - streams microphone audio to Deepgram STT
 - applies turn endpointing, interrupt, and timeout logic
-- sends the current recognized text plus a stable conversation id into PSFN or Hermes
+- sends the current recognized text plus a stable conversation id into PSFN Framework
 - streams runtime text back into ElevenLabs TTS
 - returns assistant audio either as websocket chunks or ESPHome playback media
 - exposes Voxta-compatible chat lifecycle and reply events for VaM embodiment
 - stores turn artifacts, transcripts, and reply metadata locally
 
-On the TypeScript paths, PSFN or Hermes owns the actual conversation/session
+On the TypeScript paths, PSFN Framework owns the actual conversation/session
 state. The hub keeps satellite/runtime transport state and relays the current
 turn.
 
@@ -62,7 +61,7 @@ ESPHome device / linux-voice-assistant / ESP32 fallback
 VaM / Voxta-compatible plugin
   -> SignalR JSON /hub route
   -> Voxta SendMessage framing
-  -> PSFN or Hermes conversation runtime
+  -> PSFN Framework conversation runtime
   <- Voxta ReceiveMessage chat lifecycle and streamed reply events
   <- allowlisted appTrigger/action events
 ```
@@ -99,7 +98,6 @@ Current intent:
 
 - make the voice loop feel fast and smooth enough for daily use
 - target the direct PSFN deployment first so the end-to-end path is real
-- keep Hermes available through its OpenAI-compatible API server when `AGENT_RUNTIME=hermes`
 - let VaM/Voxta act as an embodied satellite, not as a separate agent runtime
 - keep the bridge thin so this can stay a sidecar first
 - upstream only the smallest useful bridge seam later if it proves out
@@ -243,7 +241,6 @@ Runtime config comes from the project-local `.env`.
 
 Important settings for the TypeScript realtime path:
 
-- `AGENT_RUNTIME`, either `psfn` or `hermes`; defaults to `psfn`
 - `HUB_WS_URL`
 - `AUDIO_DEVICE_CARD`
 - `AUDIO_INPUT_DEVICE`
@@ -280,10 +277,6 @@ Important settings for the Python ESPHome fallback path:
 - the companion bridge identifies itself on `GET` requests with `satelliteId`/`endpointId`/`claimType` query params taken from the existing `PSFN_SATELLITE_ID`, `PSFN_ENDPOINT_ID`, and `PSFN_CLAIM_TYPE`/`PSFN_CAPABILITY_PROFILE` registry identity; an incomplete identity fails closed at startup
 - `PSFN_COMPANION_PREVIEW_MAX_BYTES` caps artifact preview payloads relayed to satellites, defaulting to 1048576
 - `PSFN_COMPANION_RECONNECT_BASE_MS` and `PSFN_COMPANION_RECONNECT_MAX_MS` tune the companion SSE reconnect backoff
-- `HERMES_API_BASE_URL` or `HERMES_API_SERVER_URL` for `AGENT_RUNTIME=hermes`, defaulting to `http://127.0.0.1:8642/v1`
-- `HERMES_API_KEY` or `API_SERVER_KEY` for Hermes API-server auth and stable `X-Hermes-Session-Id` continuation
-- `HERMES_MODEL` for the advertised Hermes API-server model, defaulting to `hermes-agent`
-- `HERMES_CHANNEL_TYPE` for the hub channel id prefix, defaulting to `hermes-agent`
 - `VOXTA_FACADE_ENABLED` enables the Voxta-compatible SignalR facade on `/hub`, defaulting to `true`
 - `VOXTA_SATELLITE_ID` and `VOXTA_SATELLITE_NAME` identify the VaM/Voxta satellite in PSFN channel metadata
 - `VOXTA_SESSION_ID` and `VOXTA_CHAT_ID` optionally pin the VaM/Voxta conversation IDs; when unset the hub derives stable IDs from the Voxta satellite, assistant, and user IDs
@@ -318,20 +311,20 @@ uv run hub run
 Fill in the remaining project-specific values in `.env`:
 
 - ESPHome endpoint settings
-- bridge-specific overrides if you do not want to inherit provider keys from `~/.hermes/.env`
+- PSFN endpoint and provider overrides for the target Framework deployment
 
-At the moment there are no required Hermes source patches in this repo. When
-`AGENT_RUNTIME=hermes`, the TypeScript hub talks to the Hermes API server over
-its OpenAI-compatible `/v1/chat/completions` endpoint.
+The Hub sends all agent turns to PSFN Framework over its OpenAI-compatible
+`/v1/chat/completions` endpoint. PSFN Framework owns prompt assembly, identity,
+memory, cognition, and tools; the Hub owns device and embodiment transport.
 
-On the TypeScript paths, the hub passes a stable conversation id through to the
-selected runtime and does not maintain its own authoritative agent memory.
+On the TypeScript paths, the hub passes a stable conversation id through to
+PSFN Framework and does not maintain its own authoritative agent memory.
 
 ## Voxta / VaM Facade
 
 The Voxta facade is mounted on the TypeScript hub. It is meant for VaM and
 AcidBubbles-style clients that expect a Voxta server shape, while still routing
-the actual conversation through PSFN or Hermes.
+the actual conversation through PSFN Framework.
 
 Supported HTTP and websocket routes:
 
@@ -357,7 +350,7 @@ Supported Voxta client messages:
 | `registerApp` | Registers the VaM/Voxta satellite capabilities |
 | `loadCharactersList`, `loadScenariosList`, `loadChatsList` | Returns minimal lists backed by the configured PSFN assistant identity |
 | `startChat`, `resumeChat`, `subscribeToChat` | Opens or attaches a stable embodied session |
-| `send` | Routes user text into the selected PSFN/Hermes runtime; `/secret` and `/note` are retained as context without generating a reply |
+| `send` | Routes user text into PSFN Framework; `/secret` and `/note` are retained as context without generating a reply |
 | `interrupt` | Cancels the active reply and emits Voxta interrupt/cancel events |
 | `triggerAction` | Emits `appTrigger` only when the action is in `VOXTA_APP_TRIGGER_ALLOWLIST` |
 | `speechPlaybackStart`, `speechPlaybackComplete`, `typingStart`, `typingEnd`, `pauseChat`, `inspect`, `inspectAudioInput` | Acknowledged for compatibility |
@@ -446,7 +439,7 @@ To apply it to a `linux-voice-assistant` checkout:
 ./scripts/apply-linux-voice-assistant-patch.sh /path/to/linux-voice-assistant
 ```
 
-This is intentionally endpoint-local. Hermes itself still does not require a source patch for the current bridge path.
+This is intentionally endpoint-local and does not change PSFN Framework.
 
 ## Pi Realtime Client
 
@@ -463,9 +456,9 @@ It is the preferred path for devices that can afford a custom client, because it
 - the same interaction pattern the working reference client used:
   stream audio continuously, stop playback locally first, then notify the hub
 
-The hub then relays the finalized user turn into the selected agent runtime,
+The hub then relays the finalized user turn into PSFN Framework,
 keeps the websocket/audio pipeline moving, and leaves the actual
-conversation/session state inside PSFN or Hermes.
+conversation/session state inside the Framework.
 
 Deploy with:
 
@@ -478,12 +471,11 @@ PI_PASSWORD='<pi-password>' ./scripts/deploy-ts-pi-client.sh <pi-host>
 ```text
 src/ts/
   hub/
-    agent-runtime.ts
+    framework-agent.ts
     main.ts
     server.ts
     deepgram-live.ts
     embodied-session.ts
-    hermes-api-model.ts
     psfn-model.ts
     voxta-facade.ts
     elevenlabs-stream.ts
@@ -510,7 +502,7 @@ tests/
 
 ## Notes
 
-- The TypeScript hub can use direct PSFN or Hermes API-server runtime selection via `AGENT_RUNTIME`.
+- The TypeScript hub sends every agent turn to PSFN Framework.
 - The repo now supports a custom TypeScript realtime client path, a Voxta/VaM facade, and an ESPHome fallback path.
 - The checked-in TypeScript path is the primary conversation path now.
 - Historical `.agent/` scaffolding exists in this repo, but it is not the main deployment target right now.
@@ -523,15 +515,15 @@ The likely upstream path is:
 
 1. keep ESPHome support as a sidecar first
 2. validate the Voxta facade against the real VaM plugin
-3. identify the smallest Hermes or PSFN streaming seam worth upstreaming
+3. identify the smallest PSFN Framework streaming seam worth upstreaming
 4. only move toward core gateway integration after the transport feels solid
 
-That keeps the current experiment useful without forcing a large Hermes core change too early.
+That keeps the current experiment useful without forcing a large Framework core change too early.
 
 ## Future Plans
 
 - further smooth streaming TTS chunking and playback pacing on the TypeScript path
-- add better latency instrumentation around STT finalize, first Hermes token, first TTS audio, and playback start
+- add better latency instrumentation around STT finalize, first Framework token, first TTS audio, and playback start
 - support fully local STT providers behind the same adapter interface
 - support fully local TTS providers behind the same adapter interface
 - keep the dedicated Pi client as the top-tier path while retaining ESPHome fallback compatibility
@@ -539,4 +531,4 @@ That keeps the current experiment useful without forcing a large Hermes core cha
 - add Voxta vision upload handling
 - harden the TS client interrupt path further with more real-device soak time
 - make the hub usable with a fully local speech stack before worrying about a polished upstream story
-- upstream the smallest Hermes-side streaming interface only after the bridge feels stable against the global deployment
+- upstream the smallest Framework-side streaming interface only after the bridge feels stable against the deployment

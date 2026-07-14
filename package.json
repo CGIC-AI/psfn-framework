@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build:ts": "tsc -p tsconfig.json",
+    "build:ts": "node scripts/clean-ts-dist.mjs && tsc -p tsconfig.json",
     "firmware:compile:waveshare-bedroom": "npm run firmware:prepare:waveshare-bedroom && uvx --from esphome==2026.6.5 esphome compile satellites/waveshare-bedroom/esphome/bedroom-satellite.yaml",
     "firmware:prepare:waveshare-bedroom": "node scripts/prepare-waveshare-bedroom-firmware.mjs",
     "firmware:validate:waveshare-bedroom": "npm run firmware:prepare:waveshare-bedroom && uvx --from esphome==2026.6.5 esphome config satellites/waveshare-bedroom/esphome/bedroom-satellite.yaml",

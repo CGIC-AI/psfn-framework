@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import WebSocket from "ws";
 
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { RealtimeHubServer } from "./server.js";
 import type { HubConfig } from "../shared/env.js";
 import type { HubToClientMessage } from "../shared/protocol.js";
@@ -58,7 +58,7 @@ test("authenticated hello uses registry-owned identity and bounded capabilities"
 
 function config(): HubConfig {
   return {
-    agentRuntime: "psfn", textOnlyMode: true, bindHost: "127.0.0.1", port: 0,
+    textOnlyMode: true, bindHost: "127.0.0.1", port: 0,
     deepgramApiKey: null, elevenlabsApiKey: null, elevenlabsVoiceId: null,
     elevenlabsModelId: "eleven_flash_v2_5", artifactsRoot: ".artifacts/test-auth",
     psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", satelliteClaim: {
@@ -66,7 +66,7 @@ function config(): HubConfig {
       capabilityProfile: "text-only", satelliteId: "hub", endpointId: "hub", displayName: "Hub",
       endpointClass: "text", locationMode: "static", telemetry: { mode: "disabled", categories: [] },
     } },
-    hermes: null, companion: null, homeAssistant: null, control: null,
+    companion: null, homeAssistant: null, control: null,
     deviceRegistry: { schemaVersion: 1, devices: [{
       deviceId: "office-device", deviceName: "Office Device", satelliteId: "office",
       satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
@@ -82,7 +82,7 @@ function config(): HubConfig {
   };
 }
 
-function agent(): AgentRuntimeAdapter {
+function agent(): FrameworkAgentAdapter {
   return { async *streamReply() { return ""; }, async close() {} };
 }
 

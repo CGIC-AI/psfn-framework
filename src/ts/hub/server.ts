@@ -29,14 +29,13 @@ import {
   type TranscriptInterim,
   type TranscriptResult,
 } from "./deepgram-live.js";
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import {
   CompanionBridge,
   CompanionRequestError,
   type CompanionEvent,
 } from "./companion-bridge.js";
 import { ElevenLabsStream } from "./elevenlabs-stream.js";
-import { HermesApiModelAdapter } from "./hermes-api-model.js";
 import { PsfnModelAdapter } from "./psfn-model.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
@@ -66,7 +65,7 @@ export class RealtimeHubServer {
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly sessions: SessionStore;
   private readonly embodiedSessions: EmbodiedSessionRegistry;
-  private readonly agent: AgentRuntimeAdapter;
+  private readonly agent: FrameworkAgentAdapter;
   private readonly tts: ElevenLabsStream;
   private readonly voxta: VoxtaFacade;
   private readonly companion: CompanionBridge | null;
@@ -74,7 +73,7 @@ export class RealtimeHubServer {
   constructor(
     private readonly config: HubConfig,
     options: {
-      agent?: AgentRuntimeAdapter;
+      agent?: FrameworkAgentAdapter;
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
       companion?: CompanionBridge | null;
@@ -82,7 +81,7 @@ export class RealtimeHubServer {
   ) {
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
-    this.agent = options.agent ?? createAgentRuntime(config);
+    this.agent = options.agent ?? createFrameworkAgent(config);
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
@@ -195,29 +194,11 @@ class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
   }
 }
 
-function createAgentRuntime(config: HubConfig): AgentRuntimeAdapter {
-  if (config.agentRuntime === "hermes") {
-    if (!config.hermes) {
-      throw new Error("Hermes runtime config is required when AGENT_RUNTIME=hermes");
-    }
-    return new HermesApiModelAdapter(config.hermes);
-  }
-  if (!config.psfn) {
-    throw new Error("PSFN runtime config is required when AGENT_RUNTIME=psfn");
-  }
+function createFrameworkAgent(config: HubConfig): FrameworkAgentAdapter {
   return new PsfnModelAdapter(config.psfn);
 }
 
 function resolveChannelType(config: HubConfig): string {
-  if (config.agentRuntime === "hermes") {
-    if (!config.hermes) {
-      throw new Error("Hermes runtime config is required when AGENT_RUNTIME=hermes");
-    }
-    return config.hermes.channelType;
-  }
-  if (!config.psfn) {
-    throw new Error("PSFN runtime config is required when AGENT_RUNTIME=psfn");
-  }
   return config.psfn.channelType;
 }
 
@@ -245,7 +226,7 @@ class RealtimeConnection {
     private readonly config: HubConfig,
     private readonly sessions: SessionStore,
     private readonly embodiedSessions: EmbodiedSessionRegistry,
-    private readonly agent: AgentRuntimeAdapter,
+    private readonly agent: FrameworkAgentAdapter,
     private readonly tts: ElevenLabsStream,
     private readonly companion: CompanionBridge | null = null,
     private readonly deviceRegistry: HubDeviceRegistry | null = null,

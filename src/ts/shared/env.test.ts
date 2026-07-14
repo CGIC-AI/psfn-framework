@@ -27,7 +27,6 @@ const PSFN_ENV_KEYS = [
 ] as const;
 
 const HUB_ENV_KEYS = [
-  "AGENT_RUNTIME",
   "HUB_TEXT_ONLY",
   "REALTIME_VOICE_BIND_HOST",
   "REALTIME_VOICE_PORT",
@@ -110,7 +109,6 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
 
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     REALTIME_VOICE_BIND_HOST: "0.0.0.0",
     REALTIME_VOICE_PORT: "8787",
@@ -124,7 +122,7 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     assert.equal(config.deepgramApiKey, null);
     assert.equal(config.elevenlabsApiKey, null);
     assert.equal(config.elevenlabsVoiceId, null);
-    assert.equal(config.psfn?.baseUrl, "http://127.0.0.1:10053/v1");
+    assert.equal(config.psfn.baseUrl, "http://127.0.0.1:10053/v1");
     assert.equal(config.companion, null);
     assert.equal(config.homeAssistant, null);
     assert.equal(config.control, null);
@@ -147,7 +145,6 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     }],
   }));
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     HOME_ASSISTANT_ENABLED: "true",
@@ -169,7 +166,6 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
 test("loadHubConfig rejects enabled Home Assistant without the private control plane", () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     HOME_ASSISTANT_ENABLED: "true",
@@ -187,7 +183,6 @@ test("loadHubConfig loads the companion bridge config with PSFN auth fallback", 
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
 
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     PSFN_API_KEY: "psfn-key",
@@ -217,16 +212,15 @@ test("loadHubConfig reuses the satellite claim identity defaults for the compani
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
 
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10053/v1",
   }, () => {
     const config = loadHubConfig(projectRoot);
     assert.deepEqual(config.companion?.identity, {
-      satelliteId: config.psfn?.satelliteClaim.satelliteId,
-      endpointId: config.psfn?.satelliteClaim.endpointId,
-      claimType: config.psfn?.satelliteClaim.type,
+      satelliteId: config.psfn.satelliteClaim.satelliteId,
+      endpointId: config.psfn.satelliteClaim.endpointId,
+      claimType: config.psfn.satelliteClaim.type,
     });
   });
 });
@@ -235,7 +229,6 @@ test("loadHubConfig prefers the explicit companion API key over the PSFN key", (
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
 
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     PSFN_API_KEY: "psfn-key",
@@ -251,7 +244,6 @@ test("loadHubConfig rejects invalid companion preview size caps", () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
 
   withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "psfn",
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10054",
@@ -260,21 +252,6 @@ test("loadHubConfig rejects invalid companion preview size caps", () => {
     assert.throws(
       () => loadHubConfig(projectRoot),
       /PSFN_COMPANION_PREVIEW_MAX_BYTES must be a positive integer/,
-    );
-  });
-});
-
-test("loadHubConfig rejects the companion bridge outside the psfn runtime", () => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
-
-  withEnv(HUB_ENV_KEYS, {
-    AGENT_RUNTIME: "hermes",
-    HUB_TEXT_ONLY: "true",
-    PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10054",
-  }, () => {
-    assert.throws(
-      () => loadHubConfig(projectRoot),
-      /PSFN_COMPANION_BASE_URL requires AGENT_RUNTIME=psfn/,
     );
   });
 });

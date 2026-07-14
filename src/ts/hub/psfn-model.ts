@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { ConversationMessage } from "./session-store.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 import type { RuntimeIdentity } from "../shared/protocol.js";
 import {
@@ -36,7 +36,7 @@ type PsfnChatMessage = {
 
 const DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES = 12;
 
-export class PsfnModelAdapter implements AgentRuntimeAdapter {
+export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private readonly apiBaseUrl: string;
   private identityRequest: Promise<RuntimeIdentity | null> | null = null;
 

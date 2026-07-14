@@ -7,20 +7,17 @@ PSFN sees one hub-backed channel. The hub owns satellite transport, voice
 orchestration, media conversion, interrupt handling, and capability fan-out to
 whatever embodied surface is attached.
 
-The target is not a PSFN-only sidecar forever. PSFN is the first-class runtime
-and initial integration target, but the hub should also be able to front Hermes,
-OpenClaw, and other agent runtimes through a small agent-runtime adapter
-interface.
+PSFN Framework is the sole agent runtime. The Hub remains extensible at the
+satellite, voice, media, and embodiment boundaries; it does not host or select
+alternate agent brains.
 
 ## Core Model
 
 The hub is a session router with modular adapters.
 
-Agent runtimes provide conversation intelligence:
+PSFN Framework provides conversation intelligence:
 
 - PSFN through its OpenAI-compatible API and channel headers.
-- Hermes through the existing Hermes adapter path.
-- OpenClaw through a future adapter with the same streaming turn contract.
 
 Satellites provide embodied I/O:
 
@@ -82,7 +79,7 @@ MVP behavior:
 
 Refactor toward these explicit modules:
 
-- `agent-runtimes/`: PSFN, Hermes, and future OpenClaw runtime adapters.
+- `framework/`: the PSFN OpenAI-compatible API and channel bridge.
 - `satellites/`: PSFN-VRM, Amica, VaM/Voxta, ESPHome, Pi realtime, and future
   hardware/avatar adapters.
 - `voice/`: STT, TTS, VAD, endpointing, interrupt, and audio fallback policy.
@@ -92,8 +89,8 @@ Refactor toward these explicit modules:
   current turn state, and event fan-out.
 - `protocol/`: typed hub wire events and capability declarations.
 
-This should preserve the current working TypeScript realtime path while moving
-the PSFN-specific assumptions behind runtime and channel boundaries.
+This should preserve the current working TypeScript realtime path while keeping
+PSFN-specific assumptions behind a clear Framework client boundary.
 
 ## PSFN Integration
 
@@ -127,10 +124,10 @@ VaM does not need to own microphone input. It can render the embodied response
 while another satellite, such as the Pi/PSFN realtime client, provides mic
 input and barge-in.
 
-## Open Runtime Support
+## Framework Boundary
 
-The hub should not bake PSFN assumptions into the satellite layer. Runtime
-adapters should expose a streaming turn interface:
+The hub should not bake cognition assumptions into the satellite layer. Its
+PSFN Framework client should expose a streaming turn interface:
 
 - Start turn with user text, context, session id, and optional media references.
 - Stream assistant text deltas.
@@ -138,8 +135,8 @@ adapters should expose a streaming turn interface:
 - Cancel or interrupt an active turn.
 - Report final turn state and usage metadata when available.
 
-PSFN can be the most capable implementation. Hermes and OpenClaw can initially
-support a smaller subset, especially for VRM or Amica rendering.
+PSFN Framework remains the sole implementation. VRM, Amica, VaM, apps, and
+hardware attach as satellites rather than alternate runtimes.
 
 ## Fallback Policy
 

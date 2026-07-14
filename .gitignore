@@ -13,8 +13,6 @@ coverage/
 worktrees/
 .artifacts/
 .agent/
-.agents/hermes/
-
 # Per-satellite ESPHome build state and local credentials
 satellites/**/.esphome/
 satellites/**/.generated/

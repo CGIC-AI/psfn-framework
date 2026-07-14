@@ -94,7 +94,7 @@ async def test_realtime_connection_streams_text_and_audio(monkeypatch, tmp_path:
     )
 
     await connection._handle_message({"type": "hello", "device_id": "pi-test", "device_name": "Pi Test"})
-    await connection._handle_message({"type": "turn.start", "wake_word_phrase": "Hey Hermes"})
+    await connection._handle_message({"type": "turn.start", "wake_word_phrase": "Hey Companion"})
     await connection._handle_message({"type": "audio", "audio": "AQACAAMA"})
     await connection._handle_message({"type": "turn.end"})
     assert connection._reply_task is not None

@@ -171,7 +171,6 @@ The hub’s PSFN-facing identity is configured in `.env`. These values become th
 registered identity and claim headers sent to PSFN:
 
 ```dotenv
-AGENT_RUNTIME=psfn
 DEVICE_TRANSPORT=realtime
 
 PSFN_API_BASE_URL=https://psfn.example/v1

@@ -197,7 +197,7 @@ become a required component of normal hub startup.
 The hub remains responsible for:
 
 - realtime websocket transport
-- PSFN or Hermes conversation execution
+- PSFN Framework conversation execution
 - STT/TTS provider orchestration
 - turn, interrupt, and session lifecycle
 - production satellite capability vocabulary
@@ -234,7 +234,7 @@ Device Studio browser app
 
 Existing PSFN Satellite Hub
   -> unchanged realtime websocket server
-  -> PSFN or Hermes runtime
+  -> PSFN Framework runtime
   -> optional future embodiment protocol extensions
 
 Physical ESP32 firmware
@@ -308,7 +308,7 @@ lifecycle events into local expression, viseme, and timeline state.
 Mock mode uses the same transport adapter interface as live mode but does not
 connect to the hub. It emits deterministic hub-like events in-process so the UI,
 behavior engine, preview, and event log can be tested without Deepgram,
-ElevenLabs, PSFN, Hermes, network access, or physical hardware.
+ElevenLabs, PSFN Framework, network access, or physical hardware.
 
 Mock mode should cover these scenarios:
 

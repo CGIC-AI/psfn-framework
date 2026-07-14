@@ -8,7 +8,7 @@ import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 import type { VoxtaFacadeConfig } from "../shared/env.js";
 import { sanitizeSpokenText } from "../shared/text.js";
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import {
   EmbodiedSessionRegistry,
   VOXTA_VAM_CAPABILITIES,
@@ -27,7 +27,7 @@ interface VoxtaFacadeDependencies {
   config: VoxtaFacadeConfig;
   sessions: SessionStore;
   embodiedSessions: EmbodiedSessionRegistry;
-  agent: AgentRuntimeAdapter;
+  agent: FrameworkAgentAdapter;
   artifactsRoot: string;
   tts?: VoxtaTtsAdapter;
   stt?: VoxtaSttAdapter;

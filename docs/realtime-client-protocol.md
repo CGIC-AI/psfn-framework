@@ -67,7 +67,7 @@ advertised to PSFN separately through the satellite claim envelope.
 ```json
 {
   "type": "turn.start",
-  "wake_word_phrase": "Hey Hermes"
+  "wake_word_phrase": "Hey Companion"
 }
 ```
 

@@ -10,7 +10,7 @@ import type {
   HubToClientMessage,
   SatelliteCapabilities,
 } from "../shared/protocol.js";
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import {
   CompanionBridge,
   CompanionRequestError,
@@ -721,7 +721,7 @@ test("hub without a companion bridge fails closed for approvals and previews", a
   }
 });
 
-class FakeAgent implements AgentRuntimeAdapter {
+class FakeAgent implements FrameworkAgentAdapter {
   async *streamReply(_input: {
     userText: string;
     conversationId?: string;
@@ -962,7 +962,6 @@ function testHubConfig(): HubConfig {
     displayName: "Companion Test Endpoint",
   });
   return {
-    agentRuntime: "psfn",
     textOnlyMode: true,
     bindHost: "127.0.0.1",
     port: 0,
@@ -978,7 +977,6 @@ function testHubConfig(): HubConfig {
       channelType: satelliteClaim.channelType,
       satelliteClaim,
     },
-    hermes: null,
     companion: null,
     homeAssistant: null,
     control: null,

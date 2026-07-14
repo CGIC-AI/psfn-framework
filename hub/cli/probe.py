@@ -168,7 +168,7 @@ def transport_spike(
     wav_sample_width_bytes: Annotated[int, typer.Option(help="WAV sample width in bytes")] = 2,
     response_port: Annotated[int, typer.Option(help="Port returned from handle_start; use 0 for API_AUDIO-first")] = 0,
 ) -> None:
-    """Capture raw voice transport artifacts without STT or Hermes in the loop."""
+    """Capture raw voice transport artifacts without STT or the Framework in the loop."""
     try:
         asyncio.run(
             _run_transport_spike(

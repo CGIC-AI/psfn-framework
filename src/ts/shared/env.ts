@@ -23,15 +23,6 @@ import {
   type SatelliteTelemetryMode,
 } from "../hub/satellite-claim.js";
 
-export interface HermesRuntimeConfig {
-  hermesHome: string;
-  model: string;
-  baseUrl: string;
-  apiKey?: string;
-  provider: string;
-  channelType: string;
-}
-
 export interface PsfnRuntimeConfig {
   model: string;
   baseUrl: string;
@@ -71,7 +62,6 @@ export interface HubControlConfig {
 }
 
 export interface HubConfig {
-  agentRuntime: "psfn" | "hermes";
   textOnlyMode: boolean;
   bindHost: string;
   port: number;
@@ -80,8 +70,7 @@ export interface HubConfig {
   elevenlabsVoiceId: string | null;
   elevenlabsModelId: string;
   artifactsRoot: string;
-  psfn: PsfnRuntimeConfig | null;
-  hermes: HermesRuntimeConfig | null;
+  psfn: PsfnRuntimeConfig;
   companion: CompanionBridgeConfig | null;
   homeAssistant: HomeAssistantConfig | null;
   control: HubControlConfig | null;
@@ -199,41 +188,12 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
   };
 }
 
-export function loadHermesRuntime(_projectRoot: string): HermesRuntimeConfig {
-  const hermesHome = resolvePath(
-    os.homedir(),
-    process.env.HERMES_HOME?.trim() || "~/.hermes",
-  );
-  const baseUrl =
-    process.env.HERMES_API_BASE_URL?.trim() ||
-    process.env.HERMES_API_SERVER_URL?.trim() ||
-    "http://127.0.0.1:8642/v1";
-  const model = process.env.HERMES_MODEL?.trim() || "hermes-agent";
-  const apiKey =
-    process.env.HERMES_API_KEY?.trim() ||
-    process.env.API_SERVER_KEY?.trim() ||
-    undefined;
-  const provider = process.env.HERMES_INFERENCE_PROVIDER?.trim() || "";
-  const channelType = process.env.HERMES_CHANNEL_TYPE?.trim() || "hermes-agent";
-  return {
-    hermesHome,
-    model,
-    baseUrl,
-    apiKey,
-    provider,
-    channelType,
-  };
-}
-
 export function loadCompanionBridgeConfig(
-  satelliteClaim: PsfnSatelliteClaimConfig | null,
+  satelliteClaim: PsfnSatelliteClaimConfig,
 ): CompanionBridgeConfig | null {
   const baseUrl = optional("PSFN_COMPANION_BASE_URL");
   if (!baseUrl) {
     return null;
-  }
-  if (!satelliteClaim) {
-    throw new Error("PSFN_COMPANION_BASE_URL requires AGENT_RUNTIME=psfn");
   }
   const identity: CompanionBridgeIdentity = {
     satelliteId: satelliteClaim.satelliteId?.trim() || "",
@@ -271,10 +231,8 @@ export function loadCompanionBridgeConfig(
 
 export function loadHubConfig(projectRoot: string): HubConfig {
   loadProjectEnv(projectRoot);
-  const agentRuntime = loadAgentRuntime();
-  const psfn = agentRuntime === "psfn" ? loadPsfnRuntime(projectRoot) : null;
-  const hermes = agentRuntime === "hermes" ? loadHermesRuntime(projectRoot) : null;
-  const companion = loadCompanionBridgeConfig(psfn?.satelliteClaim ?? null);
+  const psfn = loadPsfnRuntime(projectRoot);
+  const companion = loadCompanionBridgeConfig(psfn.satelliteClaim);
   const homeAssistant = loadHomeAssistantConfig();
   const control = loadHubControlConfig(homeAssistant !== null);
   const deviceRegistry = loadHubDeviceRegistry(
@@ -288,7 +246,6 @@ export function loadHubConfig(projectRoot: string): HubConfig {
   const textOnlyMode = process.env.HUB_TEXT_ONLY?.trim() === "true";
 
   return {
-    agentRuntime,
     textOnlyMode,
     bindHost: process.env.REALTIME_VOICE_BIND_HOST || "0.0.0.0",
     port: Number.parseInt(process.env.REALTIME_VOICE_PORT || "8787", 10),
@@ -298,7 +255,6 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     elevenlabsModelId: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
     artifactsRoot: resolvePath(projectRoot, process.env.ARTIFACT_ROOT || ".artifacts/runtime-ts"),
     psfn,
-    hermes,
     companion,
     homeAssistant,
     control,
@@ -378,14 +334,6 @@ function parsePositiveIntegerEnv(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
-}
-
-function loadAgentRuntime(): HubConfig["agentRuntime"] {
-  const runtime = process.env.AGENT_RUNTIME?.trim().toLowerCase() || "psfn";
-  if (runtime === "psfn" || runtime === "hermes") {
-    return runtime;
-  }
-  throw new Error("AGENT_RUNTIME must be either 'psfn' or 'hermes'");
 }
 
 function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {

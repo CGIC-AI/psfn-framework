@@ -10,7 +10,7 @@ import WebSocket, { type RawData } from "ws";
 
 import { wrapPcmAsWav } from "../shared/audio.js";
 import type { HubConfig } from "../shared/env.js";
-import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import { RealtimeHubServer } from "./server.js";
@@ -18,7 +18,7 @@ import type { ConversationMessage } from "./session-store.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
 
-class FakeAgent implements AgentRuntimeAdapter {
+class FakeAgent implements FrameworkAgentAdapter {
   readonly calls: Array<{
     userText: string;
     conversationId?: string;
@@ -803,7 +803,6 @@ function testHubConfig(overrides: {
     displayName: "Voxta VaM",
   });
   return {
-    agentRuntime: "psfn",
     textOnlyMode: false,
     bindHost: "127.0.0.1",
     port: 0,
@@ -819,7 +818,6 @@ function testHubConfig(overrides: {
       channelType: satelliteClaim.channelType,
       satelliteClaim,
     },
-    hermes: null,
     companion: null,
     homeAssistant: null,
     control: null,

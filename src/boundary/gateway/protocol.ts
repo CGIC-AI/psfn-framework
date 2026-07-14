@@ -153,6 +153,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   topK?: number;
   repetitionPenalty?: number;
   frequencyPenalty?: number;
+  accounting?: LLMCallAccountingContext;
 }
 
 export interface LLMEmbedParams extends GatewayCorrelationParams {
@@ -1005,4 +1006,5 @@ export const GatewayErrors = {
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
   MODEL_BUDGET_BLOCKED: -32015,
+  ICP_CONVERSATION_COST_BLOCKED: -32016,
 } as const;

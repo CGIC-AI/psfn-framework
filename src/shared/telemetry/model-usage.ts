@@ -461,6 +461,43 @@ export interface IcpConversationCostReservationResult {
   projection: IcpConversationCostProjection;
 }
 
+export type IcpConversationCostBreakerBlockReason =
+  | Extract<
+      IcpConversationCostReservationReason,
+      | 'warning_closeout_reserve_only'
+      | 'hard_limit_exceeded'
+      | 'unknown_historical_cost'
+      | 'attempt_already_settled'
+    >
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable';
+
+export type IcpConversationCostBreakerDecisionReason =
+  | IcpConversationCostReservationReason
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable';
+
+/** Content-free operator/Garden projection for one physical pre-call decision. */
+export interface IcpConversationCostBreakerEvent {
+  timestampMs: number;
+  outcome: 'reserved' | 'warning' | 'blocked';
+  reason: IcpConversationCostBreakerDecisionReason;
+  logicalCallId: string;
+  attempt: number;
+  conversationId: string;
+  rootInitiationId: string;
+  localCompanionId: string;
+  costPurpose: IcpConversationCorrelation['costPurpose'];
+  costOriginStage: IcpConversationCorrelation['costOriginStage'];
+  provider: string;
+  model: string;
+  slotKey?: string;
+  routingPurpose: string;
+  projectedRequestCostUsd?: number;
+  replayed: boolean;
+  projection?: IcpConversationCostProjection;
+}
+
 /** Fleet-only atomic reservation/query surface owned by canonical model accounting. */
 export interface IcpConversationCostAccountingPort {
   reserveIcpConversationCost(

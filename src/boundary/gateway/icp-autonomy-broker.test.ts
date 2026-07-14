@@ -15,6 +15,7 @@ import type { IcpInitiationCandidateSharedMetadata } from '../../core/icp/initia
 import type {
   IcpAutonomyReasonCode,
   IcpAvailabilityLease,
+  IcpConversationCorrelation,
   IcpConversationEpisode,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
@@ -502,6 +503,54 @@ async function triggerInvalidationRace(
 }
 
 describe('GatewayIcpAutonomyBroker', () => {
+  it('authorizes charged background work only for the authenticated durable episode participant', async () => {
+    const { broker, store, alarm } = makeBroker();
+    store.episodes.set(CONVERSATION_ID, {
+      conversationId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      initiationSource: 'foreground',
+      provenanceRef: PROVENANCE_HANDLE,
+      openedAtMs: NOW - 10_000,
+      lastActivityAtMs: NOW - 1_000,
+      status: 'active',
+      revision: 2,
+    });
+    const correlation: IcpConversationCorrelation = {
+      conversationId: CONVERSATION_ID,
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      localCompanionId: A,
+      peerCompanionId: B,
+      peerContactId: 'peer-contact-b',
+      channelId: CHANNEL,
+      turnId: 'turn-1',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+      fatigueDecision: 'not_evaluated',
+    };
+
+    await expect(broker.bindConversationCostCorrelation(A, correlation)).resolves.toEqual(correlation);
+    await expect(broker.bindConversationCostCorrelation(B, correlation)).rejects.toThrow(
+      'peer must differ from sender',
+    );
+    await expect(broker.bindConversationCostCorrelation(A, {
+      ...correlation,
+      rootInitiationId: CANDIDATE_ID,
+    })).rejects.toThrow('episode binding mismatch');
+    expect(alarm).toHaveBeenCalledWith(
+      'icp_cost_binding_mismatch',
+      expect.any(String),
+      expect.objectContaining({ conversationId: CONVERSATION_ID }),
+    );
+  });
+
   it('strictly rejects private candidate fields and sender-supplied policy claims', () => {
     expect(() => parseIcpInitiationPreflightInput({
       candidate: { ...candidate(), reasonSummary: 'must stay private' },

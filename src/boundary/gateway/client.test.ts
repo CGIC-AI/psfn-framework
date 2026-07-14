@@ -264,6 +264,24 @@ describe('GatewayClient streaming', () => {
         retryOwner: 'caller',
       },
     });
+
+    void client.complete({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'summarize' }],
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    }, 'summary');
+    const completionReq = conn.sent[1] as { params: Record<string, unknown> };
+    expect(completionReq.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    });
   });
 
   it('preserves canonical ICP attribution on gateway model requests', () => {
@@ -378,6 +396,62 @@ describe('GatewayClient streaming', () => {
 
     await expect(streamPromise).rejects.toThrow('budget blocked');
     expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
+  });
+
+  it('decodes a strict ICP cost block without accepting partner-identifying extensions', async () => {
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      outcome: 'blocked',
+      reason: 'hard_limit_exceeded',
+      logicalCallId: 'logical-1',
+      attempt: 1,
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      provider: 'openrouter',
+      model: 'test/model',
+      routingPurpose: 'chat',
+      projectedRequestCostUsd: 0.5,
+      replayed: false,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'cost blocked',
+        data: event,
+      },
+    });
+    await expect(streamPromise).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event,
+    });
+
+    const malformedPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked again' }],
+    });
+    const malformedRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      id: malformedRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque malformed block',
+        data: { ...event, peerContactId: 'must-not-cross' },
+      },
+    });
+    await expect(malformedPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
   });
 
   it.each([

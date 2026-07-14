@@ -475,6 +475,19 @@ export class GatewayServer {
       getRuntimeHealth: () => this.getRuntimeHealth(),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
+      authorizeIcpConversationCorrelation: async (correlation) => {
+        if (!this.icpAutonomyBroker) {
+          throw new JSONRPCErrorException(
+            'ICP autonomy broker is not configured',
+            GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+          );
+        }
+        const companionId = this.requireAuthenticatedAgentCompanionId(conn);
+        return await this.icpAutonomyBroker.bindConversationCostCorrelation(
+          companionId,
+          correlation,
+        );
+      },
       recordAuditEvent: async (entry) => {
         if (this.options.auditStore) {
           await this.options.auditStore.recordSummary(entry);

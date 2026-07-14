@@ -91,6 +91,16 @@ export async function buildGatewayPrivilegedCore(
           });
         });
       },
+      onIcpConversationCostDecision: (event) => {
+        eventBus.emit('icp.conversation.cost.decision', event).catch((error) => {
+          input.logger.error('Failed to emit ICP conversation cost decision telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            conversationId: event.conversationId,
+            reason: event.reason,
+            outcome: event.outcome,
+          });
+        });
+      },
     },
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });

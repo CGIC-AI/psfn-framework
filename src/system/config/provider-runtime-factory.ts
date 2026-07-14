@@ -48,6 +48,16 @@ export function createProviderRuntimeServices(
         ...(options.llmOptions ?? {}),
         usageRecorder: options.llmOptions?.usageRecorder ?? modelUsageStore,
         usageBudgetQuery: options.llmOptions?.usageBudgetQuery ?? modelUsageStore,
+        ...(
+          options.modelUsageScope
+          && 'fleetAggregation' in options.modelUsageScope
+          && options.modelUsageScope.fleetAggregation === true
+            ? {
+                icpConversationCostAccounting:
+                  options.llmOptions?.icpConversationCostAccounting ?? modelUsageStore,
+              }
+            : {}
+        ),
       }
     : options.llmOptions;
   return {

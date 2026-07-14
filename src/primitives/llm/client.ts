@@ -79,6 +79,8 @@ import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lan
 import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type {
+  IcpConversationCostAccountingPort,
+  IcpConversationCostBreakerEvent,
   ModelUsageBudgetQueryPort,
   ModelUsageRecorder,
 } from '../../shared/telemetry/model-usage.js';
@@ -115,6 +117,10 @@ import {
   reconcileProviderCostEvidence,
   type ReconciledProviderCostEvidence,
 } from '../../shared/telemetry/provider-cost-evidence.js';
+import {
+  IcpConversationCostBreaker,
+  IcpConversationCostBreakerError,
+} from './icp-conversation-cost-breaker.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -157,6 +163,8 @@ export interface LLMClientRuntimeOptions {
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   usageRecorder?: ModelUsageRecorder;
   usageBudgetQuery?: ModelUsageBudgetQueryPort;
+  icpConversationCostAccounting?: IcpConversationCostAccountingPort;
+  onIcpConversationCostDecision?: (event: IcpConversationCostBreakerEvent) => void;
   providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
@@ -188,6 +196,7 @@ export class LLMClient {
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
+  private icpConversationCostBreaker: IcpConversationCostBreaker;
   private providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   private circuitBreaker: SlidingWindowCircuitBreaker;
 
@@ -208,6 +217,11 @@ export class LLMClient {
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
     this.usageRecorder = runtimeOptions.usageRecorder;
+    this.icpConversationCostBreaker = new IcpConversationCostBreaker(
+      config,
+      runtimeOptions.icpConversationCostAccounting,
+      runtimeOptions.onIcpConversationCostDecision,
+    );
     this.providerCostResolver = runtimeOptions.providerCostResolver;
     this.modelCallGate = new ModelCallGate();
     this.circuitBreaker = runtimeOptions.circuitBreaker ?? new SlidingWindowCircuitBreaker({
@@ -503,8 +517,14 @@ export class LLMClient {
     return Math.max(1, countMessageTokens(budgetMessages));
   }
 
-  private resolveEstimatedBudgetInputTokens(context: PiContext): number | undefined {
-    if (!this.budgetController.requiresPreflightEstimate()) {
+  private resolveEstimatedBudgetInputTokens(
+    context: PiContext,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): number | undefined {
+    if (
+      !this.budgetController.requiresPreflightEstimate()
+      && !this.icpConversationCostBreaker.requiresInputEstimate(correlation)
+    ) {
       return undefined;
     }
     return this.estimateBudgetInputTokens(context);
@@ -591,13 +611,20 @@ export class LLMClient {
     candidate: RoutingCandidate,
     operation: () => Promise<T>,
   ): Promise<T> {
-    return await this.circuitBreaker.execute({
-      key: this.resolveCircuitBreakerKey(method, candidate),
-      method,
-      operation,
-      shouldRecordFailure: isRetryableError,
-      onTransition: transition => this.logCircuitBreakerTransition(transition),
-    });
+    try {
+      return await this.circuitBreaker.execute({
+        key: this.resolveCircuitBreakerKey(method, candidate),
+        method,
+        operation,
+        shouldRecordFailure: isRetryableError,
+        onTransition: transition => this.logCircuitBreakerTransition(transition),
+      });
+    } catch (error) {
+      if (error instanceof IcpConversationCostBreakerError) {
+        throw new NonRecoverableFallbackError(error);
+      }
+      throw error;
+    }
   }
 
   private async runWithModelCallGate<T>(
@@ -650,6 +677,31 @@ export class LLMClient {
         preflight.blockedEvent.reason === 'accounting_unavailable'
         || preflight.blockedEvent.reason === 'unknown_historical_cost'
       ) {
+        throw new NonRecoverableFallbackError(error);
+      }
+      throw error;
+    }
+  }
+
+  private async reserveIcpConversationCost(
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    estimatedInputTokens: number,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    logicalCallId: string,
+    attempt: number,
+  ): Promise<void> {
+    try {
+      await this.icpConversationCostBreaker.reservePhysicalAttempt({
+        candidate,
+        purpose,
+        estimatedInputTokens,
+        logicalCallId,
+        attempt,
+        correlation,
+      });
+    } catch (error) {
+      if (error instanceof IcpConversationCostBreakerError) {
         throw new NonRecoverableFallbackError(error);
       }
       throw error;
@@ -762,6 +814,15 @@ export class LLMClient {
         ? { providerCostEvidenceSummary: providerCostReconciliation.providerCostEvidenceSummary }
         : {}),
       ...(providerCost ? { providerCost } : {}),
+      ...(correlation?.icpCorrelation
+        ? {
+            icpCost: {
+              purpose: correlation.icpCorrelation.costPurpose,
+              originStage: correlation.icpCorrelation.costOriginStage,
+              fatigueDecision: correlation.icpCorrelation.fatigueDecision,
+            },
+          }
+        : {}),
     };
 
     if (!this.usageRecorder) return;
@@ -864,9 +925,9 @@ export class LLMClient {
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
-    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
-    const accountingInputTokens = this.estimateBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
+    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
+    const accountingInputTokens = estimatedInputTokens ?? this.estimateBudgetInputTokens(piContext);
     const modelHint = mergeModelHints(context.modelHint, undefined);
     const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
     const logicalCallId = externalAccounting?.logicalCallId
@@ -884,11 +945,16 @@ export class LLMClient {
         async (candidateTarget) => {
           const transport = this.transport;
           if (transport) {
+            physicalAttempt += 1;
             const transportContext = this.buildTransportContext(
               context,
               candidateTarget,
               correlation,
-              externalAccounting,
+              {
+                logicalCallId,
+                attempt: physicalAttempt,
+                retryOwner: 'caller',
+              },
             );
             return await this.runTransportWithCircuitBreaker(
               'llm.stream',
@@ -937,6 +1003,14 @@ export class LLMClient {
             physicalAttempt += 1;
             const usageAttempt = physicalAttempt;
             const attemptStartedAtMs = Date.now();
+            await this.reserveIcpConversationCost(
+              'chat',
+              candidateTarget,
+              accountingInputTokens,
+              correlation,
+              logicalCallId,
+              usageAttempt,
+            );
             let attemptFirstTokenAtMs: number | undefined;
             const markFirstToken = (): void => {
               attemptFirstTokenAtMs ??= Date.now();
@@ -1293,11 +1367,13 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = this.buildPiContext(context);
-    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
+    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
     const modelHint = mergeModelHints(context.modelHint, options.modelHint);
-    const logicalCallId = this.createUsageLogicalCallId('completion', routingPurpose, correlation);
-    let physicalAttempt = 0;
+    const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
+    const logicalCallId = externalAccounting?.logicalCallId
+      ?? this.createUsageLogicalCallId('completion', routingPurpose, correlation);
+    let physicalAttempt = (externalAccounting?.attempt ?? 1) - 1;
     let requestedProvider = modelHint?.provider;
     let requestedModel = modelHint?.model;
 
@@ -1306,7 +1382,17 @@ export class LLMClient {
       async (candidateTarget) => {
         const transport = this.transport;
         if (transport) {
-          const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+          physicalAttempt += 1;
+          const transportContext = this.buildTransportContext(
+            context,
+            candidateTarget,
+            correlation,
+            {
+              logicalCallId,
+              attempt: physicalAttempt,
+              retryOwner: 'caller',
+            },
+          );
           const executeTransport = async () => await transport.complete(transportContext, purpose, {
             ...(options.signal ? { signal: options.signal } : {}),
           });
@@ -1356,6 +1442,14 @@ export class LLMClient {
           physicalAttempt += 1;
           const attempt = physicalAttempt;
           const attemptStartedAtMs = Date.now();
+          await this.reserveIcpConversationCost(
+            routingPurpose,
+            candidateTarget,
+            estimatedInputTokens ?? 0,
+            correlation,
+            logicalCallId,
+            attempt,
+          );
           let response: Awaited<ReturnType<typeof completeSimple>>;
           try {
             response = await completeSimple(

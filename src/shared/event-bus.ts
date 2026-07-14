@@ -19,6 +19,7 @@ import type { CompletionHandoffRecord } from './contracts/completion-handoff.js'
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
+import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -799,6 +800,7 @@ export interface EventMap {
   'intention.nudge.declined': { thoughtId: string; reason?: string; dampenedWeight: number; timestamp: number };
   'intention.nudge.blocked': { thoughtId: string; reason: string; channelId?: string; nextEligibleAtMs?: number; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
+  'icp.conversation.cost.decision': IcpConversationCostBreakerEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
   'channel.voice.transcript.partial': {

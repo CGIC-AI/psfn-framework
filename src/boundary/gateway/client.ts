@@ -167,6 +167,8 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
+import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
+import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
@@ -203,6 +205,25 @@ function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEve
   }
   try {
     return parseModelBudgetBlockedEvent(error.data);
+  } catch {
+    return undefined;
+  }
+}
+
+function icpConversationCostBreakerErrorFromRpc(
+  error: unknown,
+): IcpConversationCostBreakerError | undefined {
+  if (
+    !(error instanceof JSONRPCErrorException)
+    || error.code !== GatewayErrors.ICP_CONVERSATION_COST_BLOCKED
+  ) {
+    return undefined;
+  }
+  try {
+    const event = parseIcpConversationCostBreakerEvent(error.data);
+    return event.outcome === 'blocked'
+      ? new IcpConversationCostBreakerError({ ...event, outcome: 'blocked' })
+      : undefined;
   } catch {
     return undefined;
   }
@@ -511,6 +532,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
+      if (icpCostBlock) {
+        callbacks?.onError?.(icpCostBlock);
+        throw icpCostBlock;
+      }
       const budgetBlock = modelBudgetBlockedEventFromError(error);
       if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       const err = error instanceof Error ? error : new Error(String(error));
@@ -564,10 +590,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
+        ...(context.accounting ? { accounting: context.accounting } : {}),
       },
         options.signal,
       );
     } catch (error) {
+      const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
+      if (icpCostBlock) throw icpCostBlock;
       const budgetBlock = modelBudgetBlockedEventFromError(error);
       if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       throw error;

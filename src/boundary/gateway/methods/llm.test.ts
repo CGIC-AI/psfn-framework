@@ -3,6 +3,9 @@ import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
 import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
+import { GatewayErrors } from '../protocol.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,6 +16,7 @@ function createHarness(options: {
     embedBatchWithUsage?: (texts: string[]) => Promise<unknown>;
   };
   usageEvents?: ModelUsageEventInput[];
+  authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn(async () => ({
@@ -109,6 +113,9 @@ function createHarness(options: {
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
+    ...(options.authorizeIcpConversationCorrelation
+      ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
+      : {}),
     audited: (_method, handler) => handler,
     approvalBoundary: {
       gate: (_options) => async (params) => _options.handler(params),
@@ -223,6 +230,108 @@ describe('registerLLMMethods', () => {
         attempt: 4,
         retryOwner: 'caller',
       },
+    });
+
+    await harness.invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      pin: true,
+      messages: [{ role: 'user', content: 'summarize' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 9,
+        retryOwner: 'caller',
+      },
+    });
+    expect(harness.complete.mock.calls[0]?.[0]).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 9,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('requires durable gateway episode authorization for nested ICP cost correlation', async () => {
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerContactId: 'contact-b',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: 'turn-1',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+      fatigueDecision: 'not_evaluated',
+    };
+    const authorizeIcpConversationCorrelation = vi.fn(async value => value);
+    const harness = createHarness({ authorizeIcpConversationCorrelation });
+
+    await harness.invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'summary' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      icpCorrelation: correlation,
+    });
+    expect(authorizeIcpConversationCorrelation).toHaveBeenCalledWith(correlation);
+    expect(harness.complete.mock.calls[0]?.[0]).toMatchObject({
+      correlation: {
+        companionId: correlation.localCompanionId,
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+        icpCorrelation: correlation,
+      },
+    });
+
+    await expect(createHarness().invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'forged summary' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      icpCorrelation: correlation,
+    })).rejects.toMatchObject({ code: -32011 });
+  });
+
+  it('exposes a typed ICP pre-call block over JSON-RPC', async () => {
+    const harness = createHarness();
+    const event = {
+      timestampMs: 123,
+      outcome: 'blocked' as const,
+      reason: 'hard_limit_exceeded' as const,
+      logicalCallId: 'logical-1',
+      attempt: 1,
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      provider: 'openrouter',
+      model: 'test/model',
+      routingPurpose: 'chat',
+      projectedRequestCostUsd: 0.5,
+      replayed: false,
+    };
+    harness.stream.mockRejectedValueOnce(new IcpConversationCostBreakerError(event));
+
+    await expect(harness.invoke('llm.chat', {
+      model: 'test/model',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'blocked' }],
+      systemPrompt: 'system',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+      data: event,
     });
   });
 

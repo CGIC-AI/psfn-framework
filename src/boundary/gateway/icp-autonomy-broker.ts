@@ -540,8 +540,8 @@ export class GatewayIcpAutonomyBroker {
     return { ...result, episode };
   }
 
-  /** Rebind an ordinary reply to gateway-owned episode identity and participants. */
-  async bindConversationReplyCorrelation(
+  /** Rebind any charged model work to gateway-owned episode identity and participants. */
+  async bindConversationCostCorrelation(
     senderCompanionId: string,
     value: IcpConversationCorrelation,
   ): Promise<IcpConversationCorrelation> {
@@ -555,12 +555,11 @@ export class GatewayIcpAutonomyBroker {
       && episode.participantCompanionIds.length === 2
       && episode.participantCompanionIds.includes(senderCompanionId)
       && episode.participantCompanionIds.includes(correlation.peerCompanionId)
-      && correlation.localCompanionId === senderCompanionId
-      && correlation.costOriginStage === 'reply';
+      && correlation.localCompanionId === senderCompanionId;
     if (!matches) {
       this.options.alarm(
-        'icp_reply_binding_mismatch',
-        'ICP reply correlation does not match the gateway-owned conversation episode',
+        'icp_cost_binding_mismatch',
+        'ICP cost correlation does not match the gateway-owned conversation episode',
         {
           senderCompanionId,
           peerCompanionId: correlation.peerCompanionId,
@@ -568,13 +567,25 @@ export class GatewayIcpAutonomyBroker {
           conversationId: correlation.conversationId,
         },
       );
-      throw new Error('ICP reply correlation episode binding mismatch');
+      throw new Error('ICP cost correlation episode binding mismatch');
     }
     return parseIcpConversationCorrelation({
       ...correlation,
       rootInitiationId: episode.rootInitiationId,
       initiatedByCompanionId: episode.initiatedByCompanionId,
     });
+  }
+
+  /** Rebind an ordinary transported reply and additionally require reply-stage provenance. */
+  async bindConversationReplyCorrelation(
+    senderCompanionId: string,
+    value: IcpConversationCorrelation,
+  ): Promise<IcpConversationCorrelation> {
+    const correlation = await this.bindConversationCostCorrelation(senderCompanionId, value);
+    if (correlation.costOriginStage !== 'reply') {
+      throw new Error('ICP reply correlation requires reply cost origin');
+    }
+    return correlation;
   }
 
   async revokePermit(

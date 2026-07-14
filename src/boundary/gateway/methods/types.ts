@@ -24,6 +24,7 @@ import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../../custody/credential-vault.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -65,6 +66,10 @@ export interface GatewayMethodRuntime {
   getRuntimeHealth(): RuntimeHealthResult;
   getCredentialPresence?(): GatewayCredentialPresenceResult;
   nextStreamRequestId(): string;
+  /** Authenticates nested ICP cost identity against the connection and durable episode. */
+  authorizeIcpConversationCorrelation?(
+    correlation: IcpConversationCorrelation,
+  ): Promise<IcpConversationCorrelation>;
   recordAuditEvent?(entry: {
     method: string;
     decision: PolicyDecision;

@@ -89,13 +89,6 @@ export type {
 export {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
 } from '../../../core/agent/post-turn-action-runtime.js';
-export {
-  registerPostTurnSubagentSpawnRuntime,
-} from '../../../core/agent/post-turn-subagent-spawn.js';
-export type {
-  RegisterPostTurnSubagentSpawnRuntimeOptions,
-} from '../../../core/agent/post-turn-subagent-spawn.js';
-
 interface DeferredQueueEntry {
   action: InferredPostTurnAction;
   capability: PostTurnActionCapability;

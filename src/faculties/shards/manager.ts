@@ -53,10 +53,6 @@ import type {
   ShardFoldReviewResolveParams,
 } from './fold-review.js';
 import {
-  type BoundedSubagentLaunchSummary,
-  type SubagentExecutionPort,
-} from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
-import {
   resolveCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
@@ -176,7 +172,7 @@ export interface ActiveShard {
   failureReason?: string;
 }
 
-export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
+export class ShardManager implements ShardExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private artifactReturnPort: ArtifactReturnPort;
@@ -285,45 +281,6 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       }, async () => this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig));
     }
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
-  }
-
-  async executeSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
-    const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
-    if (!activeChargeContext && chargePolicy) {
-      return runWithChargeContext({
-        chargePolicy,
-        eventBus: this.deps.eventBus,
-        lane: 'interactive',
-        correlation: getRequestContext(),
-      }, async () => this.executeSubagent(shardConfig));
-    }
-
-    chargeSurface('subagentLaunch', {
-      details: {
-        name: shardConfig.name,
-        ...(shardConfig.maxTurns !== undefined ? { maxTurns: shardConfig.maxTurns } : {}),
-      },
-    });
-
-    const result = await this.spawn(shardConfig);
-    return {
-      subagentId: result.shardId,
-      name: result.name,
-      content: result.content,
-      model: result.model,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      durationMs: result.durationMs,
-      turns: result.turns,
-      lifecycleState: result.lifecycleState,
-      health: result.health,
-      stateReason: result.stateReason,
-      ...(result.failureReason ? { failureReason: result.failureReason } : {}),
-      capabilities: [...result.capabilities],
-      requiredCapabilities: [...result.requiredCapabilities],
-      ...(result.artifactReturn ? { artifactReturn: result.artifactReturn } : {}),
-    };
   }
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {

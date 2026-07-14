@@ -1,4 +1,4 @@
-import { apiGet } from '$lib/api/client';
+import { apiDownload, apiGet, type ApiDownload } from '$lib/api/client';
 import type {
   ModelUsageData,
   ModelUsageEvent,
@@ -20,12 +20,13 @@ const MODEL_USAGE_QUERY_FIELDS = [
   'topN', 'sortBy', 'sortDirection', 'provider', 'model', 'toolName', 'callKind', 'callType',
   'purpose', 'originType', 'originStage', 'service', 'process', 'companionId', 'sessionId',
   'channelId', 'channelType', 'turnId', 'requestId', 'toolCallId', 'chargeLane', 'chargeSurface',
+  'chargeEventId',
   'chargeRunId', 'chargeRootRunId', 'chargeParentRunId', 'shardId', 'subagentId', 'conversationId',
   'rootInitiationId', 'workloadType', 'workloadId', 'slotKey', 'requestedProvider',
   'requestedModel', 'status', 'costSource', 'runId',
 ] as const satisfies ReadonlyArray<keyof ModelUsageQuery>;
 
-function modelUsageSearchParams(query: AdminModelUsageQuery): URLSearchParams {
+export function modelUsageSearchParams(query: AdminModelUsageQuery): URLSearchParams {
   const params = new URLSearchParams();
   for (const field of MODEL_USAGE_QUERY_FIELDS) {
     const value = query[field];
@@ -36,16 +37,28 @@ function modelUsageSearchParams(query: AdminModelUsageQuery): URLSearchParams {
 }
 
 export function getModelUsage(query: AdminModelUsageQuery = {}): Promise<AdminModelUsageData> {
-  const params = modelUsageSearchParams(query);
-  const suffix = params.toString();
-  return apiGet<AdminModelUsageData>(`/api/admin/model-usage${suffix ? `?${suffix}` : ''}`);
+  return apiGet<AdminModelUsageData>(buildModelUsagePath(query));
 }
 
-export function getModelUsageExportUrl(
+export function buildModelUsagePath(query: AdminModelUsageQuery = {}): string {
+  const suffix = modelUsageSearchParams(query).toString();
+  return `/api/admin/model-usage${suffix ? `?${suffix}` : ''}`;
+}
+
+export function buildModelUsageExportPath(
   format: 'csv' | 'json',
   query: AdminModelUsageQuery = {},
 ): string {
   const params = modelUsageSearchParams(query);
   params.set('format', format);
   return `/api/admin/model-usage/export?${params.toString()}`;
+}
+
+export const getModelUsageExportUrl = buildModelUsageExportPath;
+
+export function downloadModelUsageExport(
+  format: 'csv' | 'json',
+  query: AdminModelUsageQuery = {},
+): Promise<ApiDownload> {
+  return apiDownload(buildModelUsageExportPath(format, query));
 }

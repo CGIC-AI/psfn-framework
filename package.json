@@ -27,6 +27,7 @@
     "proxy:down": "docker compose --env-file .env -f proxy/docker-compose.yml down",
     "proxy:logs": "docker compose --env-file .env -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
+    "test:garden": "vitest run --config vitest.garden.config.ts",
     "test:privacy": "vitest run src/system/trust/privacy-regression.test.ts",
     "test:leak-audit": "vitest run src/core/session/context-leak-audit.test.ts",
     "test:group-harness": "vitest run src/core/session/group-chat-harness/group-chat-regression.test.ts",

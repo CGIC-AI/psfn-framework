@@ -493,10 +493,8 @@ function readJournalEntriesBeforeOnce(
   let needBoundaryEntry = false;
   let truncated = false;
 
-  const scanCandidate = (path: string): void => {
-    if (truncated) return;
-
-    let firstEntry: JournalEntry | null = null;
+  const scanCandidate = (path: string): boolean => {
+    const firstEntries: JournalEntry[] = [];
     scanJsonlFileForward(path, {
       chunkBytes,
       stats,
@@ -504,7 +502,7 @@ function readJournalEntriesBeforeOnce(
     }, (line) => {
       if (line.trim().length === 0) return false;
       try {
-        firstEntry = parseJournalLine(line);
+        firstEntries.push(parseJournalLine(line));
         return true;
       } catch (error) {
         appendQuarantinedLine(quarantined, line, error);
@@ -512,9 +510,10 @@ function readJournalEntriesBeforeOnce(
       }
     });
 
+    const firstEntry = firstEntries[0];
     // Segment ids are monotonic. A first entry at/after the cursor proves the
     // entire file is too new; only the small boundary metadata read was needed.
-    if (!firstEntry || firstEntry.id >= beforeId) return;
+    if (!firstEntry || firstEntry.id >= beforeId) return false;
 
     const stopped = scanJsonlFileBackward(path, {
       chunkBytes,
@@ -541,19 +540,20 @@ function readJournalEntriesBeforeOnce(
       needBoundaryEntry = true;
       return false;
     });
-    if (stopped) truncated = true;
+    return stopped;
   };
 
   if (existsSync(filePath)) {
-    scanCandidate(filePath);
+    truncated = scanCandidate(filePath);
   }
 
   if (!truncated) {
     const sealedSegments = listNumberedJsonlSegments(filePath)
       .sort((left, right) => right.segmentNumber - left.segmentNumber);
     for (const segment of sealedSegments) {
-      scanCandidate(segment.path);
-      if (truncated) break;
+      if (!scanCandidate(segment.path)) continue;
+      truncated = true;
+      break;
     }
   }
 

@@ -716,7 +716,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const totalMessages = this.deps.sessionStore.count(sessionId);
     const olderThanCursor = beforeId === null
       ? null
-      : this.deps.sessionStore.getEntriesInRange(sessionId, 0, beforeId - 1);
+      : this.deps.sessionStore.getEntriesBefore(sessionId, beforeId, limit + 1);
     const messages = olderThanCursor === null
       ? this.deps.sessionStore.getRecent(sessionId, limit)
       : olderThanCursor.slice(-limit);

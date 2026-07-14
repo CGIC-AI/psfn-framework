@@ -11,6 +11,7 @@ import {
   normalizeToolObservation,
 } from '../../../core/session/tool-observation.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { createFilesystemSessionArchivePort } from '../../../persistence/journals/journal/port.js';
 import { createSqliteTranscriptProjection } from '../../../persistence/sessions/transcript-projection.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -232,6 +233,8 @@ describe('AdminSessionDataService', () => {
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
       eventBus: new EventBus(),
     });
+    const beforeSpy = vi.spyOn(store, 'getEntriesBefore');
+    const rangeSpy = vi.spyOn(store, 'getEntriesInRange');
 
     const firstPage = service.getSessionMessages(channelId);
     expect(firstPage.messages).toHaveLength(100);
@@ -261,6 +264,12 @@ describe('AdminSessionDataService', () => {
       totalMessages: 250,
       returnedMessages: 100,
     });
+    expect(beforeSpy).toHaveBeenLastCalledWith(
+      channelId,
+      firstPage.pagination.nextBeforeId,
+      101,
+    );
+    expect(rangeSpy).not.toHaveBeenCalled();
 
     const terminalPage = service.getSessionMessages(channelId, {
       limit: 100,
@@ -277,6 +286,59 @@ describe('AdminSessionDataService', () => {
       totalMessages: 250,
       returnedMessages: 50,
     });
+    expect(beforeSpy).toHaveBeenCalledTimes(2);
+    expect(rangeSpy).not.toHaveBeenCalled();
+  });
+
+  it('serves messages-only older pages through bounded archive reads without full replay', () => {
+    const channelId = 'api:bounded-older-page';
+    for (let index = 1; index <= 250; index += 1) {
+      store.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index}`,
+        timestamp: 1_700_000_000_000 + index,
+      });
+    }
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const boundedReadSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloadedStore = new SessionStore(dir, { sessionArchivePort: archivePort });
+    boundedReadSpy.mockClear();
+    fullReadSpy.mockClear();
+    const compactionSpy = vi.spyOn(reloadedStore, 'getCompactionSummaries');
+    const rangeSpy = vi.spyOn(reloadedStore, 'getEntriesInRange');
+    const service = new AdminSessionDataService({
+      sessionStore: reloadedStore,
+      sessionManager: new SessionManager(reloadedStore, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const page = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: 151,
+      messagesOnly: true,
+    });
+
+    expect(page.messages).toHaveLength(100);
+    expect(page.messages[0]?.content).toBe('Message 51');
+    expect(page.messages[99]?.content).toBe('Message 150');
+    expect(page.pagination).toMatchObject({
+      beforeId: 151,
+      nextBeforeId: page.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+    expect(boundedReadSpy).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 151,
+      messageLimit: 101,
+      includeBoundaryEntry: true,
+    });
+    expect(fullReadSpy).not.toHaveBeenCalled();
+    expect(compactionSpy).not.toHaveBeenCalled();
+    expect(rangeSpy).not.toHaveBeenCalled();
   });
 
   it('searches session messages scoped to the requested session only', async () => {

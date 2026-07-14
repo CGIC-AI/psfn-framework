@@ -1447,6 +1447,10 @@ export class SessionStore implements TranscriptSearchPort {
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
+    // Compaction projection still requires canonical full-archive replay.
+    // Garden's older-page requests use messagesOnly and skip this method; a
+    // bounded compaction index belongs with the future L0 segment writer/index
+    // contract rather than duplicating segment metadata in this read path.
     const cache = this.ensureChannelFullyLoaded(channelId);
     return cache ? [...cache.compactions] : [];
   }

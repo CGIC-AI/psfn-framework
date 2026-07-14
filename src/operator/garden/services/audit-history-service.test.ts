@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -47,6 +47,87 @@ function makeChargeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEven
     ...overrides,
   };
 }
+
+function gardenAuditLine(index: number, raw: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    recordType: 'garden_audit_history',
+    entry: {
+      id: `legacy-${index}`,
+      timestamp: index,
+      source: 'garden',
+      sourceRecordId: `garden:${index}`,
+      actionType: 'settings_change',
+      decision: 'allowed',
+      narrative: `Audit entry ${index}`,
+      raw,
+    },
+  });
+}
+
+describe('GardenAuditHistoryJsonlStore', () => {
+  it('reads only a bounded recent tail and memoizes unchanged file identities', () => {
+    const path = join(makeTempDir(), 'garden-audit-history.jsonl');
+    const contents = Array.from(
+      { length: 100 },
+      (_, index) => gardenAuditLine(index, { padding: 'x'.repeat(512) }),
+    ).join('\n') + '\n';
+    writeFileSync(path, contents);
+    const observedReads: number[] = [];
+    const store = new GardenAuditHistoryJsonlStore(path, {
+      maxEntries: 10,
+      maxReadBytes: 8 * 1_024,
+      onRead: bytes => observedReads.push(bytes),
+    });
+
+    const first = store.list();
+    const readsAfterFirst = [...observedReads];
+    const second = store.list();
+
+    expect(first).toHaveLength(10);
+    expect(first.map(entry => entry.timestamp)).toEqual(
+      Array.from({ length: 10 }, (_, index) => 90 + index),
+    );
+    expect(second).toEqual(first);
+    expect(observedReads).toEqual(readsAfterFirst);
+    expect(observedReads.reduce((sum, bytes) => sum + bytes, 0)).toBeLessThan(Buffer.byteLength(contents));
+  });
+
+  it('invalidates the memo after append and file replacement', () => {
+    const dir = makeTempDir();
+    const path = join(dir, 'garden-audit-history.jsonl');
+    writeFileSync(path, `${gardenAuditLine(1)}\n`);
+    const store = new GardenAuditHistoryJsonlStore(path);
+
+    expect(store.list().map(entry => entry.timestamp)).toEqual([1]);
+    store.append({
+      id: 'new-entry',
+      timestamp: 2,
+      source: 'garden',
+      actionType: 'settings_change',
+      decision: 'allowed',
+      narrative: 'New entry',
+    });
+    expect(store.list().map(entry => entry.timestamp)).toEqual([1, 2]);
+
+    const replacement = join(dir, 'replacement.jsonl');
+    writeFileSync(replacement, `${gardenAuditLine(3)}\n`);
+    renameSync(replacement, path);
+    expect(store.list().map(entry => entry.timestamp)).toEqual([3]);
+  });
+
+  it('fails closed when the audit file mutates during a read', () => {
+    const path = join(makeTempDir(), 'garden-audit-history.jsonl');
+    writeFileSync(path, `${gardenAuditLine(1)}\n`);
+    const initialSize = statSync(path).size;
+    const store = new GardenAuditHistoryJsonlStore(path, {
+      afterRead: vi.fn(() => appendFileSync(path, `${gardenAuditLine(2)}\n`)),
+    });
+
+    expect(() => store.list()).toThrow(/changed while it was being read/i);
+    expect(statSync(path).size).toBeGreaterThan(initialSize);
+  });
+});
 
 describe('AdminAuditHistoryDataService', () => {
   it('merges persisted Garden audit, gateway audit, and charge ledger history with paging', async () => {

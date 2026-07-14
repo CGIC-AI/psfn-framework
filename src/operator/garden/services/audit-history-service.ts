@@ -1,4 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync,
+  statSync,
+  type Stats,
+} from 'node:fs';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
 import type {
   AdminAuditActionType,
@@ -24,6 +31,7 @@ const GARDEN_AUDIT_SCHEMA_VERSION = 1;
 const DEFAULT_HISTORY_LIMIT = 100;
 const MAX_HISTORY_LIMIT = 500;
 const MAX_SOURCE_SCAN = 2_000;
+const MAX_GARDEN_AUDIT_READ_BYTES = 16 * 1_024 * 1_024;
 
 const TIME_RANGE_MS: Record<Exclude<AdminAuditTimeRange, 'all'>, number> = {
   '15m': 15 * 60 * 1_000,
@@ -64,8 +72,34 @@ export interface AdminAuditHistoryService {
 
 export type GatewayAuditHistoryReader = (query: GatewayAuditHistoryQuery) => GatewayAuditHistoryPage;
 
+interface GardenAuditFileIdentity {
+  device: number;
+  inode: number;
+  size: number;
+  modifiedAtMs: number;
+  changedAtMs: number;
+}
+
+export interface GardenAuditHistoryJsonlStoreOptions {
+  maxEntries?: number;
+  maxReadBytes?: number;
+  onRead?: (bytes: number) => void;
+  /** Test seam for proving fail-closed behavior when a file changes mid-read. */
+  afterRead?: () => void;
+}
+
 export class GardenAuditHistoryJsonlStore {
-  constructor(private readonly path: string) {}
+  private readonly maxEntries: number;
+  private readonly maxReadBytes: number;
+  private cache: { identity: GardenAuditFileIdentity; entries: AdminAuditHistoryEntry[] } | null = null;
+
+  constructor(
+    private readonly path: string,
+    private readonly options: GardenAuditHistoryJsonlStoreOptions = {},
+  ) {
+    this.maxEntries = positiveInteger(options.maxEntries, MAX_SOURCE_SCAN);
+    this.maxReadBytes = positiveInteger(options.maxReadBytes, MAX_GARDEN_AUDIT_READ_BYTES);
+  }
 
   append(entry: AdminAuditHistoryEntry): void {
     appendJsonLine(this.path, {
@@ -73,16 +107,121 @@ export class GardenAuditHistoryJsonlStore {
       recordType: 'garden_audit_history',
       entry,
     } satisfies GardenAuditJsonlRecord);
+    this.cache = null;
   }
 
   list(): AdminAuditHistoryEntry[] {
-    if (!existsSync(this.path)) return [];
-    const raw = readFileSync(this.path, 'utf-8');
-    if (!raw.trim()) return [];
-    return raw.split('\n')
-      .filter(line => line.trim().length > 0)
-      .map((line, index) => parseGardenAuditLine(line, index + 1));
+    const before = readFileIdentity(this.path);
+    if (!before) {
+      this.cache = null;
+      return [];
+    }
+    if (this.cache && identitiesEqual(this.cache.identity, before)) {
+      return [...this.cache.entries];
+    }
+
+    let descriptor: number;
+    try {
+      descriptor = openSync(this.path, 'r');
+    } catch (error) {
+      throw new Error(`Garden audit history changed while it was being read: ${String(error)}`);
+    }
+
+    try {
+      const opened = identityFromStats(fstatSync(descriptor));
+      if (!identitiesEqual(before, opened)) {
+        throw new Error('Garden audit history changed while it was being read.');
+      }
+
+      const bytesToRead = Math.min(opened.size, this.maxReadBytes);
+      const start = opened.size - bytesToRead;
+      const buffer = Buffer.allocUnsafe(bytesToRead);
+      let bytesRead = 0;
+      while (bytesRead < bytesToRead) {
+        const count = readSync(descriptor, buffer, bytesRead, bytesToRead - bytesRead, start + bytesRead);
+        if (count === 0) break;
+        bytesRead += count;
+      }
+      this.options.onRead?.(bytesRead);
+      this.options.afterRead?.();
+
+      const afterDescriptorRead = identityFromStats(fstatSync(descriptor));
+      const afterPathRead = readFileIdentity(this.path);
+      if (
+        bytesRead !== bytesToRead
+        || !identitiesEqual(opened, afterDescriptorRead)
+        || !afterPathRead
+        || !identitiesEqual(opened, afterPathRead)
+      ) {
+        throw new Error('Garden audit history changed while it was being read.');
+      }
+
+      const entries = parseRecentGardenAuditEntries(
+        buffer.subarray(0, bytesRead),
+        start > 0,
+        this.maxEntries,
+      );
+      this.cache = { identity: afterPathRead, entries };
+      return [...entries];
+    } finally {
+      closeSync(descriptor);
+    }
   }
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readFileIdentity(path: string): GardenAuditFileIdentity | null {
+  try {
+    return identityFromStats(statSync(path));
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function identityFromStats(stats: Stats): GardenAuditFileIdentity {
+  return {
+    device: stats.dev,
+    inode: stats.ino,
+    size: stats.size,
+    modifiedAtMs: stats.mtimeMs,
+    changedAtMs: stats.ctimeMs,
+  };
+}
+
+function identitiesEqual(left: GardenAuditFileIdentity, right: GardenAuditFileIdentity): boolean {
+  return left.device === right.device
+    && left.inode === right.inode
+    && left.size === right.size
+    && left.modifiedAtMs === right.modifiedAtMs
+    && left.changedAtMs === right.changedAtMs;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function parseRecentGardenAuditEntries(
+  buffer: Buffer,
+  startsInsideFile: boolean,
+  maxEntries: number,
+): AdminAuditHistoryEntry[] {
+  if (buffer.length === 0) return [];
+  let raw = buffer.toString('utf8');
+  if (startsInsideFile) {
+    const firstCompleteLine = raw.indexOf('\n');
+    if (firstCompleteLine < 0) {
+      throw new Error('Garden audit history entry exceeds the bounded read window.');
+    }
+    raw = raw.slice(firstCompleteLine + 1);
+  }
+  const lines = raw.split('\n').filter(line => line.trim().length > 0);
+  return lines
+    .slice(-maxEntries)
+    .map((line, index) => parseGardenAuditLine(line, index + 1));
 }
 
 export class AdminAuditHistoryDataService implements AdminAuditHistoryService {

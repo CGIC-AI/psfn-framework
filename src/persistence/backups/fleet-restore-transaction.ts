@@ -44,6 +44,7 @@ export interface FleetRestoreTreeSpec {
 interface FleetRestoreJournal {
   schemaVersion: 1;
   operationId: string;
+  operationIdentity: string;
   kind: FleetRestoreKind;
   artifactDir: string;
   dumpPath: string;
@@ -64,9 +65,22 @@ export interface FleetRestoreTransactionOptions extends FleetRestoreFaultInjecti
   prepareStaging?: (trees: readonly StagedRestoreTree[]) => void;
   assertTargetDatabaseSafe: () => Promise<void>;
   inspectDatabaseState: () => Promise<'none' | 'all' | 'partial'>;
+  inspectDatabaseOperation: (
+    operation: FleetRestoreDatabaseOperation,
+  ) => Promise<FleetRestoreDatabaseOperationState>;
+  prepareDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
+  commitDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
+  removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
   restoreDatabase: () => Promise<void>;
   rollbackDatabase: () => Promise<void>;
 }
+
+export interface FleetRestoreDatabaseOperation {
+  operationId: string;
+  operationIdentity: string;
+}
+
+export type FleetRestoreDatabaseOperationState = 'absent' | 'prepared' | 'committed' | 'foreign';
 
 function pathsOverlap(first: string, second: string): boolean {
   return first === second || isStrictSubpath(first, second) || isStrictSubpath(second, first);
@@ -132,18 +146,19 @@ function assertDestinationsDoNotExist(trees: readonly StagedRestoreTree[]): void
   }
 }
 
-function createRestoreOperationId(
+function createRestoreDatabaseOperation(
   options: FleetRestoreTransactionOptions,
   trees: readonly StagedRestoreTree[],
-): string {
-  return createHash('sha256').update(JSON.stringify({
+): FleetRestoreDatabaseOperation {
+  const operationIdentity = createHash('sha256').update(JSON.stringify({
     kind: options.kind,
     artifactDir: options.artifactDir,
     dumpPath: options.dumpPath,
     databaseTarget: options.databaseTarget,
     expectedSchemas: options.expectedSchemas,
     destinations: trees.map(tree => tree.destination),
-  })).digest('hex').slice(0, 32);
+  })).digest('hex');
+  return { operationId: operationIdentity.slice(0, 32), operationIdentity };
 }
 
 function stageRestoreTrees(
@@ -177,7 +192,7 @@ function stageRestoreTrees(
 }
 
 function restoreJournalPath(operationId: string, trees: readonly StagedRestoreTree[]): string {
-  return join(dirname(trees[0].destination), `.psfn-fleet-restore-${operationId}.json`);
+  return join(dirname(trees[0].destination), `.restore-operation-${operationId}.json`);
 }
 
 function writeRestoreJournal(path: string, journal: FleetRestoreJournal, exclusive = false): void {
@@ -194,6 +209,7 @@ function parseRestoreJournal(path: string, expected: FleetRestoreJournal): Fleet
   if (!isRecord(parsed)
     || parsed.schemaVersion !== 1
     || parsed.operationId !== expected.operationId
+    || parsed.operationIdentity !== expected.operationIdentity
     || parsed.kind !== expected.kind
     || parsed.artifactDir !== expected.artifactDir
     || parsed.dumpPath !== expected.dumpPath
@@ -229,9 +245,12 @@ function removeRestoreJournal(path: string): void {
 async function finishRestoreRollback(
   journalPath: string,
   journal: FleetRestoreJournal,
+  operation: FleetRestoreDatabaseOperation,
   rollbackDatabase: () => Promise<void>,
+  removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>,
 ): Promise<void> {
   await rollbackDatabase();
+  await removeDatabaseOperation(operation);
   cleanupPublishedTrees(journal.trees);
   cleanupStagedTrees(journal.trees);
   removeRestoreJournal(journalPath);
@@ -241,7 +260,8 @@ export async function executeFleetRestoreTransaction(
   options: FleetRestoreTransactionOptions,
 ): Promise<{ restoredDestinations: string[] }> {
   const plannedTrees = resolveRestoreTrees(options);
-  const operationId = createRestoreOperationId(options, plannedTrees);
+  const operation = createRestoreDatabaseOperation(options, plannedTrees);
+  const { operationId, operationIdentity } = operation;
   const expectedTrees = plannedTrees.map(tree => ({
     ...tree,
     staging: join(dirname(tree.destination), `.${basename(tree.destination)}.restore-${operationId}`),
@@ -250,6 +270,7 @@ export async function executeFleetRestoreTransaction(
   const expectedJournal: FleetRestoreJournal = {
     schemaVersion: 1,
     operationId,
+    operationIdentity,
     kind: options.kind,
     artifactDir: options.artifactDir,
     dumpPath: options.dumpPath,
@@ -262,13 +283,20 @@ export async function executeFleetRestoreTransaction(
   if (existsSync(journalPath)) {
     const interrupted = parseRestoreJournal(journalPath, expectedJournal);
     if (interrupted.phase === 'rolling_back') {
-      await finishRestoreRollback(journalPath, interrupted, options.rollbackDatabase);
+      await finishRestoreRollback(
+        journalPath,
+        interrupted,
+        operation,
+        options.rollbackDatabase,
+        options.removeDatabaseOperation,
+      );
       return await executeFleetRestoreTransaction(options);
     }
   }
 
   let journal: FleetRestoreJournal;
-  if (existsSync(journalPath)) {
+  const recovering = existsSync(journalPath);
+  if (recovering) {
     journal = parseRestoreJournal(journalPath, expectedJournal);
   } else {
     assertDestinationsDoNotExist(plannedTrees);
@@ -285,31 +313,77 @@ export async function executeFleetRestoreTransaction(
   }
 
   let databaseCommitted = journal.phase === 'database_committed';
+  let markerPrepared = false;
   let preserveJournal = false;
   try {
     let databaseState: 'none' | 'all' | 'partial';
+    let markerState: FleetRestoreDatabaseOperationState;
     try {
       databaseState = await options.inspectDatabaseState();
+      markerState = await options.inspectDatabaseOperation(operation);
     } catch (error) {
       preserveJournal = true;
       throw error;
     }
-    if (databaseState === 'partial'
-      || (journal.phase === 'database_committed' && databaseState !== 'all')) {
+    if (!recovering && (databaseState !== 'none' || markerState !== 'absent')) {
       preserveJournal = true;
-      throw new Error('Fleet restore journal and target Postgres schemas are inconsistent; refusing destructive recovery');
+      throw new Error('Fresh fleet restore observed unrelated database state; refusing to claim it as restored');
     }
+    if (markerState === 'foreign' || databaseState === 'partial') {
+      preserveJournal = true;
+      throw new Error('Fleet restore journal and database operation marker are inconsistent; refusing destructive recovery');
+    }
+
+    const fullyPublished = journal.trees.every(tree => (
+      tree.published && existsSync(tree.destination) && !existsSync(tree.staging)
+    ));
+    if (recovering && markerState === 'absent') {
+      if (journal.phase === 'database_committed' && databaseState === 'all' && fullyPublished) {
+        preserveJournal = true;
+        removeRestoreJournal(journalPath);
+        return { restoredDestinations: journal.trees.map(tree => tree.destination) };
+      }
+      if (journal.phase !== 'prepared' || databaseState !== 'none') {
+        preserveJournal = true;
+        throw new Error('Fleet restore database state has no matching durable operation marker');
+      }
+    }
+
+    if (markerState === 'absent') {
+      try {
+        await options.prepareDatabaseOperation(operation);
+        markerState = 'prepared';
+      } catch (error) {
+        preserveJournal = true;
+        throw error;
+      }
+    }
+    markerPrepared = true;
+
     if (journal.phase === 'prepared') {
       if (databaseState === 'none') {
+        if (markerState !== 'prepared') {
+          preserveJournal = true;
+          throw new Error('Fleet restore database marker is not prepared for restore');
+        }
         assertDestinationsDoNotExist(journal.trees);
         await options.restoreDatabase();
         databaseCommitted = true;
+        await options.commitDatabaseOperation(operation);
+        markerState = 'committed';
         options.faultInjection?.('after_database_commit', 0);
       } else {
         databaseCommitted = true;
+        if (markerState === 'prepared') {
+          await options.commitDatabaseOperation(operation);
+          markerState = 'committed';
+        }
       }
       journal.phase = 'database_committed';
       writeRestoreJournal(journalPath, journal);
+    } else if (databaseState !== 'all' || markerState !== 'committed') {
+      preserveJournal = true;
+      throw new Error('Fleet restore committed journal does not match its database marker');
     }
 
     for (let index = 0; index < journal.trees.length; index += 1) {
@@ -341,6 +415,10 @@ export async function executeFleetRestoreTransaction(
       tree.published = true;
       writeRestoreJournal(journalPath, journal);
     }
+    // Once every tree is published, marker/journal cleanup is finalization;
+    // transient cleanup failures must never roll back a complete restore.
+    preserveJournal = true;
+    await options.removeDatabaseOperation(operation);
     removeRestoreJournal(journalPath);
   } catch (error) {
     if (preserveJournal) throw error;
@@ -348,10 +426,24 @@ export async function executeFleetRestoreTransaction(
       journal.phase = 'rolling_back';
       writeRestoreJournal(journalPath, journal);
       try {
-        await finishRestoreRollback(journalPath, journal, options.rollbackDatabase);
+        await finishRestoreRollback(
+          journalPath,
+          journal,
+          operation,
+          options.rollbackDatabase,
+          options.removeDatabaseOperation,
+        );
       } catch (rollbackError) {
         throw new AggregateError([error, rollbackError], 'Fleet restore failed and durable rollback remains pending');
       }
+    } else if (markerPrepared) {
+      try {
+        await options.removeDatabaseOperation(operation);
+      } catch (markerError) {
+        throw new AggregateError([error, markerError], 'Fleet restore failed and marker cleanup remains pending');
+      }
+      cleanupStagedTrees(journal.trees);
+      removeRestoreJournal(journalPath);
     } else {
       cleanupStagedTrees(journal.trees);
       removeRestoreJournal(journalPath);

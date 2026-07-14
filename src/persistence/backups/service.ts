@@ -60,6 +60,7 @@ import type { BackupRuntimeConfig } from './config.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { sanitizePostgresConnection } from './postgres-connection.js';
 
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
@@ -306,26 +307,6 @@ function postgresDumpFileName(databaseUrl: string, schema?: string): string {
   return `postgres${schemaSuffix}.dump`;
 }
 
-/**
- * Splits a Postgres URL into a credential-free connection argument and the
- * password, so pg_dump argv never exposes secrets to local process observers.
- */
-function toCredentialFreePostgresConnection(
-  databaseUrl: string,
-): { connectionArg: string; password?: string } {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    throw new Error(
-      'Postgres backup requires a URL connection string (postgres://…) so credentials can be passed via the environment instead of pg_dump argv',
-    );
-  }
-  const password = url.password ? decodeURIComponent(url.password) : '';
-  url.password = '';
-  return { connectionArg: url.toString(), ...(password ? { password } : {}) };
-}
-
 async function dumpPostgresDatabase(
   postgres: BackupPostgresOptions,
   databaseDir: string,
@@ -337,7 +318,10 @@ async function dumpPostgresDatabase(
     ? assertValidPostgresSchemaName(postgres.schema)
     : undefined;
   const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl, schema));
-  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const { connectionArg, password } = sanitizePostgresConnection(
+    postgres.databaseUrl,
+    'Postgres backup',
+  );
   mkdirSync(databaseDir, { recursive: true });
   try {
     await execFileAsync(binary, [

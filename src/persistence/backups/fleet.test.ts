@@ -100,9 +100,36 @@ function writeLoggingStubPgRestore(root: string): { stubPath: string; logPath: s
 
 function writeTargetStateStubPsql(root: string, output = 'public\\t0\\n'): string {
   const stubPath = join(root, `stub-psql-${Date.now()}-${Math.random()}.sh`);
+  const markerPath = `${stubPath}.marker`;
   writeFileSync(
     stubPath,
-    ['#!/bin/sh', `printf '${output.replaceAll("'", "'\\\\''")}'`, ''].join('\n'),
+    [
+      '#!/bin/sh',
+      'command=""',
+      'previous=""',
+      'for arg in "$@"; do',
+      '  if [ "$previous" = "--command" ]; then command="$arg"; fi',
+      '  previous="$arg"',
+      'done',
+      'case "$command" in',
+      '  *"restore_marker_inspect"*)',
+      `    if [ -f '${markerPath}' ]; then cat '${markerPath}'; else printf 'absent\\n'; fi`,
+      '    ;;',
+      '  *"restore_marker_prepare"*)',
+      `    printf 'prepared\\n' > '${markerPath}'`,
+      '    ;;',
+      '  *"restore_marker_commit"*)',
+      `    printf 'committed\\n' > '${markerPath}'`,
+      '    ;;',
+      '  *"restore_marker_remove"*)',
+      `    rm -f '${markerPath}'`,
+      '    ;;',
+      '  *)',
+      `    printf '${output.replaceAll("'", "'\\\\''")}'`,
+      '    ;;',
+      'esac',
+      '',
+    ].join('\n'),
     { mode: 0o755 },
   );
   return stubPath;
@@ -140,6 +167,58 @@ function writeControlledStubPgRestore(
   return { stubPath, logPath };
 }
 
+function writeCredentialRecordingStubPgRestore(root: string): {
+  stubPath: string;
+  argvPath: string;
+  passwordPath: string;
+} {
+  const stubPath = join(root, 'stub-pg-restore-credentials.sh');
+  const argvPath = join(root, 'pg-restore-credentials.argv');
+  const passwordPath = join(root, 'pg-restore-credentials.password');
+  writeFileSync(stubPath, [
+    '#!/bin/sh',
+    'if [ "$1" = "--list" ]; then',
+    '  printf "1; 2615 0 SCHEMA - companion_alpha postgres\\n"',
+    '  printf "2; 1259 0 TABLE companion_alpha restore_probe postgres\\n"',
+    '  exit 0',
+    'fi',
+    `printf '%s\\n' "$*" > '${argvPath}'`,
+    `printf '%s' "\${PGPASSWORD:-}" > '${passwordPath}'`,
+    'exit 0',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { stubPath, argvPath, passwordPath };
+}
+
+function writeRacingSchemaStateStubPsql(root: string): string {
+  const stubPath = join(root, 'stub-psql-racing-schema.sh');
+  const stateReadPath = `${stubPath}.state-read`;
+  writeFileSync(stubPath, [
+    '#!/bin/sh',
+    'command=""',
+    'previous=""',
+    'for arg in "$@"; do',
+    '  if [ "$previous" = "--command" ]; then command="$arg"; fi',
+    '  previous="$arg"',
+    'done',
+    'case "$command" in',
+    '  *"restore_marker_inspect"*)',
+    '    printf "absent\\n"',
+    '    ;;',
+    '  *)',
+    `    if [ -f '${stateReadPath}' ]; then`,
+    '      printf "companion_alpha\\t1\\npublic\\t0\\n"',
+    '    else',
+    `      : > '${stateReadPath}'`,
+    '      printf "public\\t0\\n"',
+    '    fi',
+    '    ;;',
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return stubPath;
+}
+
 function writeDestinationCollisionStubPsql(root: string, destination: string): string {
   const stubPath = join(root, 'stub-psql-destination-collision.sh');
   writeFileSync(
@@ -162,6 +241,7 @@ function writeStatefulRestoreStubs(root: string): {
   statePath: string;
 } {
   const statePath = join(root, 'restore-schema-state.txt');
+  const markerPath = join(root, 'restore-operation-marker.txt');
   const pgRestoreBinary = join(root, 'stub-pg-restore-stateful.sh');
   const psqlBinary = join(root, 'stub-psql-stateful.sh');
   writeFileSync(pgRestoreBinary, [
@@ -184,11 +264,25 @@ function writeStatefulRestoreStubs(root: string): {
     '  previous="$arg"',
     'done',
     'case "$command" in',
+    '  *"restore_marker_inspect"*)',
+    `    if [ -f '${markerPath}' ]; then cat '${markerPath}'; else printf 'absent\\n'; fi`,
+    '    ;;',
+    '  *"restore_marker_prepare"*)',
+    `    printf 'prepared\\n' > '${markerPath}'`,
+    '    ;;',
+    '  *"restore_marker_commit"*)',
+    `    printf 'committed\\n' > '${markerPath}'`,
+    '    ;;',
+    '  *"restore_marker_remove"*)',
+    `    rm -f '${markerPath}'`,
+    '    ;;',
     '  *"DROP SCHEMA"*)',
     `    printf 'public\\t0\\n' > '${statePath}'`,
     '    ;;',
+    '  *)',
+    `    if [ -f '${statePath}' ]; then cat '${statePath}'; else printf 'public\\t0\\n'; fi`,
+    '    ;;',
     'esac',
-    `if [ -f '${statePath}' ]; then cat '${statePath}'; else printf 'public\\t0\\n'; fi`,
     '',
   ].join('\n'), { mode: 0o755 });
   return { pgRestoreBinary, psqlBinary, statePath };
@@ -774,6 +868,80 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(destinations.personalWorkspacePath)).toBe(false);
   });
 
+  it('never claims unrelated schemas observed by a fresh journal as its own restore', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-unowned-schema-${Date.now()}`);
+    roots.push(root);
+    const result = await createPerCompanionTestBackup(root);
+    const { stubPath: pgRestoreBinary, logPath } = writeControlledStubPgRestore(
+      root,
+      'unowned-schema',
+      ['companion_alpha'],
+      0,
+    );
+    const destinations = {
+      companionDataDir: join(root, 'restore', 'companion'),
+      personalWorkspacePath: join(root, 'restore', 'workspace'),
+    };
+
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations,
+      postgres: {
+        databaseUrl: 'postgresql://restore@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+        psqlBinary: writeRacingSchemaStateStubPsql(root),
+      },
+    })).rejects.toThrow(/unrelated database state/);
+
+    expect(existsSync(logPath)).toBe(false);
+    expect(existsSync(destinations.companionDataDir)).toBe(false);
+    expect(existsSync(destinations.personalWorkspacePath)).toBe(false);
+    const restoreEntries = readdirSync(join(root, 'restore'));
+    expect(restoreEntries.filter(name => name.startsWith('.restore-operation-'))).toHaveLength(1);
+    expect(restoreEntries.filter(name => (
+      name.startsWith('.companion.restore-') || name.startsWith('.workspace.restore-')
+    ))).toHaveLength(2);
+  });
+
+  it('keeps query-string Postgres passwords only in child environments and out of restore journals', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-query-password-${Date.now()}`);
+    roots.push(root);
+    const result = await createPerCompanionTestBackup(root);
+    const { stubPath: pgRestoreBinary, argvPath, passwordPath } = writeCredentialRecordingStubPgRestore(root);
+    const destinations = {
+      companionDataDir: join(root, 'restore', 'companion'),
+      personalWorkspacePath: join(root, 'restore', 'workspace'),
+    };
+    let journalSnapshot = '';
+
+    await restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations,
+      postgres: {
+        databaseUrl: 'postgresql://restore@127.0.0.1:5432/restore?sslmode=disable&password=query-secret',
+        pgRestoreBinary,
+        psqlBinary: writeTargetStateStubPsql(root),
+      },
+      faultInjection: (stage) => {
+        if (stage !== 'after_journal') return;
+        const journalName = readdirSync(join(root, 'restore'))
+          .find(name => name.startsWith('.restore-operation-'));
+        if (!journalName) throw new Error('Expected restore journal at fault seam');
+        journalSnapshot = readFileSync(join(root, 'restore', journalName), 'utf8');
+      },
+    });
+
+    const argv = readFileSync(argvPath, 'utf8');
+    expect(argv).not.toContain('query-secret');
+    expect(argv).not.toContain('password=');
+    expect(argv).toContain('sslmode=disable');
+    expect(readFileSync(passwordPath, 'utf8')).toBe('query-secret');
+    expect(journalSnapshot).not.toContain('query-secret');
+    expect(journalSnapshot).not.toContain('password=');
+  });
+
   it.each([
     ['after_journal', 0, 0],
     ['after_database_commit', 0, 0],
@@ -823,7 +991,7 @@ describe('runFleetBackupCycle', () => {
         existsSync(destinations.personalWorkspacePath),
       ].filter(Boolean)).toHaveLength(expectedPublishedDestinations);
       expect(existsSync(statePath)).toBe(faultStage !== 'after_journal');
-      expect(readdirSync(join(root, 'restore')).some(name => name.startsWith('.psfn-fleet-restore-')))
+      expect(readdirSync(join(root, 'restore')).some(name => name.startsWith('.restore-operation-')))
         .toBe(true);
 
       await restoreFleetCompanionSlice({
@@ -842,7 +1010,7 @@ describe('runFleetBackupCycle', () => {
       expect(readFileSync(join(destinations.personalWorkspacePath, 'journal/personal.md'), 'utf8'))
         .toContain(COMPANION_A);
       const restoreEntries = readdirSync(join(root, 'restore'));
-      expect(restoreEntries.some(name => name.startsWith('.psfn-fleet-restore-'))).toBe(false);
+      expect(restoreEntries.some(name => name.startsWith('.restore-operation-'))).toBe(false);
       expect(restoreEntries.some(name => name.includes('.restore-'))).toBe(false);
     },
   );

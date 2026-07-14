@@ -41,6 +41,13 @@ import {
   type FleetRestoreFaultStage,
   type StagedRestoreTree,
 } from './fleet-restore-transaction.js';
+import { sanitizePostgresConnection } from './postgres-connection.js';
+import {
+  commitFleetRestoreDatabaseMarker,
+  inspectFleetRestoreDatabaseMarker,
+  prepareFleetRestoreDatabaseMarker,
+  removeFleetRestoreDatabaseMarker,
+} from './fleet-restore-database-marker.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -228,30 +235,12 @@ function findDatabaseDump(artifactDir: string): string {
   return dumps[0];
 }
 
-function toCredentialFreePostgresConnection(databaseUrl: string): {
-  connectionArg: string;
-  password?: string;
-} {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    throw new Error('Fleet restore requires a postgres:// URL so credentials stay out of process arguments');
-  }
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
-    throw new Error('Fleet restore databaseUrl must use postgres:// or postgresql://');
-  }
-  const password = url.password ? decodeURIComponent(url.password) : '';
-  url.password = '';
-  return { connectionArg: url.toString(), ...(password ? { password } : {}) };
-}
-
 async function restorePostgresDump(
   dumpPath: string,
   postgres: FleetRestorePostgresOptions,
 ): Promise<void> {
   const binary = postgres.pgRestoreBinary?.trim() || 'pg_restore';
-  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const { connectionArg, password } = sanitizePostgresConnection(postgres.databaseUrl, 'Fleet restore');
   try {
     await execFileAsync(binary, [
       '--exit-on-error',
@@ -345,7 +334,7 @@ async function readTargetSchemaState(
   postgres: FleetRestorePostgresOptions,
 ): Promise<TargetSchemaState[]> {
   const binary = postgres.psqlBinary?.trim() || 'psql';
-  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const { connectionArg, password } = sanitizePostgresConnection(postgres.databaseUrl, 'Fleet restore');
   const query = [
     'WITH scoped_objects(namespace_oid) AS (',
     'SELECT relnamespace FROM pg_class UNION ALL',
@@ -434,7 +423,7 @@ async function dropRestoreSchemas(
   postgres: FleetRestorePostgresOptions,
 ): Promise<void> {
   const binary = postgres.psqlBinary?.trim() || 'psql';
-  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const { connectionArg, password } = sanitizePostgresConnection(postgres.databaseUrl, 'Fleet restore');
   const query = expectedSchemas
     .map(schema => `DROP SCHEMA IF EXISTS "${assertValidPostgresSchemaName(schema)}" CASCADE`)
     .join('; ');
@@ -465,7 +454,10 @@ async function commitRestore(options: {
   faultInjection?: FleetRestoreFaultInjectionOptions['faultInjection'];
 }): Promise<FleetRestoreResult> {
   const expectedSchemas = await assertDumpScope(options.dumpPath, options.unit, options.postgres);
-  const databaseTarget = toCredentialFreePostgresConnection(options.postgres.databaseUrl).connectionArg;
+  const databaseTarget = sanitizePostgresConnection(
+    options.postgres.databaseUrl,
+    'Fleet restore',
+  ).connectionArg;
   const transaction = await executeFleetRestoreTransaction({
     kind: options.kind,
     artifactDir: options.artifactDir,
@@ -482,6 +474,22 @@ async function commitRestore(options: {
       options.postgres,
     ),
     inspectDatabaseState: async () => await expectedSchemaPresence(expectedSchemas, options.postgres),
+    inspectDatabaseOperation: async operation => await inspectFleetRestoreDatabaseMarker(
+      options.postgres,
+      operation,
+    ),
+    prepareDatabaseOperation: async operation => await prepareFleetRestoreDatabaseMarker(
+      options.postgres,
+      operation,
+    ),
+    commitDatabaseOperation: async operation => await commitFleetRestoreDatabaseMarker(
+      options.postgres,
+      operation,
+    ),
+    removeDatabaseOperation: async operation => await removeFleetRestoreDatabaseMarker(
+      options.postgres,
+      operation,
+    ),
     restoreDatabase: async () => await restorePostgresDump(options.dumpPath, options.postgres),
     rollbackDatabase: async () => await dropRestoreSchemas(expectedSchemas, options.postgres),
   });

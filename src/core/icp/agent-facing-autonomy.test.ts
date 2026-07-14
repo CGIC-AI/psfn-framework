@@ -110,6 +110,18 @@ describe('agent-facing ICP autonomy runtime', () => {
     expect(gateway.companionReadPeerAvailability).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [contact({ isMachineIntelligence: false }), 'not_machine_intelligence'],
+    [contact({ channelIdentities: [] }), 'invalid_companion_identity'],
+    [contact({ channelIdentities: [{ channel: 'companion', userId: 'not-a-uuid' }] }), 'invalid_companion_identity'],
+  ] as const)('classifies canonical contact failures without conflating %s with a human', async (
+    invalidContact,
+    reason,
+  ) => {
+    const { runtime } = setup([invalidContact]);
+    await expect(runtime.resolveKnownPeer(invalidContact.id)).rejects.toMatchObject({ reason });
+  });
+
   it('omits a mapping that reverse-resolves to a different canonical contact', async () => {
     const { runtime, store, gateway } = setup();
     vi.mocked(store.getByChannelIdentity).mockReturnValue(contact({ id: 'different-contact' }));
@@ -129,7 +141,12 @@ describe('agent-facing ICP autonomy runtime', () => {
 
   it('prepares and executes the exact permit/contact binding through the target command', async () => {
     const { runtime, gateway, command } = setup();
-    await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, CANDIDATE_ORIGIN);
+    await expect(runtime.executeCompanionOutreach(
+      'peer-contact-b',
+      PERMIT_ID,
+      CANDIDATE_ORIGIN,
+    ))
+      .resolves.toEqual({ disposition: 'delivered' });
     expect(gateway.companionPrepareInitiationHandoff).toHaveBeenCalledWith({
       permitId: PERMIT_ID,
       peerContactId: 'peer-contact-b',

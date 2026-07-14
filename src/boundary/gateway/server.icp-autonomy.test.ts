@@ -233,6 +233,10 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return this.permits.get(permitId) ?? null;
   }
 
+  async getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null> {
+    return [...this.permits.values()].find(permit => permit.candidateId === candidateId) ?? null;
+  }
+
   async consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult> {
     await this.beforeConsume?.();
     const current = this.permits.get(input.permitId);

@@ -7,6 +7,7 @@ import type {
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
+  IcpInitiationDeliveryDisposition,
   IcpInitiationCandidate,
   IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
@@ -115,6 +116,8 @@ export interface IcpInitiationPermitStorePort {
     expectedInvalidationFence: IcpAutonomyInvalidationFence;
   }): Promise<IcpInitiationPermit>;
   getPermit(permitId: string): Promise<IcpInitiationPermit | null>;
+  /** Idempotency owner for response-loss reconciliation at permit issue. */
+  getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null>;
   consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult>;
   revokePermit(
     permitId: string,
@@ -171,11 +174,24 @@ export interface IcpInitiationCandidateTransitionInput {
   expectedRevision: number;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
+  /** Bound only when the broker has issued the recovery-safe permit. */
+  permitId?: string;
+  /** Written atomically with consumed so recovery can distinguish delivery from suppression. */
+  deliveryDisposition?: IcpInitiationDeliveryDisposition;
+  /** Durable retry counter written with a deferred or exhausted transition. */
+  retryAttempt?: number;
+  /** Durable cooldown boundary written with a deferred transition. */
+  retryEligibleAtMs?: number;
+  /** Clears a satisfied cooldown when deferred returns to pending. */
+  clearRetryEligibility?: boolean;
 }
 
 export interface IcpInitiationCandidateStorePort {
   createCandidate(candidate: IcpInitiationCandidate): Promise<IcpInitiationCandidate>;
   getCandidate(candidateId: string): Promise<IcpInitiationCandidate | null>;
+  getCandidateByPendingFollowUpId(
+    pendingFollowUpId: string,
+  ): Promise<IcpInitiationCandidate | null>;
   listCandidates(options?: IcpInitiationCandidateListOptions): Promise<IcpInitiationCandidate[]>;
   transitionCandidate(
     input: IcpInitiationCandidateTransitionInput,

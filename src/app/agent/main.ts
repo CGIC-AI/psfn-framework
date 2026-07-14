@@ -55,8 +55,6 @@ import {
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
-import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
-import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveDriftReviewCardsPath,
   resolveChargeLedgerPath,
@@ -86,6 +84,8 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
+import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import {
   bootstrapAgentCoreRuntime,
@@ -328,35 +328,13 @@ async function main(): Promise<void> {
     toolConformanceRunner,
   } = coreRuntime;
 
-  // Wire cross-companion presence into the turn path (same late-wiring pattern
-  // as memory/contacts providers). Null flag-off: turns are byte-identical.
-  agentLoop.companionPresence = companionPresenceRuntime;
-
-  // Co-location → room-entry note (W6): an observed arrival appends the W5
-  // system-only entry note to the place's companion-room channel session.
-  // Context only, never a triggered turn (no auto-greeting loops); flag-off
-  // the event never fires and nothing is registered.
-  if (companionPresenceRuntime) {
-    registerCompanionRoomEntryNotes({
-      eventBus,
-      sink: sessionManager,
-      placesRegistry: placesRegistryConfig,
-      coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
-    });
-    log.info('Companion room-entry notes wired to co-location events');
-
-    // Presence-windowed private-room delivery (bead s10rm): the
-    // session layer serves a private companion-room channel only from this
-    // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
-    // never sees pre-join content in context. Public places and every other
-    // channel resolve unwindowed (byte-identical). Flag-off, the port is
-    // never set and the session layer is untouched.
-    sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
-      placesRegistry: placesRegistryConfig,
-      presence: companionPresenceRuntime,
-    }));
-    log.info('Presence-windowed room content gate wired to session manager');
-  }
+  wireCompanionPresenceContext({
+    agentLoop,
+    presenceRuntime: companionPresenceRuntime,
+    eventBus,
+    sessionManager,
+    placesRegistry: placesRegistryConfig,
+  });
 
   // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
   // Screens tool outputs at session-entry recording time so persisted context
@@ -455,6 +433,26 @@ async function main(): Promise<void> {
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,
+  });
+  const {
+    sourceRuntime: icpInitiationSourceRuntime,
+    weightedThoughtCandidateAdapter: icpWeightedThoughtCandidateAdapter,
+    intentionCandidateAdapter: icpIntentionCandidateAdapter,
+    unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
+  } = wireIcpInitiationSources({
+    localCompanionId: config.companionId,
+    candidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    peers: coreRuntime.icpAutonomyRuntime,
+    gateway,
+    isExternalCompanionAuthorized: () => capabilityRuntime.has('external.companion'),
+    llmProvider,
+    eventBus,
+    pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+    concernStore: intentionRuntime.concernStore,
+    presenceEnabled: companionPresenceRuntime !== null,
+    contactStore,
+    weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
+    lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
   });
 
   const moduleLoader = new ModuleLoader({
@@ -795,7 +793,9 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => {},
+    closeDatabase: async () => {
+      await persistenceRuntime.icpInitiationCandidateStore?.close();
+    },
     scheduler,
     moduleLoader,
     memoryExtractor,
@@ -810,6 +810,7 @@ async function main(): Promise<void> {
     ...(coreRuntime.icpAutonomyRuntime
       ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
       : {}),
+    ...(icpInitiationSourceRuntime ? { icpInitiationSourceRuntime } : {}),
   });
   // Control-plane tools are registered after module loading. Validate them
   // before restored durable actions can execute so a wiring-disabled notify
@@ -824,6 +825,7 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     detachCompanionEventForwarder();
+    unregisterIcpCoLocationThoughtAdapter();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
     // the read-side staleness TTL — see companion-presence-runtime.ts).
@@ -1024,6 +1026,9 @@ async function main(): Promise<void> {
         llmProvider,
         characterName: card.data.name,
       }),
+      ...(icpWeightedThoughtCandidateAdapter
+        ? { icpCandidateAdapter: icpWeightedThoughtCandidateAdapter }
+        : {}),
       channelPolicy: {
         ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
         primaryChannelType: 'discord',
@@ -1153,8 +1158,10 @@ async function main(): Promise<void> {
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
+      onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),
       scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,
       episodicSynthesizer,

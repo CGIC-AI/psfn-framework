@@ -42,6 +42,7 @@ import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres
 import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
 import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
+import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -257,6 +258,7 @@ async function main(): Promise<void> {
           },
         },
       ),
+      causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
     });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,

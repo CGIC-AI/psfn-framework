@@ -44,6 +44,7 @@ import type {
   HeartbeatAgent,
   HeartbeatRuntimeOptions,
 } from './heartbeat-runtime-contracts.js';
+import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
 import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
 import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 import type { Scheduler } from './scheduler.js';
@@ -173,7 +174,12 @@ export function wireHeartbeatPostTurnRuntime(
         return 'pending_follow_up_unavailable';
       }
       const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
-      if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, Date.now())) {
+      if (
+        !followUp
+        || followUp.activatedAt
+        || followUp.dampenedAt
+        || isPendingFollowUpExpired(followUp, Date.now())
+      ) {
         return 'stale_pending_follow_up';
       }
     }
@@ -269,12 +275,18 @@ export function wireHeartbeatPostTurnRuntime(
       return false;
     }
     const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
-    if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, nowMs)) {
+    if (
+      !followUp
+      || followUp.activatedAt
+      || followUp.dampenedAt
+      || isPendingFollowUpExpired(followUp, nowMs)
+    ) {
       log.info('Intention follow-up activation blocked by stale pending row', {
         pendingFollowUpId: payload.pendingFollowUpId,
         channelId: payload.channelId,
         missing: !followUp,
         activatedAt: followUp?.activatedAt ?? null,
+        dampenedAt: followUp?.dampenedAt ?? null,
       });
       emitIntentionFollowUpGateTelemetry('blocked', {
         reason: 'stale_pending_follow_up',
@@ -282,6 +294,23 @@ export function wireHeartbeatPostTurnRuntime(
         channelId: payload.channelId,
         missing: !followUp,
         activatedAt: followUp?.activatedAt ?? null,
+        dampenedAt: followUp?.dampenedAt ?? null,
+      });
+      return false;
+    }
+    const linkedCandidateStatus = await runtimeOptions.icpIntentionCandidateAdapter
+      ?.getLinkedCandidateStatus(payload.pendingFollowUpId);
+    if (linkedCandidateStatus) {
+      log.info('Intention follow-up activation blocked by linked ICP candidate', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        candidateStatus: linkedCandidateStatus,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'linked_icp_candidate',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        candidateStatus: linkedCandidateStatus,
       });
       return false;
     }
@@ -573,6 +602,9 @@ export function wireHeartbeatPostTurnRuntime(
             }),
           )
           : undefined;
+        const originIcpRootInitiationId = resolveIcpOriginRootInitiationId(
+          context.message.routing,
+        );
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
           ...(context.message.routing?.icpCorrelation
@@ -602,6 +634,7 @@ export function wireHeartbeatPostTurnRuntime(
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
               formationVAD: { ...internalState.emotional.vad },
+              ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
           }
         }
@@ -614,6 +647,7 @@ export function wireHeartbeatPostTurnRuntime(
               channelType: context.message.channelType,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
+              ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
             if (pendingFollowUpId) {
               if (!decision.followUp) {
@@ -955,6 +989,9 @@ export function wireHeartbeatPostTurnRuntime(
             authorName: payload.authorName,
             content: payload.content,
             timestamp: new Date(),
+            ...(payload.originIcpRootInitiationId
+              ? { routing: { originIcpRootInitiationId: payload.originIcpRootInitiationId } }
+              : {}),
           });
         },
         {
@@ -962,7 +999,7 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
-      if (runtimeOptions.proactiveOutbound) {
+      if (runtimeOptions.proactiveOutbound || runtimeOptions.icpIntentionCandidateAdapter) {
         const proactiveOutbound = runtimeOptions.proactiveOutbound;
         runtimeOptions.postTurnActions.registerHandler(
           INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
@@ -983,6 +1020,69 @@ export function wireHeartbeatPostTurnRuntime(
               ...(payload.reason ? { reason: payload.reason } : {}),
               ...(typeof action.runAt === 'number' ? { runAt: action.runAt } : {}),
             };
+            const reconcileDeliveredIcpPendingFollowUp = async (
+              pendingFollowUpId: string,
+            ): Promise<void> => {
+              if (!runtimeOptions.onIntentionFollowUpActivated) {
+                throw new Error('Linked ICP intention requires a follow-up activation callback');
+              }
+              if (!runtimeOptions.pendingFollowUpStore) {
+                throw new Error('Linked ICP intention requires a pending follow-up store');
+              }
+              const activated = await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId,
+                activationReason: 'icp_candidate_sent',
+              });
+              if (activated === true) return;
+              const followUp = await runtimeOptions.pendingFollowUpStore.peek(pendingFollowUpId);
+              if (!followUp?.activatedAt) {
+                throw new Error(`Delivered ICP pending follow-up "${pendingFollowUpId}" remained live`);
+              }
+            };
+            const reconcileDampenedIcpPendingFollowUp = async (
+              pendingFollowUpId: string,
+              dampeningReason: string,
+            ): Promise<void> => {
+              if (!runtimeOptions.onIntentionFollowUpDampened) {
+                throw new Error('Terminal ICP intention requires a follow-up dampening callback');
+              }
+              if (!runtimeOptions.pendingFollowUpStore) {
+                throw new Error('Terminal ICP intention requires a pending follow-up store');
+              }
+              const dampened = await runtimeOptions.onIntentionFollowUpDampened({
+                pendingFollowUpId,
+                dampeningReason,
+              });
+              if (dampened === true) return;
+              const followUp = await runtimeOptions.pendingFollowUpStore.peek(pendingFollowUpId);
+              if (!followUp?.dampenedAt) {
+                throw new Error(`Terminal ICP pending follow-up "${pendingFollowUpId}" remained live`);
+              }
+            };
+            const deliveredIcpCompletion = payload.pendingFollowUpId
+              ? runtimeOptions.outreachOutbox?.getIcpDeliveredCompletion(payload.pendingFollowUpId)
+              : undefined;
+            if (payload.pendingFollowUpId && deliveredIcpCompletion) {
+              await reconcileDeliveredIcpPendingFollowUp(payload.pendingFollowUpId);
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'skipped',
+                metadata: {
+                  skippedReason: 'icp_delivery_reconciled',
+                  deliveredActionId: deliveredIcpCompletion.actionId,
+                  deliveredRecordedAt: deliveredIcpCompletion.recordedAt,
+                },
+              });
+              return { detail: 'icp_candidate:delivery_reconciled' };
+            }
+            if (payload.pendingFollowUpId && runtimeOptions.icpIntentionCandidateAdapter) {
+              if (!runtimeOptions.onIntentionFollowUpActivated) {
+                throw new Error('Linked ICP intention requires a follow-up activation callback');
+              }
+              if (!runtimeOptions.outreachOutbox) {
+                throw new Error('Linked ICP intention requires a durable outreach outbox');
+              }
+            }
             const terminalRecord = runtimeOptions.outreachOutbox?.getTerminal(action.dedupeKey);
             if (terminalRecord) {
               runtimeOptions.outreachOutbox?.append({
@@ -1017,6 +1117,98 @@ export function wireHeartbeatPostTurnRuntime(
               });
               recordOutreachSessionAudit(action, payload, 'blocked', provenanceBlockReason);
               return { detail: `blocked:${provenanceBlockReason}` };
+            }
+            const icpCandidate = runtimeOptions.icpIntentionCandidateAdapter
+              ? await runtimeOptions.icpIntentionCandidateAdapter.submit({ action, payload })
+              : { kind: 'not_companion' as const };
+            if (icpCandidate.kind === 'blocked') {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'blocked',
+                reason: icpCandidate.reason,
+              });
+              recordOutreachSessionAudit(action, payload, 'blocked', icpCandidate.reason);
+              return { detail: `blocked:${icpCandidate.reason}` };
+            }
+            if (icpCandidate.kind === 'submitted') {
+              const pendingFollowUpId = payload.pendingFollowUpId;
+              const isLinkedPendingFollowUp = pendingFollowUpId !== undefined
+                && icpCandidate.result.pendingFollowUpId === pendingFollowUpId;
+              if (isLinkedPendingFollowUp
+                && icpCandidate.result.status === 'consumed'
+                && icpCandidate.result.deliveryDisposition === 'delivered') {
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'sent',
+                  metadata: {
+                    kind: 'icp_candidate_delivery',
+                    disposition: 'delivered',
+                    pendingFollowUpId,
+                    candidateId: icpCandidate.result.candidateId,
+                    candidateStatus: icpCandidate.result.status,
+                  },
+                });
+                await reconcileDeliveredIcpPendingFollowUp(pendingFollowUpId);
+              } else if (isLinkedPendingFollowUp
+                && icpCandidate.result.status === 'consumed'
+                && icpCandidate.result.deliveryDisposition === 'suppressed') {
+                await reconcileDampenedIcpPendingFollowUp(
+                  pendingFollowUpId,
+                  'icp_candidate_suppressed',
+                );
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'blocked',
+                  reason: 'icp_candidate_suppressed',
+                  metadata: {
+                    kind: 'icp_candidate_delivery',
+                    disposition: 'suppressed',
+                    pendingFollowUpId,
+                    candidateId: icpCandidate.result.candidateId,
+                    candidateStatus: icpCandidate.result.status,
+                  },
+                });
+                recordOutreachSessionAudit(action, payload, 'blocked', 'icp_candidate_suppressed');
+              } else if (isLinkedPendingFollowUp
+                && (icpCandidate.result.status === 'declined'
+                  || icpCandidate.result.status === 'cancelled'
+                  || icpCandidate.result.status === 'expired'
+                  || icpCandidate.result.status === 'rejected')) {
+                const dampeningReason = icpCandidate.result.status === 'declined'
+                  ? 'icp_candidate_declined'
+                  : icpCandidate.result.status === 'cancelled'
+                    ? 'icp_candidate_retry_exhausted'
+                    : `icp_candidate_${icpCandidate.result.status}`;
+                await reconcileDampenedIcpPendingFollowUp(pendingFollowUpId, dampeningReason);
+                runtimeOptions.outreachOutbox?.append({
+                  ...baseOutboxRecord,
+                  phase: 'blocked',
+                  reason: dampeningReason,
+                  metadata: {
+                    kind: 'icp_candidate_terminal_disposition',
+                    pendingFollowUpId,
+                    candidateId: icpCandidate.result.candidateId,
+                    candidateStatus: icpCandidate.result.status,
+                  },
+                });
+                recordOutreachSessionAudit(action, payload, 'blocked', dampeningReason);
+              }
+              const handlerResult = {
+                detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,
+              };
+              if (icpCandidate.result.status !== 'deferred') {
+                return handlerResult;
+              }
+              if (icpCandidate.result.retryEligibleAtMs === undefined) {
+                throw new Error('Deferred ICP intention candidate has no durable retry eligibility');
+              }
+              return {
+                ...handlerResult,
+                rescheduleAt: icpCandidate.result.retryEligibleAtMs,
+              };
+            }
+            if (!proactiveOutbound) {
+              throw new Error('Intention outbound action has no applicable delivery runtime');
             }
             const timeGate = evaluateProactiveOutboundTimeGate({
               nowMs: Date.now(),

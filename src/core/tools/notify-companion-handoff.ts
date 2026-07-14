@@ -67,7 +67,7 @@ function isExactNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
 }
 
-function parseDeferredAuthorizationEvidence(
+export function parseDeferredCompanionOutreachAuthorizationEvidence(
   value: unknown,
 ): DeferredCompanionOutreachAuthorizationEvidence | null {
   if (!isRecord(value)) return null;
@@ -128,7 +128,7 @@ export function isDeferredCompanionOutreachExecutionAuthorized(
   // after restart. Exact persisted origin evidence proves prior activation;
   // current capability, registration, and overlay policy remain live revocation
   // points and are rechecked again immediately before the W3 target command.
-  return parseDeferredAuthorizationEvidence(evidence) !== null
+  return parseDeferredCompanionOutreachAuthorizationEvidence(evidence) !== null
     && isCurrentDeferredExecutionPolicyAuthorized(runtime);
 }
 
@@ -179,7 +179,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   } catch {
     return null;
   }
-  const authorization = parseDeferredAuthorizationEvidence(value.authorization);
+  const authorization = parseDeferredCompanionOutreachAuthorizationEvidence(value.authorization);
   if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
   if (!isRfc4122Uuid(permitId)) return null;
   if (!authorization) return null;

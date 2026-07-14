@@ -272,7 +272,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       return { eligible: false, reasonCode: 'invalid_identity' };
     }
     const candidateExpiresAtMs = safeInteger(candidate.expires_at_ms);
-    if (candidate.status !== 'pending'
+    if (!['pending', 'permitted'].includes(candidate.status)
       || candidateExpiresAtMs === null
       || (input.permit.status === 'issued' && candidateExpiresAtMs <= input.nowMs)) {
       return { eligible: false, reasonCode: 'stale_provenance' };

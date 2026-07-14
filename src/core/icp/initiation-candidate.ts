@@ -1,10 +1,15 @@
 import {
   ICP_AUTONOMY_REASON_CODES,
+  ICP_INITIATION_CANDIDATE_STATUSES,
   ICP_INITIATION_SOURCES,
   parseIcpProvenanceHandle,
   type IcpAutonomyReasonCode,
+  type IcpInitiationCandidateStatus,
   type IcpInitiationSource,
 } from '../../shared/contracts/icp-autonomy.js';
+
+export { ICP_INITIATION_CANDIDATE_STATUSES } from '../../shared/contracts/icp-autonomy.js';
+export type { IcpInitiationCandidateStatus } from '../../shared/contracts/icp-autonomy.js';
 import {
   assertNoUnknownKeys,
   isRecord,
@@ -16,6 +21,8 @@ import {
 } from '../../shared/contracts/runtime.js';
 
 /** Private companion-local motivation. Never serialize this object to shared state. */
+export type IcpInitiationDeliveryDisposition = 'delivered' | 'suppressed';
+
 export interface IcpInitiationCandidate {
   candidateId: string;
   rootInitiationId: string;
@@ -33,25 +40,30 @@ export interface IcpInitiationCandidate {
   expiresAtMs: number;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
+  /** Private recovery binding for a permit issued before target-turn delivery. */
+  permitId?: string;
+  /** Durable intention owner used to reconcile delivery across action identities. */
+  pendingFollowUpId?: string;
+  /** Durable target result, written with the terminal consumed transition. */
+  deliveryDisposition?: IcpInitiationDeliveryDisposition;
+  /** Durable count of cooldown-gated retries already scheduled. */
+  retryAttempt?: number;
+  /** Earliest durable time at which a deferred candidate may return to pending. */
+  retryEligibleAtMs?: number;
   revision: number;
 }
-
-export const ICP_INITIATION_CANDIDATE_STATUSES = [
-  'pending',
-  'deferred',
-  'declined',
-  'rejected',
-  'permitted',
-  'consumed',
-  'expired',
-  'cancelled',
-] as const;
-export type IcpInitiationCandidateStatus = typeof ICP_INITIATION_CANDIDATE_STATUSES[number];
 
 /** The only candidate projection allowed to cross into shared arbitration state. */
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
-  'peerContactId' | 'reasonSummary' | 'continuationTaskKind'
+  | 'peerContactId'
+  | 'reasonSummary'
+  | 'continuationTaskKind'
+  | 'permitId'
+  | 'pendingFollowUpId'
+  | 'deliveryDisposition'
+  | 'retryAttempt'
+  | 'retryEligibleAtMs'
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -60,7 +72,9 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
-  'continuationTaskKind', 'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'revision',
+  'continuationTaskKind', 'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId',
+  'pendingFollowUpId', 'deliveryDisposition', 'retryAttempt', 'retryEligibleAtMs',
+  'revision',
 ] as const;
 const SHARED_CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
@@ -139,6 +153,34 @@ export function parseIcpInitiationCandidate(
     && !isIcpContinuationTaskKind(value.continuationTaskKind)) {
     throw new Error('ICP candidate.continuationTaskKind is invalid');
   }
+  const permitId = value.permitId === undefined
+    ? undefined
+    : requireUuid(value.permitId, 'ICP candidate.permitId');
+  const pendingFollowUpId = value.pendingFollowUpId === undefined
+    ? undefined
+    : requireString(value.pendingFollowUpId, 'ICP candidate.pendingFollowUpId');
+  const deliveryDisposition = value.deliveryDisposition === undefined
+    ? undefined
+    : requireEnum(
+      value.deliveryDisposition,
+      ['delivered', 'suppressed'] as const,
+      'ICP candidate.deliveryDisposition',
+    );
+  const retryAttempt = value.retryAttempt === undefined
+    ? undefined
+    : requireTimestamp(value.retryAttempt, 'ICP candidate.retryAttempt');
+  const retryEligibleAtMs = value.retryEligibleAtMs === undefined
+    ? undefined
+    : requireTimestamp(value.retryEligibleAtMs, 'ICP candidate.retryEligibleAtMs');
+  if (pendingFollowUpId !== undefined && value.source !== 'intention') {
+    throw new Error('ICP candidate.pendingFollowUpId is only valid for intention sources');
+  }
+  if (deliveryDisposition !== undefined && value.status !== 'consumed') {
+    throw new Error('ICP candidate.deliveryDisposition requires consumed status');
+  }
+  if (retryEligibleAtMs !== undefined && value.status !== 'deferred') {
+    throw new Error('ICP candidate.retryEligibleAtMs requires deferred status');
+  }
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
     throw new Error('ICP candidate.revision must be a positive safe integer');
@@ -172,6 +214,11 @@ export function parseIcpInitiationCandidate(
       'ICP candidate.status',
     ),
     ...(reasonCode !== undefined ? { reasonCode } : {}),
+    ...(permitId !== undefined ? { permitId } : {}),
+    ...(pendingFollowUpId !== undefined ? { pendingFollowUpId } : {}),
+    ...(deliveryDisposition !== undefined ? { deliveryDisposition } : {}),
+    ...(retryAttempt !== undefined ? { retryAttempt } : {}),
+    ...(retryEligibleAtMs !== undefined ? { retryEligibleAtMs } : {}),
     revision,
   };
 }

@@ -18,6 +18,7 @@ import type {
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
+import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -108,6 +109,17 @@ export interface EventMap {
     outcome: 'open' | 'closed';
     reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
     reasonClass?: 'deferrable' | 'terminal';
+    timestamp: number;
+  };
+  /** Content-free companion-local candidate lifecycle projection. */
+  'icp.initiation.candidate.lifecycle': {
+    candidateId: string;
+    localCompanionId: string;
+    peerCompanionId: string;
+    source: import('./contracts/icp-autonomy.js').IcpInitiationSource;
+    previousStatus: IcpInitiationCandidateStatus | null;
+    status: IcpInitiationCandidateStatus;
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
     timestamp: number;
   };
   'icp.permit.lifecycle': {

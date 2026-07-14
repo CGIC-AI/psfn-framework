@@ -310,6 +310,13 @@ export class GatewayIcpAutonomyBroker {
           input.candidate.peerCompanionId,
         )
       : undefined;
+    if (canCaptureFence) {
+      const existing = await this.reconcilePermitIssue(senderCompanionId, input);
+      if (existing) {
+        await this.emitGate(input, senderCompanionId, existing.decision);
+        return existing;
+      }
+    }
     const decision = await this.evaluate(senderCompanionId, input);
     if (!decision.eligible) {
       await this.emitGate(input, senderCompanionId, decision);
@@ -363,6 +370,11 @@ export class GatewayIcpAutonomyBroker {
         return { decision: closed };
       }
       if (!(error instanceof IcpOutstandingInvitationConflictError)) throw error;
+      const existing = await this.reconcilePermitIssue(senderCompanionId, input);
+      if (existing) {
+        await this.emitGate(input, senderCompanionId, existing.decision);
+        return existing;
+      }
       const closed = closedDecision('invitation_outstanding', 'deferrable');
       await this.emitGate(input, senderCompanionId, closed);
       return { decision: closed };
@@ -377,6 +389,50 @@ export class GatewayIcpAutonomyBroker {
       action: 'issued',
       timestamp: nowMs,
     });
+    return { decision: { eligible: true }, permit };
+  }
+
+  private async reconcilePermitIssue(
+    senderCompanionId: string,
+    input: IcpInitiationPermitIssueInput,
+  ): Promise<IcpInitiationPermitIssueResult | null> {
+    const permit = await this.options.store.getPermitByCandidate(input.candidate.candidateId);
+    if (!permit) return null;
+    const episode = await this.options.store.getEpisode(permit.conversationId);
+    const exactBinding = permit.senderCompanionId === senderCompanionId
+      && permit.recipientCompanionId === input.candidate.peerCompanionId
+      && permit.channelId === input.channelId
+      && permit.provenanceRef === input.candidate.provenanceRef
+      && episode !== null
+      && episode.conversationId === permit.conversationId
+      && episode.channelId === input.channelId
+      && episode.rootInitiationId === input.candidate.rootInitiationId
+      && episode.initiatedByCompanionId === senderCompanionId
+      && episode.initiationSource === input.candidate.source
+      && episode.provenanceRef === input.candidate.provenanceRef
+      && episode.status === 'invited'
+      && episode.participantCompanionIds.length === 2
+      && episode.participantCompanionIds.includes(senderCompanionId)
+      && episode.participantCompanionIds.includes(input.candidate.peerCompanionId);
+    if (!exactBinding) {
+      this.options.alarm(
+        'icp_permit_reconciliation_mismatch',
+        'ICP candidate permit reconciliation binding mismatch',
+        {
+          senderCompanionId,
+          candidateId: input.candidate.candidateId,
+          permitId: permit.permitId,
+        },
+      );
+      return { decision: closedDecision('permit_mismatch', 'terminal') };
+    }
+    if (permit.status === 'revoked') {
+      return { decision: closedDecision('permit_revoked', 'terminal') };
+    }
+    if (permit.status === 'expired'
+      || (permit.status === 'issued' && permit.expiresAtMs <= this.now())) {
+      return { decision: closedDecision('permit_expired', 'terminal') };
+    }
     return { decision: { eligible: true }, permit };
   }
 

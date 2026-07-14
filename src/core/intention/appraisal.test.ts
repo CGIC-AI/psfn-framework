@@ -12,9 +12,11 @@ import {
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   buildPostTurnAppraisalTranscript,
   sessionEntriesToIntentionMessages,
+  pendingFollowUpsToPostTurnActionCandidates,
   toInferredPostTurnActions,
   type IntentionActionDecision,
 } from './appraisal.js';
@@ -992,6 +994,67 @@ describe('intention appraisal action mapping', () => {
       authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
       content: 'Checking in.',
     });
+  });
+
+  it('preserves durable ICP lineage through resurface and a later non-ICP external decision', () => {
+    const rootInitiationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const [resurfaced] = pendingFollowUpsToPostTurnActionCandidates([{
+      id: 'follow-up-icp',
+      content: 'Reconsider checking in with the peer.',
+      priority: 'medium',
+      timing: 'immediate',
+      createdAt: '2026-07-13T20:00:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'peer-contact',
+      originIcpRootInitiationId: rootInitiationId,
+    }]);
+    expect(normalizeIntentionFollowUpActionPayload(resurfaced.payload)).toMatchObject({
+      originIcpRootInitiationId: rootInitiationId,
+    });
+
+    const [outbound] = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'The resurfaced intention still wants to reach the peer.',
+      timing: 'immediate',
+      followUp: {
+        content: 'How are you doing?',
+        delivery: 'external',
+        pendingFollowUpId: 'follow-up-icp',
+      },
+    }], {
+      message: {
+        id: 'generated-follow-up-turn',
+        channelId: 'api:test',
+        channelType: 'api',
+        routing: { originIcpRootInitiationId: rootInitiationId },
+      },
+    });
+    expect(normalizeIntentionOutboundMessageActionPayload(outbound.payload)).toMatchObject({
+      originIcpRootInitiationId: rootInitiationId,
+    });
+  });
+
+  it('rejects malformed durable ICP lineage instead of relabeling it independent', () => {
+    expect(() => decisionsToPostTurnActionCandidates([], {
+      message: {
+        id: 'generated-follow-up-turn',
+        channelId: 'api:test',
+        channelType: 'api',
+        routing: { originIcpRootInitiationId: 'not-a-root' },
+      },
+    })).toThrow(/malformed ICP root lineage/i);
+    expect(normalizeIntentionFollowUpActionPayload({
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      content: 'Check in',
+      originIcpRootInitiationId: 'not-a-root',
+    })).toBeNull();
   });
 });
 

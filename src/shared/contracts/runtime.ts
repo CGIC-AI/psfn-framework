@@ -331,6 +331,8 @@ export interface MessageRoutingMetadata {
    * prompt/runtime. It is metadata, never a parallel dispatch path.
    */
   icpCorrelation?: IcpConversationCorrelation;
+  /** Durable lineage carried by generated follow-up turns outside a live ICP channel turn. */
+  originIcpRootInitiationId?: string;
   /**
    * Internal target-turn trigger: participates in prompt assembly but is not
    * persisted as partner/system transcript speech. Only valid with a strict

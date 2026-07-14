@@ -658,10 +658,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
           AND channel_id = $6
           AND participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
           AND status = 'invited'
-        ON CONFLICT (
-          LEAST(sender_companion_id, recipient_companion_id),
-          GREATEST(sender_companion_id, recipient_companion_id)
-        ) WHERE status = 'issued' DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING ${PERMIT_COLUMNS}
       `, [
         permit.permitId,
@@ -678,6 +675,13 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       ]);
       const row = result.rows.at(0);
       if (!row) {
+        const sameCandidate = await client.query<PermitRow>(`
+          SELECT ${PERMIT_COLUMNS}
+          FROM icp_initiation_permits
+          WHERE candidate_id = $1
+          LIMIT 1
+        `, [permit.candidateId]);
+        if (sameCandidate.rows.at(0)) throw new IcpOutstandingInvitationConflictError();
         const outstanding = await client.query<PermitRow>(`
           SELECT ${PERMIT_COLUMNS}
           FROM icp_initiation_permits
@@ -768,10 +772,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
           AND channel_id = $6
           AND participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
           AND status = 'invited'
-        ON CONFLICT (
-          LEAST(sender_companion_id, recipient_companion_id),
-          GREATEST(sender_companion_id, recipient_companion_id)
-        ) WHERE status = 'issued' DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING ${PERMIT_COLUMNS}
       `, [
         permit.permitId,
@@ -788,6 +789,15 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       ]);
       const permitRow = permitResult.rows.at(0);
       if (!permitRow) {
+        const sameCandidateResult = await client.query<PermitRow>(`
+          SELECT ${PERMIT_COLUMNS}
+          FROM icp_initiation_permits
+          WHERE candidate_id = $1
+          LIMIT 1
+        `, [permit.candidateId]);
+        if (sameCandidateResult.rows.at(0)) {
+          throw new IcpOutstandingInvitationConflictError();
+        }
         const outstandingResult = await client.query<PermitRow>(`
           SELECT ${PERMIT_COLUMNS}
           FROM icp_initiation_permits
@@ -816,6 +826,15 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       FROM icp_initiation_permits
       WHERE permit_id = $1
     `, [requireUuid(permitId, 'permitId')]);
+    return row ? mapPermit(row) : null;
+  }
+
+  async getPermitByCandidate(candidateId: string): Promise<IcpInitiationPermit | null> {
+    const row = await queryOne<PermitRow>(this.pool, `
+      SELECT ${PERMIT_COLUMNS}
+      FROM icp_initiation_permits
+      WHERE candidate_id = $1
+    `, [requireUuid(candidateId, 'candidateId')]);
     return row ? mapPermit(row) : null;
   }
 

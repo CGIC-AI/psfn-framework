@@ -14,6 +14,10 @@ import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { resolveContactBlockListPath } from '../layout.js';
 import { toIcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
 import { IcpAutonomyInvalidationConflictError } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
+import { GatewayIcpAutonomyBroker } from '../../boundary/gateway/icp-autonomy-broker.js';
+import type { GatewayIcpInitiationPolicyAuthority } from '../../boundary/gateway/icp-initiation-policy-authority.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
@@ -72,6 +76,124 @@ function deferred(): { reached: Promise<void>; release: () => void; wait: () => 
 }
 
 describe('ICP autonomy Postgres persistence', () => {
+  it('reconciles simultaneous identical-candidate permit issuance to one durable permit', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const knownCompanionIds = [A, B];
+    const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    let arrivals = 0;
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const issueBarrier = async (): Promise<void> => {
+      arrivals += 1;
+      if (arrivals === 2) release();
+      await released;
+    };
+    const gatedStore = (store: PostgresIcpSharedAutonomyStore): IcpSharedAutonomyStorePort => (
+      new Proxy(store, {
+        get(target, property) {
+          if (property === 'createEpisodeAndIssuePermit') {
+            return async (input: Parameters<IcpSharedAutonomyStorePort['createEpisodeAndIssuePermit']>[0]) => {
+              await issueBarrier();
+              return await target.createEpisodeAndIssuePermit(input);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      })
+    );
+    const eventBus = new EventBus();
+    const lifecycleEvents: unknown[] = [];
+    eventBus.on('icp.permit.lifecycle', event => lifecycleEvents.push(event));
+    const openPolicy: Pick<
+      GatewayIcpInitiationPolicyAuthority,
+      'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+    > = {
+      resolve: async () => ({
+        canonicalPeerContact: true,
+        trustAllows: true,
+        senderBlocksPeer: false,
+        peerBlocksSender: false,
+        quietHours: false,
+        provenanceFresh: true,
+        recursiveMiOnlyRoot: false,
+        socialPressureAllows: true,
+        chargeAllows: true,
+        fatigueAllows: true,
+        costAllows: true,
+      }),
+      authorizeHandoff: async () => ({ eligible: true as const }),
+      runAuthorizedHandoff: async <T>(_input: unknown, operation: () => Promise<T>) => ({
+        decision: { eligible: true as const },
+        result: await operation(),
+      }),
+    };
+    const makeBroker = (
+      store: PostgresIcpSharedAutonomyStore,
+      ids: string[],
+    ): GatewayIcpAutonomyBroker => new GatewayIcpAutonomyBroker({
+      store: gatedStore(store),
+      fleetCompanionIds: new Set(knownCompanionIds),
+      isCompanionReady: () => true,
+      resolveInitiationChannel: async () => ({ ok: true }),
+      policyAuthority: openPolicy,
+      eventBus,
+      alarm: () => undefined,
+      now: () => 10_000,
+      randomUuid: () => ids.shift()!,
+    });
+    const brokerA = makeBroker(storeA, [RACE_CONVERSATION_A, RACE_PERMIT_A]);
+    const brokerB = makeBroker(storeB, [RACE_CONVERSATION_B, RACE_PERMIT_B]);
+    const input = {
+      candidate: {
+        candidateId: RACE_CANDIDATE_A,
+        rootInitiationId: RACE_CANDIDATE_A,
+        localCompanionId: A,
+        peerCompanionId: B,
+        preferredChannel: 'dm' as const,
+        source: 'foreground' as const,
+        provenanceRef: `icp-prov:${RACE_CANDIDATE_A}`,
+        createdAtMs: 9_000,
+        expiresAtMs: 70_000,
+        status: 'pending' as const,
+        revision: 1,
+      },
+      channelId: CHANNEL,
+      permitExpiresAtMs: 70_000,
+    };
+    try {
+      await storeA.publishAvailability({
+        companionId: B,
+        state: 'open_to_chat',
+        issuedAtMs: 9_000,
+        expiresAtMs: 70_000,
+        source: 'companion',
+        revision: 1,
+      });
+
+      const [first, second] = await Promise.all([
+        brokerA.issuePermit(A, input),
+        brokerB.issuePermit(A, input),
+      ]);
+
+      expect(first.decision).toEqual({ eligible: true });
+      expect(second.decision).toEqual({ eligible: true });
+      expect(first.permit).toBeDefined();
+      expect(second.permit).toBeDefined();
+      expect(first.permit?.permitId).toBe(second.permit?.permitId);
+      expect(lifecycleEvents).toHaveLength(1);
+      const episodes = await Promise.all([
+        storeA.getEpisode(RACE_CONVERSATION_A),
+        storeA.getEpisode(RACE_CONVERSATION_B),
+      ]);
+      expect(episodes.filter(Boolean)).toHaveLength(1);
+    } finally {
+      await storeA.close();
+      await storeB.close();
+    }
+  }, TIMEOUT_MS);
+
   it('rejects stale issue and consume operations after durable invalidation advances', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const knownCompanionIds = [A, B];
@@ -648,6 +770,13 @@ describe('ICP autonomy Postgres persistence', () => {
         revision: 1,
       });
       expect(await storeB.getCandidate(CANDIDATE_ID)).toBeNull();
+      await storeA.transitionCandidate({
+        candidateId: CANDIDATE_ID,
+        expectedStatus: 'pending',
+        expectedRevision: 1,
+        status: 'permitted',
+        permitId: PERMIT_ID,
+      });
     } finally {
       await storeA.close();
       await storeB.close();
@@ -657,9 +786,12 @@ describe('ICP autonomy Postgres persistence', () => {
       schema: 'companion_a',
     });
     try {
-      await expect(restarted.getCandidate(CANDIDATE_ID)).resolves.toMatchObject({
+      expect(await restarted.getCandidate(CANDIDATE_ID)).toMatchObject({
         reasonSummary: expect.stringContaining('Private motivation'),
         continuationTaskKind: 'research',
+        status: 'permitted',
+        permitId: PERMIT_ID,
+        revision: 2,
       });
     } finally {
       await restarted.close();

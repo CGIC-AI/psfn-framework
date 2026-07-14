@@ -152,6 +152,19 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(lease.revision).toBe(1);
   });
 
+  it('looks up the original permit by candidate for issue-response reconciliation', async () => {
+    mocks.queryOne.mockResolvedValue(PERMIT_ROW);
+    const store = await connect();
+
+    await expect(store.getPermitByCandidate(PERMIT_ROW.candidate_id)).resolves.toMatchObject({
+      permitId: PERMIT_ROW.permit_id,
+      candidateId: PERMIT_ROW.candidate_id,
+    });
+    const [, sql, values] = mocks.queryOne.mock.calls.at(-1) as [unknown, string, unknown[]];
+    expect(sql).toContain('WHERE candidate_id = $1');
+    expect(values).toEqual([PERMIT_ROW.candidate_id]);
+  });
+
   it('atomically prevents a companion clear from deleting an active operator lease', async () => {
     const store = await connect();
     mocks.executeQuery.mockClear();
@@ -332,9 +345,37 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     expect(sql).toContain('INSERT INTO icp_initiation_permits');
     expect(sql).toContain('FROM icp_conversation_episodes');
     expect(sql).toContain('participant_companion_ids @>');
-    expect(sql).toContain('LEAST(sender_companion_id, recipient_companion_id)');
-    expect(sql).toContain("WHERE status = 'issued' DO NOTHING");
+    expect(sql).toContain('ON CONFLICT DO NOTHING');
     expect(sql).not.toContain('reason_summary');
+  });
+
+  it('classifies an exact candidate insert conflict for broker reconciliation', async () => {
+    const store = await connect();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [PERMIT_ROW], rowCount: 1 });
+
+    await expect(store.issuePermit({
+      permit: {
+        permitId: PERMIT_ID,
+        candidateId: PERMIT_ROW.candidate_id,
+        conversationId: CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        provenanceRef: PERMIT_ROW.provenance_ref,
+        issuedAtMs: 10_000,
+        expiresAtMs: 70_000,
+        status: 'issued',
+        revision: 1,
+      },
+      expectedInvalidationFence: FENCE,
+    })).rejects.toThrow('outstanding invitation conflict');
+    const [sameCandidateSql] = mocks.clientQuery.mock.calls[3] as [string];
+    expect(sameCandidateSql).toContain('WHERE candidate_id = $1');
   });
 
   it('atomically consumes once and classifies a concurrent replay', async () => {

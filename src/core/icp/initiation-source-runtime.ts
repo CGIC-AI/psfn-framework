@@ -503,6 +503,11 @@ export function createIcpInitiationSourceRuntime(
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
     }
 
+    if (!dependencies.isExternalCompanionAuthorized()) {
+      const rejected = await transition(candidate, 'rejected', 'policy_denied');
+      return result('rejected', rejected, 'policy_denied');
+    }
+
     if (!reconcilingCommittedPermit) {
       const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
       const expiredAfterConsent = await expireIfElapsed();
@@ -517,6 +522,11 @@ export function createIcpInitiationSourceRuntime(
         const declined = await transition(candidate, 'declined', 'candidate_declined');
         return result('declined', declined, 'candidate_declined');
       }
+    }
+
+    if (!dependencies.isExternalCompanionAuthorized()) {
+      const rejected = await transition(candidate, 'rejected', 'policy_denied');
+      return result('rejected', rejected, 'policy_denied');
     }
 
     projection = toIcpInitiationCandidateSharedMetadata(candidate);

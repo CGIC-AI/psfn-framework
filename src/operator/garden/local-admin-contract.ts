@@ -120,6 +120,10 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
 
 export interface InProcessGardenAdminContractOptions {
   apiBaseUrl?: string;
@@ -167,6 +171,9 @@ export interface InProcessGardenAdminContractOptions {
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
   effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpAdminProjectionStore?: IcpAdminProjectionStore | null;
+  icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
 }
 
 export function createInProcessGardenAdminContract(
@@ -263,6 +270,17 @@ export function createInProcessGardenAdminContract(
       ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }
       : {}),
   });
+  const icpAutonomy = options.icpRuntimeEnablement && options.effectiveSchedulerConfig
+    ? new AdminIcpAutonomyDataService({
+      localCompanionId: options.config.companionId,
+      candidateStore: options.icpInitiationCandidateStore ?? null,
+      projectionStore: options.icpAdminProjectionStore ?? null,
+      runtimeEnablement: options.icpRuntimeEnablement,
+      settingsService,
+      operatorLeaseTtlMs:
+        options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+    })
+    : null;
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──
   // Reads the same companion-data quarantine file the gateway/agent screening
@@ -479,6 +497,7 @@ export function createInProcessGardenAdminContract(
     scheduler: schedulerService,
     subsystemHealth,
     toolConformance,
+    icpAutonomy,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,

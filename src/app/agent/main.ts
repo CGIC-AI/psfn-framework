@@ -445,6 +445,7 @@ async function main(): Promise<void> {
     socialGraphWatermarkStore,
   });
   const {
+    runtimeEnablement: icpRuntimeEnablement,
     sourceRuntime: icpInitiationSourceRuntime,
     weightedThoughtCandidateAdapter: icpWeightedThoughtCandidateAdapter,
     intentionCandidateAdapter: icpIntentionCandidateAdapter,
@@ -759,6 +760,8 @@ async function main(): Promise<void> {
     chargeLedger,
     scheduler,
     schedulerConfig,
+    icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    icpRuntimeEnablement,
     postTurnActions,
     outreachOutbox,
     episodicStore,

@@ -5,6 +5,10 @@ import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-can
 import { registerIcpCoLocationThoughtAdapter } from '../../core/icp/co-location-thought-adapter.js';
 import { createIcpWeightedThoughtCandidateAdapter } from '../../core/icp/weighted-thought-candidate-adapter.js';
 import type { IcpAutonomySchedulerConfig } from '../../system/config/icp-autonomy-scheduler-config.js';
+import {
+  createIcpAutonomyRuntimeEnablement,
+  type IcpAutonomyRuntimeEnablement,
+} from '../../core/icp/runtime-enablement.js';
 
 type SourceRuntimeOptions = Parameters<typeof createIcpInitiationSourceRuntime>[0];
 type ConsentEvaluatorOptions = Parameters<typeof createLlmIcpInitiationConsentEvaluator>[0];
@@ -29,6 +33,7 @@ export interface IcpInitiationSourceWiringInput {
 }
 
 export interface IcpInitiationSourceWiring {
+  runtimeEnablement: IcpAutonomyRuntimeEnablement;
   sourceRuntime: ReturnType<typeof createIcpInitiationSourceRuntime> | undefined;
   weightedThoughtCandidateAdapter:
     | ReturnType<typeof createIcpWeightedThoughtCandidateAdapter>
@@ -41,6 +46,9 @@ export interface IcpInitiationSourceWiring {
 export function wireIcpInitiationSources(
   input: IcpInitiationSourceWiringInput,
 ): IcpInitiationSourceWiring {
+  const runtimeEnablement = createIcpAutonomyRuntimeEnablement(input.config.enabled);
+  const isAuthorized = () => runtimeEnablement.isEnabled()
+    && input.isExternalCompanionAuthorized();
   const sourceRuntime = input.config.enabled
     && input.candidateStore && input.peers && input.localCompanionId
     ? createIcpInitiationSourceRuntime({
@@ -49,7 +57,7 @@ export function wireIcpInitiationSources(
         peers: input.peers,
         gateway: input.gateway,
         consent: createLlmIcpInitiationConsentEvaluator({ llmProvider: input.llmProvider }),
-        isExternalCompanionAuthorized: input.isExternalCompanionAuthorized,
+        isExternalCompanionAuthorized: isAuthorized,
         policy: {
           candidateDefaultTtlMs: input.config.candidate.defaultTtlMs,
           retryCadenceMs: input.config.candidate.retryCadenceMs,
@@ -85,6 +93,7 @@ export function wireIcpInitiationSources(
     : () => undefined;
 
   return {
+    runtimeEnablement,
     sourceRuntime,
     weightedThoughtCandidateAdapter,
     intentionCandidateAdapter,

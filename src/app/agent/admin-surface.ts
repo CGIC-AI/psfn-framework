@@ -31,6 +31,9 @@ import {
 } from '../../operator/garden/transport-paths.js';
 import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -45,6 +48,8 @@ export interface StartOptionalAdminTransportServerOptions {
   chargeLedger: RunChargeLedger;
   scheduler: Scheduler;
   schedulerConfig: SchedulerRuntimeConfig;
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
@@ -89,6 +94,17 @@ export async function startOptionalAdminTransportServer(
     satelliteRegistry: options.satelliteRegistryConfig,
   };
   const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
+  const fleetCompanionIds = options.config.companionFleet?.companions
+    .map(companion => companion.companionId)
+    ?? (options.config.companionId ? [options.config.companionId] : []);
+  const icpAdminProjectionStore = options.config.multiCompanion === true
+    && options.config.postgresDatabaseUrl
+    && fleetCompanionIds.length > 0
+    ? await PostgresIcpAdminProjectionStore.connect(
+      options.config.postgresDatabaseUrl,
+      fleetCompanionIds,
+    )
+    : null;
   const services = createInProcessGardenAdminContract({
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
@@ -99,6 +115,9 @@ export async function startOptionalAdminTransportServer(
     sessionManager: options.coreRuntime.sessionManager,
     scheduler: options.scheduler,
     effectiveSchedulerConfig: options.schedulerConfig,
+    icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
+    icpAdminProjectionStore,
+    icpRuntimeEnablement: options.icpRuntimeEnablement,
     postTurnActions: options.postTurnActions,
     outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,

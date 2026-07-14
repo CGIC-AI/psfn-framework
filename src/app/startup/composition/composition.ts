@@ -159,8 +159,10 @@ export async function composeSessionRuntimeAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }
+  const postgresSchema = options.config.postgresSchema?.trim();
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
+    ...(postgresSchema ? { schema: postgresSchema } : {}),
   });
   return createSessionComposition(options, sessionAdapters, sessionsDir);
 }

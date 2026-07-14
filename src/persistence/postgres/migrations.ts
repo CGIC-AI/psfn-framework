@@ -1,5 +1,9 @@
 export const POSTGRES_MEMORY_MIGRATIONS = [
-  `CREATE EXTENSION IF NOT EXISTS vector;`,
+  // Companion pools pin search_path to `<companion>, public`. Extension types
+  // must live in public so the first companion to migrate cannot strand the
+  // singleton pgvector extension inside its private schema and break every
+  // subsequently-starting companion.
+  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
   `
   CREATE TABLE IF NOT EXISTS l2_memories (
     id TEXT PRIMARY KEY,

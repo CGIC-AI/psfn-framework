@@ -579,14 +579,24 @@ export class SessionStore implements TranscriptSearchPort {
     const port = this.tailCache;
     if (!port) return;
     const channelKey = this.resolveTailChannelKey(channelId);
+    // Capture the epoch AT ENQUEUE time (the GET is issued now, while the row
+    // data is fresh under the journal lock), never at write-execution time: a
+    // queued append that captured pre-rewrite content must land under the
+    // pre-rewrite epoch key, where a rewrite's fence bumps make it
+    // structurally unreadable. Rejections surface when the queued op awaits
+    // the promise; the no-op catch only prevents a spurious
+    // unhandled-rejection between enqueue and execution.
+    const epochAtEnqueue = port.getEpoch(channelKey);
+    epochAtEnqueue.catch(() => { /* handled where awaited on the write chain */ });
     this.queueSessionTailWrite(channelKey, 'append', async () => {
+      const epoch = await epochAtEnqueue;
       if (this.tailRefreshRequiredChannels.has(channelKey)) {
         // A prior tail write failed: the tail may hide a gap. Drop it before
         // appending so readers fall back to the journal until repopulation.
-        await port.invalidateChannel(channelKey);
+        await port.invalidateChannel(channelKey, epoch);
         this.tailRefreshRequiredChannels.delete(channelKey);
       }
-      await port.appendRow(channelKey, row);
+      await port.appendRow(channelKey, epoch, row);
     });
   }
   private writeSessionTailThrough(channelId: string, entry: SessionEntry): void {
@@ -630,28 +640,79 @@ export class SessionStore implements TranscriptSearchPort {
     }
     this.tailRefreshRequiredChannels.delete(channelKey);
   }
+  /**
+   * Run a journal-rewrite body and GUARANTEE the post-rewrite epoch bump
+   * executes once the journal mutation is durable — even when a step between
+   * the rewrite and the bump throws (projection sync, index update, event
+   * store bookkeeping). The body calls `markRewritten()` immediately after
+   * the journal mutation lands; if it was called, the second fence runs on
+   * BOTH the success and the failure path. `bumpSessionTailEpoch` poisons the
+   * local tail (refresh flag) before attempting the INCR, so even a failed
+   * bump leaves local state safe while still throwing loudly (fail-closed).
+   */
+  private async withPostRewriteTailFence<T>(
+    channelId: string,
+    reason: string,
+    body: (markRewritten: () => void) => T,
+  ): Promise<T> {
+    const state = { rewritten: false };
+    let result: T;
+    try {
+      result = body(() => {
+        state.rewritten = true;
+      });
+    } catch (error) {
+      if (state.rewritten) {
+        try {
+          await this.bumpSessionTailEpoch(channelId, `${reason}:post`);
+        } catch (bumpError) {
+          // Neither failure may be swallowed: the caller sees both.
+          throw new AggregateError(
+            [error, bumpError],
+            `Journal rewrite failed after mutating the journal AND the post-rewrite `
+            + `tail fence failed for channel ${channelId} (${reason}): `
+            + `${toErrorMessage(error)}; ${toErrorMessage(bumpError)}`,
+          );
+        }
+      }
+      throw error;
+    }
+    if (state.rewritten) {
+      await this.bumpSessionTailEpoch(channelId, `${reason}:post`);
+    }
+    return result;
+  }
   /** Rebuild the Redis tail from the journal-backed recent window (fire-and-forget). */
   private repopulateSessionTail(channelId: string, channelKey: string): void {
     const port = this.tailCache;
     if (!port) return;
-    const entries = this.getRecent(channelId, port.maxEntriesPerChannel);
-    const rows: SessionTailRow[] = [];
-    let previousId: number | null = null;
-    for (const entry of entries) {
-      if (previousId !== null && entry.id - previousId > port.maxEntriesPerChannel) {
-        // Absurd id jump (corrupt window): keep only the newest contiguous
-        // run instead of synthesizing an unbounded placeholder range.
-        rows.length = 0;
-      } else if (previousId !== null) {
-        for (let gapId = previousId + 1; gapId < entry.id; gapId += 1) {
-          rows.push({ kind: 'id_gap', id: gapId });
-        }
-      }
-      rows.push({ kind: 'message', entry });
-      previousId = entry.id;
-    }
     this.queueSessionTailWrite(channelKey, 'repopulate', async () => {
-      await port.replaceTail(channelKey, rows);
+      // ORDER MATTERS: resolve the epoch BEFORE capturing the journal data,
+      // then write to that captured epoch's key only. Under the two-bump
+      // rewrite protocol this is airtight: data captured after an epoch read
+      // that predates the post-rewrite bump lands under a key that bump
+      // supersedes, and an epoch read after the post-rewrite bump can only
+      // see post-rewrite journal state. Resolving the epoch at write time
+      // (or capturing data before the epoch) would let a delayed
+      // repopulation resurrect pre-rewrite content under the new epoch.
+      const epoch = await port.getEpoch(channelKey);
+      const entries = this.getRecent(channelId, port.maxEntriesPerChannel);
+      const rows: SessionTailRow[] = [];
+      let previousId: number | null = null;
+      for (const entry of entries) {
+        if (previousId !== null && entry.id - previousId > port.maxEntriesPerChannel) {
+          // Absurd id jump (corrupt window): keep only the newest contiguous
+          // run instead of synthesizing an unbounded placeholder range.
+          rows.length = 0;
+        } else if (previousId !== null) {
+          for (let gapId = previousId + 1; gapId < entry.id; gapId += 1) {
+            rows.push({ kind: 'id_gap', id: gapId });
+          }
+        }
+        rows.push({ kind: 'message', entry });
+        previousId = entry.id;
+      }
+      await port.replaceTail(channelKey, epoch, rows);
       this.tailRefreshRequiredChannels.delete(channelKey);
     });
   }
@@ -1046,7 +1107,11 @@ export class SessionStore implements TranscriptSearchPort {
     // Fence the shared tail BEFORE rewriting: a failed bump aborts the
     // redaction while the journal is still untouched (fail-closed).
     await this.bumpSessionTailEpoch(options.channelId, 'cogsec_tombstone_rewrite');
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+    // Second fence AFTER the rewrite (exception-safe): closes the race where
+    // another process repopulated the post-bump epoch from a journal read
+    // taken before the rewrite landed. Runs even when a post-rewrite step
+    // (reload, projection sync, event bookkeeping) throws.
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_tombstone_rewrite', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache) => {
       const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
       const rawEntries = this.journalRuntime.readJournalEntries(archive);
       const selectedRows = rawEntries.filter(entry => isSelectedCogSecMessage(entry, selector));
@@ -1089,6 +1154,7 @@ export class SessionStore implements TranscriptSearchPort {
       ));
 
       this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      markRewritten();
       const reloaded = this.journalRuntime.loadChannel(archive);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
@@ -1142,16 +1208,10 @@ export class SessionStore implements TranscriptSearchPort {
         sealedForensicPayloadRef: sealed.ref,
         sealedForensicPayloadHash: sealed.sha256,
       } satisfies CogSecL0TombstoneResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec tombstone: ${options.channelId}`);
-    }
-    if (result.tombstonedL0RowCount > 0) {
-      // Second fence AFTER the rewrite: closes the race where another process
-      // repopulated the post-bump epoch from a journal read taken before the
-      // rewrite landed. Throws on failure (fail-closed redaction).
-      await this.bumpSessionTailEpoch(options.channelId, 'cogsec_tombstone_rewrite:post');
     }
     return result;
   }
@@ -1208,7 +1268,8 @@ export class SessionStore implements TranscriptSearchPort {
 
     // Fence the shared tail BEFORE rewriting (fail-closed redaction).
     await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_invalidation');
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+    // Second fence AFTER the rewrite, exception-safe (see applyCogSecTombstones).
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_compaction_invalidation', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache) => {
       const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
       const rawEntries = this.journalRuntime.readJournalEntries(archive);
       const selectedIds = rawEntries
@@ -1231,6 +1292,7 @@ export class SessionStore implements TranscriptSearchPort {
       ));
 
       this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      markRewritten();
       const reloaded = this.journalRuntime.loadChannel(archive);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
@@ -1241,14 +1303,10 @@ export class SessionStore implements TranscriptSearchPort {
         channelId: cache.channelId,
         invalidatedCompactionIds: selectedIds,
       } satisfies CogSecCompactionInvalidationResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec compaction invalidation: ${options.channelId}`);
-    }
-    if (result.invalidatedCompactionIds.length > 0) {
-      // Second fence AFTER the rewrite (see applyCogSecTombstones).
-      await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_invalidation:post');
     }
     return result;
   }
@@ -1270,7 +1328,8 @@ export class SessionStore implements TranscriptSearchPort {
 
     // Fence the shared tail BEFORE rewriting (fail-closed redaction).
     await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_regeneration');
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+    // Second fence AFTER the rewrite, exception-safe (see applyCogSecTombstones).
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_compaction_regeneration', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache) => {
       const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
       const rawEntries = this.journalRuntime.readJournalEntries(archive);
       const regeneratedIds: number[] = [];
@@ -1294,6 +1353,7 @@ export class SessionStore implements TranscriptSearchPort {
 
       if (regeneratedIds.length > 0) {
         this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+        markRewritten();
         const reloaded = this.journalRuntime.loadChannel(archive);
         const sessionKey = this.resolveCacheSessionKey(cache);
         this.channels.set(sessionKey, reloaded);
@@ -1306,14 +1366,10 @@ export class SessionStore implements TranscriptSearchPort {
         regeneratedCompactionIds: regeneratedIds,
         skippedCompactionIds: skippedIds,
       } satisfies CogSecCompactionRegenerationResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec compaction regeneration: ${options.channelId}`);
-    }
-    if (result.regeneratedCompactionIds.length > 0) {
-      // Second fence AFTER the rewrite (see applyCogSecTombstones).
-      await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_regeneration:post');
     }
     return result;
   }
@@ -1502,7 +1558,11 @@ export class SessionStore implements TranscriptSearchPort {
     // pre-tombstone window. A failed bump aborts the redaction (fail-closed).
     await this.bumpSessionTailEpoch(channelId, `turn_tombstone_${action}`);
     const timestamp = options.timestamp ?? Date.now();
-    this.withLockedChannelWrite(
+    // Second fence AFTER the tombstone landed, exception-safe: closes the
+    // race where another process repopulated the post-bump epoch from a
+    // pre-tombstone journal read, even when a post-journal step (cache
+    // rebuild, index/projection sync) throws (see applyCogSecTombstones).
+    await this.withPostRewriteTailFence(channelId, `turn_tombstone_${action}`, (markRewritten) => this.withLockedChannelWrite(
       channelId,
       {
         timestamp,
@@ -1528,6 +1588,7 @@ export class SessionStore implements TranscriptSearchPort {
           cache.nextId = previousNextId;
           throw error;
         }
+        markRewritten();
 
         const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
         if (full) {
@@ -1539,11 +1600,7 @@ export class SessionStore implements TranscriptSearchPort {
           this.syncTranscriptProjectionForChannel(channelId, full.entries);
         }
       },
-    );
-    // Second fence AFTER the tombstone landed: closes the race where another
-    // process repopulated the post-bump epoch from a pre-tombstone journal
-    // read (see applyCogSecTombstones).
-    await this.bumpSessionTailEpoch(channelId, `turn_tombstone_${action}:post`);
+    ));
   }
   async redactTurn(
     channelId: string,

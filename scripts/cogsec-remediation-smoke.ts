@@ -79,7 +79,7 @@ function makeEmbeddingProvider(embedding: Float32Array): EmbeddingProviderPort {
 
 function makeCompactionInvalidator(sessionStore: SessionStore) {
   return {
-    invalidateCompactionSummaries: (input: {
+    invalidateCompactionSummaries: async (input: {
       caseId: string;
       compactionSummaries: readonly CogSecLineageCompactionRef[];
     }) => {
@@ -90,8 +90,11 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
         bySession.set(summary.logicalSessionId, ids);
       }
       const invalidatedCompactionIds: string[] = [];
+      // Sequential on purpose: each rewrite fences the shared session tail
+      // (epoch bump) before and after touching the journal, and a rejection
+      // must propagate into applyCogSecRevocation (which awaits this port).
       for (const [channelId, compactionIds] of bySession.entries()) {
-        const result = sessionStore.applyCogSecCompactionInvalidations({
+        const result = await sessionStore.applyCogSecCompactionInvalidations({
           channelId,
           caseId: input.caseId,
           compactionIds,
@@ -177,7 +180,7 @@ async function main(): Promise<void> {
       'active memory context did not include dirty memory before revocation',
     );
 
-    const tombstone = sessionStore.applyCogSecTombstones({
+    const tombstone = await sessionStore.applyCogSecTombstones({
       channelId: CHANNEL_ID,
       caseId: CASE_ID,
       eventStore,

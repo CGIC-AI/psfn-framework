@@ -37,14 +37,30 @@ export interface SessionTailCachePort {
   /**
    * Fetch the bounded tail for a channel at the CURRENT epoch. Order is not
    * guaranteed; callers normalize/validate via `validateSessionTailWindow`.
+   * Implementations MUST re-check the epoch after reading the rows and treat
+   * a changed epoch as a miss (empty window): a GET-epoch/read-rows pair is
+   * otherwise a TOCTOU window across a concurrent rewrite fence.
    */
   getTail(channelKey: string): Promise<SessionTailRow[]>;
-  /** Append one row at the current epoch and trim the tail to the bound. */
-  appendRow(channelKey: string, row: SessionTailRow): Promise<void>;
-  /** Replace the current-epoch channel tail wholesale (repopulation after a miss). */
-  replaceTail(channelKey: string, rows: readonly SessionTailRow[]): Promise<void>;
-  /** Drop the current-epoch channel tail (local poison cleanup before re-append). */
-  invalidateChannel(channelKey: string): Promise<void>;
+  /**
+   * Resolve the current per-channel epoch. Writers MUST capture the epoch
+   * BEFORE (or at the moment) they capture the data they intend to write and
+   * pass that captured epoch to `appendRow`/`replaceTail`/`invalidateChannel`.
+   * Resolving the epoch at write-execution time is forbidden: a queued write
+   * that captured pre-rewrite data could otherwise land under the
+   * post-rewrite epoch and resurrect redacted content.
+   */
+  getEpoch(channelKey: string): Promise<number>;
+  /**
+   * Append one row under the CAPTURED epoch's key and trim the tail to the
+   * bound. A write to an already-superseded epoch key is harmless garbage
+   * (unreachable by readers; DEL/TTL GC removes it).
+   */
+  appendRow(channelKey: string, epoch: number, row: SessionTailRow): Promise<void>;
+  /** Replace the captured-epoch channel tail wholesale (repopulation after a miss). */
+  replaceTail(channelKey: string, epoch: number, rows: readonly SessionTailRow[]): Promise<void>;
+  /** Drop the captured-epoch channel tail (local poison cleanup before re-append). */
+  invalidateChannel(channelKey: string, epoch: number): Promise<void>;
   /**
    * Advance the per-channel epoch, making every previously written row
    * unreadable in every process. MUST be awaited by journal rewrite paths

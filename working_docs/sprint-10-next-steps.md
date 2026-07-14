@@ -33,9 +33,10 @@ was dependency-wired end to end, and the release path got tracker structure.
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
 - **Partially advanced**: `cam.1` accounting capture, `cam.2` typed
-  attribution, and `cam.3` durable dashboard accounting are code-complete and
-  validated on `feat/cost-accounting`; the parent `cam` epic and
-  `cam.4`–`.6` remain open, and none of this branch is on `main` yet. It still blocks ICP
+  attribution, `cam.3` durable dashboard accounting, and `cam.4` canonical
+  analytics are code-complete and validated on the pushed `feat/cost-accounting`
+  branch; the parent `cam` epic and `cam.5`–`.6` remain open, and none of this
+  branch is on `main` yet. It still blocks ICP
   `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -92,12 +93,14 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
-### 0.4 2026-07-14 accounting capture, attribution, and dashboard status
+### 0.4 2026-07-14 accounting capture, attribution, dashboard, and analytics status
 
 `psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,
 and `psfn-framework-cam.2` is delivered through implementation head
 `9a3f57a1` (`61097e33..9a3f57a1`). `psfn-framework-cam.3` is delivered by
-`43c76a32` and `825eef8c`, making `825eef8c` the current implementation head.
+`43c76a32` and `825eef8c`. `psfn-framework-cam.4` is integrated and pushed at
+`459e73dd` (`362b6c72..459e73dd`), making `459e73dd` the current implementation
+head.
 CAM.1 records immutable physical provider attempts with reconciled token and
 cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
 strict filters and groups, indexed Postgres persistence, and fail-closed Garden
@@ -106,6 +109,13 @@ in-memory cost samples with canonical Today/Week/Month Postgres queries,
 complete call/token/cache/provider/estimated/effective totals, a 15-second
 bounded poll, race-safe range switching, and explicit fresh/stale/unavailable
 states while keeping live context-pressure and TTFT telemetry transient.
+CAM.4 adds one tenant-scoped Postgres analytics grammar for named and strict
+custom ranges, operator timezones and DST-aware gap-filled buckets, reconciled
+totals/series/component economics, bounded one- or two-dimensional grouping,
+stable sorting and cursor pagination, exact top-N plus Other, recent/expensive
+events, and content-free CSV/JSON exports from the same filtered raw ledger.
+Garden routes and the typed client are wired to that contract, and indexed raw
+queries meet the documented year-scale target without rollups.
 
 CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
 Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
@@ -123,15 +133,34 @@ seven pre-CAM.3 flat `ModelUsageEvent` reads in the unchanged Charge/Budget
 renderer; that repair is tracked separately by open bead
 `psfn-framework-at95`, not attributed to CAM.3.
 
+CAM.4 final-check validation at integrated/pushed head `459e73dd`: focused
+range/query/export/service/operator coverage passed 5 files / 50 tests;
+Docker-backed real PostgreSQL analytics and benchmark coverage passed 2 files /
+14 tests, including tenant isolation, DST buckets, totals/group reconciliation,
+cursors, immutable component economics, export, and restart durability. The
+3,650-event year benchmark completed the canonical analytics query in 126.56 ms
+against the documented `<2000 ms` target. `npm run lint`, `npm run build`,
+`npm run garden:build`, and `git diff --check` passed. Independent review passed
+with no blocking findings under the accounting security/data-integrity/core-path
+failure standard.
+
+Report-only reviewer observations for CAM.4 (intentionally no follow-up beads):
+the shared export-row type has minor routed-model-field/duplicate-declaration
+hygiene; relative named-range cursors do not pin resolved boundaries across a
+calendar rollover; the benchmark is intentionally low-density and its explicit
+plan assertion is narrower than the full analytics fan-out; and exports ignore
+display cursor/limit state while preserving the complete filtered ledger slice.
+None affects tenant isolation, immutable accounting data, the shipped query
+path, or mandatory lint/build gates.
+
 This is a feature-branch completion boundary, not a `main` or whole-accounting
 completion claim. The `psfn-framework-cam` parent remains open, with these
 children still pending:
 
 | Bead | Remaining scope | Status |
 |---|---|---|
-| `psfn-framework-cam.4` | Calendar/custom ranges, time buckets, multidimensional breakdowns, sorting, and export | open |
 | `psfn-framework-cam.5` | Operator charge-unit to dollar reconciliation by lane, surface, and run | open |
-| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by CAM.4, CAM.5, and `574y` | blocked |
+| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by CAM.5 and `574y` | blocked |
 
 ## 1. Where things stand
 

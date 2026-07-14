@@ -40,6 +40,10 @@ import {
   type TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import {
+  normalizeSessionTailEntries,
+  type SessionTailCachePort,
+} from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
@@ -93,6 +97,7 @@ const JOURNAL_WRITE_LOCK_POLL_MS = 10;
 const JOURNAL_WRITE_LOCK_STALE_MS = 30_000;
 const JOURNAL_WRITE_LOCK_TIMEOUT_MS = 5_000;
 const JOURNAL_WRITE_SLEEP_STATE = new Int32Array(new SharedArrayBuffer(4));
+const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
 export {
   sanitizeChannelId,
   unsanitizeChannelId,
@@ -293,6 +298,18 @@ export class SessionStore implements TranscriptSearchPort {
   private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
   private journalRuntime: SessionJournalRuntime;
+  /** Optional shared hot tail (psfn-framework-hgw3.5); null = file-only behavior. */
+  private tailCache: SessionTailCachePort | null;
+  /** Serializes fire-and-forget tail writes so per-channel ops keep call order. */
+  private tailWriteChain: Promise<void> = Promise.resolve();
+  /**
+   * Channels whose Redis tail must not be trusted until repopulated: a tail
+   * write failed (possible gap) or a journal rewrite invalidated the window.
+   * Local-process poison flag backing the cross-process DEL.
+   */
+  private tailRefreshRequiredChannels = new Set<string>();
+  private tailDegradedLastWarnAt = 0;
+  private tailDegradedSuppressedCount = 0;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
@@ -313,6 +330,7 @@ export class SessionStore implements TranscriptSearchPort {
       this.transcriptSearch = this.transcriptProjection;
     }
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.tailCache = options.tailCache ?? null;
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
@@ -398,10 +416,23 @@ export class SessionStore implements TranscriptSearchPort {
     this.channels.set(resolved.sessionId, cache);
     return cache;
   }
+  /**
+   * A fullyLoaded cache may only be served while the journal file on disk is
+   * byte-identical to what the cache loaded or last wrote. Other processes
+   * (gateway, garden) append through their own SessionStore instances over the
+   * same sessions dir, so an unverified fullyLoaded cache silently serves a
+   * stale window (psfn-framework-hgw3.1: duplicate replies from a context
+   * missing the previous turn's assistant entry). `null === null` only holds
+   * while the archive file does not exist yet (empty new channel).
+   */
+  private fullyLoadedCacheIsCurrent(cache: ChannelCache): boolean {
+    if (!cache.fullyLoaded) return false;
+    return cache.archiveFingerprint === this.fingerprintArchive(cache);
+  }
   private ensureChannelFullyLoaded(channelId: string): ChannelCache | null {
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
     const existing = this.channels.get(resolvedSessionId);
-    if (existing?.fullyLoaded) return existing;
+    if (existing?.fullyLoaded && this.fullyLoadedCacheIsCurrent(existing)) return existing;
     const resolved = existing
       ? {
         sessionId: resolvedSessionId,
@@ -451,6 +482,7 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: this.journalRuntime.fingerprintArchive(archive),
       recentEntriesByLimit: new Map(),
     };
     this.channels.set(channelId, cache);
@@ -534,6 +566,135 @@ export class SessionStore implements TranscriptSearchPort {
     return this.journalRuntime.fingerprintArchive(
       this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath),
     );
+  }
+  private resolveTailChannelKey(channelId: string): string {
+    return this.resolveSessionId(channelId) ?? channelId;
+  }
+  /**
+   * Redis degraded: LOUD warn, rate-limited per occurrence window. A companion
+   * that stops replying because Redis blipped is worse than one on slow file
+   * reads, so tail failures degrade to the journal path and are logged, never
+   * hidden and never rethrown into the turn.
+   */
+  private markSessionTailDegraded(channelKey: string, operation: string, error: unknown): void {
+    this.tailRefreshRequiredChannels.add(channelKey);
+    const now = Date.now();
+    if (now - this.tailDegradedLastWarnAt < TAIL_DEGRADED_WARN_INTERVAL_MS) {
+      this.tailDegradedSuppressedCount += 1;
+      return;
+    }
+    const suppressed = this.tailDegradedSuppressedCount;
+    this.tailDegradedLastWarnAt = now;
+    this.tailDegradedSuppressedCount = 0;
+    log.warn('Session tail cache degraded; serving journal reads until the tail repopulates', {
+      channelKey,
+      operation,
+      suppressedSinceLastWarn: suppressed,
+      error: toErrorMessage(error),
+    });
+  }
+  /**
+   * Serialize fire-and-forget tail writes. The journal write already
+   * succeeded by the time these run; a tail failure only poisons the channel
+   * tail (forced refresh) and warns — it never fails the caller.
+   */
+  private queueSessionTailWrite(
+    channelKey: string,
+    operation: string,
+    op: () => Promise<void>,
+  ): void {
+    this.tailWriteChain = this.tailWriteChain.then(async () => {
+      try {
+        await op();
+      } catch (error) {
+        this.markSessionTailDegraded(channelKey, operation, error);
+      }
+    });
+  }
+  /** Write-through after a durable journal append (write path holds the journal lock). */
+  private writeSessionTailThrough(channelId: string, entry: SessionEntry): void {
+    const port = this.tailCache;
+    if (!port) return;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    this.queueSessionTailWrite(channelKey, 'append', async () => {
+      if (this.tailRefreshRequiredChannels.has(channelKey)) {
+        // A prior tail write failed: the tail may hide a gap. Drop it before
+        // appending so readers fall back to the journal until repopulation.
+        await port.invalidateChannel(channelKey);
+        this.tailRefreshRequiredChannels.delete(channelKey);
+      }
+      await port.appendEntry(channelKey, entry);
+    });
+  }
+  /**
+   * Journal rewrites and reloads must invalidate the channel tail, never
+   * patch it: the tail would otherwise serve pre-rewrite content with the
+   * redis-wins merge.
+   */
+  private invalidateSessionTail(channelId: string, reason: string): void {
+    const port = this.tailCache;
+    if (!port) return;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    this.tailRefreshRequiredChannels.add(channelKey);
+    this.queueSessionTailWrite(channelKey, `invalidate:${reason}`, async () => {
+      await port.invalidateChannel(channelKey);
+      this.tailRefreshRequiredChannels.delete(channelKey);
+    });
+  }
+  /** Rebuild the Redis tail from the journal-backed recent window (fire-and-forget). */
+  private repopulateSessionTail(channelId: string, channelKey: string): void {
+    const port = this.tailCache;
+    if (!port) return;
+    const entries = this.getRecent(channelId, port.maxEntriesPerChannel);
+    this.queueSessionTailWrite(channelKey, 'repopulate', async () => {
+      await port.replaceTail(channelKey, entries);
+      this.tailRefreshRequiredChannels.delete(channelKey);
+    });
+  }
+  /**
+   * Fetch the shared hot tail for a capture read (psfn-framework-hgw3.5).
+   * Returns null when the tail cache is disabled, degraded, poisoned, or
+   * BEHIND the just-recorded entry id (`expectedMinEntryId`) — callers then
+   * stay on the journal-backed path (byte-identical behavior) while the tail
+   * repopulates in the background. Integrates with the hgw3.1 stale-window
+   * heal guard: `reloadChannelFromDisk` poisons the tail, so a heal recapture
+   * never re-reads the window that was just diagnosed as stale.
+   */
+  async fetchSessionTailWindow(
+    channelId: string,
+    options: { expectedMinEntryId?: number } = {},
+  ): Promise<SessionEntry[] | null> {
+    const port = this.tailCache;
+    if (!port) return null;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    if (!this.tailRefreshRequiredChannels.has(channelKey)) {
+      let tail: SessionEntry[] = [];
+      try {
+        tail = normalizeSessionTailEntries(await port.getTail(channelKey));
+      } catch (error) {
+        // Fall through to repopulation: if Redis is down it fails quietly on
+        // the queued chain and the channel stays poisoned until it recovers.
+        this.markSessionTailDegraded(channelKey, 'read', error);
+        tail = [];
+      }
+      if (tail.length > 0) {
+        const tailMaxEntryId = tail[tail.length - 1].id;
+        if (options.expectedMinEntryId === undefined || tailMaxEntryId >= options.expectedMinEntryId) {
+          return tail;
+        }
+        log.warn('Session tail cache is behind the just-recorded entry; falling back to journal reads and repopulating', {
+          channelKey,
+          tailMaxEntryId,
+          expectedMinEntryId: options.expectedMinEntryId,
+        });
+      }
+    }
+    this.repopulateSessionTail(channelId, channelKey);
+    return null;
+  }
+  /** Flush queued tail writes (tests and shutdown). */
+  async flushSessionTailWrites(): Promise<void> {
+    await this.tailWriteChain;
   }
   private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
     if (tombstones.size === 0) return [...entries];
@@ -689,6 +850,7 @@ export class SessionStore implements TranscriptSearchPort {
           throw error;
         }
         this.indexSessionEntry(full);
+        this.writeSessionTailThrough(entry.channelId, full);
         return id;
       },
     );
@@ -742,8 +904,12 @@ export class SessionStore implements TranscriptSearchPort {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     if (cached?.fullyLoaded) {
-      if (cached.entries.length <= limit) return [...cached.entries];
-      return cached.entries.slice(-limit);
+      const current = this.fullyLoadedCacheIsCurrent(cached)
+        ? cached
+        : this.ensureChannelFullyLoaded(channelId);
+      if (!current) return [];
+      if (current.entries.length <= limit) return [...current.entries];
+      return current.entries.slice(-limit);
     }
     if (cached && cached.activeTurnTombstoneCount > 0) {
       const full = this.ensureChannelFullyLoaded(channelId);
@@ -787,6 +953,28 @@ export class SessionStore implements TranscriptSearchPort {
       this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
     return recentEntries;
+  }
+  /**
+   * Drop every in-memory view of the channel and reload it from the archive
+   * on disk. Detect-and-heal hook for readers that observe a session window
+   * missing an entry the write path already assigned an id past
+   * (psfn-framework-hgw3.1). Returns null when no archive exists.
+   */
+  reloadChannelFromDisk(channelId: string): { maxEntryId: number; lastMessageEntryId: number | null } | null {
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    this.channels.delete(sessionId);
+    if (sessionId !== channelId) {
+      this.channels.delete(channelId);
+    }
+    // The stale window being healed may have come FROM the shared tail;
+    // poison it so the heal recapture reads the journal and repopulates.
+    this.invalidateSessionTail(channelId, 'reload_channel_from_disk');
+    const loaded = this.ensureChannelFullyLoaded(channelId);
+    if (!loaded) return null;
+    return {
+      maxEntryId: loaded.nextId - 1,
+      lastMessageEntryId: loaded.entries.at(-1)?.id ?? null,
+    };
   }
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);
@@ -854,6 +1042,8 @@ export class SessionStore implements TranscriptSearchPort {
       ));
 
       this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      // Rewrites must invalidate the shared tail, never patch it.
+      this.invalidateSessionTail(cache.channelId, 'cogsec_tombstone_rewrite');
       const reloaded = this.journalRuntime.loadChannel(archive);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
@@ -988,6 +1178,8 @@ export class SessionStore implements TranscriptSearchPort {
       ));
 
       this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      // Rewrites must invalidate the shared tail, never patch it.
+      this.invalidateSessionTail(cache.channelId, 'cogsec_compaction_invalidation');
       const reloaded = this.journalRuntime.loadChannel(archive);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
@@ -1045,6 +1237,8 @@ export class SessionStore implements TranscriptSearchPort {
 
       if (regeneratedIds.length > 0) {
         this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+        // Rewrites must invalidate the shared tail, never patch it.
+        this.invalidateSessionTail(cache.channelId, 'cogsec_compaction_regeneration');
         const reloaded = this.journalRuntime.loadChannel(archive);
         const sessionKey = this.resolveCacheSessionKey(cache);
         this.channels.set(sessionKey, reloaded);
@@ -1256,6 +1450,9 @@ export class SessionStore implements TranscriptSearchPort {
           throw error;
         }
 
+        // Redact/restore changes the visible entry set: invalidate the shared
+        // tail rather than patching it (readers repopulate post-filtering).
+        this.invalidateSessionTail(channelId, `turn_tombstone_${action}`);
         const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
         if (full) {
           full.entries = this.applyTurnTombstonesToEntries(full.entries, full.turnTombstones);

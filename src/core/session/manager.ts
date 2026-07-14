@@ -51,6 +51,7 @@ import {
   shouldPersistSessionChannel,
   createCompactionBoundaryStore,
 } from './manager/compaction-boundary-store.js';
+import { createSessionTailReadStore } from './manager/session-tail-read-store.js';
 import {
   collectRecentEntriesWithinTokenBudget,
   isNonConversationalSessionEntry,
@@ -996,6 +997,17 @@ export class SessionManager {
   }
 
   /**
+   * Force the session store to drop and reload the channel's in-memory view
+   * from disk. Heal hook for a captured session window that is missing entries
+   * the write path already assigned ids past (psfn-framework-hgw3.1).
+   */
+  reconcileSessionChannelFromDisk(
+    channelId: string,
+  ): { maxEntryId: number; lastMessageEntryId: number | null } | null {
+    return this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
+  }
+
+  /**
    * Capture the turn's session-context snapshot through the single derivation
    * path (context-builder captureTurnSessionContext). The turn pipeline calls
    * this once pre-turn (feeding the retrieval query and the persisted
@@ -1016,6 +1028,19 @@ export class SessionManager {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+    // Shared hot tail (psfn-framework-hgw3.5): when the tail cache is enabled
+    // and serves a window covering the just-recorded entry, the capture's
+    // recent-window reads consult it first (merging with journal reads by
+    // entry id, tail winning). Null keeps the journal-only path byte-identical
+    // — including the tail-behind fallback required by the hgw3.1 heal guard.
+    const tailWindow = await this.store.fetchSessionTailWindow(resolvedChannelId, {
+      ...(input.excludeSessionEntryId !== undefined
+        ? { expectedMinEntryId: input.excludeSessionEntryId }
+        : {}),
+    });
+    const tailReadStore = tailWindow
+      ? createSessionTailReadStore(this.store, resolvedChannelId, tailWindow)
+      : null;
     return captureTurnSessionContext({
       channelId: resolvedChannelId,
       sourceChannelId,
@@ -1024,8 +1049,10 @@ export class SessionManager {
       continuityFallbackUserIds: input.continuityFallbackUserIds ?? [],
       turnBudgetCharacteristics: input.turnBudgetCharacteristics,
       config: this.config,
-      store: this.compactionBoundaryStore,
-      activityStore: this.store,
+      store: tailReadStore
+        ? createCompactionBoundaryStore(tailReadStore)
+        : this.compactionBoundaryStore,
+      activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,
       focusCompactionRanges: this.getFocusCompactionRanges(resolvedChannelId),
       focusKnowledgeTexts: this.getFocusKnowledgeTexts(resolvedChannelId),

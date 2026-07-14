@@ -29,6 +29,45 @@ export interface IcpFatigueReservationReconciliation {
   durableReservation: IcpConversationCorrelation | null;
 }
 
+/**
+ * Keep the write-ahead fatigue payload inside its strict recovery schema.
+ * Turn correlation carries additional live observability fields that are not
+ * part of the durable replay contract and must not leak into recovery state.
+ */
+export function projectFatiguePendingSpendCorrelation(
+  correlation: CorrelationMetadata,
+): Partial<CorrelationMetadata> {
+  return {
+    ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+    ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+    ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+    ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
+    ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+    ...(correlation.originType ? { originType: correlation.originType } : {}),
+    ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
+    callType: correlation.callType,
+    ...(correlation.purpose ? { purpose: correlation.purpose } : {}),
+    ...(correlation.viewerTrustLevel
+      ? { viewerTrustLevel: correlation.viewerTrustLevel }
+      : {}),
+    ...(correlation.requesterProvenance
+      ? { requesterProvenance: correlation.requesterProvenance }
+      : {}),
+    ...(correlation.viewerChannelPrivacy
+      ? { viewerChannelPrivacy: correlation.viewerChannelPrivacy }
+      : {}),
+    ...(correlation.viewerIsDirectMessage !== undefined
+      ? { viewerIsDirectMessage: correlation.viewerIsDirectMessage }
+      : {}),
+    ...(correlation.embodimentContext
+      ? { embodimentContext: structuredClone(correlation.embodimentContext) }
+      : {}),
+    ...(correlation.icpCorrelation
+      ? { icpCorrelation: { ...correlation.icpCorrelation } }
+      : {}),
+  };
+}
+
 /** Reacquire the stable turn's pending lease before replaying a durable response. */
 export async function resumeIcpFatigueRegulation(input: {
   correlation: IcpConversationCorrelation;

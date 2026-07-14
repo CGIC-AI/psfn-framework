@@ -109,12 +109,38 @@ export class IcpCertificationAgentProcess {
   }
 
   async snapshot(): Promise<Record<string, unknown>> {
-    return await this.request('snapshot') as Record<string, unknown>;
+    return await this.request({ type: 'snapshot' }) as Record<string, unknown>;
+  }
+
+  async publishAvailability(
+    state: 'open_to_chat' | 'busy' | 'do_not_disturb',
+  ): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'publish_availability', state }) as Record<string, unknown>;
+  }
+
+  async submitInitiation(
+    source: 'free_time' | 'weighted_thought',
+    sourceRecordId: string,
+  ): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'submit_initiation', source, sourceRecordId }) as
+      Record<string, unknown>;
+  }
+
+  async channelSnapshot(channelId: string): Promise<Record<string, unknown>> {
+    return await this.request({ type: 'channel_snapshot', channelId }) as Record<string, unknown>;
+  }
+
+  async forceCompaction(channelId: string): Promise<unknown> {
+    return await this.request({ type: 'force_compaction', channelId });
+  }
+
+  async appendCompactionMarker(channelId: string): Promise<void> {
+    await this.request({ type: 'append_compaction_marker', channelId });
   }
 
   async stop(): Promise<void> {
     if (!this.child.connected) return;
-    await this.request('shutdown');
+    await this.request({ type: 'shutdown' });
   }
 
   forceStop(): void {
@@ -141,12 +167,12 @@ export class IcpCertificationAgentProcess {
     else waiter.reject(new Error(message.error ?? 'ICP certification agent request failed'));
   }
 
-  private async request(type: 'ping' | 'shutdown' | 'snapshot'): Promise<unknown> {
+  private async request(command: Record<string, unknown> & { type: string }): Promise<unknown> {
     const id = ++this.nextRequestId;
     const result = new Promise<unknown>((resolveRequest, rejectRequest) => {
       this.pending.set(id, { resolve: resolveRequest, reject: rejectRequest });
     });
-    this.child.send({ id, type });
+    this.child.send({ id, ...command });
     return await result;
   }
 }
@@ -154,6 +180,7 @@ export class IcpCertificationAgentProcess {
 export interface IcpCertificationProcessHarness {
   agents: readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess];
   gateway: GatewayServer;
+  restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
   stop(): Promise<void>;
 }
 
@@ -254,7 +281,7 @@ export async function startIcpCertificationProcessHarness(input: {
     eventBus,
   });
   gateway.start();
-  const agents: IcpCertificationAgentProcess[] = [];
+  let agents: IcpCertificationAgentProcess[] = [];
   try {
     await waitForSocket(input.fixture.gatewaySocketPath);
     for (const companion of input.fixture.companions) {
@@ -271,11 +298,24 @@ export async function startIcpCertificationProcessHarness(input: {
   }
   let stopped = false;
   return {
-    agents: agents as unknown as readonly [
-      IcpCertificationAgentProcess,
-      IcpCertificationAgentProcess,
-    ],
+    get agents() {
+      return agents as unknown as readonly [
+        IcpCertificationAgentProcess,
+        IcpCertificationAgentProcess,
+      ];
+    },
     gateway,
+    async restartAgents() {
+      await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));
+      agents = [];
+      for (const companion of input.fixture.companions) {
+        agents.push(await IcpCertificationAgentProcess.start(companion));
+      }
+      return agents as unknown as readonly [
+        IcpCertificationAgentProcess,
+        IcpCertificationAgentProcess,
+      ];
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -288,4 +328,3 @@ export async function startIcpCertificationProcessHarness(input: {
     },
   };
 }
-

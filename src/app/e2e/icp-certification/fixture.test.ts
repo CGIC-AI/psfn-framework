@@ -47,6 +47,12 @@ describe('ICP certification production-shape fixture', () => {
       enabled: true,
       hardLimitUsd: 0.0004,
     });
+    expect(configA).toMatchObject({
+      compactionThresholdPct: 30,
+      modelRoster: {
+        chat: { contextWindow: 4_096, maxTokens: 1_024 },
+      },
+    });
     expect(existsSync(fixture.artifactsPath)).toBe(false);
   });
 });

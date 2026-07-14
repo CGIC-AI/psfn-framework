@@ -244,6 +244,9 @@ function buildOutboundUsageCorrelation(
     );
   }
   const charge = getRunChargeSnapshot();
+  const canonicalIcpChargeLane = resolvedCorrelation?.icpCorrelation
+    ? resolvedCorrelation.chargeLane
+    : undefined;
   return {
     ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
     ...(resolvedCorrelation?.sessionId ? { sessionId: resolvedCorrelation.sessionId } : {}),
@@ -259,9 +262,11 @@ function buildOutboundUsageCorrelation(
     ...(resolvedCorrelation?.purpose ? { purpose: resolvedCorrelation.purpose } : {}),
     ...(resolvedCorrelation?.service ? { service: resolvedCorrelation.service } : {}),
     ...(resolvedCorrelation?.process ? { process: resolvedCorrelation.process } : {}),
-    ...(charge?.lane ? { chargeLane: charge.lane } : (resolvedCorrelation?.chargeLane
-      ? { chargeLane: resolvedCorrelation.chargeLane }
-      : {})),
+    ...(canonicalIcpChargeLane
+      ? { chargeLane: canonicalIcpChargeLane }
+      : (charge?.lane ? { chargeLane: charge.lane } : (resolvedCorrelation?.chargeLane
+        ? { chargeLane: resolvedCorrelation.chargeLane }
+        : {}))),
     ...(charge?.surface
       ? { chargeSurface: charge.surface }
       : (resolvedCorrelation?.chargeSurface ? { chargeSurface: resolvedCorrelation.chargeSurface } : {})),

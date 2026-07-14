@@ -6,6 +6,8 @@ import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
@@ -322,6 +324,48 @@ describe('GatewayClient streaming', () => {
         rootInitiationId: icpCorrelation.rootInitiationId,
         icpCorrelation,
       },
+    });
+  });
+
+  it('does not overwrite the canonical ICP charge lane with the active behavioral run lane', async () => {
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+
+    await runWithChargeContext({
+      chargePolicy: makeTestChargePolicyConfig(),
+      lane: 'interactive',
+      runId: 'interactive-icp-turn',
+    }, async () => {
+      void client.stream({
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        correlation: {
+          callType: 'tool',
+          purpose: 'tool.continuation',
+          icpCorrelation,
+        },
+      });
+
+      const request = conn.sent[0] as { params: Record<string, unknown> };
+      expect(request.params).toMatchObject({
+        chargeLane: 'companion_social',
+        icpCorrelation,
+      });
     });
   });
 

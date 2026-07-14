@@ -16,9 +16,11 @@ export interface IcpSocialChargeBalanceReader {
 }
 
 /**
- * Content-free deterministic initiation pressure. Cost remains a separate W7
- * authority, so this composite deliberately reports costAllows=false until
- * that owner is supplied rather than manufacturing a permissive fallback.
+ * Content-free deterministic initiation pressure. Conversation cost is
+ * enforced separately at the gateway's canonical model-usage reservation
+ * boundary. A new candidate has no conversation spend to inspect yet, so this
+ * gate admits it and lets the first attributable model call reserve (or fail
+ * closed) under the owner-file cost policy.
  */
 export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapacityPolicyAuthority {
   constructor(
@@ -49,7 +51,10 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
     const policy = evaluateFatiguePolicy({
       config: this.chargePolicy.fatigue,
       peer: {
-        contactId: input.candidate.peerContactId,
+        // Private sender-local contact IDs are intentionally absent from the
+        // shared candidate projection. The authenticated peer companion UUID
+        // is the stable content-free relationship-pressure identity here.
+        contactId: input.candidate.peerCompanionId,
         isMachineIntelligence: true,
         relationshipType: input.senderRelationship.relationshipType,
         trustLevel: input.senderRelationship.trustLevel,
@@ -86,7 +91,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
         rollingSocialSpent + socialChargeCost <=
         this.chargePolicy.runChargeQuotaByLane.companion_social,
       fatigueAllows: spent < policy.hardCap,
-      costAllows: false,
+      costAllows: true,
     };
   }
 }

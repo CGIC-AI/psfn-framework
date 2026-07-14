@@ -12,12 +12,32 @@ import { createAgentPersistenceRuntime } from '../../../persistence/runtime-fact
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { prepareAgentStartupContext } from '../../agent/startup-context.js';
 import { registerGatewayMessageHandlers } from '../../agent/gateway-message-handlers.js';
+import { createAgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
+import { createIcpInitiationSourceRuntime } from '../../../core/icp/initiation-source-runtime.js';
+import { createLlmIcpInitiationConsentEvaluator } from '../../../core/icp/initiation-consent-evaluator.js';
+import { runAutoCompaction } from '../../../core/session/manager/compaction-service.js';
+import { createCompactionBoundaryStore } from '../../../core/session/manager/compaction-boundary-store.js';
+import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
+import { countTokens } from '../../../primitives/llm/tokens.js';
 import { CERTIFICATION_EMBEDDING_DIMS } from './constants.js';
 
-interface AgentProcessCommand {
+type AgentProcessCommand = {
   id: number;
   type: 'ping' | 'shutdown' | 'snapshot';
-}
+} | {
+  id: number;
+  type: 'publish_availability';
+  state: 'open_to_chat' | 'busy' | 'do_not_disturb';
+} | {
+  id: number;
+  type: 'submit_initiation';
+  source: 'free_time' | 'weighted_thought';
+  sourceRecordId: string;
+} | {
+  channelId: string;
+  id: number;
+  type: 'channel_snapshot' | 'force_compaction' | 'append_compaction_marker';
+};
 
 interface AgentProcessReply {
   id?: number;
@@ -120,7 +140,7 @@ async function main(): Promise<void> {
     contactStore,
     episodicStore: persistence.episodicStore,
   });
-  registerGatewayMessageHandlers({
+  const registeredHandlers = registerGatewayMessageHandlers({
     gateway,
     agentLoop: agent,
     shardManager: {
@@ -135,6 +155,37 @@ async function main(): Promise<void> {
     trackSessionActivity: () => undefined,
     companionAuthorName: identity.card.data.name,
   });
+  const autonomy = createAgentFacingIcpAutonomyRuntime({
+    contactStore,
+    gateway,
+    command: {
+      execute: async request => {
+        const initiated = await registeredHandlers.icpTargetChannelInitiator.initiate(request);
+        return { disposition: initiated.disposition };
+      },
+    },
+  });
+  const candidateStore = persistence.icpInitiationCandidateStore;
+  if (!candidateStore) throw new Error('ICP certification agent requires a candidate store');
+  const sourceRuntime = createIcpInitiationSourceRuntime({
+    localCompanionId: companionId,
+    store: candidateStore,
+    peers: autonomy,
+    gateway,
+    consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
+    isExternalCompanionAuthorized: () => startup.capabilityRuntime.has('external.companion'),
+    policy: {
+      candidateDefaultTtlMs: startup.schedulerConfig.icpAutonomy.candidate.defaultTtlMs,
+      retryCadenceMs: startup.schedulerConfig.icpAutonomy.candidate.retryCadenceMs,
+      maxRetryAttempts: startup.schedulerConfig.icpAutonomy.candidate.maxRetryAttempts,
+      permitTtlMs: startup.schedulerConfig.icpAutonomy.permit.ttlMs,
+    },
+    eventBus: startup.eventBus,
+  });
+  const compactionStore = createCompactionBoundaryStore(
+    createIcpDeliveryProjectionStore(sessionRuntime.sessionStore),
+  );
+  let compactionMarkerIndex = 0;
   await startup.eventBus.emit('system.init', {});
   await startup.eventBus.emit('system.ready', {});
   reply({
@@ -167,6 +218,85 @@ async function main(): Promise<void> {
           });
           return;
         }
+        if (raw.type === 'publish_availability') {
+          const current = await autonomy.readOwnAvailability();
+          const lease = await autonomy.publishOwnAvailability({
+            state: raw.state,
+            expiresAtMs: Date.now() + 60_000,
+            revision: (current.lease?.revision ?? 0) + 1,
+          });
+          reply({ id: raw.id, ok: true, result: lease });
+          return;
+        }
+        if (raw.type === 'submit_initiation') {
+          const result = await sourceRuntime.submit({
+            source: raw.source,
+            peerContactId: peerContact.id,
+            preferredChannel: 'dm',
+            sourceRecordId: raw.sourceRecordId,
+            reasonSummary: `Private ${raw.source} certification motivation`,
+            cause: { kind: 'independent' },
+          });
+          reply({ id: raw.id, ok: true, result });
+          return;
+        }
+        if (raw.type === 'channel_snapshot') {
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              entries: sessionRuntime.sessionStore.getRecent(raw.channelId, 100),
+              memories: await persistence.memoryStore.getMemoriesByChannel(raw.channelId, 100),
+              summaries: sessionRuntime.sessionStore.getCompactionSummaries(raw.channelId),
+            },
+          });
+          return;
+        }
+        if (raw.type === 'force_compaction') {
+          const recent = compactionStore.getRecent(raw.channelId, 100);
+          const compaction = await runAutoCompaction({
+            channelId: raw.channelId,
+            recent,
+            channelVisibility: 'private',
+            systemTokens: countTokens(identity.systemPrompt),
+            llmProvider,
+            store: compactionStore,
+            config: startup.coreConfig,
+            eventBus: startup.eventBus,
+            promptRegistry: null,
+            preCompactionExtractionHandler: null,
+          });
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              compaction: {
+                compacted: compaction.compacted,
+                compactedCount: compaction.compactedCount ?? 0,
+              },
+              compactionThresholdPct: startup.coreConfig.compactionThresholdPct,
+              recentCount: recent.length,
+              summaries: sessionRuntime.sessionStore.getCompactionSummaries(raw.channelId),
+            },
+          });
+          return;
+        }
+        if (raw.type === 'append_compaction_marker') {
+          compactionMarkerIndex += 1;
+          sessionRuntime.sessionStore.append({
+            channelId: raw.channelId,
+            role: compactionMarkerIndex % 2 === 0 ? 'assistant' : 'user',
+            content: 'deterministic certification continuity marker '.repeat(20).trim(),
+            authorId: compactionMarkerIndex % 2 === 0 ? companionId : 'certification-fixture',
+            authorName: compactionMarkerIndex % 2 === 0
+              ? identity.card.data.name
+              : 'Certification Fixture',
+            timestamp: Date.now() + compactionMarkerIndex,
+            channelVisibility: 'private',
+          });
+          reply({ id: raw.id, ok: true });
+          return;
+        }
         await agent.waitForIdle();
         gateway.destroy();
         await fatigueReservations.close();
@@ -177,7 +307,7 @@ async function main(): Promise<void> {
         reply({
           id: raw.id,
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
         });
       }
     })();

@@ -100,6 +100,7 @@ import {
 } from './turn-execution/post-turn-scheduling.js';
 import {
   invokeWithCompanionSocialCharge,
+  projectFatiguePendingSpendCorrelation,
   reserveIcpFatigueRegulation,
   resumeIcpFatigueRegulation,
 } from './turn-execution/icp-fatigue-regulation.js';
@@ -921,6 +922,7 @@ export async function handleMessageForTurn(
         turnCorrelationBase = {
           ...turnCorrelationBase,
           icpCorrelation: message.routing.icpCorrelation,
+          chargeLane: message.routing.icpCorrelation.chargeLane,
         };
       }
       if (fatigueDecision.shouldRecordSpend && message.routing?.icpCorrelation) {
@@ -940,6 +942,7 @@ export async function handleMessageForTurn(
         turnCorrelationBase = {
           ...turnCorrelationBase,
           icpCorrelation: reconciliation.correlation,
+          chargeLane: reconciliation.correlation.chargeLane,
         };
       }
       emitFatigueDecision({
@@ -1356,9 +1359,11 @@ export async function handleMessageForTurn(
             hardLimit: fatigueDecision.evaluation.stateAfter.allowance,
             overchargeLimit: fatigueDecision.evaluation.stateAfter.overchargeAllowance,
           },
-          correlation: runtime.withCorrelationPurpose(
-            turnCorrelationBase,
-            'agent.fatigue.record',
+          correlation: projectFatiguePendingSpendCorrelation(
+            runtime.withCorrelationPurpose(
+              turnCorrelationBase,
+              'agent.fatigue.record',
+            ),
           ),
         }
       : recoveredResponse?.metadata.fatiguePendingSpend;

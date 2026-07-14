@@ -61,13 +61,13 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
       socialPressureAllows: false,
       chargeAllows: true,
       fatigueAllows: true,
-      costAllows: false,
+      costAllows: true,
     });
     await expect(authority.resolve(input())).resolves.toEqual({
       socialPressureAllows: false,
       chargeAllows: true,
       fatigueAllows: false,
-      costAllows: false,
+      costAllows: true,
     });
     expect(readInitiationPressure).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -103,7 +103,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
       socialPressureAllows: true,
       chargeAllows: false,
       fatigueAllows: true,
-      costAllows: false,
+      costAllows: true,
     });
   });
 

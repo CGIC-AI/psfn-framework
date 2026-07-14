@@ -102,11 +102,28 @@ function configureOwnerFiles(systemDataDir: string): void {
   const settingsPath = join(systemDataDir, 'settings.json');
   const settings = readJson(settingsPath);
   settings.extractionInterval = 1;
-  settings.extractionThresholdPct = 1;
-  settings.compactionThresholdPct = 2;
+  settings.extractionThresholdPct = 10;
+  settings.compactionThresholdPct = 30;
   settings.sessionHistoryBudgetPct = 2;
   settings.memoryRetrievalBudgetPct = 2;
   writeJson(settingsPath, settings);
+
+  const modelsPath = join(systemDataDir, 'models.json');
+  const models = readJson(modelsPath);
+  const primaryModel = (models.models as Array<Record<string, unknown>>).find(
+    model => model.id === 'primary',
+  );
+  if (!primaryModel) throw new Error('Certification model owner requires the primary model');
+  primaryModel.capabilities = {
+    ...(primaryModel.capabilities as Record<string, unknown>),
+    maxOutputTokens: 1_024,
+    contextWindow: 4_096,
+  };
+  primaryModel.tuning = {
+    ...(primaryModel.tuning as Record<string, unknown>),
+    maxOutputTokens: 1_024,
+  };
+  writeJson(modelsPath, models);
 
   const capabilityPath = join(systemDataDir, 'capability-tier.json');
   writeJson(capabilityPath, { tier: 'autonomous', customTokens: [] });

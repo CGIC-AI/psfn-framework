@@ -9,6 +9,7 @@ import { createPostgresPool } from '../../../persistence/postgres.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_DM_CHANNEL,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
 } from './constants.js';
@@ -19,6 +20,29 @@ import {
 } from './process-harness.js';
 
 const TIMEOUT_MS = 120_000;
+
+interface ChannelSnapshot {
+  entries: Array<{
+    authorId?: string;
+    content: string;
+    role: string;
+  }>;
+  memories: Array<{ text: string }>;
+  summaries: Array<{ summary: string }>;
+}
+
+async function waitForChannelEntries(
+  agent: IcpCertificationProcessHarness['agents'][number],
+  minimum: number,
+): Promise<ChannelSnapshot> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const snapshot = await agent.channelSnapshot(CERTIFICATION_DM_CHANNEL) as unknown as ChannelSnapshot;
+    if (snapshot.entries.length >= minimum) return snapshot;
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for ${minimum} entries on ${CERTIFICATION_DM_CHANNEL}`);
+}
 
 describe('ICP certification real process harness', () => {
   let postgres: PostgresTestHarness | null = null;
@@ -91,5 +115,46 @@ describe('ICP certification real process harness', () => {
     } finally {
       await pool.end();
     }
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.submitInitiation('free_time', 'free-time:first')).resolves.toMatchObject({
+      outcome: 'sent',
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.all([
+        agentA.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+        agentB.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
+      ]);
+    }
+    const [sender, recipient] = await Promise.all([
+      waitForChannelEntries(agentA, 22),
+      waitForChannelEntries(agentB, 22),
+    ]);
+    expect(sender.entries.some(entry => entry.role === 'assistant')).toBe(true);
+    expect(recipient.entries.some(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
+    ))).toBe(true);
+    expect(JSON.stringify({ sender, recipient })).not.toContain('Private free_time certification motivation');
+
+    const compactions = await Promise.all([
+      agentA.forceCompaction(CERTIFICATION_DM_CHANNEL),
+      agentB.forceCompaction(CERTIFICATION_DM_CHANNEL),
+    ]);
+    expect(compactions).toEqual([
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+      expect.objectContaining({ compaction: expect.objectContaining({ compacted: true }) }),
+    ]);
+    const restarted = await processes.restartAgents();
+    const [restartedA, restartedB] = await Promise.all([
+      waitForChannelEntries(restarted[0], 22),
+      waitForChannelEntries(restarted[1], 22),
+    ]);
+    expect(restartedA.summaries.length).toBeGreaterThan(0);
+    expect(restartedB.summaries.length).toBeGreaterThan(0);
+    expect(restartedA.entries.some(entry => entry.role === 'assistant')).toBe(true);
+    expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
   }, TIMEOUT_MS);
 });

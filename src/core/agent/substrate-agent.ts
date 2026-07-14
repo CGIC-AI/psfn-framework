@@ -880,8 +880,24 @@ export class SubstrateAgent {
    * Inject a steering message mid-run. Delivered after current tool execution,
    * remaining tool calls are skipped, and the message is added to context
    * before the next LLM call. No-op if agent isn't streaming.
+   * Input arriving during an exclusive candidate turn is deferred as a fresh
+   * ordinary turn so it cannot steer the candidate-owned provider loop.
    */
   async steer(message: SubstrateMessage): Promise<void> {
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'steer',
+    }, async ({ deferredFromExclusive }) => {
+      if (deferredFromExclusive) {
+        await this.handleMessageUnderReservation(message);
+        return;
+      }
+      await this.steerActiveRun(message);
+    });
+  }
+
+  private async steerActiveRun(message: SubstrateMessage): Promise<void> {
     if (!this.agent.state.isStreaming) return;
     const authorContext = await this.resolveAuthorContext(message);
     this.turnSupportRuntime.recordUserMessage(
@@ -905,8 +921,24 @@ export class SubstrateAgent {
    *
    * Intention appraisal follow-ups are injected as internal Whisper notes to self
    * and are never persisted into the external session journal.
+   * Input arriving during an exclusive candidate turn is deferred as a fresh
+   * ordinary turn rather than entering the candidate follow-up queue.
    */
   async followUp(message: SubstrateMessage): Promise<void> {
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'follow-up',
+    }, async ({ deferredFromExclusive }) => {
+      if (deferredFromExclusive) {
+        await this.handleMessageUnderReservation(message);
+        return;
+      }
+      await this.followUpActiveRun(message);
+    });
+  }
+
+  private async followUpActiveRun(message: SubstrateMessage): Promise<void> {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
       this.agent.followUp({
         role: 'custom',
@@ -970,6 +1002,14 @@ export class SubstrateAgent {
    * in later turns but must not itself trigger a reply.
    */
   async observeMessage(message: SubstrateMessage): Promise<void> {
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'observation',
+    }, () => this.observeMessageUnderReservation(message));
+  }
+
+  private async observeMessageUnderReservation(message: SubstrateMessage): Promise<void> {
     await this.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
     const turnId = createTurnId();
@@ -1129,6 +1169,7 @@ export class SubstrateAgent {
 
   /** Abort the current prompt, cancelling streaming and tool execution */
   abort(): void {
+    this.turnRunReservation.assertActiveRunMutationAllowed('abort');
     this.agent.abort();
   }
 
@@ -1137,6 +1178,7 @@ export class SubstrateAgent {
     deliveryLifecycle?: TurnDeliveryLifecycle,
   ): Promise<AgentResponse> {
     return this.turnRunReservation.runShared(
+      { kind: 'ordinary-turn', sourceId: message.id },
       () => this.handleMessageUnderReservation(message, deliveryLifecycle),
     );
   }
@@ -1377,7 +1419,10 @@ export class SubstrateAgent {
   }
 
   async handleIcpAutonomyCandidateTurn(message: SubstrateMessage): Promise<AgentResponse> {
-    return this.turnRunReservation.runExclusive(async () => {
+    return this.turnRunReservation.runExclusive({
+      kind: 'candidate-turn',
+      sourceId: message.id,
+    }, async () => {
       const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
       if (!candidateOrigin) {
         throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');

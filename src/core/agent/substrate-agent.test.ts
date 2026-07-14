@@ -6238,16 +6238,95 @@ describe('SubstrateAgent steering + follow-up', () => {
     idleSpy.mockRestore();
   });
 
+  it('preserves immediate follow-up and steer delivery for an ordinary active run', async () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+    let markPromptEntered!: () => void;
+    let releasePrompt!: () => void;
+    const promptEntered = new Promise<void>((resolve) => {
+      markPromptEntered = resolve;
+    });
+    const promptRelease = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      this.state.isStreaming = true;
+      markPromptEntered();
+      await promptRelease;
+      this.state.isStreaming = false;
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: 'ordinary turn complete' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
+    const steerSpy = vi.spyOn(Agent.prototype, 'steer');
+    const ordinaryRun = agent.handleMessage(makeMessage({ id: 'ordinary-active-ingress-owner' }));
+    await promptEntered;
+
+    await Promise.all([
+      agent.followUp(makeMessage({
+        id: 'ordinary-active-follow-up',
+        content: 'ordinary active follow-up',
+      })),
+      agent.steer(makeMessage({
+        id: 'ordinary-active-steer',
+        content: 'ordinary active steer',
+      })),
+    ]);
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user',
+      content: 'ordinary active follow-up',
+    }));
+    expect(steerSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user',
+      content: 'ordinary active steer',
+    }));
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'ordinary active follow-up',
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      expect.objectContaining({ sourceMessageId: 'ordinary-active-follow-up' }),
+    );
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'ordinary active steer',
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      expect.objectContaining({ sourceMessageId: 'ordinary-active-steer' }),
+    );
+
+    releasePrompt();
+    await ordinaryRun;
+    followUpSpy.mockRestore();
+    steerSpy.mockRestore();
+  });
+
   it('reserves one agent owner across candidate pre-turn work and releases after cancellation', async () => {
+    const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(),
       makeMockLLMProvider(),
-      makeMockSessionManager(),
+      sessionManager,
       'test',
       makeConfig({ capabilityTier: 'autonomous' }),
     );
+    const notifyProbe = makeExtendedProbeTool('notify');
     agent.registerTool(withCapabilityRequirement(
-      makeExtendedProbeTool('notify'),
+      notifyProbe,
       'external.companion',
     ), 'extended');
     const nowMs = Date.now();
@@ -6390,6 +6469,393 @@ describe('SubstrateAgent steering + follow-up', () => {
     releaseOrdinary();
     await Promise.all([activeOrdinaryRun, queuedCandidateRun, lateOrdinaryRun]);
     expect(fairnessOrder).toEqual(['ordinary-active', 'candidate-writer', 'ordinary-late']);
+
+    let markProviderEntered!: () => void;
+    let releaseProvider!: () => void;
+    const providerEntered = new Promise<void>((resolve) => {
+      markProviderEntered = resolve;
+    });
+    const providerRelease = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      expect(agent.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
+      this.state.isStreaming = true;
+      markProviderEntered();
+      await providerRelease;
+      if (this.hasQueuedMessages()) {
+        const candidateNotify = agent.getActiveTurnTools().find(tool => tool.name === 'notify');
+        await candidateNotify?.execute('foreign-ingress-candidate-notify', {
+          action: 'send',
+          target_kind: 'companion',
+          contact_id: candidate.peerContactId,
+          initiation_permit: permit.permitId,
+        });
+      }
+      this.state.isStreaming = false;
+      appendAssistant(this, 'candidate provider complete');
+    });
+    const directFollowUp = vi.spyOn(Agent.prototype, 'followUp');
+    const directSteer = vi.spyOn(Agent.prototype, 'steer');
+    const directAbort = vi.spyOn(Agent.prototype, 'abort');
+    const promptCallsBeforeIngress = promptSpy.mock.calls.length;
+    const candidateProviderRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await providerEntered;
+    const providerOrdinaryToolSets: string[][] = [];
+    for (let index = 0; index < 3; index += 1) {
+      promptSpy.mockImplementationOnce(async function (this: Agent) {
+        providerOrdinaryToolSets.push(agent.getActiveTurnTools().map(tool => tool.name));
+        appendAssistant(this, `provider deferred ordinary ${index + 1}`);
+      });
+    }
+    const recordsBeforeIngress = sessionManager.recordUserMessage.mock.calls.length;
+    const followMessage = makeMessage({
+      id: 'foreign-follow-up-during-candidate-provider',
+      channelId: 'discord:foreign-follow-up',
+      content: 'foreign follow-up input',
+    });
+    const steerMessage = makeMessage({
+      id: 'foreign-steer-during-candidate-provider',
+      channelId: 'discord:foreign-steer',
+      content: 'foreign steer input',
+    });
+    const queuedMessage = makeMessage({
+      id: 'foreign-message-during-candidate-provider',
+      channelId: 'discord:foreign-message',
+      content: 'foreign queued input',
+    });
+    const observedMessage = makeMessage({
+      id: 'foreign-observation-during-candidate-provider',
+      channelId: 'discord:foreign-observation',
+      content: 'foreign observed input',
+    });
+    let followSettled = false;
+    let steerSettled = false;
+    let queuedSettled = false;
+    let observationSettled = false;
+    const followRun = agent.followUp(followMessage).finally(() => {
+      followSettled = true;
+    });
+    const steerRun = agent.steer(steerMessage).finally(() => {
+      steerSettled = true;
+    });
+    const queuedRun = agent.handleMessage(queuedMessage).finally(() => {
+      queuedSettled = true;
+    });
+    const observationRun = agent.observeMessage(observedMessage).finally(() => {
+      observationSettled = true;
+    });
+    let abortError = '';
+    try {
+      agent.abort();
+    } catch (error) {
+      abortError = String(error);
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const ingressSnapshot = {
+      followSettled,
+      steerSettled,
+      queuedSettled,
+      observationSettled,
+      directFollowUpCalls: directFollowUp.mock.calls.length,
+      directSteerCalls: directSteer.mock.calls.length,
+      directAbortCalls: directAbort.mock.calls.length,
+      abortError,
+      newRecords: sessionManager.recordUserMessage.mock.calls.length
+        - recordsBeforeIngress,
+    };
+    releaseProvider();
+    await Promise.all([candidateProviderRun, followRun, steerRun, queuedRun, observationRun]);
+    directFollowUp.mockRestore();
+    directSteer.mockRestore();
+    directAbort.mockRestore();
+
+    expect(ingressSnapshot).toEqual({
+      followSettled: false,
+      steerSettled: false,
+      queuedSettled: false,
+      observationSettled: false,
+      directFollowUpCalls: 0,
+      directSteerCalls: 0,
+      directAbortCalls: 0,
+      abortError: expect.stringContaining('candidate-owned agent run'),
+      newRecords: 0,
+    });
+    const ingressPromptCalls = promptSpy.mock.calls.slice(promptCallsBeforeIngress);
+    expect(ingressPromptCalls).toHaveLength(4);
+    expect(JSON.stringify(ingressPromptCalls[1]?.[0])).toContain('foreign follow-up input');
+    expect(JSON.stringify(ingressPromptCalls[2]?.[0])).toContain('foreign steer input');
+    expect(JSON.stringify(ingressPromptCalls[3]?.[0])).toContain('foreign queued input');
+    expect(providerOrdinaryToolSets).toHaveLength(3);
+    for (const toolNames of providerOrdinaryToolSets) {
+      expect(toolNames).not.toContain('notify');
+    }
+    expect(notifyProbe.execute).not.toHaveBeenCalled();
+    const foreignRecords = sessionManager.recordUserMessage.mock.calls.slice(recordsBeforeIngress);
+    expect(foreignRecords.map(call => call[1])).toEqual([
+      'foreign follow-up input',
+      'foreign steer input',
+      'foreign queued input',
+      'foreign observed input',
+    ]);
+    expect(JSON.stringify(foreignRecords)).not.toContain(candidate.candidateId);
+
+    const assertDeferredIngressPhase = async (input: {
+      phase: 'tool' | 'post-turn';
+      candidateRun: Promise<unknown>;
+      release: () => void;
+    }): Promise<void> => {
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const recordsBefore = sessionManager.recordUserMessage.mock.calls.length;
+      const notifyCallsBefore = vi.mocked(notifyProbe.execute).mock.calls.length;
+      const ordinaryToolSets: string[][] = [];
+      for (let index = 0; index < 3; index += 1) {
+        promptSpy.mockImplementationOnce(async function (this: Agent) {
+          ordinaryToolSets.push(agent.getActiveTurnTools().map(tool => tool.name));
+          appendAssistant(this, `${input.phase} deferred ordinary ${index + 1}`);
+        });
+      }
+      const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
+      const steerSpy = vi.spyOn(Agent.prototype, 'steer');
+      const messages = {
+        follow: makeMessage({
+          id: `foreign-follow-up-during-candidate-${input.phase}`,
+          channelId: `discord:foreign-follow-up-${input.phase}`,
+          content: `foreign ${input.phase} follow-up input`,
+        }),
+        steer: makeMessage({
+          id: `foreign-steer-during-candidate-${input.phase}`,
+          channelId: `discord:foreign-steer-${input.phase}`,
+          content: `foreign ${input.phase} steer input`,
+        }),
+        queued: makeMessage({
+          id: `foreign-message-during-candidate-${input.phase}`,
+          channelId: `discord:foreign-message-${input.phase}`,
+          content: `foreign ${input.phase} queued input`,
+        }),
+        observation: makeMessage({
+          id: `foreign-observation-during-candidate-${input.phase}`,
+          channelId: `discord:foreign-observation-${input.phase}`,
+          content: `foreign ${input.phase} observed input`,
+        }),
+      };
+      let settled = 0;
+      const ingressRuns = [
+        agent.followUp(messages.follow).finally(() => { settled += 1; }),
+        agent.steer(messages.steer).finally(() => { settled += 1; }),
+        agent.handleMessage(messages.queued).finally(() => { settled += 1; }),
+        agent.observeMessage(messages.observation).finally(() => { settled += 1; }),
+      ];
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const blockedSnapshot = {
+        settled,
+        followUpCalls: followUpSpy.mock.calls.length,
+        steerCalls: steerSpy.mock.calls.length,
+        newRecords: sessionManager.recordUserMessage.mock.calls.length - recordsBefore,
+        newNotifyCalls: vi.mocked(notifyProbe.execute).mock.calls.length - notifyCallsBefore,
+      };
+
+      input.release();
+      await Promise.all([input.candidateRun, ...ingressRuns]);
+      followUpSpy.mockRestore();
+      steerSpy.mockRestore();
+
+      expect(blockedSnapshot).toEqual({
+        settled: 0,
+        followUpCalls: 0,
+        steerCalls: 0,
+        newRecords: 0,
+        newNotifyCalls: 0,
+      });
+      const phasePromptCalls = promptSpy.mock.calls.slice(promptCallsBefore);
+      expect(phasePromptCalls).toHaveLength(3);
+      expect(JSON.stringify(phasePromptCalls[0]?.[0])).toContain(messages.follow.content);
+      expect(JSON.stringify(phasePromptCalls[1]?.[0])).toContain(messages.steer.content);
+      expect(JSON.stringify(phasePromptCalls[2]?.[0])).toContain(messages.queued.content);
+      expect(ordinaryToolSets).toHaveLength(3);
+      for (const toolNames of ordinaryToolSets) {
+        expect(toolNames).not.toContain('notify');
+      }
+      const phaseRecords = sessionManager.recordUserMessage.mock.calls.slice(recordsBefore);
+      expect(phaseRecords.map(call => call[1])).toEqual([
+        messages.follow.content,
+        messages.steer.content,
+        messages.queued.content,
+        messages.observation.content,
+      ]);
+      expect(JSON.stringify(phaseRecords)).not.toContain(candidate.candidateId);
+      expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+    };
+
+    let markToolEntered!: () => void;
+    let releaseTool!: () => void;
+    const toolEntered = new Promise<void>((resolve) => {
+      markToolEntered = resolve;
+    });
+    const toolRelease = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    vi.mocked(notifyProbe.execute).mockImplementationOnce(async () => {
+      markToolEntered();
+      await toolRelease;
+      return { content: [{ type: 'text', text: 'candidate tool complete' }], details: {} };
+    });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      const candidateNotify = agent.getActiveTurnTools().find(tool => tool.name === 'notify');
+      expect(candidateNotify).toBeDefined();
+      await candidateNotify!.execute('candidate-owned-tool-phase', {
+        action: 'send',
+        target_kind: 'companion',
+        contact_id: candidate.peerContactId,
+        initiation_permit: permit.permitId,
+      });
+      appendAssistant(this, 'candidate tool phase complete');
+    });
+    const candidateToolRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await toolEntered;
+    await assertDeferredIngressPhase({
+      phase: 'tool',
+      candidateRun: candidateToolRun,
+      release: releaseTool,
+    });
+
+    let markPostTurnEntered!: () => void;
+    let releasePostTurn!: () => void;
+    const postTurnEntered = new Promise<void>((resolve) => {
+      markPostTurnEntered = resolve;
+    });
+    const postTurnRelease = new Promise<void>((resolve) => {
+      releasePostTurn = resolve;
+    });
+    agent.registerIntentionPostTurnHook(async (context) => {
+      if (context.message.id !== candidateMessage.id) return;
+      markPostTurnEntered();
+      await postTurnRelease;
+    });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      expect(agent.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
+      appendAssistant(this, 'candidate post-turn phase starting');
+    });
+    const candidatePostTurnRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await postTurnEntered;
+    await assertDeferredIngressPhase({
+      phase: 'post-turn',
+      candidateRun: candidatePostTurnRun,
+      release: releasePostTurn,
+    });
+
+    let releaseDetachedIngress!: () => void;
+    const detachedIngressRelease = new Promise<void>((resolve) => {
+      releaseDetachedIngress = resolve;
+    });
+    let detachedIngressResults!: Promise<PromiseSettledResult<unknown>[]>;
+    const detachedFollowUpSpy = vi.spyOn(Agent.prototype, 'followUp');
+    const detachedSteerSpy = vi.spyOn(Agent.prototype, 'steer');
+    const detachedAbortSpy = vi.spyOn(Agent.prototype, 'abort');
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      detachedIngressResults = Promise.allSettled([
+        (async () => {
+          await detachedIngressRelease;
+          return agent.followUp(makeMessage({ id: 'detached-candidate-follow-up' }));
+        })(),
+        (async () => {
+          await detachedIngressRelease;
+          return agent.steer(makeMessage({ id: 'detached-candidate-steer' }));
+        })(),
+        (async () => {
+          await detachedIngressRelease;
+          return agent.handleMessage(makeMessage({ id: 'detached-candidate-message' }));
+        })(),
+        (async () => {
+          await detachedIngressRelease;
+          return agent.observeMessage(makeMessage({ id: 'detached-candidate-observation' }));
+        })(),
+        (async () => {
+          await detachedIngressRelease;
+          agent.abort();
+        })(),
+      ]);
+      appendAssistant(this, 'candidate detached descendants scheduled');
+    });
+    await agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    const recordsAfterCandidate = sessionManager.recordUserMessage.mock.calls.length;
+    const promptsAfterCandidate = promptSpy.mock.calls.length;
+    releaseDetachedIngress();
+    const detachedResults = await detachedIngressResults;
+    expect(detachedResults).toHaveLength(5);
+    for (const result of detachedResults) {
+      expect(result.status).toBe('rejected');
+      if (result.status === 'rejected') {
+        expect(String(result.reason)).toContain('candidate turn owner');
+      }
+    }
+    expect(detachedFollowUpSpy).not.toHaveBeenCalled();
+    expect(detachedSteerSpy).not.toHaveBeenCalled();
+    expect(detachedAbortSpy).not.toHaveBeenCalled();
+    expect(sessionManager.recordUserMessage.mock.calls).toHaveLength(recordsAfterCandidate);
+    expect(promptSpy.mock.calls).toHaveLength(promptsAfterCandidate);
+    detachedFollowUpSpy.mockRestore();
+    detachedSteerSpy.mockRestore();
+    detachedAbortSpy.mockRestore();
+
+    let markCancelledProviderEntered!: () => void;
+    let releaseCancelledProvider!: () => void;
+    const cancelledProviderEntered = new Promise<void>((resolve) => {
+      markCancelledProviderEntered = resolve;
+    });
+    const cancelledProviderRelease = new Promise<void>((resolve) => {
+      releaseCancelledProvider = resolve;
+    });
+    promptSpy.mockImplementationOnce(async () => {
+      markCancelledProviderEntered();
+      await cancelledProviderRelease;
+      throw new DOMException('candidate provider cancelled', 'AbortError');
+    });
+    const promptsBeforeCancellation = promptSpy.mock.calls.length;
+    const cancelledCandidateRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
+    await cancelledProviderEntered;
+    const cancellationOrdinaryToolSets: string[][] = [];
+    for (let index = 0; index < 3; index += 1) {
+      promptSpy.mockImplementationOnce(async function (this: Agent) {
+        cancellationOrdinaryToolSets.push(agent.getActiveTurnTools().map(tool => tool.name));
+        appendAssistant(this, `cancellation deferred ordinary ${index + 1}`);
+      });
+    }
+    let cancellationIngressSettled = 0;
+    const cancellationIngressRuns = [
+      agent.followUp(makeMessage({
+        id: 'foreign-follow-up-during-candidate-cancellation',
+        content: 'foreign cancellation follow-up',
+      })).finally(() => { cancellationIngressSettled += 1; }),
+      agent.steer(makeMessage({
+        id: 'foreign-steer-during-candidate-cancellation',
+        content: 'foreign cancellation steer',
+      })).finally(() => { cancellationIngressSettled += 1; }),
+      agent.handleMessage(makeMessage({
+        id: 'foreign-message-during-candidate-cancellation',
+        content: 'foreign cancellation queued input',
+      })).finally(() => { cancellationIngressSettled += 1; }),
+      agent.observeMessage(makeMessage({
+        id: 'foreign-observation-during-candidate-cancellation',
+        content: 'foreign cancellation observed input',
+      })).finally(() => { cancellationIngressSettled += 1; }),
+    ];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(cancellationIngressSettled).toBe(0);
+    releaseCancelledProvider();
+    await expect(cancelledCandidateRun).rejects.toThrow('candidate provider cancelled');
+    await Promise.all(cancellationIngressRuns);
+    expect(cancellationIngressSettled).toBe(4);
+    const cancellationPrompts = promptSpy.mock.calls.slice(promptsBeforeCancellation);
+    expect(cancellationPrompts).toHaveLength(4);
+    expect(JSON.stringify(cancellationPrompts[1]?.[0])).toContain('foreign cancellation follow-up');
+    expect(JSON.stringify(cancellationPrompts[2]?.[0])).toContain('foreign cancellation steer');
+    expect(JSON.stringify(cancellationPrompts[3]?.[0])).toContain('foreign cancellation queued input');
+    expect(cancellationOrdinaryToolSets).toHaveLength(3);
+    for (const toolNames of cancellationOrdinaryToolSets) {
+      expect(toolNames).not.toContain('notify');
+    }
+    expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
   });
 
   it('abort delegates to agent.abort', () => {

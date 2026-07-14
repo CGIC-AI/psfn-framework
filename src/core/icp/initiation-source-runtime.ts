@@ -30,6 +30,8 @@ import {
 
 const DEFAULT_CANDIDATE_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_PERMIT_TTL_MS = 5 * 60_000;
+export const ICP_INITIATION_RETRY_COOLDOWN_MS = 5 * 60_000;
+export const MAX_ICP_INITIATION_RETRY_ATTEMPTS = 3;
 const MAX_SOURCE_RECORD_ID_CHARS = 1_024;
 const log = createComponentLogger('IcpInitiationSource');
 
@@ -332,6 +334,7 @@ export function createIcpInitiationSourceRuntime(
       expiresAtMs: currentNow + ttlMs,
       status: 'pending',
       ...(request.pendingFollowUpId ? { pendingFollowUpId: request.pendingFollowUpId } : {}),
+      retryAttempt: 0,
       revision: 1,
     });
 
@@ -350,6 +353,25 @@ export function createIcpInitiationSourceRuntime(
       // invariant violation. Never silently reuse another private motivation.
       throw new Error(`ICP candidate identity conflict for ${candidateId}`);
     }
+    if (candidate.expiresAtMs <= currentNow
+      && ['pending', 'deferred', 'permitted'].includes(candidate.status)) {
+      const expired = await transition(candidate, 'expired', 'candidate_expired');
+      return result('deduped', expired, 'candidate_expired');
+    }
+    if (candidate.status === 'deferred') {
+      if (candidate.retryEligibleAtMs === undefined || currentNow < candidate.retryEligibleAtMs) {
+        return result('deduped', candidate, candidate.reasonCode ?? 'candidate_deferred');
+      }
+      const pending = await dependencies.store.transitionCandidate({
+        candidateId: candidate.candidateId,
+        expectedStatus: candidate.status,
+        expectedRevision: candidate.revision,
+        status: 'pending',
+        clearRetryEligibility: true,
+      });
+      await emitLifecycle(pending, candidate.status);
+      candidate = pending;
+    }
     const terminal = terminalOutcome(candidate);
     if (terminal) return terminal;
     if (!dependencies.isExternalCompanionAuthorized()) {
@@ -358,10 +380,6 @@ export function createIcpInitiationSourceRuntime(
         return result('rejected', rejected, 'policy_denied');
       }
       throw new Error(`Cannot execute unauthorized ICP candidate from ${candidate.status}`);
-    }
-    if (candidate.expiresAtMs <= currentNow) {
-      const expired = await transition(candidate, 'expired', 'candidate_expired');
-      return result('deduped', expired, 'candidate_expired');
     }
     if (candidate.status === 'permitted') {
       if (!candidate.permitId) {
@@ -384,6 +402,35 @@ export function createIcpInitiationSourceRuntime(
       peer.peerCompanionId,
       request,
     );
+    const deferForCooldown = async (
+      reasonCode: IcpAutonomyReasonCode,
+    ): Promise<IcpInitiationCandidate> => {
+      const completedRetryAttempts = candidate.retryAttempt ?? 0;
+      if (completedRetryAttempts >= MAX_ICP_INITIATION_RETRY_ATTEMPTS) {
+        const cancelled = await dependencies.store.transitionCandidate({
+          candidateId: candidate.candidateId,
+          expectedStatus: candidate.status,
+          expectedRevision: candidate.revision,
+          status: 'cancelled',
+          reasonCode,
+          retryAttempt: completedRetryAttempts,
+        });
+        await emitLifecycle(cancelled, candidate.status);
+        return cancelled;
+      }
+      const retryAttempt = completedRetryAttempts + 1;
+      const deferred = await dependencies.store.transitionCandidate({
+        candidateId: candidate.candidateId,
+        expectedStatus: candidate.status,
+        expectedRevision: candidate.revision,
+        status: 'deferred',
+        reasonCode,
+        retryAttempt,
+        retryEligibleAtMs: currentNow + ICP_INITIATION_RETRY_COOLDOWN_MS,
+      });
+      await emitLifecycle(deferred, candidate.status);
+      return deferred;
+    };
     let projection = toIcpInitiationCandidateSharedMetadata(candidate);
     const preflight = await dependencies.gateway.companionInitiationPreflight({
       candidate: projection,
@@ -392,6 +439,11 @@ export function createIcpInitiationSourceRuntime(
     const reconcilingCommittedPermit = !preflight.eligible
       && preflight.reasonCode === 'invitation_outstanding';
     if (!preflight.eligible && !reconcilingCommittedPermit) {
+      if (preflight.reasonClass === 'deferrable') {
+        const reasonCode = preflight.reasonCode ?? 'candidate_deferred';
+        const deferred = await deferForCooldown(reasonCode);
+        return result('deferred', deferred, reasonCode);
+      }
       const denied = transitionReason(preflight);
       const transitioned = await transition(candidate, denied.status, denied.reasonCode);
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);
@@ -400,7 +452,7 @@ export function createIcpInitiationSourceRuntime(
     if (!reconcilingCommittedPermit) {
       const consent = await dependencies.consent.evaluate({ candidate, peer, channelId });
       if (consent.action === 'defer') {
-        const deferred = await transition(candidate, 'deferred', 'candidate_deferred');
+        const deferred = await deferForCooldown('candidate_deferred');
         return result('deferred', deferred, 'candidate_deferred');
       }
       if (consent.action === 'decline') {
@@ -416,6 +468,11 @@ export function createIcpInitiationSourceRuntime(
       permitExpiresAtMs: Math.min(candidate.expiresAtMs, currentNow + DEFAULT_PERMIT_TTL_MS),
     });
     if (!permitResult.decision.eligible || !permitResult.permit) {
+      if (permitResult.decision.reasonClass === 'deferrable') {
+        const reasonCode = permitResult.decision.reasonCode ?? 'candidate_deferred';
+        const deferred = await deferForCooldown(reasonCode);
+        return result('deferred', deferred, reasonCode);
+      }
       const denied = transitionReason(permitResult.decision);
       const transitioned = await transition(candidate, denied.status, denied.reasonCode);
       return result(denied.status === 'deferred' ? 'deferred' : 'rejected', transitioned, denied.reasonCode);

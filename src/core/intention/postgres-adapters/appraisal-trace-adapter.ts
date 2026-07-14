@@ -11,6 +11,7 @@ import {
   type PendingFollowUp,
   type PendingFollowUpActivateOptions,
   type PendingFollowUpCreateInput,
+  type PendingFollowUpDampenOptions,
   type PendingFollowUpListOptions,
 } from '../pending-follow-ups.js';
 import type {
@@ -116,7 +117,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const asOfMs = this.now().getTime();
     return [...this.pendingFollowUpCache.values()]
       .filter((followUp) => {
-        if (followUp.activatedAt) return false;
+        if (followUp.activatedAt || followUp.dampenedAt) return false;
         if (isPendingFollowUpExpired(followUp, asOfMs)) return false;
         if (!normalizedContactId) return true;
         return !followUp.contactId || followUp.contactId === normalizedContactId;
@@ -135,7 +136,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
         FROM intention_pending_follow_ups
       `,
     );
@@ -182,7 +183,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
       `,
       [
         id,
@@ -257,7 +258,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
         FROM intention_pending_follow_ups
         WHERE id = $1
       `,
@@ -293,7 +294,10 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const params: unknown[] = [];
     const whereClauses: string[] = [];
 
-    if (!includeActivated) whereClauses.push('activated_at IS NULL');
+    if (!includeActivated) {
+      whereClauses.push('activated_at IS NULL');
+      whereClauses.push('dampened_at IS NULL');
+    }
     if (normalizedContactId) {
       params.push(normalizedContactId);
       whereClauses.push(`(contact_id IS NULL OR contact_id = $${params.length})`);
@@ -306,7 +310,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
         FROM intention_pending_follow_ups
         ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''}
         ORDER BY created_at ASC, id ASC
@@ -335,12 +339,12 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
       `
         UPDATE intention_pending_follow_ups
         SET activated_at = $2, activation_reason = $3
-        WHERE id = $1 AND activated_at IS NULL
+        WHERE id = $1 AND activated_at IS NULL AND dampened_at IS NULL
         RETURNING
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
       `,
       [normalizedId, activatedAt, activationReason ?? null],
     );
@@ -352,6 +356,37 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
 
   async dequeue(id: string, options: PendingFollowUpActivateOptions = {}): Promise<PendingFollowUp | null> {
     return await this.markActivated(id, options);
+  }
+
+  async dampen(id: string, options: PendingFollowUpDampenOptions): Promise<PendingFollowUp | null> {
+    const normalizedId = normalizeRequiredText(id, 'id', MAX_PENDING_ID_CHARS);
+    const dampenedAt = options.dampenedAt
+      ? normalizeIsoTimestamp(options.dampenedAt, 'dampenedAt')
+      : this.now().toISOString();
+    const dampeningReason = normalizeRequiredText(
+      options.dampeningReason,
+      'dampeningReason',
+      MAX_PENDING_REASON_CHARS,
+    );
+
+    const row = await queryOne<PendingFollowUpRow>(
+      this.pool,
+      `
+        UPDATE intention_pending_follow_ups
+        SET dampened_at = $2, dampening_reason = $3
+        WHERE id = $1 AND activated_at IS NULL AND dampened_at IS NULL
+        RETURNING
+          id, content, priority, timing, created_at, channel_id, channel_type,
+          author_id, author_name, due_at, contact_id, source_message_id,
+          context_summary, wake_conditions, origin_icp_root_initiation_id,
+          activated_at, activation_reason, dampened_at, dampening_reason
+      `,
+      [normalizedId, dampenedAt, dampeningReason],
+    );
+    if (!row) return null;
+    const followUp = mapPendingFollowUpRow(row);
+    this.pendingFollowUpCache.set(followUp.id, followUp);
+    return followUp;
   }
 
   async quarantine(input: PendingFollowUpQuarantineInput): Promise<PendingFollowUpQuarantineRecord> {
@@ -464,6 +499,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           origin_icp_root_initiation_id = COALESCE(origin_icp_root_initiation_id, $14::uuid)
         WHERE id = $1
           AND activated_at IS NULL
+          AND dampened_at IS NULL
           AND (
             $14::uuid IS NULL
             OR origin_icp_root_initiation_id IS NULL
@@ -473,7 +509,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
           id, content, priority, timing, created_at, channel_id, channel_type,
           author_id, author_name, due_at, contact_id, source_message_id,
           context_summary, wake_conditions, origin_icp_root_initiation_id,
-          activated_at, activation_reason
+          activated_at, activation_reason, dampened_at, dampening_reason
       `,
       [
         normalizedId,

@@ -33,7 +33,12 @@ export interface IcpIntentionCandidateAdapter {
 }
 
 function isLiveFollowUp(followUp: PendingFollowUp | null, nowMs: number): followUp is PendingFollowUp {
-  if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, nowMs)) {
+  if (
+    !followUp
+    || followUp.activatedAt
+    || followUp.dampenedAt
+    || isPendingFollowUpExpired(followUp, nowMs)
+  ) {
     return false;
   }
   return true;

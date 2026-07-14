@@ -139,6 +139,10 @@ export interface HeartbeatRuntimeOptions {
     pendingFollowUpId: string;
     activationReason?: string;
   }) => Promise<boolean | void | undefined> | boolean | void | undefined;
+  onIntentionFollowUpDampened?: (input: {
+    pendingFollowUpId: string;
+    dampeningReason: string;
+  }) => Promise<boolean | void | undefined> | boolean | void | undefined;
   onIntentionReminderDecision?: (input: {
     decision: IntentionActionDecision;
     channelId: string;

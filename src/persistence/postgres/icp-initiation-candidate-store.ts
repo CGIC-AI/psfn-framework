@@ -39,6 +39,8 @@ interface CandidateRow extends QueryResultRow {
   initiation_permit_id: string | null;
   pending_follow_up_id: string | null;
   delivery_disposition: string | null;
+  retry_attempt: string | number;
+  retry_eligible_at_ms: string | number | null;
   revision: string | number;
 }
 
@@ -46,7 +48,8 @@ const CANDIDATE_COLUMNS = `
   candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
   peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
   created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
-  pending_follow_up_id, delivery_disposition, revision
+  pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
+  revision
 `;
 
 function safeInteger(value: string | number, field: string): number {
@@ -84,6 +87,10 @@ function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
     ...(row.pending_follow_up_id !== null ? { pendingFollowUpId: row.pending_follow_up_id } : {}),
     ...(row.delivery_disposition !== null
       ? { deliveryDisposition: row.delivery_disposition }
+      : {}),
+    retryAttempt: safeInteger(row.retry_attempt, 'candidate.retryAttempt'),
+    ...(row.retry_eligible_at_ms !== null
+      ? { retryEligibleAtMs: safeInteger(row.retry_eligible_at_ms, 'candidate.retryEligibleAtMs') }
       : {}),
     revision: safeInteger(row.revision, 'candidate.revision'),
   });
@@ -124,9 +131,11 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
         created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
-        pending_follow_up_id, delivery_disposition, revision
+        pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
+        revision
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+        $18, $19
       )
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
@@ -146,6 +155,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.permitId ?? null,
       candidate.pendingFollowUpId ?? null,
       candidate.deliveryDisposition ?? null,
+      candidate.retryAttempt ?? 0,
+      candidate.retryEligibleAtMs ?? null,
       candidate.revision,
     ]);
     if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
@@ -207,12 +218,31 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     if (input.deliveryDisposition !== undefined && input.status !== 'consumed') {
       throw new Error('ICP candidate delivery disposition requires consumed status');
     }
+    if (input.retryAttempt !== undefined
+      && (!Number.isSafeInteger(input.retryAttempt) || input.retryAttempt < 0)) {
+      throw new Error('ICP candidate retry attempt must be a non-negative safe integer');
+    }
+    if (input.retryEligibleAtMs !== undefined
+      && (!Number.isSafeInteger(input.retryEligibleAtMs) || input.retryEligibleAtMs < 0)) {
+      throw new Error('ICP candidate retry eligibility must be a non-negative safe integer timestamp');
+    }
+    if (input.retryEligibleAtMs !== undefined && input.status !== 'deferred') {
+      throw new Error('ICP candidate retry eligibility requires deferred status');
+    }
+    if (input.clearRetryEligibility === true && input.status !== 'pending') {
+      throw new Error('ICP candidate retry eligibility can only clear when returning to pending');
+    }
     const row = await queryOne<CandidateRow>(this.pool, `
       UPDATE icp_initiation_candidates
       SET status = $4,
         reason_code = $5,
         initiation_permit_id = COALESCE($6::uuid, initiation_permit_id),
         delivery_disposition = COALESCE($7, delivery_disposition),
+        retry_eligible_at_ms = CASE
+          WHEN $4 <> 'deferred' OR $8::boolean THEN NULL
+          ELSE COALESCE($9::bigint, retry_eligible_at_ms)
+        END,
+        retry_attempt = COALESCE($10::integer, retry_attempt),
         revision = revision + 1
       WHERE candidate_id = $1 AND status = $2 AND revision = $3
       RETURNING ${CANDIDATE_COLUMNS}
@@ -224,6 +254,9 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       input.reasonCode ?? null,
       input.permitId ?? null,
       input.deliveryDisposition ?? null,
+      input.clearRetryEligibility === true,
+      input.retryEligibleAtMs ?? null,
+      input.retryAttempt ?? null,
     ]);
     if (!row) throw new Error(`ICP candidate transition conflict for ${input.candidateId}`);
     return mapCandidate(row);

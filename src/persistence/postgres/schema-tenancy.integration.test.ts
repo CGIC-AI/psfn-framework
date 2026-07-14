@@ -116,7 +116,14 @@ function memoryCandidateStore(): IcpInitiationCandidateStorePort {
         ...(input.deliveryDisposition
           ? { deliveryDisposition: input.deliveryDisposition }
           : {}),
+        ...(input.retryAttempt !== undefined ? { retryAttempt: input.retryAttempt } : {}),
+        ...(input.retryEligibleAtMs !== undefined
+          ? { retryEligibleAtMs: input.retryEligibleAtMs }
+          : {}),
       };
+      if (input.status !== 'deferred' || input.clearRetryEligibility === true) {
+        delete next.retryEligibleAtMs;
+      }
       candidates.set(next.candidateId, next);
       return next;
     },

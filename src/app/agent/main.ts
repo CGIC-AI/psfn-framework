@@ -1139,6 +1139,7 @@ async function main(): Promise<void> {
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
+      onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),

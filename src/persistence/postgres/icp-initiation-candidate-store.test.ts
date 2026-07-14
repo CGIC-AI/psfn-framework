@@ -22,6 +22,8 @@ const CANDIDATE_ROW = {
   initiation_permit_id: null,
   pending_follow_up_id: null,
   delivery_disposition: null,
+  retry_attempt: '0',
+  retry_eligible_at_ms: null,
   revision: '1',
 };
 
@@ -109,6 +111,7 @@ describe('PostgresIcpInitiationCandidateStore', () => {
     });
     const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
     expect(sql).toContain('status = $2 AND revision = $3');
+    expect(sql).toContain("$4 <> 'deferred'");
     expect(deferred.revision).toBe(2);
 
     mocks.queryOne.mockClear();

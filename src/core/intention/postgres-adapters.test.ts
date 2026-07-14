@@ -46,6 +46,8 @@ interface PendingFollowUpRow {
   wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+  dampened_at: string | null;
+  dampening_reason: string | null;
   origin_icp_root_initiation_id: string | null;
 }
 
@@ -329,6 +331,8 @@ class FakeIntentionPool {
         origin_icp_root_initiation_id: originIcpRootInitiationId,
         activated_at: null,
         activation_reason: null,
+        dampened_at: null,
+        dampening_reason: null,
       });
       return { rows: [this.pendingFollowUps.get(id)! as Row] };
     }
@@ -386,6 +390,7 @@ class FakeIntentionPool {
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
       const rows = [...this.pendingFollowUps.values()]
         .filter(row => row.activated_at === null)
+        .filter(row => row.dampened_at === null)
         .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
         .map(row => row as Row);
@@ -426,7 +431,7 @@ class FakeIntentionPool {
           string | null,
         ];
         const row = this.pendingFollowUps.get(id);
-        if (!row || row.activated_at !== null) {
+        if (!row || row.activated_at !== null || row.dampened_at !== null) {
           return { rows: [] };
         }
         row.content = content;
@@ -444,9 +449,19 @@ class FakeIntentionPool {
         row.origin_icp_root_initiation_id = originIcpRootInitiationId;
         return { rows: [row as Row] };
       }
+      if (normalized.includes('SET dampened_at = $2')) {
+        const [id, dampenedAt, dampeningReason] = values as [string, string, string];
+        const row = this.pendingFollowUps.get(id);
+        if (!row || row.activated_at !== null || row.dampened_at !== null) {
+          return { rows: [] };
+        }
+        row.dampened_at = dampenedAt;
+        row.dampening_reason = dampeningReason;
+        return { rows: [row as Row] };
+      }
       const [id, activatedAt, activationReason] = values as [string, string, string | null];
       const row = this.pendingFollowUps.get(id);
-      if (!row || row.activated_at !== null) {
+      if (!row || row.activated_at !== null || row.dampened_at !== null) {
         return { rows: [] };
       }
       row.activated_at = activatedAt;

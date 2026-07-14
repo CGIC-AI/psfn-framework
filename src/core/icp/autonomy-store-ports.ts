@@ -178,6 +178,12 @@ export interface IcpInitiationCandidateTransitionInput {
   permitId?: string;
   /** Written atomically with consumed so recovery can distinguish delivery from suppression. */
   deliveryDisposition?: IcpInitiationDeliveryDisposition;
+  /** Durable retry counter written with a deferred or exhausted transition. */
+  retryAttempt?: number;
+  /** Durable cooldown boundary written with a deferred transition. */
+  retryEligibleAtMs?: number;
+  /** Clears a satisfied cooldown when deferred returns to pending. */
+  clearRetryEligibility?: boolean;
 }
 
 export interface IcpInitiationCandidateStorePort {

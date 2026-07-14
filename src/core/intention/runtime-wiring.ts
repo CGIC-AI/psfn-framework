@@ -90,6 +90,10 @@ export interface IntentionAppraisalHooks {
     pendingFollowUpId: string;
     activationReason?: string;
   }): Promise<boolean>;
+  onIntentionFollowUpDampened(input: {
+    pendingFollowUpId: string;
+    dampeningReason: string;
+  }): Promise<boolean>;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -264,6 +268,18 @@ export function createIntentionAppraisalHooks(
         ...(activationReason ? { activationReason } : {}),
       });
       return activated !== null;
+    },
+    onIntentionFollowUpDampened: async ({
+      pendingFollowUpId,
+      dampeningReason,
+    }) => {
+      if (!pendingFollowUpStore?.dampen) {
+        throw new Error('PendingFollowUpStorePort dampening is required for follow-up disposition');
+      }
+      const dampened = await pendingFollowUpStore.dampen(pendingFollowUpId, {
+        dampeningReason,
+      });
+      return dampened !== null;
     },
   };
 }

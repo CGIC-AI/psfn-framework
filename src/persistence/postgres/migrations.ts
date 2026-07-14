@@ -776,15 +776,22 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     origin_icp_root_initiation_id UUID,
     activated_at TEXT,
     activation_reason TEXT,
+    dampened_at TEXT,
+    dampening_reason TEXT,
     CHECK (priority IN ('low', 'medium', 'high')),
     CHECK (timing IN ('immediate', 'soon', 'scheduled')),
+    CHECK ((dampened_at IS NULL) = (dampening_reason IS NULL)),
+    CHECK (activated_at IS NULL OR dampened_at IS NULL),
     CHECK (channel_type IN ('terminal', 'api', 'discord', 'telegram', 'psfn-amica'))
   );
   `,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS context_summary TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS wake_conditions TEXT;`,
   `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampened_at TEXT;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS dampening_reason TEXT;`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active ON intention_pending_follow_ups (activated_at, created_at, id);`,
+  `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_live ON intention_pending_follow_ups (activated_at, dampened_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);`,
   `
   CREATE TABLE IF NOT EXISTS intention_pending_follow_up_quarantine (
@@ -869,6 +876,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     initiation_permit_id UUID,
     pending_follow_up_id TEXT,
     delivery_disposition TEXT CHECK (delivery_disposition IN ('delivered', 'suppressed')),
+    retry_attempt INTEGER NOT NULL DEFAULT 0 CHECK (retry_attempt >= 0),
+    retry_eligible_at_ms BIGINT,
     revision BIGINT NOT NULL CHECK (revision >= 1),
     CHECK (local_companion_id <> peer_companion_id),
     CHECK (pending_follow_up_id IS NULL OR source = 'intention'),
@@ -885,6 +894,10 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS pending_follow_up_id TEXT;`,
   `ALTER TABLE icp_initiation_candidates
     ADD COLUMN IF NOT EXISTS delivery_disposition TEXT;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS retry_attempt INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS retry_eligible_at_ms BIGINT;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_initiation_candidates_pending_follow_up
     ON icp_initiation_candidates (pending_follow_up_id)
     WHERE pending_follow_up_id IS NOT NULL;`,

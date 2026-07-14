@@ -10,6 +10,8 @@ import type {
 } from './initiation-candidate.js';
 import {
   createIcpInitiationSourceRuntime,
+  ICP_INITIATION_RETRY_COOLDOWN_MS,
+  MAX_ICP_INITIATION_RETRY_ATTEMPTS,
   type IcpInitiationConsentEvaluator,
   type IcpInitiationSourceRuntimeDependencies,
 } from './initiation-source-runtime.js';
@@ -50,8 +52,15 @@ function createStore(): IcpInitiationCandidateStorePort {
         ...(input.deliveryDisposition
           ? { deliveryDisposition: input.deliveryDisposition }
           : {}),
+        ...(input.retryAttempt !== undefined ? { retryAttempt: input.retryAttempt } : {}),
+        ...(input.retryEligibleAtMs !== undefined
+          ? { retryEligibleAtMs: input.retryEligibleAtMs }
+          : {}),
         revision: current.revision + 1,
       };
+      if (input.status !== 'deferred' || input.clearRetryEligibility === true) {
+        delete next.retryEligibleAtMs;
+      }
       rows.set(next.candidateId, next);
       return structuredClone(next);
     },
@@ -223,6 +232,47 @@ describe('ICP initiation source runtime', () => {
     expect(restartedDeps.consent.evaluate).not.toHaveBeenCalled();
     expect(restartedDeps.gateway.companionInitiationPreflight).not.toHaveBeenCalled();
     expect(restartedDeps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+  });
+
+  it('bounds durable cooldown retries and terminally cancels after the final retry', async () => {
+    const store = createStore();
+    let nowMs = 1_700_000_000_000;
+    const preflight = vi.fn().mockResolvedValue({
+      eligible: false,
+      reasonCode: 'peer_busy',
+      reasonClass: 'deferrable',
+    });
+    const { deps, consent } = dependencies({
+      store,
+      now: () => nowMs,
+      gateway: {
+        companionInitiationPreflight: preflight,
+        companionIssueInitiationPermit: vi.fn(),
+      },
+    });
+    const sourceRequest = request('intention');
+
+    for (let attempt = 1; attempt <= MAX_ICP_INITIATION_RETRY_ATTEMPTS; attempt += 1) {
+      await expect(createIcpInitiationSourceRuntime(deps).submit(sourceRequest)).resolves.toMatchObject({
+        outcome: 'deferred',
+        status: 'deferred',
+      });
+      nowMs += ICP_INITIATION_RETRY_COOLDOWN_MS;
+    }
+    const exhausted = await createIcpInitiationSourceRuntime(deps).submit(sourceRequest);
+    expect(exhausted).toMatchObject({ outcome: 'deferred', status: 'cancelled' });
+    await expect(createIcpInitiationSourceRuntime(deps).submit(sourceRequest)).resolves.toMatchObject({
+      outcome: 'deduped',
+      status: 'cancelled',
+    });
+    await expect(store.getCandidate(exhausted.candidateId)).resolves.toMatchObject({
+      status: 'cancelled',
+      retryAttempt: MAX_ICP_INITIATION_RETRY_ATTEMPTS,
+    });
+    expect(preflight).toHaveBeenCalledTimes(MAX_ICP_INITIATION_RETRY_ATTEMPTS + 1);
+    expect(consent.evaluate).not.toHaveBeenCalled();
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 
   it('propagates a suppressed target disposition instead of reporting sent', async () => {

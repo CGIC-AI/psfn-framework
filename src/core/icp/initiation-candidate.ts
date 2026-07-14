@@ -40,13 +40,23 @@ export interface IcpInitiationCandidate {
   pendingFollowUpId?: string;
   /** Durable target result, written with the terminal consumed transition. */
   deliveryDisposition?: IcpInitiationDeliveryDisposition;
+  /** Durable count of cooldown-gated retries already scheduled. */
+  retryAttempt?: number;
+  /** Earliest durable time at which a deferred candidate may return to pending. */
+  retryEligibleAtMs?: number;
   revision: number;
 }
 
 /** The only candidate projection allowed to cross into shared arbitration state. */
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
-  'peerContactId' | 'reasonSummary' | 'permitId' | 'pendingFollowUpId' | 'deliveryDisposition'
+  | 'peerContactId'
+  | 'reasonSummary'
+  | 'permitId'
+  | 'pendingFollowUpId'
+  | 'deliveryDisposition'
+  | 'retryAttempt'
+  | 'retryEligibleAtMs'
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -56,7 +66,8 @@ const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
   'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId',
-  'pendingFollowUpId', 'deliveryDisposition', 'revision',
+  'pendingFollowUpId', 'deliveryDisposition', 'retryAttempt', 'retryEligibleAtMs',
+  'revision',
 ] as const;
 const SHARED_CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
@@ -144,11 +155,20 @@ export function parseIcpInitiationCandidate(
       ['delivered', 'suppressed'] as const,
       'ICP candidate.deliveryDisposition',
     );
+  const retryAttempt = value.retryAttempt === undefined
+    ? undefined
+    : requireTimestamp(value.retryAttempt, 'ICP candidate.retryAttempt');
+  const retryEligibleAtMs = value.retryEligibleAtMs === undefined
+    ? undefined
+    : requireTimestamp(value.retryEligibleAtMs, 'ICP candidate.retryEligibleAtMs');
   if (pendingFollowUpId !== undefined && value.source !== 'intention') {
     throw new Error('ICP candidate.pendingFollowUpId is only valid for intention sources');
   }
   if (deliveryDisposition !== undefined && value.status !== 'consumed') {
     throw new Error('ICP candidate.deliveryDisposition requires consumed status');
+  }
+  if (retryEligibleAtMs !== undefined && value.status !== 'deferred') {
+    throw new Error('ICP candidate.retryEligibleAtMs requires deferred status');
   }
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
@@ -183,6 +203,8 @@ export function parseIcpInitiationCandidate(
     ...(permitId !== undefined ? { permitId } : {}),
     ...(pendingFollowUpId !== undefined ? { pendingFollowUpId } : {}),
     ...(deliveryDisposition !== undefined ? { deliveryDisposition } : {}),
+    ...(retryAttempt !== undefined ? { retryAttempt } : {}),
+    ...(retryEligibleAtMs !== undefined ? { retryEligibleAtMs } : {}),
     revision,
   };
 }

@@ -49,6 +49,8 @@ export interface PendingFollowUp {
   wakeConditions?: PendingFollowUpWakeCondition[];
   activatedAt?: string;
   activationReason?: string;
+  dampenedAt?: string;
+  dampeningReason?: string;
   /** Originating ICP root preserved across durable resurface/restart. */
   originIcpRootInitiationId?: string;
 }
@@ -89,6 +91,11 @@ export interface PendingFollowUpUpdateInput {
 export interface PendingFollowUpActivateOptions {
   activatedAt?: string;
   activationReason?: string;
+}
+
+export interface PendingFollowUpDampenOptions {
+  dampenedAt?: string;
+  dampeningReason: string;
 }
 
 export interface PendingFollowUpListOptions {
@@ -175,6 +182,8 @@ export interface PendingFollowUpRow {
   wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+  dampened_at: string | null | undefined;
+  dampening_reason: string | null | undefined;
   origin_icp_root_initiation_id: string | null | undefined;
 }
 
@@ -442,6 +451,7 @@ export function resolvePendingFollowUpEnqueueResolution(
     ?? PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD;
   const scopedCandidates = existingFollowUps.filter(followUp => (
     !followUp.activatedAt
+    && !followUp.dampenedAt
     && followUp.channelId === normalized.channelId
     && normalizeOptionalIdOrNull(followUp.contactId) === normalized.contactId
   ));
@@ -555,6 +565,18 @@ export function mapRow(row: PendingFollowUpRow): PendingFollowUp {
   const activationReason = row.activation_reason === null
     ? undefined
     : normalizeOptionalText(row.activation_reason, 'activation_reason', MAX_REASON_CHARS);
+  const dampenedAt = row.dampened_at == null
+    ? undefined
+    : normalizeIsoTimestamp(row.dampened_at, 'dampened_at');
+  const dampeningReason = row.dampening_reason == null
+    ? undefined
+    : normalizeOptionalText(row.dampening_reason, 'dampening_reason', MAX_REASON_CHARS);
+  if ((dampenedAt === undefined) !== (dampeningReason === undefined)) {
+    throw new Error('Pending follow-up dampening timestamp and reason must be written together');
+  }
+  if (activatedAt && dampenedAt) {
+    throw new Error('Pending follow-up cannot be both activated and dampened');
+  }
   const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
     row.origin_icp_root_initiation_id,
   );
@@ -576,6 +598,8 @@ export function mapRow(row: PendingFollowUpRow): PendingFollowUp {
     ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
+    ...(dampenedAt ? { dampenedAt } : {}),
+    ...(dampeningReason ? { dampeningReason } : {}),
     ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
   };
 }

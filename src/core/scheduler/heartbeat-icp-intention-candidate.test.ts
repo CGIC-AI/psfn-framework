@@ -77,7 +77,7 @@ function emptyQueueStatus(): PostTurnActionQueueStatus {
 }
 
 function wire(
-  kind: 'submitted' | 'deferred' | 'declined' | 'blocked' | 'not_companion',
+  kind: 'submitted' | 'suppressed' | 'deferred' | 'declined' | 'blocked' | 'not_companion',
   options: { activation?: 'success' | 'fail_once' | 'false' | 'missing' } = {},
 ) {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-intention-'));
@@ -92,15 +92,15 @@ function wire(
   });
   const dispatch = vi.spyOn(proactiveOutbound, 'dispatch');
   const submit = vi.fn().mockResolvedValue(
-    kind === 'submitted'
+    kind === 'submitted' || kind === 'suppressed'
       ? {
           kind: 'submitted',
           result: {
-            outcome: 'sent',
+            outcome: kind === 'submitted' ? 'sent' : 'suppressed',
             candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             status: 'consumed',
             pendingFollowUpId: 'follow-up-1',
-            deliveryDisposition: 'delivered',
+            deliveryDisposition: kind === 'submitted' ? 'delivered' : 'suppressed',
           },
         }
       : kind === 'deferred'
@@ -119,6 +119,7 @@ function wire(
                 outcome: 'declined',
                 candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
                 status: 'declined',
+                pendingFollowUpId: 'follow-up-1',
               },
             }
       : kind === 'blocked'
@@ -136,6 +137,15 @@ function wire(
         ...storedPending,
         activatedAt: new Date().toISOString(),
         ...(options?.activationReason ? { activationReason: options.activationReason } : {}),
+      };
+      return storedPending;
+    }),
+    dampen: vi.fn(async (_id, options) => {
+      if (!storedPending || storedPending.activatedAt || storedPending.dampenedAt) return null;
+      storedPending = {
+        ...storedPending,
+        dampenedAt: new Date().toISOString(),
+        dampeningReason: options.dampeningReason,
       };
       return storedPending;
     }),
@@ -163,6 +173,15 @@ function wire(
     ) !== null;
   });
   const outreachOutbox = createFileOutreachOutboxStore(join(dataDir, 'outreach-outbox.jsonl'));
+  const onIntentionFollowUpDampened = vi.fn(async ({
+    pendingFollowUpId,
+    dampeningReason,
+  }: {
+    pendingFollowUpId: string;
+    dampeningReason: string;
+  }) => (
+    await pendingFollowUpStore.dampen?.(pendingFollowUpId, { dampeningReason })
+  ) != null);
   const postTurnActions: PostTurnActionRuntime = {
     registerHandler: vi.fn((actionKind: string, handler: PostTurnActionHandler) => {
       handlers.set(actionKind, handler);
@@ -196,6 +215,7 @@ function wire(
       llmProvider,
       pendingFollowUpStore,
       ...(options.activation === 'missing' ? {} : { onIntentionFollowUpActivated }),
+      onIntentionFollowUpDampened,
       proactiveOutbound,
       outreachOutbox,
       icpIntentionCandidateAdapter: { submit },
@@ -211,6 +231,7 @@ function wire(
     agentLoop,
     pendingFollowUpStore,
     onIntentionFollowUpActivated,
+    onIntentionFollowUpDampened,
     outreachOutbox,
   };
 }
@@ -330,22 +351,45 @@ describe('heartbeat ICP intention candidate integration', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['deferred', 'deferred'],
-    ['declined', 'declined'],
-  ] as const)('keeps a pending source live when ICP is %s', async (kind, status) => {
+  it('keeps a pending source live while ICP is deferred', async () => {
     const {
       handler,
       submit,
       pendingFollowUpStore,
       onIntentionFollowUpActivated,
+    } = wire('deferred');
+    await expect(handler(ACTION)).resolves.toEqual({
+      detail: 'icp_candidate:deferred:deferred',
+    });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(onIntentionFollowUpActivated).not.toHaveBeenCalled();
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.not.toHaveProperty('activatedAt');
+  });
+
+  it.each([
+    ['declined', 'declined', 'icp_candidate_declined'],
+    ['suppressed', 'consumed', 'icp_candidate_suppressed'],
+  ] as const)('dampens a pending source when ICP is %s', async (kind, status, dampeningReason) => {
+    const {
+      handler,
+      submit,
+      pendingFollowUpStore,
+      onIntentionFollowUpActivated,
+      onIntentionFollowUpDampened,
     } = wire(kind);
     await expect(handler(ACTION)).resolves.toEqual({
       detail: `icp_candidate:${kind}:${status}`,
     });
     expect(submit).toHaveBeenCalledOnce();
     expect(onIntentionFollowUpActivated).not.toHaveBeenCalled();
-    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.not.toHaveProperty('activatedAt');
+    expect(onIntentionFollowUpDampened).toHaveBeenCalledWith({
+      pendingFollowUpId: 'follow-up-1',
+      dampeningReason,
+    });
+    await expect(pendingFollowUpStore.peek('follow-up-1')).resolves.toMatchObject({
+      dampenedAt: expect.any(String),
+      dampeningReason,
+    });
   });
 
   it('preserves the existing outbound path for a non-companion contact', async () => {

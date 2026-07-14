@@ -56,6 +56,16 @@ The headline fact governing everything below: the multi-companion substrate is *
   independent review passed with no important or material report-only findings.
   Final integrated validation passed all 75 focused tests, `npm run lint`, and
   the ESM+DTS build.
+- Discord follow-up scheduling fix `psfn-framework-aoxt` is integrated into
+  `fix/orphans-stubs-bugfixes` and pushed at `a92fa7e7` (implementation
+  `491221e1`, review remediation `e7f18ba2`). The schedule tool exposes the
+  canonical five continuity destinations as one enum, rejects `discord_text`
+  without an alias, and preserves valid Discord DM/guild snowflake strings
+  unchanged through the real scheduler path. The single independent review
+  found numeric snowflakes could be precision-damaged by generic coercion; the
+  remediation now rejects raw non-string Discord IDs before enqueue, and the
+  same reviewer final check passed. Final integrated validation passed all 30
+  focused schedule/tool-call tests, `npm run lint`, and the ESM+DTS build.
 
 ## 0. 2026-07-12 update — decided priority order
 

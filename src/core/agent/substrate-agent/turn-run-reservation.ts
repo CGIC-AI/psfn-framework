@@ -38,6 +38,7 @@ interface TurnRunWaiter {
  */
 export class TurnRunReservation {
   private readonly queue: TurnRunWaiter[] = [];
+  private readonly idleWaiters = new Set<() => void>();
   private activeReaders = 0;
   private writerActive = false;
   private activeWriterOwner: TurnRunOwnerContext | null = null;
@@ -82,6 +83,18 @@ export class TurnRunReservation {
       owner,
       () => run({ deferredFromExclusive, owner }),
     );
+  }
+
+  /** Wait until every active or queued outer turn callback has settled. */
+  async waitForIdle(): Promise<void> {
+    if (this.activeOwner.getStore()?.active) {
+      throw new Error('Cannot wait for turn-run idle from inside an active turn owner');
+    }
+    if (this.isIdle()) return;
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+      this.resolveIdleWaitersIfIdle();
+    });
   }
 
   assertActiveRunMutationAllowed(operation: string): void {
@@ -158,5 +171,18 @@ export class TurnRunReservation {
       this.activeReaders += 1;
       next.grant();
     }
+
+    this.resolveIdleWaitersIfIdle();
+  }
+
+  private isIdle(): boolean {
+    return !this.writerActive && this.activeReaders === 0 && this.queue.length === 0;
+  }
+
+  private resolveIdleWaitersIfIdle(): void {
+    if (!this.isIdle() || this.idleWaiters.size === 0) return;
+    const waiters = [...this.idleWaiters];
+    this.idleWaiters.clear();
+    for (const resolve of waiters) resolve();
   }
 }

@@ -742,6 +742,7 @@ async function main(): Promise<void> {
             result: {
               records: records.map(record => ({
                 turnId: record.turnId,
+                requestId: record.requestId,
                 status: record.status,
                 hasAssistantMessage: record.assistantMessage !== undefined,
                 ...(record.icpCorrelation
@@ -752,6 +753,8 @@ async function main(): Promise<void> {
                         localCompanionId: record.icpCorrelation.localCompanionId,
                         peerCompanionId: record.icpCorrelation.peerCompanionId,
                         channelId: record.icpCorrelation.channelId,
+                        turnId: record.icpCorrelation.turnId,
+                        requestId: record.icpCorrelation.requestId,
                         fatigueDecision: record.icpCorrelation.fatigueDecision,
                         ...(record.icpCorrelation.fatigueReasonCode
                           ? { fatigueReasonCode: record.icpCorrelation.fatigueReasonCode }

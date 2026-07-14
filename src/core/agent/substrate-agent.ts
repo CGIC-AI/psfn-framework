@@ -1099,9 +1099,12 @@ export class SubstrateAgent {
     });
   }
 
-  /** Wait for the agent to finish all pending work (prompt + steering + follow-ups) */
-  waitForIdle(): Promise<void> {
-    return this.agent.waitForIdle();
+  /** Wait for the model engine and every owned outer turn callback to settle. */
+  async waitForIdle(): Promise<void> {
+    await Promise.all([
+      this.agent.waitForIdle(),
+      this.turnRunReservation.waitForIdle(),
+    ]);
   }
 
   setActiveConcernProvider(provider: ActiveConcernContextProvider | null): void {

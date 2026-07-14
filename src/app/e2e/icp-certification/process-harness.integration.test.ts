@@ -58,9 +58,12 @@ interface TurnRecordsSnapshot {
       fatigueReasonCode?: string;
       localCompanionId: string;
       peerCompanionId: string;
+      requestId: string;
       rootInitiationId: string;
+      turnId: string;
     };
     hasAssistantMessage: boolean;
+    requestId: string;
     status: string;
     turnId: string;
   }>;
@@ -509,17 +512,29 @@ describe('ICP certification real process harness', () => {
     const recipientTurns = await agentB.turnRecordsSnapshot(
       CERTIFICATION_DM_CHANNEL,
     ) as unknown as TurnRecordsSnapshot;
-    expect(recipientTurns.records).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        status: 'completed',
-        hasAssistantMessage: true,
-        correlation: expect.objectContaining({
-          channelId: CERTIFICATION_DM_CHANNEL,
-          localCompanionId: CERTIFICATION_COMPANION_B,
-          peerCompanionId: CERTIFICATION_COMPANION_A,
-        }),
-      }),
-    ]));
+    const completedRecipientTurns = recipientTurns.records.filter(record => (
+      record.status === 'completed'
+      && record.hasAssistantMessage
+      && record.correlation?.channelId === CERTIFICATION_DM_CHANNEL
+      && record.correlation.localCompanionId === CERTIFICATION_COMPANION_B
+      && record.correlation.peerCompanionId === CERTIFICATION_COMPANION_A
+    ));
+    expect(completedRecipientTurns).toHaveLength(1);
+    const [completedRecipientTurn] = completedRecipientTurns;
+    expect(completedRecipientTurn).toMatchObject({
+      requestId: expect.any(String),
+      turnId: expect.any(String),
+      correlation: {
+        channelId: CERTIFICATION_DM_CHANNEL,
+        conversationId: expect.any(String),
+        fatigueDecision: 'allow',
+        localCompanionId: CERTIFICATION_COMPANION_B,
+        peerCompanionId: CERTIFICATION_COMPANION_A,
+        requestId: completedRecipientTurn.requestId,
+        rootInitiationId: expect.any(String),
+        turnId: completedRecipientTurn.turnId,
+      },
+    });
   }, TIMEOUT_MS);
 
   it.each([

@@ -154,4 +154,52 @@ describe('TurnRunReservation', () => {
     expect(observedLease?.owner).toEqual(queuedIngress('idle', 'steer'));
     expect(observedOwner).toEqual(queuedIngress('idle', 'steer'));
   });
+
+  it('waits for active and queued outer turn callbacks to settle', async () => {
+    const reservation = new TurnRunReservation();
+    const readerGate = deferred();
+    const writerGate = deferred();
+    const order: string[] = [];
+
+    const reader = reservation.runShared(ordinary('recipient-turn'), async () => {
+      order.push('reader-start');
+      await readerGate.promise;
+      order.push('reader-end');
+    });
+    await nextTick();
+    const writer = reservation.runExclusive(candidate('candidate-turn'), async () => {
+      order.push('writer-start');
+      await writerGate.promise;
+      order.push('writer-end');
+    });
+    await nextTick();
+
+    let idleResolved = false;
+    const idle = reservation.waitForIdle().then(() => {
+      idleResolved = true;
+      order.push('idle');
+    });
+    await nextTick();
+    expect(idleResolved).toBe(false);
+
+    readerGate.release();
+    await reader;
+    await nextTick();
+    expect(order).toEqual(['reader-start', 'reader-end', 'writer-start']);
+    expect(idleResolved).toBe(false);
+
+    writerGate.release();
+    await Promise.all([writer, idle]);
+    expect(order).toEqual(['reader-start', 'reader-end', 'writer-start', 'writer-end', 'idle']);
+  });
+
+  it('fails loudly instead of deadlocking when an active owner waits on itself', async () => {
+    const reservation = new TurnRunReservation();
+
+    await expect(reservation.runShared(ordinary('self-wait'), async () => {
+      await reservation.waitForIdle();
+    })).rejects.toThrow('inside an active turn owner');
+
+    await expect(reservation.waitForIdle()).resolves.toBeUndefined();
+  });
 });

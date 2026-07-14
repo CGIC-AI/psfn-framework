@@ -48,6 +48,7 @@ import type { IcpInitiationCandidate } from '../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js';
 import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
+import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -6335,17 +6336,20 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('waitForIdle delegates to agent.waitForIdle', async () => {
+  it('waitForIdle joins the model engine and the complete outer turn owner', async () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
     );
 
     const idleSpy = vi.spyOn(Agent.prototype, 'waitForIdle').mockResolvedValue();
+    const turnRunIdleSpy = vi.spyOn(TurnRunReservation.prototype, 'waitForIdle').mockResolvedValue();
 
     await agent.waitForIdle();
-    expect(idleSpy).toHaveBeenCalled();
+    expect(idleSpy).toHaveBeenCalledOnce();
+    expect(turnRunIdleSpy).toHaveBeenCalledOnce();
 
     idleSpy.mockRestore();
+    turnRunIdleSpy.mockRestore();
   });
 
   it('preserves immediate follow-up and steer delivery for an ordinary active run', async () => {

@@ -7,6 +7,7 @@ import {
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
+import type { SessionTailCachePort } from './session-tail-cache-port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -84,6 +85,12 @@ export interface SessionStoreOptions {
   transcriptProjection?: TranscriptProjectionPort | null;
   transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;
+  /**
+   * Optional bounded hot session tail shared across processes
+   * (psfn-framework-hgw3.5). Null/absent keeps reads and writes byte-identical
+   * to the file-only path.
+   */
+  tailCache?: SessionTailCachePort | null;
 }
 
 export interface SessionIntegrityProvider {

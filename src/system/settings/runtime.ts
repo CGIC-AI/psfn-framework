@@ -2,6 +2,7 @@ import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
 import {
@@ -173,6 +174,9 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     observationMaskingWindow: config.observationMaskingWindow ?? 1,
     compactionEmotionalSalienceThresholdPct:
       config.compactionEmotionalSalienceThresholdPct ?? 75,
+    sessionTailCache: structuredClone(
+      config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
+    ),
   } satisfies SnapshotSection<
     | 'sessionHistoryBudgetPct'
     | 'memoryRetrievalBudgetPct'
@@ -196,6 +200,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'compactionThresholdPct'
     | 'observationMaskingWindow'
     | 'compactionEmotionalSalienceThresholdPct'
+    | 'sessionTailCache'
   >;
 }
 
@@ -540,6 +545,11 @@ function applyCoreSettings(
   if ('sessionMirrorChannelOverrides' in settings) {
     config.sessionMirrorChannelOverrides = structuredClone(
       settings.sessionMirrorChannelOverrides ?? {},
+    );
+  }
+  if ('sessionTailCache' in settings) {
+    config.sessionTailCache = structuredClone(
+      settings.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     );
   }
   if ('groupMemory' in settings) {

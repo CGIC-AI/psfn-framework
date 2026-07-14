@@ -811,6 +811,7 @@ async function main(): Promise<void> {
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;
+  shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

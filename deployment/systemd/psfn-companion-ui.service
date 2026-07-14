@@ -1,9 +1,8 @@
 [Unit]
 Description=PSFN Companion UI LAN Dev Server
-After=network-online.target psfn-satellite-hub.service
+After=network-online.target local-fs.target psfn-satellite-hub.service
 Wants=network-online.target
-Requires=psfn-satellite-hub.service
-RequiresMountsFor=%h/psfn-framework-source %h/psfn-satellite-hub
+Requires=local-fs.target psfn-satellite-hub.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -11,10 +10,9 @@ StartLimitBurst=5
 Type=simple
 User=psfn
 Group=psfn
-WorkingDirectory=%h/psfn-framework-source/companion-ui
-Environment=HOME=%h
+WorkingDirectory=~
 Environment=PATH=/opt/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/opt/node-v22/bin/npm run dev -- --host 0.0.0.0 --port 5173
+ExecStart=/opt/node-v22/bin/npm --prefix ./psfn-framework-source/companion-ui run dev -- --host 0.0.0.0 --port 5173
 Restart=on-failure
 RestartSec=5
 KillMode=mixed

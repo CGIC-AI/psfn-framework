@@ -10,8 +10,22 @@ load_private_ops_config() {
     return 1
   fi
   if [[ -r "$config_path" ]]; then
+    # The caller's exported environment is authoritative. Snapshot it before
+    # loading local defaults, then restore it so the file can only fill values
+    # the operator did not supply explicitly.
+    local -A explicit_environment=()
+    local variable_name variable_value
+    while IFS='=' read -r -d '' variable_name variable_value; do
+      explicit_environment["$variable_name"]=$variable_value
+    done < <(env -0)
+
     # shellcheck disable=SC1090
     source "$config_path"
+
+    for variable_name in "${!explicit_environment[@]}"; do
+      printf -v "$variable_name" '%s' "${explicit_environment[$variable_name]}"
+      export "$variable_name"
+    done
   fi
 }
 

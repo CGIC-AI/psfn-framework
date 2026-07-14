@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const repoRoot = process.cwd();
 const opsDir = join(repoRoot, 'scripts/ops');
 const loaderPath = join(opsDir, 'load-private-ops-config.sh');
+const systemdDir = join(repoRoot, 'deployment/systemd');
 const scripts = [
   'load-private-ops-config.sh',
   'ship-kube-update.sh',
@@ -34,7 +35,12 @@ describe('private deployment operations scripts', () => {
     return configPath;
   }
 
-  function runScript(scriptName: string, args: string[], configPath: string) {
+  function runScript(
+    scriptName: string,
+    args: string[],
+    configPath: string,
+    envOverrides: NodeJS.ProcessEnv = {},
+  ) {
     return spawnSync('bash', [join(opsDir, scriptName), ...args], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -42,6 +48,7 @@ describe('private deployment operations scripts', () => {
         ...process.env,
         PSFN_HOST_ALIAS: '',
         PSFN_OPS_CONFIG: configPath,
+        ...envOverrides,
       },
     });
   }
@@ -85,6 +92,53 @@ describe('private deployment operations scripts', () => {
     expect(result.stdout).toBe('offline-example|example-namespace');
   });
 
+  it('keeps explicit environment values ahead of local config defaults', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-private-ops-precedence-'));
+    tempDirs.push(dir);
+    const configPath = join(dir, 'operator.env');
+    writeFileSync(
+      configPath,
+      'PSFN_HOST_ALIAS=file-target\nPSFN_NAMESPACE=file-namespace\n',
+      'utf8',
+    );
+
+    const result = spawnSync(
+      'bash',
+      [
+        '-c',
+        'source "$1"; load_private_ops_config "$2"; printf "%s|%s" "$PSFN_HOST_ALIAS" "$PSFN_NAMESPACE"',
+        '_',
+        loaderPath,
+        opsDir,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PSFN_HOST_ALIAS: 'environment-target',
+          PSFN_NAMESPACE: 'environment-namespace',
+          PSFN_OPS_CONFIG: configPath,
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('environment-target|environment-namespace');
+  });
+
+  it('accepts an inherited sync target during offline config validation', () => {
+    const result = runScript(
+      'sync-companion-beads.sh',
+      ['--check-config'],
+      emptyPrivateConfig(),
+      { PSFN_HOST_ALIAS: 'environment-target' },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('configuration valid');
+  });
+
   it('rejects an explicitly selected config that is not readable', () => {
     const missingPath = join(mkdtempSync(join(tmpdir(), 'psfn-private-ops-missing-')), 'missing.env');
     tempDirs.push(join(missingPath, '..'));
@@ -103,5 +157,19 @@ describe('private deployment operations scripts', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('PSFN_HOST_ALIAS is required');
+  });
+
+  it.each([
+    ['psfn-companion-ui.service', './psfn-framework-source/companion-ui'],
+    ['psfn-satellite-hub.service', './psfn-satellite-hub'],
+  ])('%s resolves its work tree from the configured service account home', (unitName, npmPrefix) => {
+    const unit = readFileSync(join(systemdDir, unitName), 'utf8');
+
+    expect(unit).toContain('User=psfn');
+    expect(unit).toContain('WorkingDirectory=~');
+    expect(unit).toContain(`ExecStart=/opt/node-v22/bin/npm --prefix ${npmPrefix}`);
+    expect(unit).toMatch(/^After=.*\blocal-fs\.target\b/m);
+    expect(unit).not.toContain('%h');
+    expect(unit).not.toContain('Environment=HOME=');
   });
 });

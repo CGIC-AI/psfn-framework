@@ -485,6 +485,21 @@ assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'sate
 assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
 assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
 
+const piHubOverlayRendered = render([
+  '-f',
+  resolve(chartDir, 'overlays/pi-satellite-hub.values.yaml'),
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+  '--set-string',
+  'secrets.values.satelliteHubApiKey=verify-hub-satellite-key',
+]);
+const piHubDevices = findDocumentByKindName(piHubOverlayRendered, 'ConfigMap', 'psfn-hub-devices');
+assertIncludes(
+  piHubDevices,
+  '\"control\":[\"interrupt\",\"presence\",\"session_attach\",\"approvals\",\"touch\"]',
+  'Pi companion app touch capability grant',
+);
+
 const hubTextOnlyRendered = render([
   '--set',
   'satelliteHub.enabled=true',

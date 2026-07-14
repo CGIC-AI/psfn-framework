@@ -36,7 +36,7 @@ export class CompanionStimulusIngress implements CompanionStimulusPort {
     if (!satellite || !stimulus) {
       throw new Error('Companion stimulus delivery requires satellite and stimulus routing metadata');
     }
-    const key = `${satellite.satelliteId}\u0000${satellite.endpointId}\u0000${stimulus.kind}`;
+    const key = `${satellite.satelliteId}\u0000${stimulus.kind}`;
     const acceptedAt = this.now();
     const previousAcceptedAt = this.lastAcceptedAt.get(key);
     if (previousAcceptedAt !== undefined) {

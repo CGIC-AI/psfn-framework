@@ -89,10 +89,10 @@ import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
   handleCompanionEventsStream,
-  handleCompanionTouchStimulus,
   matchCompanionRelayRoute,
   type CompanionRelayHttpDeps,
 } from './server/companion-relay-routes.js';
+import { handleCompanionTouchStimulus } from './server/companion-touch-stimulus-route.js';
 import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
 
 const log = createComponentLogger('ApiServer');

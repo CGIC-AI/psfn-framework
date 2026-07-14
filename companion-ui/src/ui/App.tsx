@@ -49,6 +49,7 @@ export function App() {
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
   const [spritePetted, setSpritePetted] = useState(false);
+  const [touchError, setTouchError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
   const storeRef = useRef<HubStreamStore | null>(null);
@@ -59,9 +60,12 @@ export function App() {
     const coalescer = new HeadpatCoalescer({
       emit: (interaction) => {
         try {
-          storeRef.current?.sendTouchInteraction(interaction);
-        } catch {
-          // Connection and capability failures surface through the Hub client.
+          const store = storeRef.current;
+          if (!store) throw new Error('Satellite Hub is not connected');
+          store.sendTouchInteraction(interaction);
+          setTouchError(null);
+        } catch (error) {
+          setTouchError(error instanceof Error ? error.message : 'Headpat delivery failed');
         }
       },
     });
@@ -257,7 +261,7 @@ export function App() {
       <ToastLayer
         approvals={approvals}
         artifacts={artifacts}
-        error={streamState.failure?.message ?? configError}
+        error={streamState.failure?.message ?? touchError ?? configError}
         onApprovalDecision={decideApproval}
         onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}

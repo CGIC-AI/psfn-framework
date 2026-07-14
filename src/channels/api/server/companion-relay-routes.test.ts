@@ -61,6 +61,11 @@ const TEST_REGISTRY = parseSatelliteRegistryConfig({
           maxCapabilities: ['text', 'touch'],
           telemetryScopes: ['approvals', 'artifacts', 'tool_activity'],
         }),
+        endpointFixture({
+          endpointId: 'hub-secondary',
+          maxCapabilities: ['text', 'touch'],
+          telemetryScopes: ['approvals', 'artifacts', 'tool_activity'],
+        }),
       ],
     },
     {
@@ -655,6 +660,18 @@ describe('companion relay routes', () => {
       const rearmed = await request(port, 'POST', '/v1/companion/stimuli', body, AUTH);
       expect(rearmed.status).toBe(200);
       expect(deliveredStimuli).toHaveLength(2);
+    });
+
+    it('cannot bypass the satellite cooldown by rotating registered endpoints', async () => {
+      const first = await request(port, 'POST', '/v1/companion/stimuli', headpatBody(), AUTH);
+      const second = await request(port, 'POST', '/v1/companion/stimuli', {
+        ...headpatBody(),
+        endpointId: 'hub-secondary',
+      }, AUTH);
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(deliveredStimuli).toHaveLength(1);
     });
   });
 

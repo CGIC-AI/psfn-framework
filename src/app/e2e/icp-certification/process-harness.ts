@@ -8,15 +8,20 @@ import type { GatewayMultiCompanionConfig } from '../../../boundary/gateway/mult
 import { RootBoundIcpInitiationCausalityAuthority } from '../../../boundary/gateway/icp-initiation-causality-authority.js';
 import { IcpFatigueInitiationCapacityAuthority } from '../../../core/agent/fatigue/initiation-capacity.js';
 import { EventBus } from '../../../shared/event-bus.js';
+import type { IcpConversationCostBreakerEvent } from '../../../shared/telemetry/model-usage.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
+import { createPostgresPool } from '../../../persistence/postgres.js';
 import { PostgresCompanionPresenceStore } from '../../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from '../../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from '../../../persistence/postgres/icp-shared-autonomy-store.js';
+import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
 import { loadChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import { loadAgentConfig } from '../../../system/config/load-config.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
 import { loadPlacesRegistryConfig } from '../../../channels/backplane/places-registry.js';
-import { createScriptedE2ELLMProvider } from '../test-llm-provider.js';
+import { LLMClient } from '../../../primitives/llm/client.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -27,6 +32,8 @@ import type {
   IcpCertificationCompanionFixture,
   IcpCertificationFixture,
 } from './fixture.js';
+import { configureIcpCertificationModelEndpoint } from './fixture.js';
+import { startIcpCertificationModelServer } from './openai-fixture-server.js';
 
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
 const START_TIMEOUT_MS = 60_000;
@@ -180,6 +187,8 @@ export class IcpCertificationAgentProcess {
 export interface IcpCertificationProcessHarness {
   agents: readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess];
   gateway: GatewayServer;
+  readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
+  readonly modelRequestCount: number;
   restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
   stop(): Promise<void>;
 }
@@ -205,6 +214,26 @@ export async function startIcpCertificationProcessHarness(input: {
   databaseUrl: string;
   fixture: IcpCertificationFixture;
 }): Promise<IcpCertificationProcessHarness> {
+  const modelServer = await startIcpCertificationModelServer();
+  configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
+  const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'icp-certification-loopback-key';
+  const config = hydrateJsonBackedRuntimeConfig(
+    loadAgentConfig(input.fixture.companions[0].env),
+    { seedDir: input.fixture.companions[0].env.CONFIG_DIR },
+  );
+  const modelUsagePool = createPostgresPool(input.databaseUrl, {
+    applicationName: 'psfn-icp-certification-model-usage',
+    allowExitOnIdle: true,
+  });
+  const modelUsage = new PostgresModelUsageStore(modelUsagePool, { fleetAggregation: true });
+  const costDecisions: IcpConversationCostBreakerEvent[] = [];
+  const llmProvider = new LLMClient(config, {
+    usageRecorder: modelUsage,
+    usageBudgetQuery: modelUsage,
+    icpConversationCostAccounting: modelUsage,
+    onIcpConversationCostDecision: decision => costDecisions.push(decision),
+  });
   const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
   const autonomy = await PostgresIcpSharedAutonomyStore.connect(input.databaseUrl, {
@@ -255,7 +284,6 @@ export async function startIcpCertificationProcessHarness(input: {
     discordAccounts: {},
   };
   const eventBus = new EventBus();
-  const llmProvider = createScriptedE2ELLMProvider();
   const gateway = new GatewayServer({
     socketPath: input.fixture.gatewaySocketPath,
     llmProvider,
@@ -279,6 +307,7 @@ export async function startIcpCertificationProcessHarness(input: {
     icpAutonomyStore: autonomy,
     icpInitiationPolicyAuthority: authority,
     eventBus,
+    modelUsageRecorder: modelUsage,
   });
   gateway.start();
   let agents: IcpCertificationAgentProcess[] = [];
@@ -294,6 +323,10 @@ export async function startIcpCertificationProcessHarness(input: {
     await fatigue.close().catch(() => undefined);
     await autonomy.close().catch(() => undefined);
     await presence.close().catch(() => undefined);
+    await modelUsagePool.end().catch(() => undefined);
+    await modelServer.stop().catch(() => undefined);
+    if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
     throw error;
   }
   let stopped = false;
@@ -305,6 +338,12 @@ export async function startIcpCertificationProcessHarness(input: {
       ];
     },
     gateway,
+    get costDecisions() {
+      return costDecisions;
+    },
+    get modelRequestCount() {
+      return modelServer.requests.length;
+    },
     async restartAgents() {
       await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));
       agents = [];
@@ -325,6 +364,10 @@ export async function startIcpCertificationProcessHarness(input: {
       await fatigue.close();
       await autonomy.close();
       await presence.close();
+      await modelUsagePool.end();
+      await modelServer.stop();
+      if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
     },
   };
 }

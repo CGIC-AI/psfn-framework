@@ -753,7 +753,23 @@ export class LLMClient {
     const process = this.resolveBudgetProcess(purpose, correlation);
     const chargeSnapshot = getRunChargeSnapshot();
     const capturedProviderCost = this.providerCostResolver?.();
-    const responseUsageEvidence = usageDetails?.cost
+    const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
+    const syntheticRoutedEndpointCost = candidate.requestBaseUrl !== undefined
+      && usageDetails?.cost?.total === 0
+      && [
+        usageDetails.cost.input,
+        usageDetails.cost.output,
+        usageDetails.cost.cacheRead,
+        usageDetails.cost.cacheWrite,
+      ].every(value => value === undefined || value === 0)
+      && accountingRates !== undefined
+      && [
+        accountingRates.inputPer1MUsd,
+        accountingRates.outputPer1MUsd,
+        accountingRates.cacheReadPer1MUsd,
+        accountingRates.cacheWritePer1MUsd,
+      ].some(value => value !== undefined && value > 0);
+    const responseUsageEvidence = usageDetails?.cost && !syntheticRoutedEndpointCost
       ? { responseUsage: usageDetails.cost }
       : {};
     const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
@@ -778,7 +794,6 @@ export class LLMClient {
       usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
-    const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
     const accounting = reconcileModelUsageAccounting({
       usage: {
         inputTokens: usageDetails?.input ?? inputTokens,
@@ -816,6 +831,7 @@ export class LLMClient {
         ? { providerCostEvidenceSummary: providerCostReconciliation.providerCostEvidenceSummary }
         : {}),
       ...(providerCost ? { providerCost } : {}),
+      ...(syntheticRoutedEndpointCost ? { syntheticRoutedEndpointCostIgnored: true } : {}),
       ...(correlation?.icpCorrelation
         ? {
             icpCost: {

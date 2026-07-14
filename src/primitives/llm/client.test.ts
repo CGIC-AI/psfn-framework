@@ -352,6 +352,62 @@ describe('LLMClient ICP conversation cost admission', () => {
     }));
   });
 
+  it('does not let a routed endpoint synthetic zero override canonical model pricing', async () => {
+    const config = makeIcpConfig();
+    const primary = config.modelRegistry?.models.find(
+      entry => entry.identity.model === 'z-ai/glm-5',
+    );
+    if (!primary) throw new Error('Expected the primary test model');
+    primary.identity.source.baseUrl = 'http://loopback.test/v1';
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const accounting: IcpConversationCostAccountingPort = {
+      reserveIcpConversationCost: vi.fn(async input => ({
+        allowed: true,
+        replayed: false,
+        reason: 'below_warning',
+        projectedRequestCostUsd: input.projectedCostUsd,
+        projection: projection(input.projectedCostUsd),
+      })),
+      getIcpConversationCostProjection: vi.fn(async () => projection(0)),
+    };
+    const client = new LLMClient(config, {
+      usageRecorder,
+      icpConversationCostAccounting: accounting,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 12,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Continue' }],
+      correlation: { callType: 'chat', icpCorrelation: correlation },
+    });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      providerCost: {},
+      estimatedCost: expect.objectContaining({ total: 0.000014 }),
+      effectiveCost: expect.objectContaining({ total: 0.000014 }),
+      costSource: 'estimate',
+      metadata: expect.objectContaining({ syntheticRoutedEndpointCostIgnored: true }),
+    }));
+  });
+
   it('suppresses provider I/O when the canonical hard breaker denies the attempt', async () => {
     const reserveIcpConversationCost = vi.fn<
       IcpConversationCostAccountingPort['reserveIcpConversationCost']

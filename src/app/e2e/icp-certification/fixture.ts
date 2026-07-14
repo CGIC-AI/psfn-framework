@@ -55,6 +55,12 @@ export interface IcpCertificationFixture {
   cleanup(): void;
 }
 
+export type IcpCertificationCostProfile =
+  | 'permissive'
+  | 'lowered_warning'
+  | 'lowered_hard'
+  | 'missing';
+
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 }
@@ -235,6 +241,7 @@ function makeCompanion(input: {
 
 export function createIcpCertificationFixture(input: {
   databaseUrl: string;
+  costProfile?: IcpCertificationCostProfile;
   seedDir?: string;
 }): IcpCertificationFixture {
   const rootDir = mkdtempSync(join(tmpdir(), 'psfn-icp-certification-'));
@@ -251,6 +258,74 @@ export function createIcpCertificationFixture(input: {
   mkdirSync(socketDir, { recursive: true });
   copyCanonicalOwners(seedDir, systemDataDir);
   configureOwnerFiles(systemDataDir);
+  const modelsPath = join(systemDataDir, 'models.json');
+  const models = readJson(modelsPath);
+  const modelEntries = models.models as Array<Record<string, unknown>>;
+  const primaryModel = modelEntries.find(
+    model => model.id === 'primary',
+  );
+  if (!primaryModel) throw new Error('Certification model owner requires the primary model');
+  const costProfile = input.costProfile ?? 'permissive';
+  if (costProfile !== 'missing') {
+    for (const model of modelEntries) {
+      const chatCapable = (model.purposes as Array<{ purpose?: unknown }>).some(
+        purpose => purpose.purpose === 'chat',
+      );
+      model.cost = chatCapable && costProfile !== 'permissive'
+        ? {
+            inputPer1MUsd: 0,
+            outputPer1MUsd: costProfile === 'lowered_hard' ? 15 : 10,
+            currency: 'USD',
+          }
+        : { inputPer1MUsd: 0, outputPer1MUsd: 0, currency: 'USD' };
+      if (chatCapable && costProfile !== 'permissive') {
+        model.capabilities = {
+          ...(model.capabilities as Record<string, unknown>),
+          maxOutputTokens: 10,
+        };
+        model.tuning = {
+          ...(model.tuning as Record<string, unknown>),
+          maxOutputTokens: 10,
+        };
+      }
+    }
+  }
+  writeJson(modelsPath, models);
+
+  if (costProfile === 'lowered_warning' || costProfile === 'lowered_hard') {
+    const chargePath = join(systemDataDir, 'charge-policy.json');
+    const charge = readJson(chargePath);
+    charge.icpCostBreaker = costProfile === 'lowered_hard'
+      ? {
+          enabled: true,
+          warningThresholdUsd: 0.00015,
+          hardLimitUsd: 0.0002,
+          finalCloseoutReserveUsd: 0.00005,
+          pendingReservationStaleAfterMs: 60_000,
+          includedCostPurposes: {
+            conversation_turn: true,
+            tool: true,
+            summary: true,
+            extraction: true,
+            sidecar: true,
+          },
+        }
+      : {
+          enabled: true,
+          warningThresholdUsd: 0.0001,
+          hardLimitUsd: 0.0003,
+          finalCloseoutReserveUsd: 0.0002,
+          pendingReservationStaleAfterMs: 60_000,
+          includedCostPurposes: {
+            conversation_turn: true,
+            tool: true,
+            summary: true,
+            extraction: true,
+            sidecar: true,
+          },
+        };
+    writeJson(chargePath, charge);
+  }
   writeJson(join(systemDataDir, 'companions.json'), {
     companions: [
       {
@@ -314,4 +389,20 @@ export function createIcpCertificationFixture(input: {
       rmSync(rootDir, { recursive: true, force: true });
     },
   };
+}
+
+export function configureIcpCertificationModelEndpoint(
+  fixture: IcpCertificationFixture,
+  baseUrl: string,
+): void {
+  const modelsPath = join(fixture.systemDataDir, 'models.json');
+  const models = readJson(modelsPath);
+  for (const model of models.models as Array<Record<string, unknown>>) {
+    const identity = model.identity as Record<string, unknown>;
+    identity.source = {
+      ...(identity.source as Record<string, unknown>),
+      baseUrl,
+    };
+  }
+  writeJson(modelsPath, models);
 }

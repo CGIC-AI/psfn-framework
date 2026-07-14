@@ -31,6 +31,23 @@ interface ChannelSnapshot {
   summaries: Array<{ summary: string }>;
 }
 
+async function waitForBlockedCostDecision(
+  harness: IcpCertificationProcessHarness,
+  reason: string,
+): Promise<IcpCertificationProcessHarness['costDecisions'][number]> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const decision = harness.costDecisions.find(candidate => (
+      candidate.outcome === 'blocked' && candidate.reason === reason
+    ));
+    if (decision) return decision;
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(
+    `Timed out waiting for ICP cost decision ${reason}: ${JSON.stringify(harness.costDecisions)}`,
+  );
+}
+
 async function waitForChannelEntries(
   agent: IcpCertificationProcessHarness['agents'][number],
   minimum: number,
@@ -156,5 +173,66 @@ describe('ICP certification real process harness', () => {
     expect(restartedB.summaries.length).toBeGreaterThan(0);
     expect(restartedA.entries.some(entry => entry.role === 'assistant')).toBe(true);
     expect(restartedB.entries.some(entry => entry.authorId === CERTIFICATION_COMPANION_A)).toBe(true);
+  }, TIMEOUT_MS);
+
+  it.each([
+    ['lowered_warning', 'warning_closeout_reserve_only', 0.0001],
+    ['lowered_hard', 'hard_limit_exceeded', 0.00015],
+  ] as const)(
+    'stops the second companion at the fleet-scoped %s cost boundary',
+    async (costProfile, expectedReason, expectedActualCostUsd) => {
+      if (!postgres) throw new Error('Postgres certification harness is unavailable');
+      const { databaseUrl } = await postgres.createDatabase();
+      fixture = createIcpCertificationFixture({ databaseUrl, costProfile });
+      processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+      const [agentA, agentB] = processes.agents;
+      await agentB.publishAvailability('open_to_chat');
+      await expect(agentA.submitInitiation('free_time', `cost:${costProfile}`)).resolves
+        .toMatchObject({ outcome: 'sent', status: 'consumed' });
+
+      const blocked = await waitForBlockedCostDecision(processes, expectedReason);
+      expect(blocked).toMatchObject({
+        localCompanionId: CERTIFICATION_COMPANION_B,
+        outcome: 'blocked',
+        reason: expectedReason,
+        projection: {
+          actualCostUsd: expectedActualCostUsd,
+          attributedCompanionCount: 1,
+        },
+      });
+      expect(processes.costDecisions).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          localCompanionId: CERTIFICATION_COMPANION_A,
+          outcome: 'reserved',
+          reason: 'below_warning',
+        }),
+      ]));
+      expect(processes.costDecisions.some(decision => (
+        decision.localCompanionId === CERTIFICATION_COMPANION_B
+        && (decision.outcome === 'reserved' || decision.outcome === 'warning')
+      ))).toBe(false);
+      expect(processes.modelRequestCount).toBeGreaterThanOrEqual(2);
+    },
+    TIMEOUT_MS,
+  );
+
+  it('fails closed before provider dispatch when canonical ICP pricing is missing', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({ databaseUrl, costProfile: 'missing' });
+    processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
+
+    const [agentA, agentB] = processes.agents;
+    await agentB.publishAvailability('open_to_chat');
+    await expect(agentA.submitInitiation('free_time', 'cost:missing')).rejects
+      .toThrow(/missing_cost_metadata|cost breaker/i);
+    const blocked = await waitForBlockedCostDecision(processes, 'missing_cost_metadata');
+    expect(blocked).toMatchObject({
+      localCompanionId: CERTIFICATION_COMPANION_A,
+      outcome: 'blocked',
+      reason: 'missing_cost_metadata',
+    });
+    expect(processes.modelRequestCount).toBe(1);
   }, TIMEOUT_MS);
 });

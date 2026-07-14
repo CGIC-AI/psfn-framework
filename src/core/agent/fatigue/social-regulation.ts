@@ -12,18 +12,19 @@ import type { FatigueBudgetState } from './fatigue-budget.js';
 import { isFatigueWorkIntent } from './policy.js';
 
 function resolveContinuationEvidence(input: {
+  policy: FatiguePolicyConfig['socialRegulation']['continuationEvidence'];
   recentHumanParticipation: boolean;
   trustedStructuredWorkIntent: boolean;
   explicitPeerInvitation: boolean;
 }): FatigueContinuationEvidence[] {
   return [
-    ...(input.recentHumanParticipation
+    ...(input.policy.recentHumanParticipation && input.recentHumanParticipation
       ? ['recent_human_participation' as const]
       : []),
-    ...(input.trustedStructuredWorkIntent
+    ...(input.policy.activeWorkOrResearch && input.trustedStructuredWorkIntent
       ? ['active_work_or_research' as const]
       : []),
-    ...(input.explicitPeerInvitation
+    ...(input.policy.explicitPeerInvitation && input.explicitPeerInvitation
       ? ['explicit_peer_invitation' as const]
       : []),
   ];
@@ -74,6 +75,7 @@ export function projectFatigueSocialRegulation(input: {
   const continuationEvidence = input.continuationEvidenceOverride
     ? [...input.continuationEvidenceOverride]
     : resolveContinuationEvidence({
+        policy: input.config.socialRegulation.continuationEvidence,
         recentHumanParticipation: input.hasRecentHumanParticipation,
         trustedStructuredWorkIntent,
         explicitPeerInvitation: input.explicitPeerInvitation === true,

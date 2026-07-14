@@ -4,6 +4,7 @@ import { createLlmIcpInitiationConsentEvaluator } from '../../core/icp/initiatio
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
 import { registerIcpCoLocationThoughtAdapter } from '../../core/icp/co-location-thought-adapter.js';
 import { createIcpWeightedThoughtCandidateAdapter } from '../../core/icp/weighted-thought-candidate-adapter.js';
+import type { IcpAutonomySchedulerConfig } from '../../system/config/icp-autonomy-scheduler-config.js';
 
 type SourceRuntimeOptions = Parameters<typeof createIcpInitiationSourceRuntime>[0];
 type ConsentEvaluatorOptions = Parameters<typeof createLlmIcpInitiationConsentEvaluator>[0];
@@ -11,6 +12,7 @@ type IntentionAdapterOptions = Parameters<typeof createIcpIntentionCandidateAdap
 type CoLocationAdapterOptions = Parameters<typeof registerIcpCoLocationThoughtAdapter>[0];
 
 export interface IcpInitiationSourceWiringInput {
+  config: IcpAutonomySchedulerConfig;
   localCompanionId: string | undefined;
   candidateStore: SourceRuntimeOptions['store'] | undefined;
   peers: SourceRuntimeOptions['peers'] | undefined;
@@ -39,7 +41,8 @@ export interface IcpInitiationSourceWiring {
 export function wireIcpInitiationSources(
   input: IcpInitiationSourceWiringInput,
 ): IcpInitiationSourceWiring {
-  const sourceRuntime = input.candidateStore && input.peers && input.localCompanionId
+  const sourceRuntime = input.config.enabled
+    && input.candidateStore && input.peers && input.localCompanionId
     ? createIcpInitiationSourceRuntime({
         localCompanionId: input.localCompanionId,
         store: input.candidateStore,
@@ -47,6 +50,12 @@ export function wireIcpInitiationSources(
         gateway: input.gateway,
         consent: createLlmIcpInitiationConsentEvaluator({ llmProvider: input.llmProvider }),
         isExternalCompanionAuthorized: input.isExternalCompanionAuthorized,
+        policy: {
+          candidateDefaultTtlMs: input.config.candidate.defaultTtlMs,
+          retryCadenceMs: input.config.candidate.retryCadenceMs,
+          maxRetryAttempts: input.config.candidate.maxRetryAttempts,
+          permitTtlMs: input.config.permit.ttlMs,
+        },
         eventBus: input.eventBus,
       })
     : undefined;
@@ -63,7 +72,8 @@ export function wireIcpInitiationSources(
       })
     : undefined;
   const unregisterCoLocationThoughtAdapter = (
-    input.presenceEnabled && input.weightedThoughtStore && input.localCompanionId
+    input.config.enabled
+      && input.presenceEnabled && input.weightedThoughtStore && input.localCompanionId
   )
     ? registerIcpCoLocationThoughtAdapter({
         eventBus: input.eventBus,

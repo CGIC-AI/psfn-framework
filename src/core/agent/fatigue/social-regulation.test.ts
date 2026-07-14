@@ -48,6 +48,32 @@ function makeState(input: {
 describe('ICP fatigue social regulation projection', () => {
   const config = makeTestFatiguePolicyConfig();
 
+  it('honors owner-disabled continuation evidence without accepting message text', () => {
+    const projection = projectFatigueSocialRegulation({
+      config: {
+        ...config,
+        socialRegulation: {
+          ...config.socialRegulation,
+          continuationEvidence: {
+            recentHumanParticipation: false,
+            activeWorkOrResearch: true,
+            explicitPeerInvitation: false,
+          },
+        },
+      },
+      decision: 'allowed_charged',
+      policyBaseState: 'soft_exhausted',
+      intent: 'research',
+      taskKind: 'research',
+      hasRecentHumanParticipation: true,
+      explicitPeerInvitation: true,
+      stateBefore: makeState({ normalSpent: 4, root: true }),
+      amount: 1,
+    });
+
+    expect(projection.continuationEvidence).toEqual(['active_work_or_research']);
+  });
+
   it('progresses from normal through maturation, social charge, wrap, and final closeout', () => {
     const project = (
       stateBefore: FatigueBudgetState,

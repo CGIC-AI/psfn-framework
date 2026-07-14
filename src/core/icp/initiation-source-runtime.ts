@@ -99,6 +99,12 @@ export interface IcpInitiationSourceRuntimeDependencies {
   consent: IcpInitiationConsentEvaluator;
   /** Canonical capability-tier authorization. Required for every source. */
   isExternalCompanionAuthorized(): boolean;
+  policy?: {
+    candidateDefaultTtlMs: number;
+    retryCadenceMs: number;
+    maxRetryAttempts: number;
+    permitTtlMs: number;
+  };
   eventBus?: EventBus;
   now?: () => number;
 }
@@ -269,6 +275,12 @@ export function createIcpInitiationSourceRuntime(
     throw new Error('ICP initiation source runtime requires a lowercase RFC-4122 localCompanionId');
   }
   const now = dependencies.now ?? Date.now;
+  const policy = dependencies.policy ?? {
+    candidateDefaultTtlMs: DEFAULT_CANDIDATE_TTL_MS,
+    retryCadenceMs: ICP_INITIATION_RETRY_COOLDOWN_MS,
+    maxRetryAttempts: MAX_ICP_INITIATION_RETRY_ATTEMPTS,
+    permitTtlMs: DEFAULT_PERMIT_TTL_MS,
+  };
   const inFlight = new Map<string, Promise<IcpInitiationSourceResult>>();
 
   const emitLifecycle = async (
@@ -327,7 +339,7 @@ export function createIcpInitiationSourceRuntime(
     }
     const ttlMs = Math.min(
       MAX_ICP_CANDIDATE_TTL_MS,
-      Math.max(1, Math.floor(request.ttlMs ?? DEFAULT_CANDIDATE_TTL_MS)),
+      Math.max(1, Math.floor(request.ttlMs ?? policy.candidateDefaultTtlMs)),
     );
     const identity = sourceIdentity({
       localCompanionId: dependencies.localCompanionId,
@@ -441,7 +453,7 @@ export function createIcpInitiationSourceRuntime(
         return expired;
       }
       const completedRetryAttempts = candidate.retryAttempt ?? 0;
-      if (completedRetryAttempts >= MAX_ICP_INITIATION_RETRY_ATTEMPTS) {
+      if (completedRetryAttempts >= policy.maxRetryAttempts) {
         const cancelled = await dependencies.store.transitionCandidate({
           candidateId: candidate.candidateId,
           expectedStatus: candidate.status,
@@ -463,7 +475,7 @@ export function createIcpInitiationSourceRuntime(
         retryAttempt,
         retryEligibleAtMs: Math.min(
           candidate.expiresAtMs,
-          transitionNow + ICP_INITIATION_RETRY_COOLDOWN_MS,
+          transitionNow + policy.retryCadenceMs,
         ),
       });
       await emitLifecycle(deferred, candidate.status);
@@ -512,7 +524,7 @@ export function createIcpInitiationSourceRuntime(
     const permitResult = await dependencies.gateway.companionIssueInitiationPermit({
       candidate: projection,
       channelId,
-      permitExpiresAtMs: Math.min(candidate.expiresAtMs, permitRequestNow + DEFAULT_PERMIT_TTL_MS),
+      permitExpiresAtMs: Math.min(candidate.expiresAtMs, permitRequestNow + policy.permitTtlMs),
     });
     const expiredAfterPermit = await expireIfElapsed();
     if (expiredAfterPermit) {

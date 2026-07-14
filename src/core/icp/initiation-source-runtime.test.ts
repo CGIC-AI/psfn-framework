@@ -154,6 +154,29 @@ describe('ICP initiation source runtime', () => {
     },
   );
 
+  it('uses the canonical owner policy for candidate, retry, and permit leases', async () => {
+    const nowMs = 1_700_000_000_000;
+    const { deps } = dependencies({
+      now: () => nowMs,
+      policy: {
+        candidateDefaultTtlMs: 60_000,
+        retryCadenceMs: 12_000,
+        maxRetryAttempts: 2,
+        permitTtlMs: 30_000,
+      },
+    });
+
+    const result = await createIcpInitiationSourceRuntime(deps).submit(request('intention'));
+
+    await expect(deps.store.getCandidate(result.candidateId)).resolves.toMatchObject({
+      createdAtMs: nowMs,
+      expiresAtMs: nowMs + 60_000,
+    });
+    expect(deps.gateway.companionIssueInitiationPermit).toHaveBeenCalledWith(
+      expect.objectContaining({ permitExpiresAtMs: nowMs + 30_000 }),
+    );
+  });
+
   it.each(['free_time', 'weighted_thought', 'intention', 'foreground'] as const)(
     'denies %s without external.companion before consent, permit, or target execution',
     async (source) => {

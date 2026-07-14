@@ -166,6 +166,7 @@ export interface InProcessGardenAdminContractOptions {
   chargeLedger?: RunChargeLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
+  effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
 }
 
 export function createInProcessGardenAdminContract(
@@ -258,6 +259,9 @@ export function createInProcessGardenAdminContract(
     config: options.config,
     configStore,
     ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
+    ...(options.effectiveSchedulerConfig
+      ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }
+      : {}),
   });
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──

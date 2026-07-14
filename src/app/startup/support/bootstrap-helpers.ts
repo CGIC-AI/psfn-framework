@@ -315,6 +315,12 @@ export function hydrateCanonicalStartupConfig(
         relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    icpAutonomy: {
+      enabled: persistedScheduler.icpAutonomy.enabled,
+      candidate: { ...persistedScheduler.icpAutonomy.candidate },
+      permit: { ...persistedScheduler.icpAutonomy.permit },
+      availability: { ...persistedScheduler.icpAutonomy.availability },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

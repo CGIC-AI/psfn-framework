@@ -445,6 +445,7 @@ function parseFatigueSocialRegulationConfig(
     'declinedPressureUnits',
     'deferredPressureUnits',
     'unansweredPressureUnits',
+    'continuationEvidence',
   ], fieldPath);
   const relationshipPressureHalfLifeMs = parsePositiveInteger(
     raw.relationshipPressureHalfLifeMs,
@@ -464,6 +465,15 @@ function parseFatigueSocialRegulationConfig(
   if (conversationMaturingRatio <= 0 || conversationMaturingRatio >= 1) {
     throw new Error(`Invalid charge policy: ${fieldPath}.conversationMaturingRatio must be > 0 and < 1`);
   }
+  const continuationEvidence = raw.continuationEvidence;
+  if (!isRecord(continuationEvidence)) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.continuationEvidence must be an object`);
+  }
+  assertNoUnknownKeys(continuationEvidence, [
+    'recentHumanParticipation',
+    'activeWorkOrResearch',
+    'explicitPeerInvitation',
+  ], `${fieldPath}.continuationEvidence`);
   return {
     relationshipPressureHalfLifeMs,
     relationshipPressureWindowMs,
@@ -488,6 +498,20 @@ function parseFatigueSocialRegulationConfig(
       raw.unansweredPressureUnits,
       `${fieldPath}.unansweredPressureUnits`,
     ),
+    continuationEvidence: {
+      recentHumanParticipation: parseBoolean(
+        continuationEvidence.recentHumanParticipation,
+        `${fieldPath}.continuationEvidence.recentHumanParticipation`,
+      ),
+      activeWorkOrResearch: parseBoolean(
+        continuationEvidence.activeWorkOrResearch,
+        `${fieldPath}.continuationEvidence.activeWorkOrResearch`,
+      ),
+      explicitPeerInvitation: parseBoolean(
+        continuationEvidence.explicitPeerInvitation,
+        `${fieldPath}.continuationEvidence.explicitPeerInvitation`,
+      ),
+    },
   };
 }
 

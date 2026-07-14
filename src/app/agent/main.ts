@@ -450,6 +450,7 @@ async function main(): Promise<void> {
     intentionCandidateAdapter: icpIntentionCandidateAdapter,
     unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
   } = wireIcpInitiationSources({
+    config: schedulerConfig.icpAutonomy,
     localCompanionId: config.companionId,
     candidateStore: persistenceRuntime.icpInitiationCandidateStore,
     peers: coreRuntime.icpAutonomyRuntime,
@@ -757,6 +758,7 @@ async function main(): Promise<void> {
     eventBus,
     chargeLedger,
     scheduler,
+    schedulerConfig,
     postTurnActions,
     outreachOutbox,
     episodicStore,

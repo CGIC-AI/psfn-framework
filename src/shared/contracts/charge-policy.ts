@@ -180,6 +180,12 @@ export interface FatigueSocialRegulationConfig {
   deferredPressureUnits: number;
   /** Initiation pressure added while an invitation remains unanswered. */
   unansweredPressureUnits: number;
+  /** Owner-selected structured facts that may justify a bounded continuation. */
+  continuationEvidence: {
+    recentHumanParticipation: boolean;
+    activeWorkOrResearch: boolean;
+    explicitPeerInvitation: boolean;
+  };
 }
 
 export interface FatiguePolicyConfig {

@@ -2,16 +2,36 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
-import type { NdjsonConnection } from './transport.js';
+import type {
+  GatewayRpcSerializedTransportStats,
+  NdjsonConnection,
+} from './transport.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
   const emitter = new EventEmitter();
   const sent: unknown[] = [];
+  const transportStats: GatewayRpcSerializedTransportStats = {
+    frameCount: 0,
+    serializedBytes: 0,
+    rpcCallCount: 0,
+    byMethod: {},
+  };
 
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
+      const serializedBytes = Buffer.byteLength(JSON.stringify(data), 'utf8');
+      transportStats.frameCount += 1;
+      transportStats.serializedBytes += serializedBytes;
+      const method = (data as { method?: unknown } | null)?.method;
+      if (typeof method === 'string') {
+        transportStats.rpcCallCount += 1;
+        const methodStats = transportStats.byMethod[method] ?? { callCount: 0, serializedBytes: 0 };
+        methodStats.callCount += 1;
+        methodStats.serializedBytes += serializedBytes;
+        transportStats.byMethod[method] = methodStats;
+      }
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -25,6 +45,9 @@ function createMockConnection() {
     },
     get destroyed(): boolean {
       return false;
+    },
+    get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+      return structuredClone(transportStats);
     },
     // Emit a message to the client as if received from the gateway
     _emit(message: unknown): void {
@@ -122,6 +145,20 @@ describe('GatewayClient streaming', () => {
       },
     });
     await expect(streamPromise).resolves.toMatchObject({ content: 'saw image' });
+    expect(client.getSerializedTransportStats()).toMatchObject({
+      frameCount: 2,
+      rpcCallCount: 2,
+      byMethod: {
+        'intake.screen_image': { callCount: 1 },
+        'llm.chat': { callCount: 1 },
+      },
+    });
+    expect(client.getSerializedTransportStats().serializedBytes).toBe(
+      conn.sent.reduce(
+        (total, frame) => total + Buffer.byteLength(JSON.stringify(frame), 'utf8'),
+        0,
+      ),
+    );
   });
 
   it('explicitly resends inline bytes once when the gateway reports a retention miss', async () => {

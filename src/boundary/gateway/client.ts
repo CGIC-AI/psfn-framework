@@ -6,7 +6,11 @@ import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorExcep
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import type {
+  GatewayRpcConnection,
+  GatewayRpcEndpoint,
+  GatewayRpcSerializedTransportStats,
+} from './transport.js';
 import {
   createSocketClient,
   createWebSocketRpcClient,
@@ -525,6 +529,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   get dims(): number {
     return this.embeddingDims;
+  }
+
+  getSerializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return this.conn.serializedTransportStats;
   }
 
   async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {

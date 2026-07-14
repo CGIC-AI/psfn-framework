@@ -1,8 +1,22 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** and **fleet-efficiency status added 2026-07-14** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
+
+## 2026-07-14 feature status — `feat/fleet-efficiency`
+
+- `psfn-framework-2z12.2` is closed at `0b741e01` (implementation `af9f4a33`,
+  bounded remediation `0b741e01`). Clean session appends now use a cached archive
+  fingerprint instead of rescanning the full journal; stale/unknown fingerprints
+  still take the lock-scoped full reconciliation path.
+- The remediation preserves exactly-once HMAC append semantics after a transient
+  post-commit fingerprint fault, invalidates the cache for the next write, and
+  keeps a missing archive fail-closed.
+- Final integrated gate: focused session suites 79/79, lint, ESM+DTS build, and
+  diff check all passed. The branch is pushed for backup and remains unmerged;
+  parent epic `psfn-framework-2z12` remains open for its other children.
+- Material report-only observations: none.
 
 ## 0. 2026-07-12 update — decided priority order
 

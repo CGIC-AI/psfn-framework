@@ -40,6 +40,9 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
     getEmotionalSnapshot: async (id) => store.getEmotionalSnapshot(id),
     getEmotionalTimeSeries: async (id, limit) => store.getEmotionalTimeSeries(id, limit),
     updateRelationshipType: async (id, relationshipType, actor) => store.updateRelationshipType(id, relationshipType, actor),
+    compareAndSetRelationshipType: async (id, expectedRelationshipType, relationshipType, actor) => (
+      store.compareAndSetRelationshipType(id, expectedRelationshipType, relationshipType, actor)
+    ),
     setChannelPrivacy: async (contactId, channel, channelUserId, privacyLevel, actor) => store.setChannelPrivacy(contactId, channel, channelUserId, privacyLevel, actor),
     setConversationChannelPrivacy: async (contactId, channel, channelId, privacyLevel, actor) => store.setConversationChannelPrivacy(contactId, channel, channelId, privacyLevel, actor),
     getConversationChannelPrivacy: async (contactId, channel, channelId) => store.getConversationChannelPrivacy(contactId, channel, channelId),

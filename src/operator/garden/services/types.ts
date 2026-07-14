@@ -61,6 +61,7 @@ export type {
 
 export type {
   AdminAdaptiveToolTelemetryEvent,
+  AdminToolInvocationEvent,
   AdminToolFailureEvent,
   AdminToolAvailabilityView,
   AdminToolHealthView,

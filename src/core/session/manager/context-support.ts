@@ -15,6 +15,7 @@ import {
 } from '../entry-attribution.js';
 import {
   MASKED_TOOL_OBSERVATION_CONTENT,
+  parseToolObservationMetadata,
   type ToolObservationMetadata,
 } from '../tool-observation.js';
 import {
@@ -25,6 +26,30 @@ import {
   wrapUntrustedContext,
 } from '../manager-primitives.js';
 import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
+
+const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
+const GENERATED_IMAGE_STATUS_PATTERN = /"status"\s*:\s*"image_generated"/u;
+const PENDING_IMAGE_ATTACHMENT_PATTERN = /"attachmentPending"\s*:\s*true/u;
+
+function renderImageToolHistoryProvenance(
+  entry: SessionEntry,
+  metadata: ToolObservationMetadata,
+): string | null {
+  if (
+    metadata.isError !== false
+    || !ARTIFACT_IMAGE_TOOL_NAMES.has(metadata.toolName)
+    || !GENERATED_IMAGE_STATUS_PATTERN.test(entry.content)
+    || !PENDING_IMAGE_ATTACHMENT_PATTERN.test(entry.content)
+  ) {
+    return null;
+  }
+
+  const nextRequest = metadata.toolName === 'selfie_create'
+    ? 'call selfie_create again for a new selfie'
+    : 'call generate_image again for a new image';
+  return `[Prior image tool success] ${metadata.toolName} produced a pending image attachment in that turn. `
+    + `Assistant text alone never creates an attachment; ${nextRequest}.`;
+}
 
 // Minute-resolution provenance stamp for rendered history. Returns undefined on
 // missing/invalid timestamps so context assembly never crashes on bad data.
@@ -253,6 +278,19 @@ export function entriesToMessages(
       continue;
     }
     if (entry.role === 'tool') {
+      const toolObservation = parseToolObservationMetadata(entry.metadata);
+      if (toolObservation) {
+        const content = renderImageToolHistoryProvenance(entry, toolObservation);
+        if (!content) continue;
+        const stampLabel = entryStampLabel(entry.timestamp);
+        messages.push({
+          role: 'system',
+          content: stampLabel !== undefined ? `[${stampLabel}] ${content}` : content,
+          provenance: toolResultProvenance(entry, toolObservation),
+          sourceRole: entry.role,
+          ...(stampLabel !== undefined ? { stampLabel } : {}),
+        });
+      }
       continue;
     }
     const attribution = normalizeSessionEntryAttribution(entry);

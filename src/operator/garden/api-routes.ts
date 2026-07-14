@@ -525,6 +525,7 @@ export function buildAdminApiRoutes(options: {
             serviceHealth: [],
             toolHealth: [],
             inventory: [],
+            recentInvocations: [],
             recentFailures: [],
             recentTelemetry: [],
           });

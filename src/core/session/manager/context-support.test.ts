@@ -185,6 +185,31 @@ describe('entriesToMessages', () => {
     });
   });
 
+  it('stamps context-visible system notes (appendContextSystemNote shape)', () => {
+    // Mirrors exactly what SessionManager.appendContextSystemNote persists —
+    // the temporal wake notes ride this shape, so their stamp is load-bearing.
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'system',
+        content: '[Temporal wake]\nA new day has started.',
+        authorId: 'system',
+        authorName: 'System',
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'system_note',
+            source: 'temporal_wakeup_morning',
+          },
+        }),
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe('system');
+    expect(messages[0]?.content.startsWith(`${BASE_STAMP} `)).toBe(true);
+    expect(messages[0]?.content).toContain('[Temporal wake]');
+  });
+
   it('drops internal-lane instrumentation from assembled context', () => {
     const messages = entriesToMessages([
       makeEntry({

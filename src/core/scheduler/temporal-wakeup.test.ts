@@ -947,6 +947,31 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
     expect(appended.every(a => a.note.includes('[Temporal wake]'))).toBe(true);
   });
 
+  it('morning lane still wakes the latest session when the partner has been idle past the lookback window', async () => {
+    vi.useFakeTimers();
+    // Partner last spoke 4 days before the wake slot — outside the 72h
+    // lookback, so enumeration returns nothing; the latest session must
+    // remain a candidate (pre-fan-out behavior, and the absence case is
+    // exactly when the new-day frame matters most).
+    const FOUR_DAYS_AGO = DAY2_MORNING - 4 * 24 * 60 * 60_000;
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: FOUR_DAYS_AGO })] },
+    ]);
+    port.listRecentlyActiveChannels = () => [];
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(appended.map(a => a.channelId)).toEqual([DISCORD]);
+    expect(appended[0]?.note).toContain('[Temporal wake]');
+  });
+
   it('morning outward delivery targets only the single most-recent-partner channel', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY2_MORNING));

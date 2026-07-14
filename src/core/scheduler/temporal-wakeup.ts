@@ -716,20 +716,27 @@ interface ResolvedWakeupSessionContext {
  * psfn-framework-2x37.3). When the session manager exposes enumeration, every
  * channel with partner activity inside `activeChannelLookbackHours` is a
  * candidate; per-channel eligibility (internal/public/idle/anti-loop) still
- * gates each one downstream. Without the enumeration surface the module falls
- * back to the single latest session — the pre-fan-out behavior — so it never
- * assumes a capability the caller did not wire.
+ * gates each one downstream. The latest session is always a candidate even
+ * when the partner has been idle past the lookback window — a multi-day
+ * absence is exactly when the new-day frame matters most, and pre-fan-out
+ * behavior always evaluated it. Without the enumeration surface the module
+ * falls back to that single latest session alone, so it never assumes a
+ * capability the caller did not wire.
  */
 function enumerateWakeupChannels(
   options: TemporalWakeupRuntimeOptions,
   nowMs: number,
 ): StartupSessionMetadata[] {
-  if (options.sessionManager.listRecentlyActiveChannels) {
-    const lookbackMs = Math.max(0, options.config.activeChannelLookbackHours) * HOUR_MS;
-    return options.sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs });
+  const latest = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
+  if (!options.sessionManager.listRecentlyActiveChannels) {
+    return latest ? [latest] : [];
   }
-  const single = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
-  return single ? [single] : [];
+  const lookbackMs = Math.max(0, options.config.activeChannelLookbackHours) * HOUR_MS;
+  const channels = options.sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs });
+  if (latest && !channels.some(channel => channel.sessionId === latest.sessionId)) {
+    channels.push(latest);
+  }
+  return channels;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   LLMPromptCacheObservability,
   LLMSystemPromptCacheBoundaries,
@@ -48,9 +49,14 @@ function resolveSessionIdForScope(
   scope: PromptCacheScope,
   correlation: PromptCacheCorrelation | undefined,
 ): string | undefined {
-  return scope === 'request'
+  const raw = scope === 'request'
     ? correlation?.requestId
     : correlation?.channelId;
+  if (!raw) return undefined;
+  // Providers receive this as an affinity/cache key (e.g. Mistral x-affinity,
+  // OpenAI prompt_cache_key). Hash so raw internal/channel identifiers never
+  // leave the process; equal inputs still map to a stable affinity token.
+  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
 }
 
 function supportsCacheControlBreakpoints(

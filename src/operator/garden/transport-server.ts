@@ -11,7 +11,7 @@ import {
   requireMtlsPeerFileConfig,
   verifyPeerCertificateSpiffeUri,
 } from '../../shared/net/mtls.js';
-import { readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
+import { bindRequestForResponse, readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
 import type { AdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
@@ -47,6 +47,7 @@ function dispatchAdminApiRoute(
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
+    bindRequestForResponse(res, req);
     route.handle(req, res, params);
     return true;
   }

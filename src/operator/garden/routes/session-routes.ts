@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { sendCompressedJson, sendJson } from '../../../channels/backplane/http/primitives.js';
-import { exactPath, prefixedParamPath, wrappedParamPath } from '../route-matchers.js';
+import { exactPath, nestedParamPath, prefixedParamPath, wrappedParamPath } from '../route-matchers.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import type {
@@ -9,6 +9,7 @@ import type {
   AdminSessionService,
 } from '../services/types.js';
 import {
+  AdminSessionTurnNotFoundError,
   MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT,
   MAX_ADMIN_SESSION_SEARCH_LIMIT,
 } from '../services/session-service.js';
@@ -20,6 +21,7 @@ interface ParsedSessionMessageQuery {
   limit?: number;
   beforeId?: number;
   messagesOnly?: boolean;
+  includeTurns?: boolean;
 }
 
 function parsePositiveIntegerParam(
@@ -63,12 +65,15 @@ function parseSessionMessageQuery(req: IncomingMessage):
   if (!beforeId.ok) return beforeId;
   const messagesOnly = parseBooleanParam(params, 'messagesOnly');
   if (!messagesOnly.ok) return messagesOnly;
+  const includeTurns = parseBooleanParam(params, 'includeTurns');
+  if (!includeTurns.ok) return includeTurns;
   return {
     ok: true,
     value: {
       ...(limit.value !== undefined ? { limit: limit.value } : {}),
       ...(beforeId.value !== undefined ? { beforeId: beforeId.value } : {}),
       ...(messagesOnly.value !== undefined ? { messagesOnly: messagesOnly.value } : {}),
+      ...(includeTurns.value !== undefined ? { includeTurns: includeTurns.value } : {}),
     },
   };
 }
@@ -366,6 +371,27 @@ export function buildAdminSessionRoutes(options: {
             error: toSanitizedMessage(error, 'Failed to search session messages'),
           }),
         );
+      },
+    },
+    {
+      // Per-turn lazy detail: matched before the generic session route so
+      // `.../turns/<turnId>` resolves to a single bounded turn snapshot instead
+      // of being swallowed as a channelId.
+      method: 'GET',
+      match: nestedParamPath('/api/admin/sessions/', '/turns/', 'channelId', 'turnId'),
+      handle: (req, res, { channelId, turnId }) => {
+        try {
+          const payload = sessionService.getSessionTurnDetail(channelId, turnId);
+          sendCompressedJson(req, res, 200, payload);
+        } catch (error) {
+          if (error instanceof AdminSessionTurnNotFoundError) {
+            sendJson(res, 404, { error: error.message });
+            return;
+          }
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load turn detail'),
+          });
+        }
       },
     },
     {

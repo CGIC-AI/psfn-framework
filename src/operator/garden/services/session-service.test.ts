@@ -16,7 +16,40 @@ import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
-import { AdminSessionDataService } from './session-service.js';
+import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
+
+function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId,
+    requestId: `req-${turnId}`,
+    channelId,
+    channelType: 'api',
+    startedAt: 1_700_000_000_000,
+    completedAt: 1_700_000_000_050,
+    status: 'completed',
+    userMessage: {
+      role: 'user',
+      content: 'hi',
+      timestamp: 1_700_000_000_010,
+      authorId: 'user-1',
+      authorName: 'User',
+    },
+    assistantMessage: {
+      role: 'assistant',
+      content: 'hello',
+      timestamp: 1_700_000_000_025,
+    },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: {
+      model: 'test-model',
+    },
+  };
+}
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -203,6 +236,67 @@ describe('AdminSessionDataService', () => {
     expect(light.turns).toEqual([]);
     expect(light.compactionAuditViews).toEqual([]);
     expect(light.roleEnvelopePreviews).toEqual([]);
+  });
+
+  it('drops turns and previews but keeps compaction audits when includeTurns is false', () => {
+    const channelId = 'api:include-turns';
+    const firstMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'first message',
+      timestamp: 1_700_000_000_001,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'second message',
+      timestamp: 1_700_000_000_002,
+    });
+    store.insertCompaction(channelId, 'summary of early rows', firstMessageId);
+    store.appendTurnRecord(makeTurnRecord(channelId, createTurnId()));
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const full = service.getSessionMessages(channelId);
+    expect(full.turns.length).toBeGreaterThan(0);
+    expect(full.compactionAuditViews.length).toBeGreaterThan(0);
+
+    const lean = service.getSessionMessages(channelId, { includeTurns: false });
+    expect(lean.messages).toHaveLength(2);
+    expect(lean.turns).toEqual([]);
+    expect(lean.roleEnvelopePreviews).toEqual([]);
+    // Compaction summaries survive so the session browser keeps its banner.
+    expect(lean.compactionAuditViews.length).toBeGreaterThan(0);
+  });
+
+  it('serves a single turn via getSessionTurnDetail and fails closed for unknown turns', () => {
+    const channelId = 'api:turn-detail';
+    store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
+    store.append({ channelId, role: 'assistant', content: 'hello', timestamp: 1_700_000_000_002 });
+    const turnId = createTurnId();
+    const otherTurnId = createTurnId();
+    store.appendTurnRecord(makeTurnRecord(channelId, otherTurnId));
+    store.appendTurnRecord(makeTurnRecord(channelId, turnId));
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const detail = service.getSessionTurnDetail(channelId, turnId);
+    expect(detail.sessionId).toBe(channelId);
+    expect(detail.channelId).toBe(channelId);
+    expect(detail.turn.record.turnId).toBe(turnId);
+
+    expect(() => service.getSessionTurnDetail(channelId, 'turn-does-not-exist'))
+      .toThrow(AdminSessionTurnNotFoundError);
+    expect(() => service.getSessionTurnDetail(channelId, '   '))
+      .toThrow(AdminSessionTurnNotFoundError);
   });
 
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {

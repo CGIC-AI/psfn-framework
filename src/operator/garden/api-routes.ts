@@ -30,7 +30,7 @@ import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
@@ -920,7 +920,7 @@ export function buildAdminApiRoutes(options: {
             entries: [],
             available: false,
             message: 'Confirmation queue is unavailable (gateway integration not configured).',
-          });
+          }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           return;
         }
         confirmationQueueApi.listConfirmationQueue().then(
@@ -928,14 +928,14 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 200, {
               entries: result.entries,
               available: true,
-            });
+            }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           },
           (error) => {
             sendJson(res, 200, {
               entries: [],
               available: true,
               message: `Unable to load confirmation queue: ${String(error)}`,
-            });
+            }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           },
         );
       },

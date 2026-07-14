@@ -166,6 +166,7 @@ export type {
   AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
 export type {

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import AccountingCockpit from '$lib/components/accounting/AccountingCockpit.svelte';
+  import { accountingSearchParamsForTab } from '$lib/accounting/query-state';
   import {
     getCharges,
     type AdminChargeLedgerData,
@@ -324,8 +325,7 @@
   function selectTab(tab: 'charges' | 'token-usage'): void {
     activeTab = tab;
     const url = new URL(window.location.href);
-    if (tab === 'token-usage') url.searchParams.set('tab', tab);
-    else url.search = '';
+    url.search = accountingSearchParamsForTab(url.searchParams, tab).toString();
     window.history.replaceState(window.history.state, '', url);
   }
 

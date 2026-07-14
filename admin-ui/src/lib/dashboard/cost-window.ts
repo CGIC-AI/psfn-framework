@@ -36,6 +36,10 @@ export function buildDashboardCostWindowPath(costWindow: DashboardCostWindow): s
   return `/api/admin/dashboard?costWindow=${encodeURIComponent(costWindow)}`;
 }
 
+export function buildDashboardAccountingPath(costWindow: DashboardCostWindow): string {
+  return `/charge-budget?tab=token-usage&range=${encodeURIComponent(costWindow)}`;
+}
+
 export function createDashboardCostWindowSelection(
   committed: DashboardCostWindow,
 ): DashboardCostWindowSelection {

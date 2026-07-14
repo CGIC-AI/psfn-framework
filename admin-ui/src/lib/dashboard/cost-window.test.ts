@@ -7,6 +7,7 @@ import {
   createDashboardCostWindowSelection,
   DASHBOARD_COST_WINDOW_OPTIONS,
   DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS,
+  buildDashboardAccountingPath,
   buildDashboardCostWindowPath,
   rejectDashboardCostWindowSelection,
   resolveDashboardCostWindow,
@@ -33,6 +34,18 @@ test('buildDashboardCostWindowPath includes validated costWindow query parameter
   assert.equal(buildDashboardCostWindowPath('today'), '/api/admin/dashboard?costWindow=today');
   assert.equal(buildDashboardCostWindowPath('week'), '/api/admin/dashboard?costWindow=week');
   assert.equal(buildDashboardCostWindowPath('month'), '/api/admin/dashboard?costWindow=month');
+});
+
+test('dashboard accounting drill-through carries the committed Today/Week/Month range', () => {
+  assert.equal(buildDashboardAccountingPath('today'), '/charge-budget?tab=token-usage&range=today');
+  assert.equal(buildDashboardAccountingPath('week'), '/charge-budget?tab=token-usage&range=week');
+  assert.equal(buildDashboardAccountingPath('month'), '/charge-budget?tab=token-usage&range=month');
+
+  const source = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
+  assert.equal(
+    source.match(/href=\{buildDashboardAccountingPath\(committedCostWindow\)\}/gu)?.length,
+    2,
+  );
 });
 
 test('dashboard refresh interval is bounded to fifteen seconds', () => {

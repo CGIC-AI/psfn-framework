@@ -44,6 +44,8 @@ export interface AccountingQueryState {
   filters: Partial<Record<ModelUsageGroupDimension, string>>;
 }
 
+export type AccountingTab = 'charges' | 'token-usage';
+
 const CONTROL_CHARACTER = /[\u0000-\u001F\u007F-\u009F]/u;
 const GROUP_DIMENSIONS = new Set<string>(MODEL_USAGE_GROUP_DIMENSIONS);
 const CHARGE_LANES = new Set<string>(CHARGE_POLICY_RUNTIME_LANE_VALUES);
@@ -197,6 +199,16 @@ export function accountingStateToSearchParams(state: AccountingQueryState): URLS
     if (value) params.set(`filter.${dimension}`, value);
   }
   return params;
+}
+
+export function accountingSearchParamsForTab(
+  params: URLSearchParams,
+  tab: AccountingTab,
+): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (tab === 'token-usage') next.set('tab', tab);
+  else next.delete('tab');
+  return next;
 }
 
 export function buildModelUsageQuery(state: AccountingQueryState): ModelUsageQuery {

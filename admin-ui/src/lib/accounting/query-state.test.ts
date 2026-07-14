@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountingSearchParamsForTab,
   accountingStateFromSearchParams,
   accountingStateToSearchParams,
   buildChargeCostQuery,
@@ -25,6 +26,34 @@ describe('accounting query state', () => {
     expect(parsed).toEqual(state);
     expect(params.get('filter.model')).toBe('gpt-5');
     expect(params.get('filter.chargeLane')).toBe('interactive');
+  });
+
+  it('preserves accounting query state across Token Usage and Charge Policy tab switches', () => {
+    const state = {
+      ...createDefaultAccountingState('America/New_York', new Date('2026-07-14T12:00:00Z')),
+      range: 'quarter' as const,
+      bucket: 'week' as const,
+      groupBy: ['model', 'channelId'] as const,
+      sortBy: 'totalTokens' as const,
+      sortDirection: 'asc' as const,
+      eventOrder: 'recent' as const,
+      filters: { model: 'gpt-5', channelId: 'discord:operator' },
+    };
+
+    const tokenUsageParams = accountingStateToSearchParams(state);
+    const chargePolicyParams = accountingSearchParamsForTab(tokenUsageParams, 'charges');
+    const returnedTokenUsageParams = accountingSearchParamsForTab(
+      chargePolicyParams,
+      'token-usage',
+    );
+
+    expect(chargePolicyParams.get('tab')).toBeNull();
+    expect(returnedTokenUsageParams.get('tab')).toBe('token-usage');
+    expect(accountingStateFromSearchParams(
+      returnedTokenUsageParams,
+      'UTC',
+      new Date('2025-01-01T00:00:00Z'),
+    )).toEqual(state);
   });
 
   it('fails closed to known values and ignores undeclared filter dimensions', () => {

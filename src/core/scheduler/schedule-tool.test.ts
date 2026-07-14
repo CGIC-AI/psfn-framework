@@ -192,6 +192,24 @@ describe('schedule tool', () => {
     expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
   });
 
+  it('rejects a numeric Discord snowflake before generic argument coercion can lose precision', async () => {
+    const pendingFollowUpStore = createPendingFollowUpStore();
+    const { tool } = createTool({ pendingFollowUpStore });
+    const impreciseNumericSnowflake = Number('123456789012345678');
+
+    const result = await executeScheduleCall(tool, {
+      action: 'create_follow_up',
+      content: 'This must not be queued to a precision-damaged destination.',
+      channel_id: impreciseNumericSnowflake,
+      channel_type: 'discord',
+    });
+
+    expect(Number.isSafeInteger(impreciseNumericSnowflake)).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('channel_id');
+    expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+  });
+
   it('fails closed before enqueueing a non-canonical channel type', async () => {
     const pendingFollowUpStore = createPendingFollowUpStore();
     const { tool } = createTool({ pendingFollowUpStore });

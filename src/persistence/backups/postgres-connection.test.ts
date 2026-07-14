@@ -27,6 +27,7 @@ const SAFE_LIBPQ_QUERY_PARAMETERS = [
   ['requiressl', '1'],
   ['ssl_max_protocol_version', 'TLSv1.3'],
   ['ssl_min_protocol_version', 'TLSv1.2'],
+  ['ssl', 'true'],
   ['sslcompression', '0'],
   ['sslcrl', '/etc/ssl/postgres.crl'],
   ['sslcrldir', '/etc/ssl/postgres-crl'],
@@ -155,6 +156,43 @@ describe('sanitizePostgresConnection', () => {
     expect((error as Error).message).not.toContain(parameter);
     expect((error as Error).message).not.toContain(secret);
     expect((error as Error).message).not.toContain(encodeURIComponent(secret));
+  });
+
+  it.each([
+    'postgresql://nested:nested-secret@127.0.0.1/other',
+    'host=127.0.0.1 password=nested-secret',
+  ])('rejects an extended dbname value that could hide nested credentials', (nestedConnection) => {
+    let error: unknown;
+    try {
+      sanitizePostgresConnection(
+        `postgresql://restore@127.0.0.1/runtime?dbname=${encodeURIComponent(nestedConnection)}`,
+        'Test restore',
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/unsupported credential-bearing parameter/);
+    expect((error as Error).message).not.toContain('nested-secret');
+    expect((error as Error).message).not.toContain(encodeURIComponent(nestedConnection));
+  });
+
+  it('rejects URL fragments without echoing their content', () => {
+    const secret = 'fragment-secret';
+    let error: unknown;
+    try {
+      sanitizePostgresConnection(
+        `postgresql://restore@127.0.0.1/runtime#password=${secret}`,
+        'Test restore',
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/must not contain a fragment/);
+    expect((error as Error).message).not.toContain(secret);
   });
 });
 

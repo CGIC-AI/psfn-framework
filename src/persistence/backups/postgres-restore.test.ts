@@ -1,7 +1,7 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deriveRestoreVerifyDatabaseUrl,
   verifyPostgresDumpRestore,
@@ -22,6 +22,7 @@ describe('verifyPostgresDumpRestore', () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots) {
       rmSync(root, { recursive: true, force: true });
     }
@@ -39,6 +40,25 @@ describe('verifyPostgresDumpRestore', () => {
     const stubPath = join(root, 'stub-pg-restore.sh');
     writeFileSync(stubPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     return stubPath;
+  }
+
+  function writeCredentialRecordingStubPgRestore(root: string): {
+    stubPath: string;
+    argvPath: string;
+    envPath: string;
+  } {
+    const stubPath = join(root, 'stub-pg-restore-credential-recording.sh');
+    const argvPath = join(root, 'pg-restore.argv');
+    const envPath = join(root, 'pg-restore.env');
+    writeFileSync(stubPath, [
+      '#!/bin/sh',
+      `printf '%s\n' "$@" > '${argvPath}'`,
+      `printf 'PGPASSWORD=%s|PGPASSFILE=%s|PGSERVICE=%s|PGSERVICEFILE=%s|PGSSLKEY=%s|KRB5CCNAME=%s\n' "$PGPASSWORD" "$PGPASSFILE" "$PGSERVICE" "$PGSERVICEFILE" "$PGSSLKEY" "$KRB5CCNAME" > '${envPath}'`,
+      'printf "restore warning restore/raw-secret restore%2Fraw-secret" >&2',
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    return { stubPath, argvPath, envPath };
   }
 
   /**
@@ -86,6 +106,26 @@ describe('verifyPostgresDumpRestore', () => {
     return stubPath;
   }
 
+  function writeCredentialRecordingStubPsql(root: string): {
+    stubPath: string;
+    argvPath: string;
+    envPath: string;
+  } {
+    const argvPath = join(root, 'psql.argv');
+    const envPath = join(root, 'psql.env');
+    const stubPath = writeStubPsql(root);
+    const original = join(root, 'stub-psql-original.sh');
+    writeFileSync(original, readFileSync(stubPath, 'utf8'), { mode: 0o755 });
+    writeFileSync(stubPath, [
+      '#!/bin/sh',
+      `printf '%s\n' "$@" >> '${argvPath}'`,
+      `printf 'PGPASSWORD=%s|PGPASSFILE=%s|PGSERVICE=%s|PGSERVICEFILE=%s|PGSSLKEY=%s|KRB5CCNAME=%s\n' "$PGPASSWORD" "$PGPASSFILE" "$PGSERVICE" "$PGSERVICEFILE" "$PGSSLKEY" "$KRB5CCNAME" >> '${envPath}'`,
+      `exec '${original}' "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    return { stubPath, argvPath, envPath };
+  }
+
   function writeDump(root: string): string {
     const dumpPath = join(root, 'psfn.dump');
     writeFileSync(dumpPath, 'PGDMP-stub');
@@ -107,6 +147,48 @@ describe('verifyPostgresDumpRestore', () => {
     expect(result.vectorColumnChecked).toBe('l2_memories.embedding');
     const memories = result.tableCounts.find(entry => entry.table === 'l2_memories');
     expect(memories).toEqual({ table: 'l2_memories', restored: 1200, source: 1250 });
+  });
+
+  it('keeps explicit credentials only in sanitized child environments and redacts diagnostics', async () => {
+    const root = makeRoot();
+    const psql = writeCredentialRecordingStubPsql(root);
+    const pgRestore = writeCredentialRecordingStubPgRestore(root);
+    vi.stubEnv('PGPASSWORD', 'ambient-password');
+    vi.stubEnv('PGPASSFILE', '/secret/ambient.pgpass');
+    vi.stubEnv('PGSERVICE', 'production');
+    vi.stubEnv('PGSERVICEFILE', '/secret/pg_service.conf');
+    vi.stubEnv('PGSSLKEY', '/secret/client.key');
+    vi.stubEnv('KRB5CCNAME', 'FILE:/secret/krb5-cache');
+
+    const result = await verifyPostgresDumpRestore({
+      dumpPath: writeDump(root),
+      scratchDatabaseUrl: 'postgresql://u@127.0.0.1:5432/psfn_restore_verify?password=restore%2Fraw-secret',
+      sourceDatabaseUrl: 'postgresql://u:source-secret@127.0.0.1:5432/psfn',
+      psqlBinary: psql.stubPath,
+      pgRestoreBinary: pgRestore.stubPath,
+    });
+
+    const argv = `${readFileSync(psql.argvPath, 'utf8')}\n${readFileSync(pgRestore.argvPath, 'utf8')}`;
+    expect(argv).not.toContain('restore/raw-secret');
+    expect(argv).not.toContain('restore%2Fraw-secret');
+    expect(argv).not.toContain('source-secret');
+    expect(argv).not.toContain('password=');
+    expect(argv).toContain('--no-password');
+
+    const psqlEnv = readFileSync(psql.envPath, 'utf8');
+    const pgRestoreEnv = readFileSync(pgRestore.envPath, 'utf8');
+    expect(psqlEnv).toContain('PGPASSWORD=restore/raw-secret');
+    expect(psqlEnv).toContain('PGPASSWORD=source-secret');
+    expect(pgRestoreEnv).toContain('PGPASSWORD=restore/raw-secret');
+    for (const env of [psqlEnv, pgRestoreEnv]) {
+      expect(env).toContain(`PGPASSFILE=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`);
+      expect(env).toContain('PGSERVICE=|PGSERVICEFILE=|PGSSLKEY=');
+      expect(env).not.toContain('ambient-password');
+      expect(env).not.toContain('/secret/');
+    }
+    expect(result.restoreWarnings).toContain('[redacted]');
+    expect(result.restoreWarnings).not.toContain('restore/raw-secret');
+    expect(result.restoreWarnings).not.toContain('restore%2Fraw-secret');
   });
 
   it('fails closed when a critical table restores empty while the source has rows', async () => {

@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FLEET_BACKUP_MANIFEST_NAME,
   FLEET_CLUSTER_DIR_NAME,
@@ -135,6 +135,26 @@ function writeTargetStateStubPsql(root: string, output = 'public\\t0\\n'): strin
   return stubPath;
 }
 
+function writeCredentialRecordingTargetStateStubPsql(root: string): {
+  stubPath: string;
+  argvPath: string;
+  envPath: string;
+} {
+  const stubPath = writeTargetStateStubPsql(root);
+  const originalPath = `${stubPath}.original`;
+  const argvPath = `${stubPath}.argv`;
+  const envPath = `${stubPath}.env`;
+  writeFileSync(originalPath, readFileSync(stubPath, 'utf8'), { mode: 0o755 });
+  writeFileSync(stubPath, [
+    '#!/bin/sh',
+    `printf '%s\\n' "$@" >> '${argvPath}'`,
+    `printf 'PGPASSWORD=%s|PGPASSFILE=%s|PGSERVICE=%s|PGSERVICEFILE=%s|PGSSLKEY=%s|KRB5CCNAME=%s\\n' "$PGPASSWORD" "$PGPASSFILE" "$PGSERVICE" "$PGSERVICEFILE" "$PGSSLKEY" "$KRB5CCNAME" >> '${envPath}'`,
+    `exec '${originalPath}' "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { stubPath, argvPath, envPath };
+}
+
 function writeControlledStubPgRestore(
   root: string,
   name: string,
@@ -171,10 +191,12 @@ function writeCredentialRecordingStubPgRestore(root: string, restoreExitCode = 0
   stubPath: string;
   argvPath: string;
   passwordPath: string;
+  envPath: string;
 } {
   const stubPath = join(root, 'stub-pg-restore-credentials.sh');
   const argvPath = join(root, 'pg-restore-credentials.argv');
   const passwordPath = join(root, 'pg-restore-credentials.password');
+  const envPath = join(root, 'pg-restore-credentials.env');
   writeFileSync(stubPath, [
     '#!/bin/sh',
     'if [ "$1" = "--list" ]; then',
@@ -184,11 +206,12 @@ function writeCredentialRecordingStubPgRestore(root: string, restoreExitCode = 0
     'fi',
     `printf '%s\\n' "$*" > '${argvPath}'`,
     `printf '%s' "\${PGPASSWORD:-}" > '${passwordPath}'`,
+    `printf 'PGPASSFILE=%s|PGSERVICE=%s|PGSERVICEFILE=%s|PGSSLKEY=%s|KRB5CCNAME=%s\\n' "$PGPASSFILE" "$PGSERVICE" "$PGSERVICEFILE" "$PGSSLKEY" "$KRB5CCNAME" > '${envPath}'`,
     ...(restoreExitCode === 0 ? [] : ['printf \'%s\' "${PGPASSWORD:-}" >&2']),
     `exit ${restoreExitCode}`,
     '',
   ].join('\n'), { mode: 0o755 });
-  return { stubPath, argvPath, passwordPath };
+  return { stubPath, argvPath, passwordPath, envPath };
 }
 
 function writeRacingSchemaStateStubPsql(root: string): string {
@@ -398,6 +421,7 @@ describe('runFleetBackupCycle', () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots) {
       rmSync(root, { recursive: true, force: true });
     }
@@ -909,7 +933,19 @@ describe('runFleetBackupCycle', () => {
     const root = join(tmpdir(), `psfn-fleet-restore-query-password-${Date.now()}`);
     roots.push(root);
     const result = await createPerCompanionTestBackup(root);
-    const { stubPath: pgRestoreBinary, argvPath, passwordPath } = writeCredentialRecordingStubPgRestore(root);
+    const {
+      stubPath: pgRestoreBinary,
+      argvPath,
+      passwordPath,
+      envPath: pgRestoreEnvPath,
+    } = writeCredentialRecordingStubPgRestore(root);
+    const psql = writeCredentialRecordingTargetStateStubPsql(root);
+    vi.stubEnv('PGPASSWORD', 'ambient-password');
+    vi.stubEnv('PGPASSFILE', '/secret/ambient.pgpass');
+    vi.stubEnv('PGSERVICE', 'production');
+    vi.stubEnv('PGSERVICEFILE', '/secret/pg_service.conf');
+    vi.stubEnv('PGSSLKEY', '/secret/client.key');
+    vi.stubEnv('KRB5CCNAME', 'FILE:/secret/krb5-cache');
     const destinations = {
       companionDataDir: join(root, 'restore', 'companion'),
       personalWorkspacePath: join(root, 'restore', 'workspace'),
@@ -923,7 +959,7 @@ describe('runFleetBackupCycle', () => {
       postgres: {
         databaseUrl: 'postgresql://restore@127.0.0.1:5432/restore?sslmode=disable&password=query-secret',
         pgRestoreBinary,
-        psqlBinary: writeTargetStateStubPsql(root),
+        psqlBinary: psql.stubPath,
       },
       faultInjection: (stage) => {
         if (stage !== 'after_journal') return;
@@ -939,6 +975,18 @@ describe('runFleetBackupCycle', () => {
     expect(argv).not.toContain('password=');
     expect(argv).toContain('sslmode=disable');
     expect(readFileSync(passwordPath, 'utf8')).toBe('query-secret');
+    const psqlArgv = readFileSync(psql.argvPath, 'utf8');
+    expect(psqlArgv).not.toContain('query-secret');
+    expect(psqlArgv).not.toContain('password=');
+    for (const childEnv of [
+      readFileSync(psql.envPath, 'utf8'),
+      readFileSync(pgRestoreEnvPath, 'utf8'),
+    ]) {
+      expect(childEnv).toContain(`PGPASSFILE=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`);
+      expect(childEnv).toContain('PGSERVICE=|PGSERVICEFILE=|PGSSLKEY=');
+      expect(childEnv).not.toContain('ambient-password');
+      expect(childEnv).not.toContain('/secret/');
+    }
     expect(journalSnapshot).not.toContain('query-secret');
     expect(journalSnapshot).not.toContain('password=');
   });

@@ -76,16 +76,19 @@ function writeRecordingStubPgDump(root: string): {
   stubPath: string;
   argvPath: string;
   pgPasswordPath: string;
+  envPath: string;
 } {
   const stubPath = join(root, 'stub-pg-dump-recording.sh');
   const argvPath = join(root, 'pg-dump-argv.txt');
   const pgPasswordPath = join(root, 'pg-dump-pgpassword.txt');
+  const envPath = join(root, 'pg-dump-env.txt');
   writeFileSync(
     stubPath,
     [
       '#!/bin/sh',
       `printf '%s\\n' "$@" > '${argvPath}'`,
       `printf '%s' "\${PGPASSWORD:-}" > '${pgPasswordPath}'`,
+      `printf 'PGPASSFILE=%s|PGSERVICE=%s|PGSERVICEFILE=%s|PGSSLKEY=%s|KRB5CCNAME=%s\n' "$PGPASSFILE" "$PGSERVICE" "$PGSERVICEFILE" "$PGSSLKEY" "$KRB5CCNAME" > '${envPath}'`,
       'out=""',
       'for arg in "$@"; do case "$arg" in --file=*) out="${arg#--file=}";; esac; done',
       'printf "stub-dump" > "$out"',
@@ -93,7 +96,7 @@ function writeRecordingStubPgDump(root: string): {
     ].join('\n'),
     { mode: 0o755 },
   );
-  return { stubPath, argvPath, pgPasswordPath };
+  return { stubPath, argvPath, pgPasswordPath, envPath };
 }
 
 function writeFailingStubPgDump(root: string): string {
@@ -191,6 +194,7 @@ describe('runBackupCycle', () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots) {
       rmSync(root, { recursive: true, force: true });
     }
@@ -325,7 +329,12 @@ describe('runBackupCycle', () => {
     const backupRootDir = join(root, 'backups');
     mkdirSync(sessionsDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
-    const { stubPath, argvPath, pgPasswordPath } = writeRecordingStubPgDump(root);
+    const { stubPath, argvPath, pgPasswordPath, envPath } = writeRecordingStubPgDump(root);
+    vi.stubEnv('PGPASSFILE', '/secret/ambient.pgpass');
+    vi.stubEnv('PGSERVICE', 'production');
+    vi.stubEnv('PGSERVICEFILE', '/secret/pg_service.conf');
+    vi.stubEnv('PGSSLKEY', '/secret/client.key');
+    vi.stubEnv('KRB5CCNAME', 'FILE:/secret/krb5-cache');
 
     const result = await runBackupCycle({
       postgres: {
@@ -342,6 +351,10 @@ describe('runBackupCycle', () => {
     expect(argv).not.toContain('sup3r-secret');
     expect(argv).toContain('postgresql://psfn@127.0.0.1:5432/psfn');
     expect(readFileSync(pgPasswordPath, 'utf-8')).toBe('sup3r-secret');
+    const childEnv = readFileSync(envPath, 'utf-8');
+    expect(childEnv).toContain(`PGPASSFILE=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`);
+    expect(childEnv).toContain('PGSERVICE=|PGSERVICEFILE=|PGSSLKEY=');
+    expect(childEnv).not.toContain('/secret/');
   });
 
   it('passes --schema and writes a schema-qualified dump when a schema is set', async () => {

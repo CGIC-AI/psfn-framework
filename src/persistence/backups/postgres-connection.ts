@@ -26,6 +26,7 @@ const SUPPORTED_NON_CREDENTIAL_QUERY_PARAMETERS = new Set([
   'requiressl',
   'ssl_max_protocol_version',
   'ssl_min_protocol_version',
+  'ssl',
   'sslcompression',
   'sslcrl',
   'sslcrldir',
@@ -142,6 +143,9 @@ export function sanitizePostgresConnection(
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
     throw new Error(`${context} database URL must use postgres:// or postgresql://`);
   }
+  if (url.hash) {
+    throw new Error(`${context} database URL must not contain a fragment`);
+  }
 
   const userInfoPassword = url.password
     ? decodeUriComponent(url.password, context)
@@ -160,6 +164,12 @@ export function sanitizePostgresConnection(
     if (name === 'password') {
       queryPasswords.push(decodeUriComponent(rawValue, context));
     } else if (SUPPORTED_NON_CREDENTIAL_QUERY_PARAMETERS.has(name)) {
+      if (name === 'dbname') {
+        const databaseName = decodeUriComponent(rawValue, context);
+        if (databaseName.includes('=') || /^postgres(?:ql)?:\/\//iu.test(databaseName)) {
+          throw new Error(`${context} database URL has an unsupported credential-bearing parameter`);
+        }
+      }
       retainedQuerySegments.push(segment);
     } else {
       throw new Error(`${context} database URL has an unsupported database URL parameter`);

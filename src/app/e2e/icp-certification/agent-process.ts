@@ -11,17 +11,33 @@ import {
 import { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
+import { PostgresIcpAdminProjectionStore } from '../../../persistence/postgres/icp-admin-projection-store.js';
 import { RunChargeLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { prepareAgentStartupContext } from '../../agent/startup-context.js';
 import { registerGatewayMessageHandlers } from '../../agent/gateway-message-handlers.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
-import { createIcpInitiationSourceRuntime } from '../../../core/icp/initiation-source-runtime.js';
-import { createLlmIcpInitiationConsentEvaluator } from '../../../core/icp/initiation-consent-evaluator.js';
-import { createIcpAutonomyRuntimeEnablement } from '../../../core/icp/runtime-enablement.js';
+import { wireIcpInitiationSources } from '../../agent/icp-initiation-source-wiring.js';
 import { runAutoCompaction } from '../../../core/session/manager/compaction-service.js';
 import { createCompactionBoundaryStore } from '../../../core/session/manager/compaction-boundary-store.js';
 import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
 import { countTokens } from '../../../primitives/llm/tokens.js';
+import { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { wirePostTurnActionRuntime } from '../../startup/composition/post-turn-actions.js';
+import {
+  COMPANION_CANDIDATE_QUEUED_TEXT,
+  inferIcpInitiationCandidateActions,
+  registerIcpInitiationCandidatePostTurnRuntime,
+} from '../../../core/tools/notify-companion-candidate.js';
+import { createNotifyTool } from '../../../core/tools/ntfy.js';
+import { toInferredPostTurnActions } from '../../../core/intention/appraisal/action-translation.js';
+import { createThoughtWeight } from '../../../core/intention/weighted-thoughts.js';
+import {
+  registerWeightedThoughtOutreachTask,
+  WEIGHTED_THOUGHT_OUTREACH_TASK_ID,
+} from '../../../core/scheduler/weighted-thought-outreach-lane.js';
+import { AdminIcpAutonomyDataService } from '../../../operator/garden/services/icp-autonomy-service.js';
+import { AdminSettingsDataService } from '../../../operator/garden/services/settings-service.js';
+import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
 import { CERTIFICATION_EMBEDDING_DIMS } from './constants.js';
 
 type AgentProcessCommand = {
@@ -33,12 +49,10 @@ type AgentProcessCommand = {
   state: 'open_to_chat' | 'busy' | 'do_not_disturb';
 } | {
   id: number;
-  type: 'runtime_emergency_disable';
+  type: 'garden_emergency_disable';
 } | {
   id: number;
-  type: 'submit_initiation';
-  source: 'free_time' | 'weighted_thought';
-  sourceRecordId: string;
+  type: 'run_free_time_notification' | 'run_weighted_thought_scheduler';
 } | {
   channelId: string;
   id: number;
@@ -181,27 +195,87 @@ async function main(): Promise<void> {
   });
   const candidateStore = persistence.icpInitiationCandidateStore;
   if (!candidateStore) throw new Error('ICP certification agent requires a candidate store');
-  const runtimeEnablement = createIcpAutonomyRuntimeEnablement(
-    startup.schedulerConfig.icpAutonomy.enabled,
-  );
-  const sourceRuntime = startup.schedulerConfig.icpAutonomy.enabled
-    ? createIcpInitiationSourceRuntime({
-        localCompanionId: companionId,
-        store: candidateStore,
-        peers: autonomy,
-        gateway,
-        consent: createLlmIcpInitiationConsentEvaluator({ llmProvider }),
-        isExternalCompanionAuthorized: () => runtimeEnablement.isEnabled()
+  const intentionRuntime = persistence.intentionRuntime;
+  const weightedThoughtStore = persistence.weightedThoughtStore;
+  if (!intentionRuntime || !weightedThoughtStore) {
+    throw new Error('ICP certification agent requires durable intention stores');
+  }
+  const sourceWiring = wireIcpInitiationSources({
+    config: startup.schedulerConfig.icpAutonomy,
+    localCompanionId: companionId,
+    candidateStore,
+    peers: autonomy,
+    gateway,
+    isExternalCompanionAuthorized: () => startup.capabilityRuntime.has('external.companion'),
+    llmProvider,
+    eventBus: startup.eventBus,
+    pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+    concernStore: intentionRuntime.concernStore,
+    presenceEnabled: false,
+    contactStore,
+    weightedThoughtStore,
+    lifecycleConfig: startup.schedulerConfig.weightedThoughtOutreach.lifecycle,
+  });
+  const { runtimeEnablement, sourceRuntime, weightedThoughtCandidateAdapter } = sourceWiring;
+  const scheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
+    eligibilityGate: startup.eligibilityGate,
+  });
+  const postTurnActions = wirePostTurnActionRuntime({
+    eventBus: startup.eventBus,
+    scheduler,
+    agentLoop: agent,
+    eligibilityGate: startup.eligibilityGate,
+    intervalMs: 1,
+  });
+  const fixedNotifyActivationSource = 'extended_loaded' as const;
+  const unregisterInitiationCandidates = sourceRuntime
+    ? registerIcpInitiationCandidatePostTurnRuntime({
+        agentLoop: agent,
+        postTurnActions,
+        runtime: sourceRuntime,
+        resolveOriginActivationSource: () => fixedNotifyActivationSource,
+        isExecutionAuthorized: evidence => evidence.activationSource === fixedNotifyActivationSource
+          && runtimeEnablement.isEnabled()
           && startup.capabilityRuntime.has('external.companion'),
-        policy: {
-          candidateDefaultTtlMs: startup.schedulerConfig.icpAutonomy.candidate.defaultTtlMs,
-          retryCadenceMs: startup.schedulerConfig.icpAutonomy.candidate.retryCadenceMs,
-          maxRetryAttempts: startup.schedulerConfig.icpAutonomy.candidate.maxRetryAttempts,
-          permitTtlMs: startup.schedulerConfig.icpAutonomy.permit.ttlMs,
-        },
-        eventBus: startup.eventBus,
       })
-    : undefined;
+    : () => undefined;
+  registerWeightedThoughtOutreachTask({
+    scheduler,
+    eventBus: startup.eventBus,
+    config: startup.schedulerConfig.weightedThoughtOutreach,
+    quietHours: null,
+    store: weightedThoughtStore,
+    nudgeEvaluator: {
+      evaluate: async () => {
+        throw new Error('Companion weighted thoughts must route through the ICP adapter');
+      },
+    },
+    ...(weightedThoughtCandidateAdapter ? { icpCandidateAdapter: weightedThoughtCandidateAdapter } : {}),
+    channelPolicy: { primaryChannelType: 'discord' },
+  });
+  const projectionStore = await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
+    localCompanionId: companionId,
+    knownCompanionIds: startup.config.companionFleet?.companions.map(entry => entry.companionId)
+      ?? [companionId],
+  });
+  const settingsService = new AdminSettingsDataService({
+    config: startup.config,
+    configStore: createOwnerFileConfigStore({
+      dataDir: startup.pathSnapshot.systemDataDir,
+      seedDir: process.env.CONFIG_DIR,
+      defaultContextWindow: startup.config.defaultContextWindow,
+    }),
+    effectiveSchedulerConfig: startup.schedulerConfig,
+  });
+  const gardenIcpAutonomy = new AdminIcpAutonomyDataService({
+    localCompanionId: companionId,
+    candidateStore,
+    projectionStore,
+    runtimeEnablement,
+    settingsService,
+    operatorLeaseTtlMs: startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+  });
+  let autonomousTriggerIndex = 0;
   const compactionStore = createCompactionBoundaryStore(
     createIcpDeliveryProjectionStore(sessionRuntime.sessionStore),
   );
@@ -248,31 +322,129 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: lease });
           return;
         }
-        if (raw.type === 'submit_initiation') {
+        if (raw.type === 'run_free_time_notification') {
           if (!sourceRuntime) throw new Error('ICP autonomy is disabled by scheduler.json');
-          const result = await sourceRuntime.submit({
-            source: raw.source,
-            peerContactId: peerContact.id,
-            preferredChannel: 'dm',
-            sourceRecordId: raw.sourceRecordId,
-            reasonSummary: `Private ${raw.source} certification motivation`,
-            cause: { kind: 'independent' },
+          const candidateIdsBefore = new Set(
+            (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
+          );
+          autonomousTriggerIndex += 1;
+          const turnId = `free-time-notify-${autonomousTriggerIndex}`;
+          const toolCallId = `notify-${autonomousTriggerIndex}`;
+          const notify = createNotifyTool({
+            dispatch: async () => {
+              throw new Error('Companion candidate notification must not dispatch during tool execution');
+            },
+          }, {
+            companionCandidateEnabled: true,
+            isCompanionCandidateAuthorized: () => runtimeEnablement.isEnabled()
+              && startup.capabilityRuntime.has('external.companion'),
           });
-          reply({ id: raw.id, ok: true, result });
-          return;
-        }
-        if (raw.type === 'runtime_emergency_disable') {
-          runtimeEnablement.disable();
-          const current = await autonomy.readOwnAvailability();
-          const lease = await autonomy.publishOwnAvailability({
-            state: 'do_not_disturb',
-            expiresAtMs: Date.now() + startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
-            revision: (current.lease?.revision ?? 0) + 1,
+          const params = {
+            action: 'consider' as const,
+            target_kind: 'companion' as const,
+            contact_id: peerContact.id,
+            reason_summary: 'Private free-time certification motivation',
+          };
+          const toolResult = await notify.execute(toolCallId, params);
+          const toolText = toolResult.content.map(part => (
+            part.type === 'text' ? part.text : ''
+          )).join('');
+          if (toolText !== COMPANION_CANDIDATE_QUEUED_TEXT || toolResult.details?.isError) {
+            throw new Error(`Free-time notification was not queued: ${toolText}`);
+          }
+          const message = {
+            id: turnId,
+            channelId: 'internal:free-time:idle',
+            channelType: 'terminal' as const,
+            authorId: 'scheduler',
+            authorName: 'Free Time',
+            content: 'Run the bounded free-time notification adapter.',
+            timestamp: new Date(),
+          };
+          const candidates = inferIcpInitiationCandidateActions({
+            message,
+            response: {} as never,
+            turnMessages: [
+              {
+                role: 'assistant',
+                content: [{ type: 'toolCall', id: toolCallId, name: 'notify', arguments: params }],
+              },
+              {
+                role: 'toolResult',
+                toolCallId,
+                toolName: 'notify',
+                isError: false,
+                content: [{ type: 'text', text: toolText }],
+              },
+            ] as never,
+            turnId: turnId as never,
+            completedAt: Date.now(),
+          }, fixedNotifyActivationSource);
+          const [action] = toInferredPostTurnActions(candidates, message);
+          if (!action) throw new Error('Free-time notification did not infer a durable candidate');
+          await startup.eventBus.emit('agent.post_turn.actions.inferred', {
+            message,
+            response: {
+              content: '',
+              channelId: message.channelId,
+              metadata: { model: 'scheduler:free-time', inputTokens: 0, outputTokens: 0, durationMs: 0 },
+            },
+            actions: [action],
           });
+          await scheduler.tick();
+          const status = postTurnActions.getActionStatus(action.id);
+          const candidateId = (await candidateStore.listCandidates({ limit: 50 })).find(candidate => (
+            !candidateIdsBefore.has(candidate.candidateId) && candidate.source === 'free_time'
+          ))?.candidateId;
+          if (!candidateId) throw new Error('Free-time candidate was not persisted');
+          const candidate = await candidateStore.getCandidate(candidateId);
           reply({
             id: raw.id,
             ok: true,
-            result: { enabled: runtimeEnablement.isEnabled(), lease },
+            result: { ...candidate, postTurnStatus: status?.state },
+          });
+          return;
+        }
+        if (raw.type === 'run_weighted_thought_scheduler') {
+          if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
+            throw new Error('ICP autonomy is disabled by scheduler.json');
+          }
+          autonomousTriggerIndex += 1;
+          const thoughtId = `certification-weighted-${autonomousTriggerIndex}`;
+          const candidateIdsBefore = new Set(
+            (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
+          );
+          await weightedThoughtStore.save(createThoughtWeight({
+            id: thoughtId,
+            content: 'Private weighted-thought certification motivation',
+            source: 'certification_co_location',
+            thoughtClass: 'standard',
+            contactId: peerContact.id,
+            provenance: { coLocationRef: `certification:${autonomousTriggerIndex}` },
+            relationshipMultiplier: 2,
+            emotionalIntensity: 1,
+          }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
+          const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
+          if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
+          await task.handler();
+          const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
+            !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
+          ));
+          if (!candidate) throw new Error('Weighted-thought scheduler did not persist a candidate');
+          reply({ id: raw.id, ok: true, result: candidate });
+          return;
+        }
+        if (raw.type === 'garden_emergency_disable') {
+          const result = await gardenIcpAutonomy.emergencyDisable();
+          const current = await autonomy.readOwnAvailability();
+          reply({
+            id: raw.id,
+            ok: true,
+            result: {
+              ...result,
+              enabled: runtimeEnablement.isEnabled(),
+              lease: current.lease,
+            },
           });
           return;
         }
@@ -338,7 +510,11 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
+        unregisterInitiationCandidates();
+        sourceWiring.unregisterCoLocationThoughtAdapter();
+        await scheduler.stop();
         gateway.destroy();
+        await gardenIcpAutonomy.close();
         await fatigueReservations.close();
         chargeLedger.close();
         startup.stopDebugObserver();

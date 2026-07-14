@@ -135,18 +135,14 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
-  async submitInitiation(
-    source: 'free_time' | 'weighted_thought',
-    sourceRecordId: string,
-  ): Promise<Record<string, unknown>> {
-    const result = await this.request({ type: 'submit_initiation', source, sourceRecordId }) as
+  async runFreeTimeNotification(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'run_free_time_notification' }) as
       Record<string, unknown>;
     this.artifacts.append({
       kind: 'initiation',
       companionId: this.fixture.companionId,
-      source,
+      source: 'free_time_notification',
       candidateId: String(result.candidateId ?? 'unknown'),
-      outcome: String(result.outcome ?? 'unknown'),
       status: String(result.status ?? 'unknown'),
       ...(result.reasonCode ? { reasonCode: String(result.reasonCode) } : {}),
       ...(result.deliveryDisposition
@@ -156,10 +152,27 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
-  async activateRuntimeEmergencyDisable(): Promise<Record<string, unknown>> {
-    const result = await this.request({ type: 'runtime_emergency_disable' }) as Record<string, unknown>;
+  async runWeightedThoughtScheduler(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'run_weighted_thought_scheduler' }) as
+      Record<string, unknown>;
     this.artifacts.append({
-      kind: 'runtime_emergency_disable',
+      kind: 'initiation',
+      companionId: this.fixture.companionId,
+      source: 'weighted_thought_scheduler',
+      candidateId: String(result.candidateId ?? 'unknown'),
+      status: String(result.status ?? 'unknown'),
+      ...(result.reasonCode ? { reasonCode: String(result.reasonCode) } : {}),
+      ...(result.deliveryDisposition
+        ? { deliveryDisposition: String(result.deliveryDisposition) }
+        : {}),
+    });
+    return result;
+  }
+
+  async activateGardenEmergencyDisable(): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'garden_emergency_disable' }) as Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'garden_emergency_disable',
       companionId: this.fixture.companionId,
     });
     return result;

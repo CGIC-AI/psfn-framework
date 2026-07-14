@@ -28,14 +28,13 @@ export type IcpCertificationArtifact =
     companionId: string;
     deliveryDisposition?: string;
     kind: 'initiation';
-    outcome: string;
     reasonCode?: string;
     source: string;
     status: string;
   }
   | {
     companionId: string;
-    kind: 'runtime_emergency_disable';
+    kind: 'garden_emergency_disable';
   }
   | {
     kind: 'harness_lifecycle';

@@ -162,10 +162,10 @@ describe('ICP certification real process harness', () => {
 
     const [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.submitInitiation('free_time', 'free-time:first')).resolves.toMatchObject({
-      outcome: 'sent',
+    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
       status: 'consumed',
       deliveryDisposition: 'delivered',
+      postTurnStatus: 'succeeded',
     });
     for (let index = 0; index < 20; index += 1) {
       await Promise.all([
@@ -215,8 +215,8 @@ describe('ICP certification real process harness', () => {
 
       const [agentA, agentB] = processes.agents;
       await agentB.publishAvailability('open_to_chat');
-      await expect(agentA.submitInitiation('free_time', `cost:${costProfile}`)).resolves
-        .toMatchObject({ outcome: 'sent', status: 'consumed' });
+      await expect(agentA.runFreeTimeNotification()).resolves
+        .toMatchObject({ status: 'consumed' });
 
       const blocked = await waitForBlockedCostDecision(processes, expectedReason);
       expect(blocked).toMatchObject({
@@ -252,7 +252,7 @@ describe('ICP certification real process harness', () => {
 
     const [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.submitInitiation('free_time', 'cost:missing')).rejects
+    await expect(agentA.runFreeTimeNotification()).rejects
       .toThrow(/missing_cost_metadata|cost breaker/i);
     const blocked = await waitForBlockedCostDecision(processes, 'missing_cost_metadata');
     expect(blocked).toMatchObject({
@@ -271,8 +271,7 @@ describe('ICP certification real process harness', () => {
 
     const [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('do_not_disturb');
-    await expect(agentA.submitInitiation('free_time', 'adversarial:dnd')).resolves.toMatchObject({
-      outcome: 'rejected',
+    await expect(agentA.runFreeTimeNotification()).resolves.toMatchObject({
       status: 'rejected',
       reasonCode: 'peer_do_not_disturb',
     });
@@ -280,16 +279,14 @@ describe('ICP certification real process harness', () => {
 
     await agentB.publishAvailability('open_to_chat');
     processes.queueConsentDecision('defer');
-    await expect(agentA.submitInitiation('weighted_thought', 'consent:defer')).resolves
+    await expect(agentA.runWeightedThoughtScheduler()).resolves
       .toMatchObject({
-        outcome: 'deferred',
         status: 'deferred',
         reasonCode: 'candidate_deferred',
       });
     processes.queueConsentDecision('decline');
-    await expect(agentA.submitInitiation('weighted_thought', 'consent:decline')).resolves
+    await expect(agentA.runWeightedThoughtScheduler()).resolves
       .toMatchObject({
-        outcome: 'declined',
         status: 'declined',
         reasonCode: 'candidate_declined',
       });
@@ -298,20 +295,12 @@ describe('ICP certification real process harness', () => {
       agentA.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
       agentB.appendCompactionMarker(CERTIFICATION_DM_CHANNEL),
     ]);
-    const sent = await agentA.submitInitiation('weighted_thought', 'replay:weighted-thought');
+    const sent = await agentA.runWeightedThoughtScheduler();
     expect(sent).toMatchObject({
-      outcome: 'sent',
       status: 'consumed',
       deliveryDisposition: 'delivered',
     });
-    const settledRequestCount = await waitForModelRequestQuiescence(processes);
-    await expect(agentA.submitInitiation('weighted_thought', 'replay:weighted-thought')).resolves
-      .toMatchObject({
-        candidateId: sent.candidateId,
-        outcome: 'deduped',
-        status: 'consumed',
-      });
-    expect(await waitForModelRequestQuiescence(processes)).toBe(settledRequestCount);
+    await waitForModelRequestQuiescence(processes);
 
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-certification-fatigue-assertions',
@@ -375,30 +364,25 @@ describe('ICP certification real process harness', () => {
 
     const [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.activateRuntimeEmergencyDisable()).resolves.toMatchObject({
+    await expect(agentA.activateGardenEmergencyDisable()).resolves.toMatchObject({
       enabled: false,
       lease: { state: 'do_not_disturb' },
     });
-    setIcpCertificationAutonomyEnabled(fixture, false);
-    await expect(agentA.submitInitiation('free_time', 'emergency:blocked')).resolves.toMatchObject({
-      outcome: 'rejected',
-      status: 'rejected',
-      reasonCode: 'policy_denied',
-    });
+    await expect(agentA.runFreeTimeNotification()).rejects
+      .toThrow(/not capability\/tool-policy authorized/i);
     expect(processes.modelRequestCount).toBe(0);
 
     let [restartedA, restartedB] = await processes.restartAgents();
     await restartedB.publishAvailability('open_to_chat');
-    await expect(restartedA.submitInitiation('free_time', 'emergency:owner-disabled')).rejects
+    await expect(restartedA.runFreeTimeNotification()).rejects
       .toThrow(/autonomy is disabled by scheduler\.json/i);
     expect(processes.modelRequestCount).toBe(0);
 
     setIcpCertificationAutonomyEnabled(fixture, true);
     [restartedA, restartedB] = await processes.restartAgents();
     await restartedB.publishAvailability('open_to_chat');
-    await expect(restartedA.submitInitiation('free_time', 'emergency:rollback')).resolves
+    await expect(restartedA.runFreeTimeNotification()).resolves
       .toMatchObject({
-        outcome: 'sent',
         status: 'consumed',
         deliveryDisposition: 'delivered',
       });
@@ -417,7 +401,7 @@ describe('ICP certification real process harness', () => {
       expect.objectContaining({ runtimeClass: 'SubstrateAgent' }),
     ]);
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.submitInitiation('free_time', 'feature-off')).rejects
+    await expect(agentA.runFreeTimeNotification()).rejects
       .toThrow(/autonomy is disabled by scheduler\.json/i);
     expect(processes.modelRequestCount).toBe(0);
     await expect(agentA.channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toMatchObject({

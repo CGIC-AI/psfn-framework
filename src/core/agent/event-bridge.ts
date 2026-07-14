@@ -7,6 +7,10 @@ import type { ToolCall } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  createStreamingHistoryStampStripper,
+  type StreamingHistoryStampStripper,
+} from '../../shared/utils/history-stamp-hygiene.js';
 
 const log = createComponentLogger('EventBridge');
 
@@ -41,6 +45,14 @@ export interface EventBridge {
  */
 export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge {
   let nextContextToken = 1;
+  // Fail-safe strip of mimicked history stamps on the delta stream
+  // (psfn-framework-2x37.10): the OpenAI-compatible streaming API delivers
+  // the reply as raw deltas with no final-text reconciliation, so the strip
+  // applied to the accepted turn text alone cannot cover it. Text blocks of a
+  // message stream sequentially, so one active stripper suffices: text_start
+  // resets it, text_end flushes withheld chars. A stale stripper left by an
+  // aborted block is discarded, never flushed into a later block's stream.
+  let activeTextStripper: StreamingHistoryStampStripper | null = null;
   const contextStack: Array<{
     token: number;
     channelId: string;
@@ -83,7 +95,8 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       case 'message_update': {
         const delta = event.assistantMessageEvent;
         if (delta.type === 'text_start') {
-          const text = getTextFromPartial(delta.partial, delta.contentIndex);
+          activeTextStripper = createStreamingHistoryStampStripper();
+          const text = activeTextStripper.push(getTextFromPartial(delta.partial, delta.contentIndex));
           if (text.length === 0) break;
           eventBus.emit('agent.stream.delta', {
             channelId,
@@ -91,9 +104,24 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
             ...withCorrelation('chat', 'stream_text_delta'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
         } else if (delta.type === 'text_delta') {
+          // A delta without a preceding text_start means the context attached
+          // mid-stream; a fresh stripper still starts at a line start, which
+          // is the fail-safe reading for stamp mimicry.
+          activeTextStripper ??= createStreamingHistoryStampStripper();
+          const text = activeTextStripper.push(delta.delta);
+          if (text.length === 0) break;
           eventBus.emit('agent.stream.delta', {
             channelId,
-            text: delta.delta,
+            text,
+            ...withCorrelation('chat', 'stream_text_delta'),
+          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+        } else if (delta.type === 'text_end') {
+          const withheld = activeTextStripper?.flush() ?? '';
+          activeTextStripper = null;
+          if (withheld.length === 0) break;
+          eventBus.emit('agent.stream.delta', {
+            channelId,
+            text: withheld,
             ...withCorrelation('chat', 'stream_text_delta'),
           }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
         } else if (delta.type === 'thinking_delta') {

@@ -290,8 +290,11 @@ export function entriesToMessages(
     );
 
     // Timestamp stamp is trusted runtime provenance, so it wraps OUTSIDE any
-    // untrusted-context envelope applied above.
-    const stampLabel = entryStampLabel(entry.timestamp);
+    // untrusted-context envelope applied above. The companion's own turns stay
+    // unstamped: a model that reads its past speech prefixed with stamps
+    // mimics the prefix into new replies (live leak, psfn-framework-2x37.10);
+    // user/system stamps alone carry the timeline.
+    const stampLabel = role === 'assistant' ? undefined : entryStampLabel(entry.timestamp);
 
     // Merge consecutive same-role messages
     const last = messages.at(-1);

@@ -176,7 +176,9 @@ describe('entriesToMessages', () => {
     });
     expect(messages[1]).toMatchObject({
       role: 'assistant',
-      content: `${BASE_STAMP} A quiet thought.`,
+      // Assistant turns render unstamped — the model mimics leading stamps on
+      // its own prior speech into new replies (psfn-framework-2x37.10).
+      content: 'A quiet thought.',
       provenance: {
         kind: 'companion_direct',
         sourceAuthor: 'companion',
@@ -208,6 +210,35 @@ describe('entriesToMessages', () => {
     expect(messages[0]?.role).toBe('system');
     expect(messages[0]?.content.startsWith(`${BASE_STAMP} `)).toBe(true);
     expect(messages[0]?.content).toContain('[Temporal wake]');
+  });
+
+  it('never stamps assistant turns, even with valid timestamps', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'user',
+        content: 'How was your night?',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      }),
+      makeEntry({
+        id: 2,
+        role: 'assistant',
+        content: 'Quiet, mostly reading.',
+        timestamp: 1_700_000_000_100,
+      }),
+      makeEntry({
+        id: 3,
+        role: 'assistant',
+        content: 'And a little music.',
+        timestamp: 1_700_000_120_000,
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.content).toBe(`${BASE_STAMP} How was your night?`);
+    // No stamp on the merged assistant turn either — the merge path must not
+    // reintroduce the prefix the model would mimic.
+    expect(messages[1]?.content).toBe('Quiet, mostly reading.\nAnd a little music.');
   });
 
   it('drops internal-lane instrumentation from assembled context', () => {

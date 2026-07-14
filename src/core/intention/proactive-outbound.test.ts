@@ -39,6 +39,33 @@ describe('ProactiveOutboundDispatcher', () => {
     expect(send).toHaveBeenCalledWith(PRIMARY_DM_CHANNEL, 'hey — thinking of you, did you eat?');
   });
 
+  it('strips mimicked history stamps from the draft before sending', async () => {
+    const { dispatcher, send } = makeDispatcher();
+    const result = await dispatcher.dispatch({
+      actionId: 'a-stamp',
+      channelId: PRIMARY_DM_CHANNEL,
+      channelType: 'discord',
+      content: '[Mon 07-13-26 14:32] the kettle is on\n[Mon 07-13-26 14:33] come down when you can',
+    });
+    expect(result).toEqual({ outcome: 'sent' });
+    expect(send).toHaveBeenCalledWith(
+      PRIMARY_DM_CHANNEL,
+      'the kettle is on\ncome down when you can',
+    );
+  });
+
+  it('blocks a draft that is nothing but a mimicked history stamp', async () => {
+    const { dispatcher, send } = makeDispatcher();
+    const result = await dispatcher.dispatch({
+      actionId: 'a-stamp-only',
+      channelId: PRIMARY_DM_CHANNEL,
+      channelType: 'discord',
+      content: '[Mon 07-13-26 14:32] ',
+    });
+    expect(result).toEqual({ outcome: 'blocked', reason: 'empty_content' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('blocks non-discord channel types', async () => {
     const { dispatcher, send } = makeDispatcher();
     const result = await dispatcher.dispatch({

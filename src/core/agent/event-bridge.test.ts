@@ -111,6 +111,131 @@ describe('createEventBridge', () => {
     expect(deltas).toEqual(['Goodnight.']);
   });
 
+  it('strips a mimicked history stamp from the start of a streamed text block', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: '[Mon 0' }] },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '7-13-26 14:32] good' },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: ' morning' },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_end',
+        contentIndex: 0,
+        content: '[Mon 07-13-26 14:32] good morning',
+        partial: { content: [{ type: 'text', text: '[Mon 07-13-26 14:32] good morning' }] },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas.join('')).toBe('good morning');
+  });
+
+  it('flushes a withheld partial stamp lookalike on text_end', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: 'see you soon\n[Mon 07-1' }] },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_end',
+        contentIndex: 0,
+        content: 'see you soon\n[Mon 07-1',
+        partial: { content: [{ type: 'text', text: 'see you soon\n[Mon 07-1' }] },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas.join('')).toBe('see you soon\n[Mon 07-1');
+  });
+
+  it('leaves a stamp quoted mid-sentence untouched in streamed text', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: 'you said that at [Mon ' }] },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '07-13-26 14:32] earlier' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas.join('')).toBe('you said that at [Mon 07-13-26 14:32] earlier');
+  });
+
+  it('does not flush an aborted block\'s withheld text into the next block', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const deltas: string[] = [];
+    eventBus.on('agent.stream.delta', ({ text }) => { deltas.push(text); });
+
+    bridge.setChannel('test-channel');
+    // Block aborted mid-candidate: no text_end arrives.
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 0,
+        partial: { content: [{ type: 'text', text: '[Mon 07-1' }] },
+      },
+    });
+    emitAgentEvent({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: {
+        type: 'text_start',
+        contentIndex: 1,
+        partial: { content: [{ type: 'text', text: '' }, { type: 'text', text: 'fresh block' }] },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(deltas.join('')).toBe('fresh block');
+  });
+
   it('emits agent.toolcall.start/delta/end for toolcall message events', async () => {
     const bridge = createEventBridge(agent, eventBus);
     const starts: any[] = [];

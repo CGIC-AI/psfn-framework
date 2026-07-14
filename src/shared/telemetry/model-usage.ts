@@ -90,9 +90,6 @@ export interface ModelUsageEventInput {
   slotKey?: string;
   requestedProvider?: string;
   requestedModel?: string;
-  slotKey?: string;
-  requestedProvider?: string;
-  requestedModel?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -347,6 +344,9 @@ export interface ModelUsageExportRow {
   attribution: ModelUsageAttribution;
   provider: string;
   model: string;
+  slotKey?: string;
+  requestedProvider?: string;
+  requestedModel?: string;
   inputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;

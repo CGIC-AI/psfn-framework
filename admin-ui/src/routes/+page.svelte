@@ -199,7 +199,7 @@
         </p>
       </a>
 
-      <a href="/charge-budget" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block" aria-busy={costWindowLoading || backgroundRefreshLoading}>
+      <a href="/charge-budget?tab=token-usage" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block" aria-busy={costWindowLoading || backgroundRefreshLoading}>
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span></p>
         {#if selectedCostWindowUsage}
           <p class="text-2xl font-serif text-shadow-900 mt-1">
@@ -219,7 +219,7 @@
           <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
             Model Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span>
           </p>
-          <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Budget</a>
+          <a href="/charge-budget?tab=token-usage" class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Analyze</a>
         </div>
         {#if selectedCostWindowUsage}
           <p class="text-2xl font-serif text-shadow-900 mt-1">

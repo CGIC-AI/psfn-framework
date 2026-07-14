@@ -252,10 +252,13 @@ describe('IntentionAppraisal', () => {
       purpose: 'intention.appraisal',
       icpCorrelation: {
         ...icpCorrelation,
+        requestId: expect.stringContaining('intention-appraisal:'),
         costPurpose: 'sidecar',
         costOriginStage: 'post_turn',
       },
     });
+    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
   });
 
   it('triggers immediately on emotional shift', async () => {

@@ -182,15 +182,16 @@ export function deriveIcpTransportMessageId(
   return `companion-reply-${correlation.localCompanionId}-${correlation.turnId}`;
 }
 
-export function derivePostTurnIcpConversationCorrelation(
+export function deriveChildIcpConversationCostCorrelation(
   value: IcpConversationCorrelation,
-  costPurpose: Extract<IcpConversationCorrelation['costPurpose'], 'summary' | 'extraction' | 'sidecar'>,
+  child: Pick<IcpConversationCorrelation, 'requestId' | 'costPurpose' | 'costOriginStage'>,
 ): IcpConversationCorrelation {
   const correlation = parseIcpConversationCorrelation(value);
   return parseIcpConversationCorrelation({
     ...correlation,
-    costPurpose,
-    costOriginStage: 'post_turn',
+    requestId: child.requestId,
+    costPurpose: child.costPurpose,
+    costOriginStage: child.costOriginStage,
   });
 }
 

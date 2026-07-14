@@ -2535,6 +2535,7 @@ describe('SessionManager', () => {
           costOriginStage: 'post_turn',
         }),
       });
+      expect(context.correlation?.icpCorrelation?.requestId).toBe(context.correlation?.requestId);
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',

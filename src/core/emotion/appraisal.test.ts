@@ -130,8 +130,10 @@ describe('EmotionAppraisal', () => {
     expect(complete.mock.calls[0]?.[1]).toBe('background');
     expect(complete.mock.calls[0]?.[2]).toMatchObject({
       correlation: {
+        requestId: `${icpCorrelation.requestId}:emotion-appraisal`,
         icpCorrelation: {
           ...icpCorrelation,
+          requestId: `${icpCorrelation.requestId}:emotion-appraisal`,
           costPurpose: 'sidecar',
           costOriginStage: 'post_turn',
         },

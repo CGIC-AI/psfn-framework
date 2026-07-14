@@ -4,7 +4,7 @@ import type {
   CorrelationMetadata,
 } from '../../../shared/contracts/runtime.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
-import { derivePostTurnIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import {
   classifyAppraisalTrigger,
   hasDueSoonConcern,
@@ -161,11 +161,12 @@ export class IntentionAppraisal {
       content: JSON.stringify(promptPayload, null, 2),
     };
     const requestContext = getRequestContext();
+    const appraisalRequestId = requestContext?.requestId
+      ? `${requestContext.requestId}:intention-appraisal`
+      : `intention-appraisal:${normalized.sessionId}:${normalized.now}`;
     const correlation: CorrelationMetadata = {
       ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-      requestId: requestContext?.requestId
-        ? `${requestContext.requestId}:intention-appraisal`
-        : `intention-appraisal:${normalized.sessionId}:${normalized.now}`,
+      requestId: appraisalRequestId,
       channelId: requestContext?.channelId ?? normalized.sessionId,
       callType: 'background',
       purpose: 'intention.appraisal',
@@ -173,9 +174,13 @@ export class IntentionAppraisal {
       originStage: `intention.appraisal.${trigger}`,
       ...(normalized.icpCorrelation
         ? {
-            icpCorrelation: derivePostTurnIcpConversationCorrelation(
+            icpCorrelation: deriveChildIcpConversationCostCorrelation(
               normalized.icpCorrelation,
-              'sidecar',
+              {
+                requestId: appraisalRequestId,
+                costPurpose: 'sidecar',
+                costOriginStage: 'post_turn',
+              },
             ),
           }
         : {}),

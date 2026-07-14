@@ -5,17 +5,37 @@ import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { CONTEXT_FEEDBACK_ACTION_KIND, wireContextFeedbackRuntime } from './runtime.js';
 
-function makeMessage(): SubstrateMessage {
+const ICP_CORRELATION: IcpConversationCorrelation = {
+  conversationId: '44444444-4444-4444-8444-444444444444',
+  rootInitiationId: '99999999-9999-4999-8999-999999999999',
+  initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  peerContactId: 'contact-nova',
+  channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  turnId: 'turn-ctx-1',
+  messageId: 'companion-message-1',
+  requestId: 'companion-message-1',
+  chargeLane: 'companion_social',
+  surface: 'companion_dm',
+  costPurpose: 'conversation_turn',
+  costOriginStage: 'reply',
+  fatigueDecision: 'allow',
+};
+
+function makeMessage(icpCorrelation?: IcpConversationCorrelation): SubstrateMessage {
   return {
     id: 'msg-ctx-1',
-    channelId: 'terminal:test',
-    channelType: 'terminal',
+    channelId: icpCorrelation?.channelId ?? 'terminal:test',
+    channelType: icpCorrelation ? 'companion' : 'terminal',
     authorId: 'user-1',
     authorName: 'User',
     content: 'Can you summarize what context you used?',
     timestamp: new Date(),
+    ...(icpCorrelation ? { routing: { icpCorrelation } } : {}),
   };
 }
 
@@ -192,7 +212,7 @@ describe('wireContextFeedbackRuntime', () => {
 
     expect(inferers).toHaveLength(1);
     const inferer = inferers[0];
-    const message = makeMessage();
+    const message = makeMessage(ICP_CORRELATION);
     const response = makeResponse();
     const candidates = await inferer({
       message,
@@ -205,6 +225,7 @@ describe('wireContextFeedbackRuntime', () => {
     });
     expect(candidates).toHaveLength(1);
     expect(candidates[0]?.kind).toBe(CONTEXT_FEEDBACK_ACTION_KIND);
+    expect(candidates[0]?.payload).toMatchObject({ icpCorrelation: ICP_CORRELATION });
 
     const inferredAction = toInferredAction(candidates[0]!, message, 'context-action-1');
     await eventBus.emit('agent.post_turn.actions.inferred', {
@@ -223,9 +244,15 @@ describe('wireContextFeedbackRuntime', () => {
           originType: 'memory',
           originStage: 'context.feedback',
           purpose: 'context.feedback',
-          channelId: 'terminal:test',
+          channelId: ICP_CORRELATION.channelId,
           turnId: 'turn-ctx-1',
-          requestId: 'turn-ctx-1',
+          requestId: `${ICP_CORRELATION.requestId}:context-feedback`,
+          icpCorrelation: {
+            ...ICP_CORRELATION,
+            requestId: `${ICP_CORRELATION.requestId}:context-feedback`,
+            costPurpose: 'sidecar',
+            costOriginStage: 'post_turn',
+          },
         }),
       }),
       'memory',

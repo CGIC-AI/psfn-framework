@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertIcpConversationStatusTransition,
   assertIcpConversationActivityTransition,
+  deriveChildIcpConversationCostCorrelation,
   parseIcpAvailabilityLease,
   parseIcpConversationCorrelation,
   parseIcpConversationEpisode,
@@ -156,5 +157,41 @@ describe('ICP autonomy shared contracts', () => {
       ...correlation,
       initiatedByCompanionId: COMPANION_C,
     })).toThrow('initiatedByCompanionId must be the local or peer companion');
+  });
+
+  it('derives a child cost correlation without changing trusted conversation scope', () => {
+    const parent = parseIcpConversationCorrelation({
+      conversationId: CONVERSATION_ID,
+      rootInitiationId: ROOT_INITIATION_ID,
+      initiatedByCompanionId: COMPANION_A,
+      localCompanionId: COMPANION_A,
+      peerCompanionId: COMPANION_B,
+      peerContactId: 'contact-artemis',
+      channelId: `companion-dm:${COMPANION_A}:${COMPANION_B}`,
+      turnId: 'turn-1',
+      messageId: 'message-1',
+      requestId: 'request-parent',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    });
+
+    expect(deriveChildIcpConversationCostCorrelation(parent, {
+      requestId: 'request-parent:summary',
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+    })).toEqual({
+      ...parent,
+      requestId: 'request-parent:summary',
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+    });
+    expect(() => deriveChildIcpConversationCostCorrelation(parent, {
+      requestId: ' ',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+    })).toThrow('requestId must be a non-empty trimmed string');
   });
 });

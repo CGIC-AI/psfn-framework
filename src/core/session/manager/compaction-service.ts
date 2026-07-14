@@ -31,7 +31,7 @@ import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import {
-  derivePostTurnIcpConversationCorrelation,
+  deriveChildIcpConversationCostCorrelation,
   type IcpConversationCorrelation,
 } from '../../../shared/contracts/icp-autonomy.js';
 
@@ -160,9 +160,13 @@ export async function completeSessionSummary(params: SessionSummaryCompletionPar
           ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
           ...(params.icpCorrelation
             ? {
-                icpCorrelation: derivePostTurnIcpConversationCorrelation(
+                icpCorrelation: deriveChildIcpConversationCostCorrelation(
                   params.icpCorrelation,
-                  'summary',
+                  {
+                    requestId: `${params.requestIdBase}:summary`,
+                    costPurpose: 'summary',
+                    costOriginStage: 'post_turn',
+                  },
                 ),
               }
             : {}),

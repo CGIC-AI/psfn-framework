@@ -145,12 +145,16 @@ describe('runExtractionOrchestration fail-closed errors', () => {
     }));
 
     expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+      requestId: 'memory-extraction:api:test:manual',
       icpCorrelation: {
         ...icpCorrelation,
+        requestId: 'memory-extraction:api:test:manual',
         costPurpose: 'extraction',
         costOriginStage: 'post_turn',
       },
     });
+    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
   });
 
   it('emits concern candidate context from accepted extraction material', async () => {

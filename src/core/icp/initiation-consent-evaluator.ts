@@ -21,11 +21,8 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 function extractObject(content: string): Record<string, unknown> | null {
-  const start = content.indexOf('{');
-  const end = content.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
   try {
-    const parsed: unknown = JSON.parse(content.slice(start, end + 1));
+    const parsed: unknown = JSON.parse(content.trim());
     return isRecord(parsed) ? parsed : null;
   } catch {
     return null;

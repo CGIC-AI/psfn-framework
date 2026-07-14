@@ -46,7 +46,13 @@ describe('ICP initiation consent evaluator', () => {
     expect(JSON.stringify(prompt)).toContain(candidate.reasonSummary);
   });
 
-  it.each(['not json', '{"action":"send","message":"bypass"}', '{"action":"unknown"}'])(
+  it.each([
+    'not json',
+    '{"action":"send","message":"bypass"}',
+    '{"action":"unknown"}',
+    'Sure: {"action":"send"}',
+    '```json\n{"action":"send"}\n```',
+  ])(
     'fails closed on malformed or message-authoring output: %s',
     async (content) => {
       const evaluator = createLlmIcpInitiationConsentEvaluator({

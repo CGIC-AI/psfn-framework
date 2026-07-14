@@ -9,7 +9,9 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --claim  # Claim work atomically
 bd close <id>         # Complete work
-bd sync               # Sync with git
+bd dolt commit -m "Update issue state"  # Commit Beads changes
+bd dolt pull          # Pull the configured Dolt remote
+bd dolt push          # Push committed Beads changes
 ```
 
 ## Worktree Placement
@@ -116,13 +118,20 @@ bd close bd-42 --reason "Completed" --json
    - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
 5. **Complete**: `bd close <id> --reason "Done"`
 
-### Auto-Sync
+### Dolt Sync
 
-bd automatically syncs with git:
+This checkout stores Beads in Dolt rather than syncing through a git-tracked
+JSONL file. After issue writes, commit and synchronize the Beads database
+explicitly:
 
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
+```bash
+bd dolt commit -m "Update issue state"
+bd dolt remote list
+bd dolt pull   # when an origin remote is configured
+bd dolt push   # when an origin remote is configured
+```
+
+Do not use `bd sync`; that command is not present in the installed CLI.
 
 ### Important Rules
 
@@ -148,7 +157,10 @@ For more details, see README.md and docs/QUICKSTART.md.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd dolt commit -m "Update issue state"
+   bd dolt remote list
+   bd dolt pull
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

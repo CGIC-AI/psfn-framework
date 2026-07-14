@@ -171,6 +171,21 @@ ancestor of this branch. Integrate that commit (or the branch containing it) and
 rerun the hygiene gate before closing `c337`. The real flagship restore rehearsal
 in §2d remains a separate live-cutover gate.
 
+The 2026-07-14 tracker reconciliation reran the fixed point on pushed branch
+`feat/fleet-workspace-isolation` at `d7ec186f`: 434/434 focused
+workspace-isolation/restore tests passed across 21 files, including all three
+real-Postgres restore integrations; settings-contract verification, lint, the
+ESM+DTS build, backup/restore verification (`verified: true`), dependency-cycle
+verification, and branch diff checks passed. Repository hygiene still fails for
+the exact missing `a81cdd49` content: the identity-literal scan reports the
+unreconciled allowlist and shared-type-guard verification reports the same three
+local guards. The exact integration source is commit `a81cdd49` on
+`origin/fix/orphans-stubs-bugfixes` (also contained by several pushed work
+branches); it was not merged during tracker reconciliation. No remaining
+IMPORTANT c337 implementation defect was found, so no empty fixes epic was
+created. Live workspace/cutover proof is tracked separately by validation bead
+`psfn-framework-g44z` and does not keep c337 open.
+
 ## 1. Where things stand
 
 | Merge (→ `feat/multi-companion`) | Delivered | Status |
@@ -252,10 +267,11 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10d4` | Future-idea: management capability tier above autonomy — deferred |
 | `psfn-framework-s10d5` | Future-idea: shared-wiki caretaker/meta layer detailed design — deferred |
 | `psfn-framework-s10d6` | Future-idea: voice subsystem rewrite — deferred |
-| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; both restore-security children are closed and combined real-Postgres integration passes @ `28c7cba4`; remains open only for its repository-hygiene acceptance gate after integrating `a81cdd49` (§0.5) |
+| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; both restore-security children are closed; fresh fixed-point verification passed 434/434 focused tests plus lint/settings/build/backup/diff @ `d7ec186f`; remains open only for its repository-hygiene acceptance gate after integrating `a81cdd49` (§0.5) |
 | `psfn-framework-wprg` | Restore rollback ownership — integrated, independently reviewed, remediated, final-check approved, and closed @ `078f7bfe` (§0.5) |
 | `psfn-framework-5s70` | Restore credential-channel hardening — integrated, independently reviewed, remediated, combined-check approved, and closed through merge `28c7cba4` (§0.5) |
-| `psfn-framework-s10d7` | Fleet restore functions — code-complete with c337 on `feat/fleet-workspace-isolation`; real flagship restore rehearsal still hard-gates cutover (§2d) |
+| `psfn-framework-g44z` | Separate live validation: lossless Personal Workspace migration, cross-Garden isolation proof using the existing Carlini leak corpus, and disposable real-flagship restore rehearsal before cutover; does not block c337 |
+| `psfn-framework-s10d7` | Fleet restore functions — verified shipped with c337 and closed; real flagship restore rehearsal is tracked by `psfn-framework-g44z` and still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |
 | `psfn-framework-s10f3` | P2 open: docs pass — `docs/operations.md`/`docs/setup.md` don't cover multi-companion yet |

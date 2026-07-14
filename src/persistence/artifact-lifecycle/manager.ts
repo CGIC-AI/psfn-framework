@@ -11,6 +11,7 @@ import type { ArtifactLifecyclePolicyConfig } from '../../system/config/schedule
 import type { ScratchpadEntry } from '../../core/agent/contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import {
+  isStrictSubpath,
   resolveArtifactLifecycleAuditPath,
   resolveGeneratedImagesDir,
   resolveManagedWorkspaceTempDir,
@@ -65,11 +66,6 @@ export interface ArtifactLifecycleCleanupResult {
   deletedGeneratedMediaPaths: string[];
   deletedWorkspaceTempPaths: string[];
   skippedPromotedPaths: string[];
-}
-
-function isStrictSubpath(candidatePath: string, rootPath: string): boolean {
-  const rel = relative(resolve(rootPath), resolve(candidatePath));
-  return rel.length > 0 && !rel.startsWith('..');
 }
 
 function toCutoff(now: number, retentionDays: number): number {

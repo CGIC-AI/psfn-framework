@@ -229,6 +229,18 @@ autonomous tier), plus the active tool overlay and all broker policy checks.
 Permit values and private candidate reasoning are never returned in tool output
 or audit summaries.
 
+Autonomous source cadence is not a new model-facing tool. Weighted-thought,
+intention, and co-location adapters submit private candidates to the same broker
+and permit path; `scheduler.json > icpAutonomy` owns enablement/retry/TTL and a
+restart applies owner edits. The Garden **Autonomy** page is the operator-facing
+control plane: it may show bounded content-free lifecycle/provenance/reason,
+fatigue/charge/cost state, but never message bodies, private motivation,
+peer-contact IDs, bearer permit IDs, transcripts, prompts, private reasoning, or
+chain-of-thought. Its cancel, DND, and emergency-disable controls act only on the
+local companion and write `autonomy_control` audit entries. They do not add
+model-facing actions, accept arbitrary companion IDs, enable cross-cluster
+communication, or let one companion administer another.
+
 The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, external outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
 
 ## Canonical Self-Status Surface

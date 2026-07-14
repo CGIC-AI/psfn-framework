@@ -7,6 +7,7 @@ import type {
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
+  IcpInitiationDeliveryDisposition,
   IcpInitiationCandidate,
   IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
@@ -175,6 +176,8 @@ export interface IcpInitiationCandidateTransitionInput {
   reasonCode?: IcpAutonomyReasonCode;
   /** Bound only when the broker has issued the recovery-safe permit. */
   permitId?: string;
+  /** Written atomically with consumed so recovery can distinguish delivery from suppression. */
+  deliveryDisposition?: IcpInitiationDeliveryDisposition;
 }
 
 export interface IcpInitiationCandidateStorePort {

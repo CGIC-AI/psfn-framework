@@ -867,8 +867,12 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     )),
     reason_code TEXT,
     initiation_permit_id UUID,
+    pending_follow_up_id TEXT,
+    delivery_disposition TEXT CHECK (delivery_disposition IN ('delivered', 'suppressed')),
     revision BIGINT NOT NULL CHECK (revision >= 1),
-    CHECK (local_companion_id <> peer_companion_id)
+    CHECK (local_companion_id <> peer_companion_id),
+    CHECK (pending_follow_up_id IS NULL OR source = 'intention'),
+    CHECK (delivery_disposition IS NULL OR status = 'consumed')
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_status
@@ -877,6 +881,13 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     ON icp_initiation_candidates (peer_companion_id, status, created_at_ms, candidate_id);`,
   `ALTER TABLE icp_initiation_candidates
     ADD COLUMN IF NOT EXISTS initiation_permit_id UUID;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS pending_follow_up_id TEXT;`,
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS delivery_disposition TEXT;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_initiation_candidates_pending_follow_up
+    ON icp_initiation_candidates (pending_follow_up_id)
+    WHERE pending_follow_up_id IS NOT NULL;`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

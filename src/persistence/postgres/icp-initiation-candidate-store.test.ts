@@ -20,6 +20,8 @@ const CANDIDATE_ROW = {
   status: 'pending',
   reason_code: null,
   initiation_permit_id: null,
+  pending_follow_up_id: null,
+  delivery_disposition: null,
   revision: '1',
 };
 

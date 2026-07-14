@@ -18,7 +18,10 @@ import type {
 } from '../../core/scheduler/heartbeat-runtime-contracts.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../../core/intention/appraisal.js';
-import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
+import {
+  createFileOutreachOutboxStore,
+  type OutreachOutboxStore,
+} from '../../core/intention/outreach-outbox.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
 import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
@@ -29,6 +32,7 @@ import {
   runPostgresMigrations,
 } from '../postgres.js';
 import { POSTGRES_INTENTION_MIGRATIONS } from './migrations.js';
+import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import {
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -111,6 +115,9 @@ function candidateStore(): IcpInitiationCandidateStorePort {
         revision: current.revision + 1,
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
         ...(input.permitId ? { permitId: input.permitId } : {}),
+        ...(input.deliveryDisposition
+          ? { deliveryDisposition: input.deliveryDisposition }
+          : {}),
       };
       candidates.set(next.candidateId, structuredClone(next));
       return structuredClone(next);
@@ -123,7 +130,7 @@ async function wireOutboundHandler(options: {
   dataDir: string;
   adapter: ReturnType<typeof createIcpIntentionCandidateAdapter>;
   pendingFollowUpStore: ReturnType<typeof createPostgresIntentionPortsFromPool>['pendingFollowUpStore'];
-  outreachOutbox: ReturnType<typeof createFileOutreachOutboxStore>;
+  outreachOutbox: OutreachOutboxStore;
   onIntentionFollowUpActivated: NonNullable<
     HeartbeatRuntimeOptions['onIntentionFollowUpActivated']
   >;
@@ -334,6 +341,217 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         expect(issuePermit).toHaveBeenCalledOnce();
         expect(delivery).toHaveBeenCalledOnce();
       } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'recovers a crash before the delivery marker without repeating the durable ICP pipeline',
+    async () => {
+      if (!harness) throw new Error('Postgres integration harness is unavailable');
+      const database = await harness.createDatabase();
+      const schema = 'companion_icp_delivery_marker_recovery';
+      const pool = createPostgresPool(database.databaseUrl, {
+        applicationName: 'psfn-icp-delivery-marker-recovery',
+        allowExitOnIdle: true,
+        max: 4,
+        schema,
+      });
+      const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-delivery-marker-recovery-'));
+      tempDirs.push(dataDir);
+      const outboxPath = join(dataDir, 'outreach-outbox.jsonl');
+      let candidateStore: PostgresIcpInitiationCandidateStore | null = null;
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, { schema });
+        const firstPorts = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-14T02:00:00.000Z'),
+          idFactory: () => 'pending-follow-up-marker-recovery',
+        });
+        const pending = await firstPorts.pendingFollowUpStore.enqueue({
+          content: 'Reach out once despite a local completion-ledger crash.',
+          priority: 'medium',
+          timing: 'immediate',
+          channelId: 'api:test',
+          channelType: 'api',
+          authorId: 'system:intention',
+          authorName: 'Whisper',
+          contactId: 'peer-contact',
+          sourceMessageId: 'source-before-marker-crash',
+        });
+        if (!pending) throw new Error('pending follow-up was not created');
+
+        const consent = vi.fn().mockResolvedValue({ action: 'send' as const });
+        const preflight = vi.fn().mockResolvedValue({ eligible: true as const });
+        const issuePermit = vi.fn().mockImplementation(async ({ candidate }) => ({
+          decision: { eligible: true as const },
+          permit: {
+            permitId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            candidateId: candidate.candidateId,
+            conversationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+            senderCompanionId: LOCAL_COMPANION_ID,
+            recipientCompanionId: PEER_COMPANION_ID,
+            channelId: `companion-dm:${LOCAL_COMPANION_ID}:${PEER_COMPANION_ID}`,
+            provenanceRef: candidate.provenanceRef,
+            issuedAtMs: Date.parse('2026-07-14T02:00:00.000Z'),
+            expiresAtMs: Date.parse('2026-07-14T02:05:00.000Z'),
+            status: 'issued' as const,
+            revision: 1,
+          },
+        }));
+        const delivery = vi.fn().mockResolvedValue({ disposition: 'delivered' as const });
+        const peers = {
+          resolveKnownPeer: vi.fn().mockResolvedValue({
+            contactId: 'peer-contact',
+            displayName: 'Peer',
+            peerCompanionId: PEER_COMPANION_ID,
+          }),
+          executeCompanionOutreach: delivery,
+        };
+        const createSourceRuntime = (store: PostgresIcpInitiationCandidateStore, nowMs: number) => (
+          createIcpInitiationSourceRuntime({
+            localCompanionId: LOCAL_COMPANION_ID,
+            store,
+            peers,
+            gateway: {
+              companionInitiationPreflight: preflight,
+              companionIssueInitiationPermit: issuePermit,
+            },
+            consent: { evaluate: consent },
+            isExternalCompanionAuthorized: () => true,
+            now: () => nowMs,
+          })
+        );
+
+        candidateStore = await PostgresIcpInitiationCandidateStore.connect(
+          database.databaseUrl,
+          { schema },
+        );
+        const firstAdapter = createIcpIntentionCandidateAdapter({
+          sourceRuntime: createSourceRuntime(
+            candidateStore,
+            Date.parse('2026-07-14T02:00:00.000Z'),
+          ),
+          peers,
+          pendingFollowUpStore: firstPorts.pendingFollowUpStore,
+          concernStore: firstPorts.concernStore,
+          now: () => Date.parse('2026-07-14T02:00:00.000Z'),
+        });
+        const durableOutbox = createFileOutreachOutboxStore(outboxPath);
+        let injectMarkerFailure = true;
+        const failingOutbox: OutreachOutboxStore = {
+          append(record) {
+            if (injectMarkerFailure
+              && record.phase === 'sent'
+              && record.metadata?.kind === 'icp_candidate_delivery') {
+              injectMarkerFailure = false;
+              throw new Error('injected failure before ICP delivery completion marker append');
+            }
+            durableOutbox.append(record);
+          },
+          hasTerminal: dedupeKey => durableOutbox.hasTerminal(dedupeKey),
+          getTerminal: dedupeKey => durableOutbox.getTerminal(dedupeKey),
+          getIcpDeliveredCompletion: pendingFollowUpId => (
+            durableOutbox.getIcpDeliveredCompletion(pendingFollowUpId)
+          ),
+        };
+        const firstHandler = await wireOutboundHandler({
+          dataDir,
+          adapter: firstAdapter,
+          pendingFollowUpStore: firstPorts.pendingFollowUpStore,
+          outreachOutbox: failingOutbox,
+          onIntentionFollowUpActivated: async ({ pendingFollowUpId, activationReason }) => (
+            await firstPorts.pendingFollowUpStore.dequeue(pendingFollowUpId, {
+              ...(activationReason ? { activationReason } : {}),
+            })
+          ) !== null,
+        });
+        const firstAction = {
+          id: 'marker-crash-first-action',
+          kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          dedupeKey: 'intention.outbound_message:marker-crash-first-action',
+          channelId: 'api:test',
+          sourceMessageId: 'source-before-marker-crash',
+          inferredAt: Date.parse('2026-07-14T02:00:00.000Z'),
+          payload: {
+            channelId: 'api:test',
+            channelType: 'api',
+            content: 'Private peer outreach candidate with durable completion recovery.',
+            pendingFollowUpId: pending.id,
+          },
+        } satisfies InferredPostTurnAction;
+
+        await expect(firstHandler(firstAction)).rejects.toThrow(
+          'injected failure before ICP delivery completion marker append',
+        );
+        await expect(firstPorts.pendingFollowUpStore.peek(pending.id)).resolves.not.toHaveProperty('activatedAt');
+        expect(createFileOutreachOutboxStore(outboxPath)
+          .getIcpDeliveredCompletion(pending.id)).toBeUndefined();
+        await expect(candidateStore.listCandidates()).resolves.toEqual([
+          expect.objectContaining({
+            status: 'consumed',
+            pendingFollowUpId: pending.id,
+            deliveryDisposition: 'delivered',
+          }),
+        ]);
+
+        await candidateStore.close();
+        candidateStore = await PostgresIcpInitiationCandidateStore.connect(
+          database.databaseUrl,
+          { schema },
+        );
+        const restartedPorts = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-14T02:01:00.000Z'),
+        });
+        const restartedAdapter = createIcpIntentionCandidateAdapter({
+          sourceRuntime: createSourceRuntime(
+            candidateStore,
+            Date.parse('2026-07-14T02:01:00.000Z'),
+          ),
+          peers,
+          pendingFollowUpStore: restartedPorts.pendingFollowUpStore,
+          concernStore: restartedPorts.concernStore,
+          now: () => Date.parse('2026-07-14T02:01:00.000Z'),
+        });
+        const restartedHandler = await wireOutboundHandler({
+          dataDir,
+          adapter: restartedAdapter,
+          pendingFollowUpStore: restartedPorts.pendingFollowUpStore,
+          outreachOutbox: createFileOutreachOutboxStore(outboxPath),
+          onIntentionFollowUpActivated: async ({ pendingFollowUpId, activationReason }) => (
+            await restartedPorts.pendingFollowUpStore.dequeue(pendingFollowUpId, {
+              ...(activationReason ? { activationReason } : {}),
+            })
+          ) !== null,
+        });
+
+        await expect(restartedHandler(firstAction)).resolves.toEqual({
+          detail: 'icp_candidate:deduped:consumed',
+        });
+        await expect(restartedPorts.pendingFollowUpStore.peek(pending.id)).resolves.toMatchObject({
+          activatedAt: '2026-07-14T02:01:00.000Z',
+          activationReason: 'icp_candidate_sent',
+        });
+        expect(createFileOutreachOutboxStore(outboxPath)
+          .getIcpDeliveredCompletion(pending.id)).toBeDefined();
+
+        await expect(restartedHandler({
+          ...firstAction,
+          id: 'marker-crash-new-action-after-restart',
+          dedupeKey: 'intention.outbound_message:marker-crash-new-action-after-restart',
+          inferredAt: Date.parse('2026-07-14T02:02:00.000Z'),
+        })).resolves.toEqual({ detail: 'icp_candidate:delivery_reconciled' });
+        const count = await pool.query<{ count: string }>(
+          'SELECT COUNT(*)::text AS count FROM icp_initiation_candidates',
+        );
+        expect(count.rows[0]?.count).toBe('1');
+        expect(consent).toHaveBeenCalledOnce();
+        expect(preflight).toHaveBeenCalledOnce();
+        expect(issuePermit).toHaveBeenCalledOnce();
+        expect(delivery).toHaveBeenCalledOnce();
+      } finally {
+        if (candidateStore) await candidateStore.close();
         await pool.end();
       }
     },

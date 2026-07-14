@@ -5,6 +5,7 @@ import {
   runPostgresMigrations,
 } from '../postgres.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
+import { PostgresActiveConcernStore } from '../../core/intention/postgres-adapters/concerns-adapter.js';
 import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
 import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 import type {
@@ -112,6 +113,9 @@ function memoryCandidateStore(): IcpInitiationCandidateStorePort {
         revision: current.revision + 1,
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
         ...(input.permitId ? { permitId: input.permitId } : {}),
+        ...(input.deliveryDisposition
+          ? { deliveryDisposition: input.deliveryDisposition }
+          : {}),
       };
       candidates.set(next.candidateId, next);
       return next;
@@ -627,6 +631,152 @@ describe('Postgres schema tenancy plumbing', () => {
           status: 'active',
           originIcpRootInitiationId: expect.stringMatching(/^(aaaaaaaa|bbbbbbbb)-/),
         });
+      } finally {
+        if (blockerOpen) await blocker.query('ROLLBACK');
+        blocker.release();
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'preserves a rooted active concern and all evidence across a queued unrooted merge',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-active-concern-rooted-unrooted-merge',
+        allowExitOnIdle: true,
+        max: 7,
+        schema: 'companion_active_concern_rooted_unrooted',
+      });
+      const blocker = await pool.connect();
+      let blockerOpen = false;
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_active_concern_rooted_unrooted',
+        });
+        const now = () => new Date('2026-07-13T21:00:00.000Z');
+        const seedStore = new PostgresActiveConcernStore(pool, now, () => 'active-merge-seed');
+        const created = await seedStore.create({
+          text: 'Preserve all evidence for the active peer outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+          evidenceRefs: [{ kind: 'runtime', ref: 'seed-evidence' }],
+        });
+        const rootedStore = new PostgresActiveConcernStore(pool, now, () => 'unexpected-rooted');
+        const unrootedStore = new PostgresActiveConcernStore(pool, now, () => 'unexpected-unrooted');
+        await Promise.all([rootedStore.hydrateCache(), unrootedStore.hydrateCache()]);
+
+        await blocker.query('BEGIN');
+        blockerOpen = true;
+        await blocker.query('SELECT id FROM active_concerns WHERE id = $1 FOR UPDATE', [created.id]);
+        const rootedMerge = rootedStore.create({
+          text: created.text,
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:00.000Z',
+          expiresAt: '2026-07-14T21:00:00.000Z',
+          evidenceRefs: [{ kind: 'message', ref: 'rooted-merge-evidence' }],
+          originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        });
+        await waitForBlockedActiveConcernQueries(pool, 1);
+        const unrootedMerge = unrootedStore.create({
+          text: created.text,
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:01.000Z',
+          expiresAt: '2026-07-14T21:00:01.000Z',
+          evidenceRefs: [{ kind: 'message', ref: 'unrooted-merge-evidence' }],
+        });
+        await waitForBlockedActiveConcernQueries(pool, 2);
+        await blocker.query('COMMIT');
+        blockerOpen = false;
+
+        await expect(Promise.all([rootedMerge, unrootedMerge])).resolves.toHaveLength(2);
+        const finalConcern = await seedStore.getById(created.id);
+        expect(finalConcern).toMatchObject({
+          originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          evidenceRefs: expect.arrayContaining([
+            { kind: 'runtime', ref: 'seed-evidence' },
+            { kind: 'message', ref: 'rooted-merge-evidence' },
+            { kind: 'message', ref: 'unrooted-merge-evidence' },
+          ]),
+        });
+      } finally {
+        if (blockerOpen) await blocker.query('ROLLBACK');
+        blocker.release();
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'allows one active-concern root merge and leaves its winning row unchanged by the loser',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-active-concern-two-root-merge',
+        allowExitOnIdle: true,
+        max: 7,
+        schema: 'companion_active_concern_two_roots',
+      });
+      const blocker = await pool.connect();
+      let blockerOpen = false;
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_active_concern_two_roots',
+        });
+        const now = () => new Date('2026-07-13T21:00:00.000Z');
+        const seedStore = new PostgresActiveConcernStore(pool, now, () => 'active-two-roots-seed');
+        const created = await seedStore.create({
+          text: 'Serialize competing roots for the active outreach plan.',
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T20:00:00.000Z',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+          evidenceRefs: [{ kind: 'runtime', ref: 'seed-two-root-evidence' }],
+        });
+        const storeA = new PostgresActiveConcernStore(pool, now, () => 'unexpected-root-a');
+        const storeB = new PostgresActiveConcernStore(pool, now, () => 'unexpected-root-b');
+        await Promise.all([storeA.hydrateCache(), storeB.hydrateCache()]);
+
+        await blocker.query('BEGIN');
+        blockerOpen = true;
+        await blocker.query('SELECT id FROM active_concerns WHERE id = $1 FOR UPDATE', [created.id]);
+        const mergeRoot = (
+          store: PostgresActiveConcernStore,
+          root: string,
+          evidenceRef: string,
+        ) => store.create({
+          text: created.text,
+          contactId: 'peer-contact',
+          createdAt: '2026-07-13T21:00:00.000Z',
+          expiresAt: '2026-07-14T21:00:00.000Z',
+          evidenceRefs: [{ kind: 'message', ref: evidenceRef }],
+          originIcpRootInitiationId: root,
+        });
+        const rootA = mergeRoot(
+          storeA,
+          'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          'active-root-a-evidence',
+        );
+        await waitForBlockedActiveConcernQueries(pool, 1);
+        const rootB = mergeRoot(
+          storeB,
+          'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          'active-root-b-evidence',
+        );
+        await waitForBlockedActiveConcernQueries(pool, 2);
+        await blocker.query('COMMIT');
+        blockerOpen = false;
+
+        const settled = await Promise.allSettled([rootA, rootB]);
+        const fulfilled = settled.filter(
+          (result): result is PromiseFulfilledResult<Awaited<typeof rootA>> => result.status === 'fulfilled',
+        );
+        expect(fulfilled).toHaveLength(1);
+        expect(settled.filter(result => result.status === 'rejected')).toHaveLength(1);
+        await expect(seedStore.getById(created.id)).resolves.toEqual(fulfilled[0]!.value);
       } finally {
         if (blockerOpen) await blocker.query('ROLLBACK');
         blocker.release();

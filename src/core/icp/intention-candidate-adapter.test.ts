@@ -136,6 +136,7 @@ describe('ICP intention candidate adapter', () => {
       source: 'intention',
       peerContactId: 'peer-contact',
       sourceRecordId: action.dedupeKey,
+      pendingFollowUpId: 'follow-up-1',
       reasonSummary: 'A private reason',
       cause: { kind: 'icp_conversation', rootInitiationId: ROOT },
     }));

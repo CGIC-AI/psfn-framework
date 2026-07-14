@@ -47,6 +47,9 @@ function createStore(): IcpInitiationCandidateStorePort {
         status: input.status,
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
         ...(input.permitId ? { permitId: input.permitId } : {}),
+        ...(input.deliveryDisposition
+          ? { deliveryDisposition: input.deliveryDisposition }
+          : {}),
         revision: current.revision + 1,
       };
       rows.set(next.candidateId, next);

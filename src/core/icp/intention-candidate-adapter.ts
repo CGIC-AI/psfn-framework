@@ -117,6 +117,7 @@ export function createIcpIntentionCandidateAdapter(input: {
         preferredChannel: parsedChannel?.kind === 'room' ? 'current_room' : 'dm',
         ...(parsedChannel?.kind === 'room' ? { currentRoomChannelId: payload.channelId } : {}),
         sourceRecordId: action.dedupeKey,
+        ...(payload.pendingFollowUpId ? { pendingFollowUpId: payload.pendingFollowUpId } : {}),
         reasonSummary: (payload.reason?.trim() || payload.content).slice(0, 1_000),
         cause: inheritedRoot
           ? { kind: 'icp_conversation', rootInitiationId: inheritedRoot }

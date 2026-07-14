@@ -93,8 +93,22 @@ class FakeIntentionPool {
     });
   }
 
+  async connect(): Promise<{
+    query: FakeIntentionPool['query'];
+    release(): void;
+  }> {
+    return {
+      query: this.query.bind(this),
+      release() {},
+    };
+  }
+
   async query<Row>(text: string, values: readonly unknown[] = []): Promise<QueryResult<Row>> {
     const normalized = text.replace(/\s+/g, ' ').trim();
+
+    if (normalized === 'BEGIN' || normalized === 'COMMIT' || normalized === 'ROLLBACK') {
+      return { rows: [] };
+    }
 
     if (normalized.startsWith('INSERT INTO active_concerns')) {
       const [

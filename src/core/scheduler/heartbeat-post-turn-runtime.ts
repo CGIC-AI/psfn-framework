@@ -1084,8 +1084,9 @@ export function wireHeartbeatPostTurnRuntime(
             }
             if (icpCandidate.kind === 'submitted') {
               if (payload.pendingFollowUpId
-                && icpCandidate.result.outcome === 'sent'
-                && icpCandidate.result.status === 'consumed') {
+                && icpCandidate.result.pendingFollowUpId === payload.pendingFollowUpId
+                && icpCandidate.result.status === 'consumed'
+                && icpCandidate.result.deliveryDisposition === 'delivered') {
                 runtimeOptions.outreachOutbox?.append({
                   ...baseOutboxRecord,
                   phase: 'sent',

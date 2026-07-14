@@ -17,6 +17,8 @@ import {
 } from '../../shared/utils/types.js';
 
 /** Private companion-local motivation. Never serialize this object to shared state. */
+export type IcpInitiationDeliveryDisposition = 'delivered' | 'suppressed';
+
 export interface IcpInitiationCandidate {
   candidateId: string;
   rootInitiationId: string;
@@ -34,13 +36,17 @@ export interface IcpInitiationCandidate {
   reasonCode?: IcpAutonomyReasonCode;
   /** Private recovery binding for a permit issued before target-turn delivery. */
   permitId?: string;
+  /** Durable intention owner used to reconcile delivery across action identities. */
+  pendingFollowUpId?: string;
+  /** Durable target result, written with the terminal consumed transition. */
+  deliveryDisposition?: IcpInitiationDeliveryDisposition;
   revision: number;
 }
 
 /** The only candidate projection allowed to cross into shared arbitration state. */
 export type IcpInitiationCandidateSharedMetadata = Omit<
   IcpInitiationCandidate,
-  'peerContactId' | 'reasonSummary' | 'permitId'
+  'peerContactId' | 'reasonSummary' | 'permitId' | 'pendingFollowUpId' | 'deliveryDisposition'
 >;
 
 export const MAX_ICP_CANDIDATE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -49,7 +55,8 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
-  'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId', 'revision',
+  'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId',
+  'pendingFollowUpId', 'deliveryDisposition', 'revision',
 ] as const;
 const SHARED_CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
@@ -127,6 +134,22 @@ export function parseIcpInitiationCandidate(
   const permitId = value.permitId === undefined
     ? undefined
     : requireUuid(value.permitId, 'ICP candidate.permitId');
+  const pendingFollowUpId = value.pendingFollowUpId === undefined
+    ? undefined
+    : requireString(value.pendingFollowUpId, 'ICP candidate.pendingFollowUpId');
+  const deliveryDisposition = value.deliveryDisposition === undefined
+    ? undefined
+    : requireEnum(
+      value.deliveryDisposition,
+      ['delivered', 'suppressed'] as const,
+      'ICP candidate.deliveryDisposition',
+    );
+  if (pendingFollowUpId !== undefined && value.source !== 'intention') {
+    throw new Error('ICP candidate.pendingFollowUpId is only valid for intention sources');
+  }
+  if (deliveryDisposition !== undefined && value.status !== 'consumed') {
+    throw new Error('ICP candidate.deliveryDisposition requires consumed status');
+  }
   const revision = value.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
     throw new Error('ICP candidate.revision must be a positive safe integer');
@@ -158,6 +181,8 @@ export function parseIcpInitiationCandidate(
     ),
     ...(reasonCode !== undefined ? { reasonCode } : {}),
     ...(permitId !== undefined ? { permitId } : {}),
+    ...(pendingFollowUpId !== undefined ? { pendingFollowUpId } : {}),
+    ...(deliveryDisposition !== undefined ? { deliveryDisposition } : {}),
     revision,
   };
 }

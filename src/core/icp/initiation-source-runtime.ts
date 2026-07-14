@@ -45,6 +45,8 @@ export interface IcpInitiationSourceRequest {
   currentRoomChannelId?: string;
   /** Durable source owner identity (thought/follow-up/turn/tool-call tuple). */
   sourceRecordId: string;
+  /** Durable intention owner; stable when a scheduler action is recreated. */
+  pendingFollowUpId?: string;
   /** Private companion-local motivation. Never projected to the gateway. */
   reasonSummary: string;
   cause: IcpInitiationCause;
@@ -110,6 +112,8 @@ export interface IcpInitiationSourceResult {
   candidateId: string;
   status: IcpInitiationCandidateStatus;
   reasonCode?: IcpAutonomyReasonCode;
+  pendingFollowUpId?: string;
+  deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'];
 }
 
 export interface IcpInitiationSourceRuntime {
@@ -164,11 +168,17 @@ function sourceIdentity(input: {
     input.peerCompanionId,
     input.request.source,
     input.request.preferredChannel,
-    requireTrimmed(
-      input.request.sourceRecordId,
-      'sourceRecordId',
-      MAX_SOURCE_RECORD_ID_CHARS,
-    ),
+    input.request.pendingFollowUpId === undefined
+      ? requireTrimmed(
+        input.request.sourceRecordId,
+        'sourceRecordId',
+        MAX_SOURCE_RECORD_ID_CHARS,
+      )
+      : `pending-follow-up:${requireTrimmed(
+        input.request.pendingFollowUpId,
+        'pendingFollowUpId',
+        MAX_SOURCE_RECORD_ID_CHARS,
+      )}`,
   ].join('\0');
 }
 
@@ -181,7 +191,8 @@ function sameCandidate(left: IcpInitiationCandidate, right: IcpInitiationCandida
     && left.preferredChannel === right.preferredChannel
     && left.source === right.source
     && left.provenanceRef === right.provenanceRef
-    && left.reasonSummary === right.reasonSummary;
+    && left.reasonSummary === right.reasonSummary
+    && left.pendingFollowUpId === right.pendingFollowUpId;
 }
 
 function result(
@@ -194,6 +205,10 @@ function result(
     candidateId: candidate.candidateId,
     status: candidate.status,
     ...(reasonCode ? { reasonCode } : {}),
+    ...(candidate.pendingFollowUpId ? { pendingFollowUpId: candidate.pendingFollowUpId } : {}),
+    ...(candidate.deliveryDisposition
+      ? { deliveryDisposition: candidate.deliveryDisposition }
+      : {}),
   };
 }
 
@@ -264,6 +279,7 @@ export function createIcpInitiationSourceRuntime(
     candidate: IcpInitiationCandidate,
     status: IcpInitiationCandidateStatus,
     reasonCode?: IcpAutonomyReasonCode,
+    deliveryDisposition?: IcpInitiationCandidate['deliveryDisposition'],
   ): Promise<IcpInitiationCandidate> => {
     const next = await dependencies.store.transitionCandidate({
       candidateId: candidate.candidateId,
@@ -271,6 +287,7 @@ export function createIcpInitiationSourceRuntime(
       expectedRevision: candidate.revision,
       status,
       ...(reasonCode ? { reasonCode } : {}),
+      ...(deliveryDisposition ? { deliveryDisposition } : {}),
     });
     await emitLifecycle(next, candidate.status);
     return next;
@@ -282,6 +299,9 @@ export function createIcpInitiationSourceRuntime(
     candidateId: string,
   ): Promise<IcpInitiationSourceResult> => {
     const currentNow = now();
+    if (request.pendingFollowUpId !== undefined && request.source !== 'intention') {
+      throw new Error('pendingFollowUpId is only valid for intention initiation sources');
+    }
     const ttlMs = Math.min(
       MAX_ICP_CANDIDATE_TTL_MS,
       Math.max(1, Math.floor(request.ttlMs ?? DEFAULT_CANDIDATE_TTL_MS)),
@@ -311,6 +331,7 @@ export function createIcpInitiationSourceRuntime(
       createdAtMs: currentNow,
       expiresAtMs: currentNow + ttlMs,
       status: 'pending',
+      ...(request.pendingFollowUpId ? { pendingFollowUpId: request.pendingFollowUpId } : {}),
       revision: 1,
     });
 
@@ -354,7 +375,7 @@ export function createIcpInitiationSourceRuntime(
         candidate.permitId,
         dependencies.isExternalCompanionAuthorized,
       );
-      const consumed = await transition(candidate, 'consumed');
+      const consumed = await transition(candidate, 'consumed', undefined, execution.disposition);
       return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
     }
 
@@ -413,7 +434,7 @@ export function createIcpInitiationSourceRuntime(
       permitResult.permit.permitId,
       dependencies.isExternalCompanionAuthorized,
     );
-    const consumed = await transition(permitted, 'consumed');
+    const consumed = await transition(permitted, 'consumed', undefined, execution.disposition);
     return result(execution.disposition === 'delivered' ? 'sent' : 'suppressed', consumed);
   };
 

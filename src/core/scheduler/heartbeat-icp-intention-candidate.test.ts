@@ -99,6 +99,8 @@ function wire(
             outcome: 'sent',
             candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             status: 'consumed',
+            pendingFollowUpId: 'follow-up-1',
+            deliveryDisposition: 'delivered',
           },
         }
       : kind === 'deferred'

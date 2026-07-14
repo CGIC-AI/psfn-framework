@@ -668,65 +668,99 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     existing: ActiveConcern,
     input: ConcernMergeInput,
   ): Promise<ActiveConcern> {
-    if (isConcernTerminalStatus(existing.status)) {
-      throw new Error(`Cannot merge into terminal concern "${existing.id}"`);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockedResult = await client.query<ActiveConcernRow>(
+        `
+          SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
+          FROM active_concerns
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [existing.id],
+      );
+      const lockedRow = lockedResult.rows.at(0);
+      if (!lockedRow) {
+        throw new Error(`Failed to lock active concern "${existing.id}" for merge`);
+      }
+      const locked = mapActiveConcernRow(lockedRow);
+      if (isConcernTerminalStatus(locked.status)) {
+        throw new Error(`Cannot merge into terminal concern "${locked.id}"`);
+      }
+      assertCompatibleConcernIcpRoot(locked, input.originIcpRootInitiationId);
+      const status = mergeConcernStatus(locked.status, input.status);
+      validateConcernStatusTransition({
+        from: locked.status,
+        to: status,
+        evidenceRefs: input.evidenceRefs,
+      });
+      const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, locked.createdAt);
+      const nextReviewAt = chooseEarlierOptionalConcernTimestamp(
+        locked.nextReviewAt,
+        input.nextReviewAt,
+      );
+      const originIcpRootInitiationId = locked.originIcpRootInitiationId
+        ?? input.originIcpRootInitiationId;
+      const updatedResult = await client.query<ActiveConcernRow>(
+        `
+          UPDATE active_concerns
+          SET
+            priority = $2,
+            status = $3,
+            expires_at = $4,
+            salience = $5,
+            sensitivity = $6,
+            owner = $7,
+            evidence_refs = $8::jsonb,
+            last_reviewed_at = $9,
+            next_review_at = $10,
+            merged_from_ids = $11::jsonb,
+            split_from_id = $12,
+            origin_icp_root_initiation_id = $13
+          WHERE id = $1
+          RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
+        `,
+        [
+          locked.id,
+          chooseHigherConcernPriority(locked.priority, input.priority),
+          status,
+          clampConcernExpiresAt(
+            chooseLaterConcernTimestamp(locked.expiresAt, boundedExpiresAt),
+            locked.createdAt,
+          ),
+          Math.max(locked.salience, input.salience),
+          mergeConcernSensitivity(locked.sensitivity, input.sensitivity),
+          input.owner,
+          serializeConcernEvidenceRefs(mergeConcernEvidenceRefs(locked.evidenceRefs, input.evidenceRefs)),
+          input.lastReviewedAt,
+          nextReviewAt ?? null,
+          serializeStringList(mergeConcernStringLists(locked.mergedFromIds ?? [], input.mergedFromIds)),
+          input.splitFromId ?? locked.splitFromId ?? null,
+          originIcpRootInitiationId ?? null,
+        ],
+      );
+      const updatedRow = updatedResult.rows.at(0);
+      if (!updatedRow) {
+        throw new Error(`Failed to merge active concern "${locked.id}"`);
+      }
+      const concern = mapActiveConcernRow(updatedRow);
+      await client.query('COMMIT');
+      this.activeConcernCache.set(concern.id, concern);
+      return concern;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `Failed to roll back active concern merge transaction for "${existing.id}"`,
+        );
+      }
+      throw error;
+    } finally {
+      client.release();
     }
-    const status = mergeConcernStatus(existing.status, input.status);
-    validateConcernStatusTransition({
-      from: existing.status,
-      to: status,
-      evidenceRefs: input.evidenceRefs,
-    });
-    const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
-    const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
-    assertCompatibleConcernIcpRoot(existing, input.originIcpRootInitiationId);
-    const originIcpRootInitiationId = existing.originIcpRootInitiationId
-      ?? input.originIcpRootInitiationId;
-    const row = await queryOne<ActiveConcernRow>(
-      this.pool,
-      `
-        UPDATE active_concerns
-        SET
-          priority = $2,
-          status = $3,
-          expires_at = $4,
-          salience = $5,
-          sensitivity = $6,
-          owner = $7,
-          evidence_refs = $8::jsonb,
-          last_reviewed_at = $9,
-          next_review_at = $10,
-          merged_from_ids = $11::jsonb,
-          split_from_id = $12,
-          origin_icp_root_initiation_id = $13
-        WHERE id = $1
-        RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
-      `,
-      [
-        existing.id,
-        chooseHigherConcernPriority(existing.priority, input.priority),
-        status,
-        clampConcernExpiresAt(
-          chooseLaterConcernTimestamp(existing.expiresAt, boundedExpiresAt),
-          existing.createdAt,
-        ),
-        Math.max(existing.salience, input.salience),
-        mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
-        input.owner,
-        serializeConcernEvidenceRefs(mergeConcernEvidenceRefs(existing.evidenceRefs, input.evidenceRefs)),
-        input.lastReviewedAt,
-        nextReviewAt ?? null,
-        serializeStringList(mergeConcernStringLists(existing.mergedFromIds ?? [], input.mergedFromIds)),
-        input.splitFromId ?? existing.splitFromId ?? null,
-        originIcpRootInitiationId ?? null,
-      ],
-    );
-    if (!row) {
-      throw new Error(`Failed to merge active concern "${existing.id}"`);
-    }
-    const concern = mapActiveConcernRow(row);
-    this.activeConcernCache.set(concern.id, concern);
-    return concern;
   }
 
   private resolveConcernTtlMs(priority: 'high' | 'medium' | 'low'): number {

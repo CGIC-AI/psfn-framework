@@ -37,13 +37,16 @@ interface CandidateRow extends QueryResultRow {
   status: string;
   reason_code: string | null;
   initiation_permit_id: string | null;
+  pending_follow_up_id: string | null;
+  delivery_disposition: string | null;
   revision: string | number;
 }
 
 const CANDIDATE_COLUMNS = `
   candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
   peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
-  created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id, revision
+  created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
+  pending_follow_up_id, delivery_disposition, revision
 `;
 
 function safeInteger(value: string | number, field: string): number {
@@ -78,6 +81,10 @@ function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
     status: row.status,
     ...(row.reason_code !== null ? { reasonCode: row.reason_code } : {}),
     ...(row.initiation_permit_id !== null ? { permitId: row.initiation_permit_id } : {}),
+    ...(row.pending_follow_up_id !== null ? { pendingFollowUpId: row.pending_follow_up_id } : {}),
+    ...(row.delivery_disposition !== null
+      ? { deliveryDisposition: row.delivery_disposition }
+      : {}),
     revision: safeInteger(row.revision, 'candidate.revision'),
   });
 }
@@ -116,8 +123,11 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       INSERT INTO icp_initiation_candidates (
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
-        created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id, revision
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
+        pending_follow_up_id, delivery_disposition, revision
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+      )
       RETURNING ${CANDIDATE_COLUMNS}
     `, [
       candidate.candidateId,
@@ -134,6 +144,8 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.status,
       candidate.reasonCode ?? null,
       candidate.permitId ?? null,
+      candidate.pendingFollowUpId ?? null,
+      candidate.deliveryDisposition ?? null,
       candidate.revision,
     ]);
     if (!row) throw new Error(`Failed to create ICP candidate ${candidate.candidateId}`);
@@ -185,11 +197,22 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
     if (input.status === 'permitted' && input.permitId === undefined) {
       throw new Error('ICP candidate permitted transition requires a recovery permit binding');
     }
+    if (input.status === 'consumed' && input.deliveryDisposition === undefined) {
+      throw new Error('ICP candidate consumed transition requires a delivery disposition');
+    }
+    if (input.deliveryDisposition !== undefined
+      && !['delivered', 'suppressed'].includes(input.deliveryDisposition)) {
+      throw new Error(`Unknown ICP candidate delivery disposition ${input.deliveryDisposition}`);
+    }
+    if (input.deliveryDisposition !== undefined && input.status !== 'consumed') {
+      throw new Error('ICP candidate delivery disposition requires consumed status');
+    }
     const row = await queryOne<CandidateRow>(this.pool, `
       UPDATE icp_initiation_candidates
       SET status = $4,
         reason_code = $5,
         initiation_permit_id = COALESCE($6::uuid, initiation_permit_id),
+        delivery_disposition = COALESCE($7, delivery_disposition),
         revision = revision + 1
       WHERE candidate_id = $1 AND status = $2 AND revision = $3
       RETURNING ${CANDIDATE_COLUMNS}
@@ -200,6 +223,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       input.status,
       input.reasonCode ?? null,
       input.permitId ?? null,
+      input.deliveryDisposition ?? null,
     ]);
     if (!row) throw new Error(`ICP candidate transition conflict for ${input.candidateId}`);
     return mapCandidate(row);

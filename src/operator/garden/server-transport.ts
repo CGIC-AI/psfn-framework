@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, realpathSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
-import { brotliCompressSync, gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
 import { sendText } from '../../channels/backplane/http/primitives.js';
 
 const GARDEN_MIME_TYPES: Record<string, string> = {
@@ -32,6 +32,9 @@ const GARDEN_MIN_COMPRESS_BYTES = 1024;
 // Cap on the in-memory on-the-fly compression memo. Static asset counts are
 // small; this is a safety valve against unbounded growth.
 const GARDEN_COMPRESSION_CACHE_MAX_ENTRIES = 512;
+const GARDEN_FAST_BROTLI_OPTIONS = {
+  params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+} as const;
 
 type WireEncoding = 'br' | 'gzip';
 
@@ -189,10 +192,12 @@ export class AdminServerTransport {
       }
     }
 
-    // ETag identifies the exact representation: base version (size + mtime) plus
-    // the content-encoding, since Vary: Accept-Encoding means caches key on both.
-    const baseTag = `${fileStat.size.toString(16)}-${Math.trunc(fileStat.mtimeMs).toString(16)}`;
-    const etag = `"${baseTag}${encoding ? `-${encoding}` : ''}"`;
+    // Weak ETag: size + full-precision mtime is a change heuristic, not a
+    // byte-content identity, so the tag must not claim strong equality. The
+    // encoding suffix keeps compressed/identity representations distinct
+    // (Vary: Accept-Encoding means caches key on both).
+    const baseTag = `${fileStat.size.toString(16)}-${fileStat.mtimeMs.toString(16)}`;
+    const etag = `W/"${baseTag}${encoding ? `-${encoding}` : ''}"`;
 
     const headers: Record<string, string> = {
       'Cache-Control': cacheControl,
@@ -228,12 +233,16 @@ export class AdminServerTransport {
     size: number,
     encoding: WireEncoding,
   ): Promise<Buffer> {
-    const key = `${resolvedPath} ${Math.trunc(mtimeMs)} ${size} ${encoding}`;
+    const key = `${resolvedPath} ${mtimeMs} ${size} ${encoding}`;
     const cached = this.compressionCache.get(key);
     if (cached) return cached.buffer;
 
     const content = await readFile(resolvedPath);
-    const buffer = encoding === 'br' ? brotliCompressSync(content) : gzipSync(content);
+    // Fast brotli: default quality (11) blocks the event loop on large
+    // assets; precompressed .br siblings carry the max-quality copies.
+    const buffer = encoding === 'br'
+      ? brotliCompressSync(content, GARDEN_FAST_BROTLI_OPTIONS)
+      : gzipSync(content);
 
     if (this.compressionCache.size >= GARDEN_COMPRESSION_CACHE_MAX_ENTRIES) {
       this.compressionCache.clear();
@@ -245,12 +254,12 @@ export class AdminServerTransport {
   private ifNoneMatchSatisfied(header: string | string[], etag: string): boolean {
     const raw = Array.isArray(header) ? header.join(',') : header;
     if (raw.trim() === '*') return true;
-    // Compare against both the strong tag and its weak form; the client may echo
-    // either back on a conditional request.
-    const weak = `W/${etag}`;
+    // Weak comparison: strip any W/ prefix on both sides — either peer may
+    // echo the weak or strong form of the same validator.
+    const opaque = etag.replace(/^W\//, '');
     for (const candidate of raw.split(',')) {
-      const value = candidate.trim();
-      if (value === etag || value === weak) return true;
+      const value = candidate.trim().replace(/^W\//, '');
+      if (value === opaque) return true;
     }
     return false;
   }

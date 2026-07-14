@@ -135,7 +135,7 @@ describe('AdminServerTransport Garden assets', () => {
     expect(captured.body).toBe('console.log("asset");');
     expect(captured.headers['Content-Type']).toBe('text/javascript');
     expect(captured.headers['Cache-Control']).toBe('public, max-age=31536000, immutable');
-    expect(captured.headers.ETag).toMatch(/^"[0-9a-f]+-[0-9a-f]+"$/);
+    expect(captured.headers.ETag).toMatch(/^W\/"[0-9a-f.]+-[0-9a-f.]+"$/);
     expect(captured.headers.Vary).toBe('Accept-Encoding');
     expect(captured.headers['Content-Encoding']).toBeUndefined();
   });

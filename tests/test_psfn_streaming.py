@@ -78,7 +78,9 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
     assert second_chunks == ["Again"]
     assert requests[0]["model"] == "psfn"
     assert requests[0]["stream"] is True
-    assert requests[0]["system_prompt_mode"] == "custom"
+    assert "max_tokens" not in requests[0]
+    assert requests[0]["system_prompt_mode"] == "default"
+    assert "system_prompt" not in requests[0]
     assert requests[0]["response_style"] == "concise"
     assert requests[0]["user"] == "realtime:pi-w"
     assert requests[0]["messages"] == [{"role": "user", "content": "hello"}]
@@ -160,7 +162,7 @@ async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
     assert payload["provider"] == "openrouter"
     assert payload["model"] == "z-ai-glm-5.2-nitro"
     assert payload["stream"] is True
-    assert payload["max_tokens"] == 80
+    assert "max_tokens" not in payload
     assert payload["system_prompt_mode"] == "default"
     assert payload["response_style"] == "concise"
     assert payload["user"] == "bedroom"

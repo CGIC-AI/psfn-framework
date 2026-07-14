@@ -34,10 +34,6 @@ type PsfnChatMessage = {
   content: PsfnChatMessageContent;
 };
 
-const DEFAULT_SYSTEM_PROMPT =
-  "Reply as plain spoken dialogue only, in one short sentence unless the user explicitly asks for more. "
-  + "Do not use roleplay actions, stage directions, emotes, asterisks, markdown, narration, or scene-setting. "
-  + "Do not call tools. Do not add preambles, summaries, or extra reassurance.";
 const DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES = 12;
 
 export class PsfnModelAdapter implements AgentRuntimeAdapter {
@@ -72,9 +68,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       JSON.stringify({
         model: this.runtime.model,
         stream: false,
-        max_tokens: 80,
-        system_prompt_mode: "custom",
-        system_prompt: DEFAULT_SYSTEM_PROMPT,
+        system_prompt_mode: "default",
         response_style: "concise",
         user: conversationId,
         satellite_claim: satelliteClaim,

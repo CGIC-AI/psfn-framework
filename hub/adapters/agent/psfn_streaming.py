@@ -21,11 +21,6 @@ from hub.satellite_claims import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "Respond in one short, spoken-friendly sentence unless the user explicitly asks for more. "
-    "Do not call tools. Do not add preambles, summaries, or extra reassurance."
-)
-
 TouchKind = Literal["headpat", "petting", "hug", "kiss"]
 TouchRegion = Literal["head", "cheek", "body"]
 TouchResponseMode = Literal["respond", "observe"]
@@ -238,17 +233,13 @@ class PsfnStreamingProvider:
             "model": self._model_name,
             "messages": messages,
             "stream": stream,
-            "max_tokens": 80,
+            "system_prompt_mode": "default",
             "response_style": "concise",
             "user": conversation_id,
             "satellite_claim": satellite_claim,
         }
         if self._provider_name:
             payload["provider"] = self._provider_name
-            payload["system_prompt_mode"] = "default"
-        else:
-            payload["system_prompt_mode"] = "custom"
-            payload["system_prompt"] = _DEFAULT_SYSTEM_PROMPT
         return payload
 
     def _build_satellite_claim(self, conversation_id: str) -> dict[str, object]:

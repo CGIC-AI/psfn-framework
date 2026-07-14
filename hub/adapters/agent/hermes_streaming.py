@@ -250,9 +250,7 @@ for raw_line in sys.stdin:
             model=payload["model_name"],
             messages=messages,
             stream=True,
-            max_tokens=80,
-            # Voice turns need visible text quickly. Reasoning-first streams can
-            # consume the response budget without yielding spoken content.
+            # Voice turns need visible text quickly rather than reasoning-first latency.
             extra_body={"reasoning": {"enabled": False}},
         )
 

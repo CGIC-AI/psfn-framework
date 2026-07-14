@@ -80,6 +80,10 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     assert.equal(capturedHeaders["X-PSFN-Satellite-Name"], "Thin Shell");
     assert.equal(capturedBody.user, "thin-shell:demo");
     assert.equal(capturedBody.stream, false);
+    assert.equal("max_tokens" in capturedBody, false);
+    assert.equal(capturedBody.system_prompt_mode, "default");
+    assert.equal("system_prompt" in capturedBody, false);
+    assert.equal(capturedBody.response_style, "concise");
     assert.deepEqual(capturedBody.messages, [{ role: "user", content: "hello" }]);
     const bodyClaim = capturedBody.satellite_claim as Record<string, unknown>;
     assert.equal(bodyClaim.protocolVersion, "satellite-claim.v1");

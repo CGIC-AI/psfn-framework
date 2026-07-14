@@ -121,8 +121,15 @@ live policy, and reaches the target-channel command without forced test tool
 state or constant authorization. The `faae4fe5` fixed point passed build/DTS,
 lint, settings-contract, repository-hygiene, Fallow, all seven Postgres
 reservation integration tests, and the full suite (8,319 passed, 3 skipped).
-Two immutable independent re-reviews are pending before the child bead is
-closed.
+Subsequent hardening (`d47d4057..72238bc8`) added candidate notify scope/turn
+isolation, exclusive candidate-run reservation, and idle queue-ingress
+ownership. Both required fresh independent reviews **passed** on the unchanged
+code fixed point `72238bc8` (2026-07-13/14; see
+`working_docs/w6-review-1-record.md` and `w6-review-2-record.md`). The sole
+remaining close blocker for `.6.6` is the full-suite test gate: a late
+unhandled `ENOENT *.jsonl.write-lock` teardown failure, tracked as
+`psfn-framework-k510` and recorded as blocking `.6.6`. Low/hardening review
+findings are filed as `psfn-framework-srr2` and `psfn-framework-7eke`.
 
 This is an implementation-wave checkpoint, not completion of the ICP epic or
 release validation. W5 and W7-W9 (`s10mc.6.5`, `.6.7` through `.6.9`) remain
@@ -199,8 +206,8 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W4 plus W6 fatigue/social regulation, hardened through `faae4fe5`; W5 and W7-W9 remain open; not merged or live-tested |
-| `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — code and full local validation complete at `faae4fe5`; two final immutable independent reviews pending before close |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W4 plus W6 fatigue/social regulation, hardened through `72238bc8`; W5 and W7-W9 remain open; not merged or live-tested |
+| `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — both fresh independent reviews **passed** at `72238bc8`; close blocked only by the full-suite ENOENT test gate (`psfn-framework-k510`) |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |
 | `psfn-framework-s10rm` | Room mechanics — entry-event note merged @ `98e964eb`; **open**: presence-windowed delivery, public-room semantics, memory-tag tweaks (§2e) |

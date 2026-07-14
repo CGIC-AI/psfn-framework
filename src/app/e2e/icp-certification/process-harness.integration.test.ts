@@ -25,7 +25,9 @@ import {
 } from './fixture.js';
 import {
   startIcpCertificationProcessHarness,
+  startIcpSingleCompanionFeatureOffHarness,
   type IcpCertificationProcessHarness,
+  type IcpSingleCompanionFeatureOffHarness,
 } from './process-harness.js';
 
 const TIMEOUT_MS = 120_000;
@@ -110,6 +112,7 @@ describe('ICP certification real process harness', () => {
   let postgres: PostgresTestHarness | null = null;
   let fixture: IcpCertificationFixture | null = null;
   let processes: IcpCertificationProcessHarness | null = null;
+  let singleProcess: IcpSingleCompanionFeatureOffHarness | null = null;
 
   beforeAll(async () => {
     postgres = await startPostgresTestHarness({ image: PGVECTOR_POSTGRES_TEST_IMAGE });
@@ -118,6 +121,8 @@ describe('ICP certification real process harness', () => {
   afterEach(async () => {
     await processes?.stop();
     processes = null;
+    await singleProcess?.stop();
+    singleProcess = null;
     fixture?.cleanup();
     fixture = null;
   }, TIMEOUT_MS);
@@ -579,22 +584,83 @@ describe('ICP certification real process harness', () => {
     expect(processes.modelRequestCount).toBeGreaterThan(0);
   }, TIMEOUT_MS);
 
-  it('boots both real agents with feature-off parity and rejects initiation without an LLM call', async () => {
+  it('reports real recipient failure, retries once after restart, and collapses the duplicate frame', async () => {
     if (!postgres) throw new Error('Postgres certification harness is unavailable');
     const { databaseUrl } = await postgres.createDatabase();
-    fixture = createIcpCertificationFixture({ databaseUrl, autonomyEnabled: false });
+    fixture = createIcpCertificationFixture({ databaseUrl });
     processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
 
-    const [agentA, agentB] = processes.agents;
-    await expect(Promise.all([agentA.ready(), agentB.ready()])).resolves.toEqual([
-      expect.objectContaining({ runtimeClass: 'SubstrateAgent' }),
-      expect.objectContaining({ runtimeClass: 'SubstrateAgent' }),
-    ]);
+    let [agentA, agentB] = processes.agents;
     await agentB.publishAvailability('open_to_chat');
-    await expect(agentA.runFreeTimeNotification()).rejects
+    await agentB.armNextCompanionTurnFailure();
+    const initial = await agentA.runFreeTimeNotification();
+    expect(initial).toMatchObject({
+      status: 'consumed',
+      deliveryDisposition: 'delivered',
+    });
+    const candidateId = String(initial.candidateId);
+    const failureDeadline = Date.now() + 20_000;
+    while (await agentA.failureObservationCount() < 1) {
+      if (Date.now() >= failureDeadline) {
+        throw new Error('Timed out waiting for the sender delivery-failure observation');
+      }
+      await new Promise(resolveWait => setTimeout(resolveWait, 25));
+    }
+    expect(await agentB.channelSnapshot(CERTIFICATION_DM_CHANNEL)).toMatchObject({ entries: [] });
+
+    [agentA, agentB] = await processes.restartGatewayAndAgents();
+    const beforeRetry = await agentB.channelSnapshot(CERTIFICATION_DM_CHANNEL) as unknown as ChannelSnapshot;
+    await expect(agentA.retryCandidateDelivery(candidateId)).resolves.toMatchObject({
+      disposition: 'delivered',
+    });
+    await waitForChannelEntries(
+      agentB,
+      beforeRetry.entries.length + 2,
+      CERTIFICATION_DM_CHANNEL,
+    );
+    const requestsAfterRetry = await waitForModelRequestQuiescence(processes);
+    const settledAfterRetry = await agentB.channelSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as ChannelSnapshot;
+    await expect(agentA.retryCandidateDelivery(candidateId)).resolves.toMatchObject({
+      disposition: 'delivered',
+    });
+    await new Promise(resolveWait => setTimeout(resolveWait, 250));
+    const afterDuplicate = await agentB.channelSnapshot(
+      CERTIFICATION_DM_CHANNEL,
+    ) as unknown as ChannelSnapshot;
+    expect(afterDuplicate.entries).toHaveLength(settledAfterRetry.entries.length);
+    expect(await waitForModelRequestQuiescence(processes)).toBe(requestsAfterRetry);
+
+    await processes.rejectMalformedFrame();
+    await processes.stopAgent(0);
+    await processes.rejectAuthenticatedSpoof(0);
+    agentA = await processes.restartAgent(0);
+    await expect(agentA.ready()).resolves.toMatchObject({
+      companionId: CERTIFICATION_COMPANION_A,
+      multiCompanion: true,
+    });
+  }, TIMEOUT_MS);
+
+  it('boots one genuine single-companion feature-off agent without ICP stores or LLM calls', async () => {
+    if (!postgres) throw new Error('Postgres certification harness is unavailable');
+    const { databaseUrl } = await postgres.createDatabase();
+    fixture = createIcpCertificationFixture({
+      databaseUrl,
+      autonomyEnabled: false,
+      topology: 'single_companion',
+    });
+    singleProcess = await startIcpSingleCompanionFeatureOffHarness({ fixture });
+
+    await expect(singleProcess.agent.ready()).resolves.toMatchObject({
+      companionId: CERTIFICATION_COMPANION_A,
+      multiCompanion: false,
+      runtimeClass: 'SubstrateAgent',
+    });
+    await expect(singleProcess.agent.runFreeTimeNotification()).rejects
       .toThrow(/autonomy is disabled by scheduler\.json/i);
-    expect(processes.modelRequestCount).toBe(0);
-    await expect(agentA.channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toMatchObject({
+    expect(singleProcess.modelRequestCount).toBe(0);
+    await expect(singleProcess.agent.channelSnapshot(CERTIFICATION_DM_CHANNEL)).resolves.toMatchObject({
       entries: [],
       summaries: [],
     });

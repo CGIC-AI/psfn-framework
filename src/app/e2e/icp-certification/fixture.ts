@@ -53,6 +53,7 @@ export interface IcpCertificationFixture {
   rootDir: string;
   runtimeRoot: string;
   systemDataDir: string;
+  topology: 'multi_companion' | 'single_companion';
   cleanup(): void;
 }
 
@@ -275,6 +276,7 @@ export function createIcpCertificationFixture(input: {
   costProfile?: IcpCertificationCostProfile;
   fatigueProfile?: IcpCertificationFatigueProfile;
   seedDir?: string;
+  topology?: 'multi_companion' | 'single_companion';
 }): IcpCertificationFixture {
   const rootDir = mkdtempSync(join(tmpdir(), 'psfn-icp-certification-'));
   const runtimeRoot = join(rootDir, 'runtime');
@@ -409,6 +411,12 @@ export function createIcpCertificationFixture(input: {
       workspacePath: join(rootDir, 'workspace-b'),
     }),
   ] as const;
+  const topology = input.topology ?? 'multi_companion';
+  if (topology === 'single_companion') {
+    companions[0].env.PSFN_MULTI_COMPANION = '0';
+    delete companions[0].env.COMPANION_PG_SCHEMA;
+    rmSync(join(systemDataDir, 'companions.json'));
+  }
 
   const artifactsPath = join(rootDir, 'artifacts', 'certification.jsonl');
   let cleaned = false;
@@ -419,6 +427,7 @@ export function createIcpCertificationFixture(input: {
     rootDir,
     runtimeRoot,
     systemDataDir,
+    topology,
     cleanup() {
       if (cleaned) return;
       cleaned = true;

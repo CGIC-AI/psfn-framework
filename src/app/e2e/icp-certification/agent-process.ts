@@ -17,6 +17,7 @@ import { PostgresIcpAdminProjectionStore } from '../../../persistence/postgres/i
 import { RunChargeLedger } from '../../../shared/telemetry/charge-ledger.js';
 import { prepareAgentStartupContext } from '../../agent/startup-context.js';
 import { registerGatewayMessageHandlers } from '../../agent/gateway-message-handlers.js';
+import type { GatewayMessageAgentLoop } from '../../agent/gateway-message-handlers.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
 import { wireIcpInitiationSources } from '../../agent/icp-initiation-source-wiring.js';
 import { runAutoCompaction } from '../../../core/session/manager/compaction-service.js';
@@ -46,6 +47,8 @@ import {
   CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_PRIVATE_ROOM,
 } from './constants.js';
+import { composeCompanionDmChannelId } from '../../../shared/contracts/companion-channels.js';
+import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 type AgentProcessCommand = {
   id: number;
@@ -60,7 +63,12 @@ type AgentProcessCommand = {
 } | {
   id: number;
   type: 'enter_private_room' | 'run_free_time_notification'
+    | 'fail_next_companion_turn' | 'failure_observation_snapshot'
     | 'run_room_weighted_thought_scheduler' | 'run_weighted_thought_scheduler';
+} | {
+  candidateId: string;
+  id: number;
+  type: 'retry_candidate_delivery';
 } | {
   id: number;
   phase: 'post_exit' | 'pre_entry';
@@ -91,6 +99,28 @@ function reply(message: AgentProcessReply): void {
   process.send(message);
 }
 
+function projectCandidate(candidate: {
+  candidateId: string;
+  deliveryDisposition?: string;
+  preferredChannel: string;
+  reasonCode?: string;
+  rootInitiationId: string;
+  source: string;
+  status: string;
+}): Record<string, unknown> {
+  return {
+    candidateId: candidate.candidateId,
+    rootInitiationId: candidate.rootInitiationId,
+    source: candidate.source,
+    preferredChannel: candidate.preferredChannel,
+    status: candidate.status,
+    ...(candidate.reasonCode ? { reasonCode: candidate.reasonCode } : {}),
+    ...(candidate.deliveryDisposition
+      ? { deliveryDisposition: candidate.deliveryDisposition }
+      : {}),
+  };
+}
+
 async function main(): Promise<void> {
   const startup = prepareAgentStartupContext({ env: process.env, log: logger });
   const databaseUrl = startup.config.postgresDatabaseUrl?.trim();
@@ -119,19 +149,25 @@ async function main(): Promise<void> {
   const peer = startup.config.companionFleet?.companions.find(
     candidate => candidate.companionId !== companionId,
   );
-  if (!peer) throw new Error('ICP certification agent requires exactly one peer fixture');
-  const peerContact = await contactStore.resolveChannelIdentity(
-    'companion',
-    peer.companionId,
-    `Certification peer ${peer.companionId.slice(0, 4)}`,
-  );
-  await contactStore.setMachineIntelligence(peerContact.id, true, 'e2e:icp-certification');
-  await contactStore.setTrustLevel(peerContact.id, 'trusted', 'e2e:icp-certification');
-  await contactStore.updateRelationshipType(
-    peerContact.id,
-    'ai_companion',
-    'e2e:icp-certification',
-  );
+  if (startup.config.multiCompanion && !peer) {
+    throw new Error('ICP certification agent requires exactly one peer fixture');
+  }
+  const peerContact = peer
+    ? await contactStore.resolveChannelIdentity(
+        'companion',
+        peer.companionId,
+        `Certification peer ${peer.companionId.slice(0, 4)}`,
+      )
+    : undefined;
+  if (peerContact) {
+    await contactStore.setMachineIntelligence(peerContact.id, true, 'e2e:icp-certification');
+    await contactStore.setTrustLevel(peerContact.id, 'trusted', 'e2e:icp-certification');
+    await contactStore.updateRelationshipType(
+      peerContact.id,
+      'ai_companion',
+      'e2e:icp-certification',
+    );
+  }
 
   const llmProvider = createLLMProviderPort(gateway);
   const sessionRuntime = await composeSessionRuntimeAsync({
@@ -181,24 +217,31 @@ async function main(): Promise<void> {
     contactStore,
     episodicStore: persistence.episodicStore,
   });
-  const presenceStore = persistence.companionPresenceStore;
-  if (!presenceStore) throw new Error('ICP certification agent requires shared companion presence');
-  const presenceRuntime = new CompanionPresenceRuntime({
-    store: presenceStore,
-    companionId,
-    eventBus: startup.eventBus,
-    placesRegistry: startup.placesRegistryConfig,
-  });
-  wireCompanionPresenceContext({
-    agentLoop: agent,
-    presenceRuntime,
-    eventBus: startup.eventBus,
-    sessionManager: sessionRuntime.sessionManager,
-    placesRegistry: startup.placesRegistryConfig,
-  });
+  let failNextCompanionTurn = false;
+  let failureObservationCount = 0;
+  const certificationAgentLoop: GatewayMessageAgentLoop = {
+    handleMessage: async (message, deliveryLifecycle) => {
+      if (failNextCompanionTurn && message.channelType === 'companion') {
+        failNextCompanionTurn = false;
+        throw new Error('Controlled certification companion processing failure');
+      }
+      return await agent.handleMessage(message, deliveryLifecycle);
+    },
+    observeMessage: async (message) => {
+      if (message.id.startsWith('companion-delivery-failure:')) {
+        failureObservationCount += 1;
+      }
+      await agent.observeMessage(message);
+    },
+    waitForIdle: agent.waitForIdle.bind(agent),
+    findRecordedIcpInitiation: agent.findRecordedIcpInitiation.bind(agent),
+    findIcpDeliveryObservation: agent.findIcpDeliveryObservation.bind(agent),
+    findRecordedCompanionSourceMessage: agent.findRecordedCompanionSourceMessage.bind(agent),
+    recordIcpDeliveryObservation: agent.recordIcpDeliveryObservation.bind(agent),
+  };
   const registeredHandlers = registerGatewayMessageHandlers({
     gateway,
-    agentLoop: agent,
+    agentLoop: certificationAgentLoop,
     shardManager: {
       delegateSatelliteSession: async () => {
         throw new Error('Shard delegation is outside ICP certification scope');
@@ -222,7 +265,6 @@ async function main(): Promise<void> {
     },
   });
   const candidateStore = persistence.icpInitiationCandidateStore;
-  if (!candidateStore) throw new Error('ICP certification agent requires a candidate store');
   const intentionRuntime = persistence.intentionRuntime;
   const weightedThoughtStore = persistence.weightedThoughtStore;
   if (!intentionRuntime || !weightedThoughtStore) {
@@ -281,28 +323,49 @@ async function main(): Promise<void> {
     ...(weightedThoughtCandidateAdapter ? { icpCandidateAdapter: weightedThoughtCandidateAdapter } : {}),
     channelPolicy: { primaryChannelType: 'discord' },
   });
-  const projectionStore = await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
-    localCompanionId: companionId,
-    knownCompanionIds: startup.config.companionFleet?.companions.map(entry => entry.companionId)
-      ?? [companionId],
-  });
-  const settingsService = new AdminSettingsDataService({
-    config: startup.config,
-    configStore: createOwnerFileConfigStore({
-      dataDir: startup.pathSnapshot.systemDataDir,
-      seedDir: process.env.CONFIG_DIR,
-      defaultContextWindow: startup.config.defaultContextWindow,
-    }),
-    effectiveSchedulerConfig: startup.schedulerConfig,
-  });
-  const gardenIcpAutonomy = new AdminIcpAutonomyDataService({
-    localCompanionId: companionId,
-    candidateStore,
-    projectionStore,
-    runtimeEnablement,
-    settingsService,
-    operatorLeaseTtlMs: startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
-  });
+  const presenceStore = persistence.companionPresenceStore;
+  const presenceRuntime = presenceStore
+    ? new CompanionPresenceRuntime({
+        store: presenceStore,
+        companionId,
+        eventBus: startup.eventBus,
+        placesRegistry: startup.placesRegistryConfig,
+      })
+    : undefined;
+  if (presenceRuntime) {
+    wireCompanionPresenceContext({
+      agentLoop: agent,
+      presenceRuntime,
+      eventBus: startup.eventBus,
+      sessionManager: sessionRuntime.sessionManager,
+      placesRegistry: startup.placesRegistryConfig,
+    });
+  }
+  const projectionStore = candidateStore
+    ? await PostgresIcpAdminProjectionStore.connect(databaseUrl, {
+        localCompanionId: companionId,
+        knownCompanionIds: startup.config.companionFleet?.companions.map(entry => entry.companionId)
+          ?? [companionId],
+      })
+    : undefined;
+  const gardenIcpAutonomy = candidateStore && projectionStore
+    ? new AdminIcpAutonomyDataService({
+        localCompanionId: companionId,
+        candidateStore,
+        projectionStore,
+        runtimeEnablement,
+        settingsService: new AdminSettingsDataService({
+          config: startup.config,
+          configStore: createOwnerFileConfigStore({
+            dataDir: startup.pathSnapshot.systemDataDir,
+            seedDir: process.env.CONFIG_DIR,
+            defaultContextWindow: startup.config.defaultContextWindow,
+          }),
+          effectiveSchedulerConfig: startup.schedulerConfig,
+        }),
+        operatorLeaseTtlMs: startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+      })
+    : undefined;
   const autonomousTriggerEpoch = randomUUID();
   let autonomousTriggerIndex = 0;
   const compactionStore = createCompactionBoundaryStore(
@@ -316,9 +379,10 @@ async function main(): Promise<void> {
     type: 'ready',
     result: {
       companionId,
-      peerContactId: peerContact.id,
+      ...(peerContact ? { peerContactId: peerContact.id } : {}),
       postgresSchema: startup.config.postgresSchema,
       runtimeClass: agent.constructor.name,
+      multiCompanion: startup.config.multiCompanion,
     },
   });
 
@@ -351,7 +415,21 @@ async function main(): Promise<void> {
           reply({ id: raw.id, ok: true, result: lease });
           return;
         }
+        if (raw.type === 'fail_next_companion_turn') {
+          if (!startup.config.multiCompanion) {
+            throw new Error('Controlled companion failure requires multi-companion mode');
+          }
+          failNextCompanionTurn = true;
+          reply({ id: raw.id, ok: true, result: { armed: true } });
+          return;
+        }
+        if (raw.type === 'failure_observation_snapshot') {
+          await agent.waitForIdle();
+          reply({ id: raw.id, ok: true, result: { failureObservationCount } });
+          return;
+        }
         if (raw.type === 'enter_private_room') {
+          if (!presenceRuntime) throw new Error('Private-room presence requires multi-companion mode');
           await presenceRuntime.recordDeliberateMove({
             siteId: 'certification',
             placeId: 'certification_private_room',
@@ -371,6 +449,9 @@ async function main(): Promise<void> {
         }
         if (raw.type === 'run_free_time_notification') {
           if (!sourceRuntime) throw new Error('ICP autonomy is disabled by scheduler.json');
+          if (!candidateStore || !peerContact) {
+            throw new Error('ICP autonomy requires multi-companion candidate ownership');
+          }
           const candidateIdsBefore = new Set(
             (await candidateStore.listCandidates({ limit: 50 })).map(candidate => candidate.candidateId),
           );
@@ -428,7 +509,6 @@ async function main(): Promise<void> {
             completedAt: Date.now(),
           }, fixedNotifyActivationSource);
           const [action] = toInferredPostTurnActions(candidates, message);
-          if (!action) throw new Error('Free-time notification did not infer a durable candidate');
           await startup.eventBus.emit('agent.post_turn.actions.inferred', {
             message,
             response: {
@@ -445,16 +525,51 @@ async function main(): Promise<void> {
           ))?.candidateId;
           if (!candidateId) throw new Error('Free-time candidate was not persisted');
           const candidate = await candidateStore.getCandidate(candidateId);
+          if (!candidate) throw new Error('Free-time candidate disappeared after persistence');
           reply({
             id: raw.id,
             ok: true,
-            result: { ...candidate, postTurnStatus: status?.state },
+            result: { ...projectCandidate(candidate), postTurnStatus: status?.state },
           });
+          return;
+        }
+        if (raw.type === 'retry_candidate_delivery') {
+          if (!candidateStore) {
+            throw new Error('ICP delivery recovery requires multi-companion candidate ownership');
+          }
+          const candidate = await candidateStore.getCandidate(raw.candidateId);
+          if (!candidate || candidate.status !== 'consumed' || !candidate.permitId) {
+            throw new Error('ICP delivery recovery requires a consumed candidate with a permit');
+          }
+          if (candidate.preferredChannel !== 'dm') {
+            throw new Error('Certification delivery recovery currently requires a companion DM');
+          }
+          const channelId = composeCompanionDmChannelId(companionId, candidate.peerCompanionId);
+          const sourceMessageId = `icp-initiation:${candidate.candidateId}`;
+          const observation = await agent.findIcpDeliveryObservation(channelId, sourceMessageId);
+          const response = observation?.recoveryResponse;
+          if (!response?.content.trim() || !response.metadata.icpCorrelation) {
+            throw new Error('ICP delivery recovery requires a durable sender response');
+          }
+          const correlation = parseIcpConversationCorrelation(response.metadata.icpCorrelation);
+          const result = await gateway.companionSendInitiation({
+            channelId,
+            content: response.content,
+            authorName: identity.card.data.name,
+            permitId: candidate.permitId,
+            conversationId: correlation.conversationId,
+            recipientCompanionId: candidate.peerCompanionId,
+            correlation,
+          });
+          reply({ id: raw.id, ok: true, result: { disposition: 'delivered', ...result } });
           return;
         }
         if (raw.type === 'run_weighted_thought_scheduler') {
           if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
             throw new Error('ICP autonomy is disabled by scheduler.json');
+          }
+          if (!candidateStore || !peerContact) {
+            throw new Error('Weighted-thought autonomy requires multi-companion candidate ownership');
           }
           autonomousTriggerIndex += 1;
           const thoughtId = `certification-weighted-${autonomousTriggerEpoch}-${autonomousTriggerIndex}`;
@@ -478,14 +593,18 @@ async function main(): Promise<void> {
             !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
           ));
           if (!candidate) throw new Error('Weighted-thought scheduler did not persist a candidate');
-          reply({ id: raw.id, ok: true, result: candidate });
+          reply({ id: raw.id, ok: true, result: projectCandidate(candidate) });
           return;
         }
         if (raw.type === 'run_room_weighted_thought_scheduler') {
           if (!sourceRuntime || !weightedThoughtCandidateAdapter) {
             throw new Error('ICP autonomy is disabled by scheduler.json');
           }
-          if (presenceRuntime.getOwnPresenceWindow()?.place.placeId !== 'certification_private_room') {
+          if (!candidateStore || !peerContact) {
+            throw new Error('Room autonomy requires multi-companion candidate ownership');
+          }
+          if (!presenceRuntime
+            || presenceRuntime.getOwnPresenceWindow()?.place.placeId !== 'certification_private_room') {
             throw new Error('Room weighted-thought scheduler requires current private-room presence');
           }
           autonomousTriggerIndex += 1;
@@ -514,10 +633,13 @@ async function main(): Promise<void> {
             !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
           ));
           if (!candidate) throw new Error('Room weighted-thought scheduler did not persist a candidate');
-          reply({ id: raw.id, ok: true, result: candidate });
+          reply({ id: raw.id, ok: true, result: projectCandidate(candidate) });
           return;
         }
         if (raw.type === 'garden_emergency_disable') {
+          if (!gardenIcpAutonomy) {
+            throw new Error('Garden ICP autonomy is unavailable in single-companion mode');
+          }
           const result = await gardenIcpAutonomy.emergencyDisable();
           const current = await autonomy.readOwnAvailability();
           reply({
@@ -616,8 +738,8 @@ async function main(): Promise<void> {
         sourceWiring.unregisterCoLocationThoughtAdapter();
         await scheduler.stop();
         gateway.destroy();
-        await gardenIcpAutonomy.close();
-        await presenceRuntime.shutdown();
+        await gardenIcpAutonomy?.close();
+        await presenceRuntime?.shutdown();
         await fatigueReservations.close();
         chargeLedger.close();
         startup.stopDebugObserver();

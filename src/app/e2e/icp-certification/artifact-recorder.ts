@@ -7,8 +7,9 @@ export type IcpCertificationArtifact =
   | {
     kind: 'agent_ready';
     companionId: string;
-    postgresSchema: string;
+    postgresSchema?: string;
     runtimeClass: string;
+    topology?: 'single_companion';
   }
   | {
     kind: 'availability';
@@ -40,6 +41,18 @@ export type IcpCertificationArtifact =
     kind: 'harness_lifecycle';
     modelRequestCount: number;
     state: 'started' | 'stopped';
+    topology?: 'single_companion';
+  }
+  | {
+    candidateId: string;
+    companionId: string;
+    disposition: string;
+    kind: 'delivery_recovery';
+  }
+  | {
+    companionId?: string;
+    kind: 'transport_rejection';
+    probe: 'authenticated_identity_spoof' | 'malformed_ndjson';
   };
 
 /**

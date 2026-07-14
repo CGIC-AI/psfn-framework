@@ -686,6 +686,29 @@ describe('ICP autonomy Postgres persistence', () => {
         `, [CANDIDATE_ID]),
       );
 
+      await poolA.query(`
+        UPDATE icp_initiation_candidates
+        SET status = 'consumed', revision = revision + 1
+        WHERE candidate_id = $1
+      `, [CANDIDATE_ID]);
+      await expect(authority.authorizeHandoff({
+        senderCompanionId: A,
+        peerContactId: peerForA.id,
+        permit: { ...handoffPermit, status: 'consumed', revision: 2 },
+        nowMs,
+      })).resolves.toEqual({ eligible: true });
+      await expect(authority.authorizeHandoff({
+        senderCompanionId: A,
+        peerContactId: peerForA.id,
+        permit: handoffPermit,
+        nowMs,
+      })).resolves.toEqual({ eligible: false, reasonCode: 'stale_provenance' });
+      await poolA.query(`
+        UPDATE icp_initiation_candidates
+        SET status = 'pending', revision = revision + 1
+        WHERE candidate_id = $1
+      `, [CANDIDATE_ID]);
+
       new ContactBlockListStore(resolveContactBlockListPath(companionBDataDir)).block({
         channelType: 'companion',
         contactId: A,

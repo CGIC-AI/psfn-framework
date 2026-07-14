@@ -1,8 +1,11 @@
 import { fork, type ChildProcess } from 'node:child_process';
+import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { GatewayServer } from '../../../boundary/gateway/server.js';
+import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
+import { createSocketClient, type GatewayRpcConnection } from '../../../boundary/gateway/transport.js';
 import { GatewayCompanionChannelLane } from '../../../boundary/gateway/companion-channels.js';
 import type { GatewayMultiCompanionConfig } from '../../../boundary/gateway/multi-companion.js';
 import { RootBoundIcpInitiationCausalityAuthority } from '../../../boundary/gateway/icp-initiation-causality-authority.js';
@@ -50,8 +53,9 @@ interface ChildMessage {
 
 export interface CertificationAgentReady {
   companionId: string;
-  peerContactId: string;
-  postgresSchema: string;
+  multiCompanion: boolean;
+  peerContactId?: string;
+  postgresSchema?: string;
   runtimeClass: string;
 }
 
@@ -203,6 +207,29 @@ export class IcpCertificationAgentProcess {
     return result;
   }
 
+  async armNextCompanionTurnFailure(): Promise<void> {
+    await this.request({ type: 'fail_next_companion_turn' });
+  }
+
+  async failureObservationCount(): Promise<number> {
+    const result = await this.request({ type: 'failure_observation_snapshot' }) as {
+      failureObservationCount: number;
+    };
+    return result.failureObservationCount;
+  }
+
+  async retryCandidateDelivery(candidateId: string): Promise<Record<string, unknown>> {
+    const result = await this.request({ type: 'retry_candidate_delivery', candidateId }) as
+      Record<string, unknown>;
+    this.artifacts.append({
+      kind: 'delivery_recovery',
+      companionId: this.fixture.companionId,
+      candidateId,
+      disposition: String(result.disposition ?? 'unknown'),
+    });
+    return result;
+  }
+
   async channelSnapshot(channelId: string): Promise<Record<string, unknown>> {
     return await this.request({ type: 'channel_snapshot', channelId }) as Record<string, unknown>;
   }
@@ -264,8 +291,18 @@ export interface IcpCertificationProcessHarness {
   readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
   readonly modelRequestCount: number;
   queueConsentDecision(decision: IcpCertificationConsentDecision): void;
+  rejectAuthenticatedSpoof(index: 0 | 1): Promise<void>;
+  rejectMalformedFrame(): Promise<void>;
   restartAgent(index: 0 | 1): Promise<IcpCertificationAgentProcess>;
   restartAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
+  restartGatewayAndAgents(): Promise<readonly [IcpCertificationAgentProcess, IcpCertificationAgentProcess]>;
+  stopAgent(index: 0 | 1): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export interface IcpSingleCompanionFeatureOffHarness {
+  agent: IcpCertificationAgentProcess;
+  readonly modelRequestCount: number;
   stop(): Promise<void>;
 }
 
@@ -284,6 +321,42 @@ async function waitForSocket(path: string): Promise<void> {
     await new Promise(resolveWait => setTimeout(resolveWait, 10));
   }
   throw new Error(`Gateway socket was not created at ${path}`);
+}
+
+async function invokeRawRpc(
+  connection: GatewayRpcConnection,
+  id: number,
+  method: string,
+  params: unknown,
+): Promise<Record<string, unknown>> {
+  const response = new Promise<Record<string, unknown>>((resolveResponse, rejectResponse) => {
+    const timeout = setTimeout(() => {
+      rejectResponse(new Error(`Timed out waiting for raw gateway RPC ${method}`));
+    }, 5_000);
+    connection.onMessage((message) => {
+      if (typeof message !== 'object' || message === null || !('id' in message)
+        || (message as { id?: unknown }).id !== id) return;
+      clearTimeout(timeout);
+      resolveResponse(message as Record<string, unknown>);
+    });
+    connection.once('close', () => {
+      clearTimeout(timeout);
+      rejectResponse(new Error(`Gateway closed raw RPC ${method}`));
+    });
+  });
+  connection.send({ jsonrpc: '2.0', id, method, params });
+  return await response;
+}
+
+async function waitForDestroyed(connection: GatewayRpcConnection): Promise<void> {
+  if (connection.destroyed) return;
+  await new Promise<void>((resolveClosed, rejectClosed) => {
+    const timeout = setTimeout(() => rejectClosed(new Error('Gateway did not close rejected frame')), 5_000);
+    connection.once('close', () => {
+      clearTimeout(timeout);
+      resolveClosed();
+    });
+  });
 }
 
 export async function startIcpCertificationProcessHarness(input: {
@@ -372,7 +445,7 @@ export async function startIcpCertificationProcessHarness(input: {
     discordAccounts: {},
   };
   const eventBus = new EventBus();
-  const gateway = new GatewayServer({
+  const createGateway = () => new GatewayServer({
     socketPath: input.fixture.gatewaySocketPath,
     llmProvider,
     embeddingService: {
@@ -397,6 +470,7 @@ export async function startIcpCertificationProcessHarness(input: {
     eventBus,
     modelUsageRecorder: modelUsage,
   });
+  let gateway = createGateway();
   gateway.start();
   let agents: IcpCertificationAgentProcess[] = [];
   try {
@@ -433,7 +507,9 @@ export async function startIcpCertificationProcessHarness(input: {
         IcpCertificationAgentProcess,
       ];
     },
-    gateway,
+    get gateway() {
+      return gateway;
+    },
     get costDecisions() {
       return costDecisions;
     },
@@ -443,9 +519,65 @@ export async function startIcpCertificationProcessHarness(input: {
     queueConsentDecision(decision) {
       modelServer.queueConsentDecision(decision);
     },
+    async rejectAuthenticatedSpoof(index) {
+      const fixtureCompanion = input.fixture.companions[index];
+      const spoofedCompanion = input.fixture.companions[index === 0 ? 1 : 0];
+      const connection = await createSocketClient({
+        socketPath: input.fixture.gatewaySocketPath,
+        reconnect: false,
+      });
+      try {
+        const identified = await invokeRawRpc(connection, 1, 'gateway.client.identify', {
+          role: 'agent',
+          companionId: fixtureCompanion.companionId,
+          authToken: deriveCompanionAuthToken(
+            fixtureCompanion.companionId,
+            'agent',
+            CERTIFICATION_SESSION_KEYRING,
+          ),
+        });
+        if ('error' in identified) {
+          throw new Error(`Raw authenticated identify failed: ${JSON.stringify(identified.error)}`);
+        }
+        connection.send({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'companion.message.send',
+          params: {
+            channelId: `companion-dm:${fixtureCompanion.companionId}:${spoofedCompanion.companionId}`,
+            content: 'Certification authenticated identity-spoof probe',
+            companionId: spoofedCompanion.companionId,
+          },
+        });
+        await waitForDestroyed(connection);
+      } finally {
+        connection.destroy();
+      }
+      artifacts.append({
+        kind: 'transport_rejection',
+        probe: 'authenticated_identity_spoof',
+        companionId: fixtureCompanion.companionId,
+      });
+    },
+    async rejectMalformedFrame() {
+      const socket = createConnection(input.fixture.gatewaySocketPath);
+      await new Promise<void>((resolveConnected, rejectConnected) => {
+        socket.once('connect', resolveConnected);
+        socket.once('error', rejectConnected);
+      });
+      socket.write('{"jsonrpc":"2.0","method":\n');
+      await new Promise<void>((resolveClosed, rejectClosed) => {
+        const timeout = setTimeout(() => rejectClosed(new Error('Malformed frame was not closed')), 5_000);
+        socket.once('close', () => {
+          clearTimeout(timeout);
+          resolveClosed();
+        });
+        socket.once('error', () => undefined);
+      });
+      artifacts.append({ kind: 'transport_rejection', probe: 'malformed_ndjson' });
+    },
     async restartAgent(index) {
       const previous = agents[index];
-      if (!previous) throw new Error(`Certification agent ${index} is unavailable`);
       await previous.stop().catch(() => previous.forceStop());
       const replacement = await IcpCertificationAgentProcess.start(
         input.fixture.companions[index],
@@ -480,6 +612,33 @@ export async function startIcpCertificationProcessHarness(input: {
         IcpCertificationAgentProcess,
       ];
     },
+    async restartGatewayAndAgents() {
+      await Promise.all(agents.map(agent => agent.stop().catch(() => agent.forceStop())));
+      agents = [];
+      await gateway.stop();
+      gateway = createGateway();
+      gateway.start();
+      await waitForSocket(input.fixture.gatewaySocketPath);
+      for (const companion of input.fixture.companions) {
+        const agent = await IcpCertificationAgentProcess.start(companion, artifacts);
+        agents.push(agent);
+        const ready = await agent.ready();
+        artifacts.append({
+          kind: 'agent_ready',
+          companionId: ready.companionId,
+          postgresSchema: ready.postgresSchema,
+          runtimeClass: ready.runtimeClass,
+        });
+      }
+      return agents as unknown as readonly [
+        IcpCertificationAgentProcess,
+        IcpCertificationAgentProcess,
+      ];
+    },
+    async stopAgent(index) {
+      const agent = agents[index];
+      await agent.stop().catch(() => agent.forceStop());
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -493,6 +652,86 @@ export async function startIcpCertificationProcessHarness(input: {
       artifacts.append({
         kind: 'harness_lifecycle',
         state: 'stopped',
+        modelRequestCount: modelServer.requests.length,
+      });
+      await modelServer.stop();
+      if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
+    },
+  };
+}
+
+export async function startIcpSingleCompanionFeatureOffHarness(input: {
+  fixture: IcpCertificationFixture;
+}): Promise<IcpSingleCompanionFeatureOffHarness> {
+  if (input.fixture.topology !== 'single_companion') {
+    throw new Error('Single-companion certification requires a single-companion fixture');
+  }
+  const modelServer = await startIcpCertificationModelServer();
+  const artifacts = new IcpCertificationArtifactRecorder(input.fixture.artifactsPath);
+  configureIcpCertificationModelEndpoint(input.fixture, modelServer.baseUrl);
+  const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'icp-certification-loopback-key';
+  const companion = input.fixture.companions[0];
+  const config = hydrateJsonBackedRuntimeConfig(
+    loadAgentConfig(companion.env),
+    { seedDir: companion.env.CONFIG_DIR },
+  );
+  const gateway = new GatewayServer({
+    socketPath: input.fixture.gatewaySocketPath,
+    llmProvider: new LLMClient(config),
+    embeddingService: {
+      dims: CERTIFICATION_EMBEDDING_DIMS,
+      embed: async text => deterministicEmbedding(text),
+      embedBatch: async texts => texts.map(deterministicEmbedding),
+    },
+    discordAdapter: {
+      id: 'certification-disabled-discord',
+      outbound: {
+        textChunkLimit: 2_000,
+        sendText: async () => undefined,
+      },
+    },
+    policyConfig: { workspacePath: input.fixture.rootDir },
+    sessionHmacKeyring: CERTIFICATION_SESSION_KEYRING,
+    wyomingShardRouting: { enabled: false },
+    eventBus: new EventBus(),
+  });
+  let agent: IcpCertificationAgentProcess | undefined;
+  try {
+    gateway.start();
+    await waitForSocket(input.fixture.gatewaySocketPath);
+    agent = await IcpCertificationAgentProcess.start(companion, artifacts);
+    const ready = await agent.ready();
+    artifacts.append({
+      kind: 'agent_ready',
+      companionId: ready.companionId,
+      runtimeClass: ready.runtimeClass,
+      topology: 'single_companion',
+    });
+  } catch (error) {
+    agent?.forceStop();
+    await gateway.stop().catch(() => undefined);
+    await modelServer.stop().catch(() => undefined);
+    if (previousOpenRouterApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
+    throw error;
+  }
+  let stopped = false;
+  return {
+    agent,
+    get modelRequestCount() {
+      return modelServer.requests.length;
+    },
+    async stop() {
+      if (stopped) return;
+      stopped = true;
+      await agent.stop().catch(() => agent.forceStop());
+      await gateway.stop();
+      artifacts.append({
+        kind: 'harness_lifecycle',
+        state: 'stopped',
+        topology: 'single_companion',
         modelRequestCount: modelServer.requests.length,
       });
       await modelServer.stop();

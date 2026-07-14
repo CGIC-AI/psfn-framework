@@ -15,7 +15,7 @@ import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/co
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
-import type { Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
@@ -84,7 +84,7 @@ import {
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
-import { materializeContainedFileSync } from '../../shared/utils/contained-file.js';
+import { materializeGatewayAttachments } from './attachment-materialization.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -94,69 +94,8 @@ const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
 );
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 const FRAME_PREVIEW_LIMIT = 200;
-const MAX_AGENT_RESPONSE_ATTACHMENTS = 10;
-const MAX_AGENT_RESPONSE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
-
-function requireAttachmentString(value: unknown, field: string, maxLength: number): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
-    throw new Error(`Agent response attachment ${field} is invalid`);
-  }
-  return value.trim();
-}
-
-function decodeCanonicalBase64(value: string): Buffer {
-  if (value.length > Math.ceil(MAX_AGENT_RESPONSE_ATTACHMENT_BYTES * 4 / 3) + 4
-    || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) {
-    throw new Error('Agent response attachment dataBase64 is invalid or oversized');
-  }
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.length > MAX_AGENT_RESPONSE_ATTACHMENT_BYTES
-    || bytes.toString('base64') !== value) {
-    throw new Error('Agent response attachment dataBase64 is invalid or oversized');
-  }
-  return bytes;
-}
-
-function materializeAgentResponseAttachments(
-  attachments: readonly Attachment[] | undefined,
-  personalWorkspacePath: string,
-): Attachment[] | undefined {
-  if (attachments === undefined) return undefined;
-  if (!Array.isArray(attachments) || attachments.length > MAX_AGENT_RESPONSE_ATTACHMENTS) {
-    throw new Error('Agent response attachments exceed the gateway materialization limit');
-  }
-  return attachments.map((attachment) => {
-    if (!isRecord(attachment)) throw new Error('Agent response attachment must be an object');
-    const url = requireAttachmentString(attachment.url, 'url', 8_192);
-    const contentType = requireAttachmentString(attachment.contentType, 'contentType', 255);
-    const name = requireAttachmentString(attachment.name, 'name', 512);
-    const localPath = typeof attachment.localPath === 'string' && attachment.localPath.trim()
-      ? attachment.localPath.trim()
-      : null;
-    const dataBase64 = typeof attachment.dataBase64 === 'string' && attachment.dataBase64
-      ? attachment.dataBase64
-      : null;
-    if (localPath && dataBase64) {
-      throw new Error('Agent response attachment must not provide both localPath and dataBase64');
-    }
-    if (localPath) {
-      const materialized = materializeContainedFileSync({
-        path: localPath,
-        root: personalWorkspacePath,
-        readMaxBytes: MAX_AGENT_RESPONSE_ATTACHMENT_BYTES,
-      });
-      if (!materialized.bytes) throw new Error('Agent response attachment exceeds the gateway byte limit');
-      return { url, contentType, name, dataBase64: materialized.bytes.toString('base64') };
-    }
-    if (dataBase64) {
-      const bytes = decodeCanonicalBase64(dataBase64);
-      return { url, contentType, name, dataBase64: bytes.toString('base64') };
-    }
-    return { url, contentType, name };
-  });
-}
 
 type GatewayConnectionState = 'registering' | 'ready' | 'degraded' | 'offline';
 type GatewayConnectionHealth = 'healthy' | 'stale' | 'failed';
@@ -1600,7 +1539,7 @@ export class GatewayServer {
       companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
     });
-    const attachments = materializeAgentResponseAttachments(
+    const attachments = materializeGatewayAttachments(
       result.attachments,
       this.resolveConnectionWorkspacePath(conn),
     );

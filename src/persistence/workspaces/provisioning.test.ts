@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveCompanionFleetPaths, type CompanionsFleetConfig } from '../../system/config/companions-config.js';
@@ -103,6 +103,27 @@ describe('fleet workspace provisioning', () => {
     expect(() => provisionFleetWorkspaces(fixture.fleet, {
       companionLibrarySourceDir: fixture.source,
     })).toThrow(/every bundle file must be declared exactly once/);
+  });
+
+  it('fails closed when an undeclared nested directory or file is present', () => {
+    const fixture = makeFixture();
+    mkdirSync(join(fixture.source, 'nested'));
+    writeFileSync(join(fixture.source, 'nested', 'undeclared.md'), 'nested undeclared file\n');
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: fixture.source,
+    })).toThrow(/only manifest-declared regular files/);
+  });
+
+  it('fails closed when the source bundle contains a symlink', () => {
+    const fixture = makeFixture();
+    const outside = join(fixture.root, 'outside.md');
+    writeFileSync(outside, 'outside\n');
+    symlinkSync(outside, join(fixture.source, 'linked.md'));
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: fixture.source,
+    })).toThrow(/only manifest-declared regular files/);
   });
 
   it('fails closed when a manifest changes without a bundle version bump', () => {

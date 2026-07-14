@@ -13,6 +13,7 @@ import {
 } from './provisioning.js';
 import { createHash } from 'node:crypto';
 import { SharedCompanionWorkspaceStore } from './shared-workspace-store.js';
+import type { DurableWriteStage } from '../../shared/utils/fs.js';
 
 const FLEET: CompanionsFleetConfig = {
   companions: [{
@@ -176,6 +177,54 @@ describe('SharedCompanionWorkspaceStore', () => {
       'provenance/events',
       `${proposal.reviewId}.approved.json`,
     ))).toBe(true);
+    expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(false);
+  });
+
+  it.each<DurableWriteStage>([
+    'after_file_sync',
+    'after_publish',
+    'after_directory_sync',
+  ])('recovers a complete provenance record after durable-write fault %s', (faultStage) => {
+    const { store, sharedWorkspacePath } = createStore();
+    const proposal = store.propose({
+      artifactPath: `recovery/provenance-${faultStage}.md`,
+      content: `durable ${faultStage}\n`,
+      mediaType: 'text/markdown',
+      actor: { id: 'operator-a', role: 'proposer' },
+      provenance: 'durable provenance syscall ordering',
+    });
+    store.recordCogSecDecision({
+      reviewId: proposal.reviewId,
+      reviewer: { id: 'operator-c', role: 'cogsec' },
+      decision: 'approved',
+    });
+    const provenancePath = join(
+      sharedWorkspacePath,
+      'provenance/events',
+      `${proposal.reviewId}.approved.json`,
+    );
+    let injected = false;
+    const faultingStore = new SharedCompanionWorkspaceStore(sharedWorkspacePath, {
+      faultInjection: (stage, path) => {
+        if (!injected && stage === faultStage && path === provenancePath) {
+          injected = true;
+          throw new Error(`durable fault ${faultStage}`);
+        }
+      },
+    });
+
+    expect(() => faultingStore.review({
+      reviewId: proposal.reviewId,
+      reviewer: { id: 'operator-b', role: 'reviewer' },
+      decision: 'approve',
+    })).toThrow(`durable fault ${faultStage}`);
+    expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(true);
+    if (faultStage === 'after_file_sync') expect(existsSync(provenancePath)).toBe(false);
+    else expect(() => JSON.parse(readFileSync(provenancePath, 'utf8'))).not.toThrow();
+
+    const recovered = new SharedCompanionWorkspaceStore(sharedWorkspacePath);
+    expect(recovered.listReviews()[0].status).toBe('approved');
+    expect(() => JSON.parse(readFileSync(provenancePath, 'utf8'))).not.toThrow();
     expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(false);
   });
 

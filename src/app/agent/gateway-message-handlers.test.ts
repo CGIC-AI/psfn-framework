@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
@@ -11,6 +14,7 @@ import type {
   CompanionMessageDeliveryFailureNotification,
   CompanionMessageFailureReportParams,
 } from '../../boundary/gateway/protocol.js';
+import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -451,6 +455,46 @@ describe('registerGatewayMessageHandlers', () => {
       });
     });
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+  });
+
+  it('delivers generated local media through authenticated gateway materialization as immutable bytes', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'psfn-agent-discord-media-'));
+    try {
+      const localPath = join(workspace, 'purr.png');
+      writeFileSync(localPath, 'generated-png-bytes');
+      const adapterSendMedia = vi.fn(async () => {});
+      const harness = createHarness({
+        handleMessage: async () => ({
+          ...makeResponse(''),
+          attachments: [{
+            url: 'https://images.example.test/purr.png',
+            contentType: 'image/png',
+            name: 'purr.png',
+            localPath,
+          }],
+        }),
+        discordSendMedia: async (channelId, media) => {
+          await adapterSendMedia(channelId, materializeGatewayAttachment(media, workspace));
+        },
+      });
+
+      await harness.onDiscordMessage(makeMessage({
+        channelId: 'discord:general',
+        channelType: 'discord',
+        routing: undefined,
+      }));
+
+      await vi.waitFor(() => {
+        expect(adapterSendMedia).toHaveBeenCalledWith('discord:general', {
+          url: 'https://images.example.test/purr.png',
+          contentType: 'image/png',
+          name: 'purr.png',
+          dataBase64: Buffer.from('generated-png-bytes').toString('base64'),
+        });
+      });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it('records diagnostics when discord agent handling fails', async () => {

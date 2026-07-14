@@ -7,8 +7,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   FLEET_BACKUP_MANIFEST_NAME,
@@ -152,6 +154,44 @@ function writeDestinationCollisionStubPsql(root: string, destination: string): s
     { mode: 0o755 },
   );
   return stubPath;
+}
+
+function writeStatefulRestoreStubs(root: string): {
+  pgRestoreBinary: string;
+  psqlBinary: string;
+  statePath: string;
+} {
+  const statePath = join(root, 'restore-schema-state.txt');
+  const pgRestoreBinary = join(root, 'stub-pg-restore-stateful.sh');
+  const psqlBinary = join(root, 'stub-psql-stateful.sh');
+  writeFileSync(pgRestoreBinary, [
+    '#!/bin/sh',
+    'if [ "$1" = "--list" ]; then',
+    '  printf "1; 2615 0 SCHEMA - companion_alpha postgres\\n"',
+    '  printf "2; 1259 0 TABLE companion_alpha restore_probe postgres\\n"',
+    '  exit 0',
+    'fi',
+    `printf 'companion_alpha\\t1\\npublic\\t0\\n' > '${statePath}'`,
+    'exit 0',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  writeFileSync(psqlBinary, [
+    '#!/bin/sh',
+    'command=""',
+    'previous=""',
+    'for arg in "$@"; do',
+    '  if [ "$previous" = "--command" ]; then command="$arg"; fi',
+    '  previous="$arg"',
+    'done',
+    'case "$command" in',
+    '  *"DROP SCHEMA"*)',
+    `    printf 'public\\t0\\n' > '${statePath}'`,
+    '    ;;',
+    'esac',
+    `if [ -f '${statePath}' ]; then cat '${statePath}'; else printf 'public\\t0\\n'; fi`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { pgRestoreBinary, psqlBinary, statePath };
 }
 
 function writeSystemOwnerFiles(systemDataDir: string): void {
@@ -611,6 +651,39 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(destinations.personalWorkspacePath)).toBe(false);
   });
 
+  it('rejects companion manifest entries whose artifact and schema were swapped', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-identity-swap-${Date.now()}`);
+    roots.push(root);
+    const result = await createPerCompanionTestBackup(root);
+    const manifest = JSON.parse(readFileSync(result.fleetManifestPath, 'utf8')) as {
+      units: Array<{
+        kind: string;
+        companionId?: string;
+        postgresSchema?: string;
+        artifactDir?: string;
+      }>;
+    };
+    const alpha = manifest.units.find(unit => unit.companionId === COMPANION_A)!;
+    const beta = manifest.units.find(unit => unit.companionId === COMPANION_B)!;
+    [alpha.artifactDir, beta.artifactDir] = [beta.artifactDir, alpha.artifactDir];
+    [alpha.postgresSchema, beta.postgresSchema] = [beta.postgresSchema, alpha.postgresSchema];
+    writeFileSync(result.fleetManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: {
+        companionDataDir: join(root, 'restore', 'data'),
+        personalWorkspacePath: join(root, 'restore', 'workspace'),
+      },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary: writeLoggingStubPgRestore(root).stubPath,
+        psqlBinary: writeTargetStateStubPsql(root),
+      },
+    })).rejects.toThrow(/canonical layout|artifact identity/);
+  });
+
   it('rejects an existing target schema before filesystem publication or pg_restore', async () => {
     const root = join(tmpdir(), `psfn-fleet-restore-schema-collision-${Date.now()}`);
     roots.push(root);
@@ -700,6 +773,79 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(destinations.companionDataDir)).toBe(false);
     expect(existsSync(destinations.personalWorkspacePath)).toBe(false);
   });
+
+  it.each([
+    ['after_journal', 0, 0],
+    ['after_database_commit', 0, 0],
+    ['after_tree_publish', 1, 1],
+    ['after_tree_publish', 2, 2],
+  ] as const)(
+    'recovers a SIGKILL at %s (published tree %i) without a mixed final restore',
+    async (faultStage, publishedTreeCount, expectedPublishedDestinations) => {
+      const root = join(
+        tmpdir(),
+        `psfn-fleet-restore-sigkill-${faultStage}-${publishedTreeCount}-${Date.now()}`,
+      );
+      roots.push(root);
+      const result = await createPerCompanionTestBackup(root);
+      const { pgRestoreBinary, psqlBinary, statePath } = writeStatefulRestoreStubs(root);
+      const destinations = {
+        companionDataDir: join(root, 'restore', 'companion'),
+        personalWorkspacePath: join(root, 'restore', 'workspace'),
+      };
+      const worker = fileURLToPath(new URL(
+        './test-fixtures/fleet-restore-kill-worker.ts',
+        import.meta.url,
+      ));
+      const child = spawn(process.execPath, [
+        '--import',
+        'tsx',
+        worker,
+        result.fleetManifestPath,
+        COMPANION_A,
+        destinations.companionDataDir,
+        destinations.personalWorkspacePath,
+        'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+        psqlBinary,
+        faultStage,
+        String(publishedTreeCount),
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolveExit, rejectExit) => {
+          child.once('error', rejectExit);
+          child.once('exit', (code, signal) => resolveExit({ code, signal }));
+        },
+      );
+      expect(outcome).toEqual({ code: null, signal: 'SIGKILL' });
+      expect([
+        existsSync(destinations.companionDataDir),
+        existsSync(destinations.personalWorkspacePath),
+      ].filter(Boolean)).toHaveLength(expectedPublishedDestinations);
+      expect(existsSync(statePath)).toBe(faultStage !== 'after_journal');
+      expect(readdirSync(join(root, 'restore')).some(name => name.startsWith('.psfn-fleet-restore-')))
+        .toBe(true);
+
+      await restoreFleetCompanionSlice({
+        fleetManifestPath: result.fleetManifestPath,
+        companionId: COMPANION_A,
+        destinations,
+        postgres: {
+          databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+          pgRestoreBinary,
+          psqlBinary,
+        },
+      });
+
+      expect(readFileSync(join(destinations.companionDataDir, 'vault/note.md'), 'utf8'))
+        .toContain(COMPANION_A);
+      expect(readFileSync(join(destinations.personalWorkspacePath, 'journal/personal.md'), 'utf8'))
+        .toContain(COMPANION_A);
+      const restoreEntries = readdirSync(join(root, 'restore'));
+      expect(restoreEntries.some(name => name.startsWith('.psfn-fleet-restore-'))).toBe(false);
+      expect(restoreEntries.some(name => name.includes('.restore-'))).toBe(false);
+    },
+  );
 
   it('restores a group artifact only into explicit whole-fleet destinations', async () => {
     const root = join(tmpdir(), `psfn-fleet-group-restore-${Date.now()}`);

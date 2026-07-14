@@ -6,11 +6,9 @@ import {
   realpathSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { isRecord } from '../../shared/utils/types.js';
 import { isStrictSubpath } from '../layout.js';
@@ -25,11 +23,26 @@ import {
   SYSTEM_CONFIG_DIR_NAME,
   verifySystemConfigSnapshot,
 } from './system-config-tree.js';
-import { verifyBackupContentsManifest } from './backup-contents.js';
+import {
+  FLEET_ARTIFACT_IDENTITY_NAME,
+  verifyBackupContentsManifest,
+} from './backup-contents.js';
 import {
   FLEET_BACKUP_MANIFEST_SCHEMA_VERSION,
+  FLEET_CLUSTER_DIR_NAME,
+  FLEET_COMPANIONS_DIR_NAME,
+  FLEET_GROUP_DIR_NAME,
+  type FleetArtifactIdentity,
   type FleetBackupUnitOutcome,
 } from './service.js';
+import {
+  executeFleetRestoreTransaction,
+  type FleetRestoreFaultInjectionOptions,
+  type FleetRestoreFaultStage,
+  type StagedRestoreTree,
+} from './fleet-restore-transaction.js';
+
+export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
 const execFileAsync = promisify(execFile);
 const POSTGRES_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -106,9 +119,56 @@ export interface FleetRestoreResult {
   restoredDestinations: string[];
 }
 
-interface StagedTree {
-  destination: string;
-  staging: string;
+const FLEET_ARTIFACT_TIMESTAMP_PATTERN = /^\d{8}T\d{9}Z$/u;
+
+function assertCanonicalArtifactLayout(unit: FleetBackupUnitOutcome): void {
+  const segments = unit.artifactDir?.split('/') ?? [];
+  const timestamp = segments.at(-1);
+  const canonical = unit.kind === 'companion'
+    ? segments.length === 3
+      && segments[0] === FLEET_COMPANIONS_DIR_NAME
+      && segments[1] === unit.companionId
+    : segments.length === 2
+      && segments[0] === (unit.kind === 'cluster' ? FLEET_CLUSTER_DIR_NAME : FLEET_GROUP_DIR_NAME);
+  if (!canonical || !timestamp || !FLEET_ARTIFACT_TIMESTAMP_PATTERN.test(timestamp)) {
+    throw new Error(`Fleet restore ${unit.kind} artifact does not use its canonical layout`);
+  }
+}
+
+function verifyArtifactIdentity(artifactDir: string, unit: FleetBackupUnitOutcome): void {
+  const identityPath = join(artifactDir, FLEET_ARTIFACT_IDENTITY_NAME);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(identityPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Fleet restore artifact identity is missing or malformed: ${String(error)}`);
+  }
+  if (!isRecord(parsed) || parsed.schemaVersion !== 1 || parsed.kind !== unit.kind) {
+    throw new Error('Fleet restore artifact identity does not match its manifest unit');
+  }
+  const keys = Object.keys(parsed).sort();
+  const expectedKeys = unit.kind === 'companion'
+    ? ['companionId', 'kind', 'postgresSchema', 'schemaVersion']
+    : unit.kind === 'cluster'
+      ? ['kind', 'postgresSchema', 'schemaVersion']
+      : ['kind', 'postgresSchemas', 'schemaVersion'];
+  if (JSON.stringify(keys) !== JSON.stringify(expectedKeys.sort())
+    || (unit.kind === 'companion'
+      && (typeof parsed.companionId !== 'string' || typeof parsed.postgresSchema !== 'string'))
+    || (unit.kind === 'cluster' && typeof parsed.postgresSchema !== 'string')
+    || (unit.kind === 'group'
+      && (!Array.isArray(parsed.postgresSchemas)
+        || parsed.postgresSchemas.some(schema => typeof schema !== 'string')))) {
+    throw new Error('Fleet restore artifact identity has an invalid shape');
+  }
+  const identity = parsed as unknown as FleetArtifactIdentity;
+  const expectedSchemas = unit.postgresSchemas ? [...unit.postgresSchemas].sort() : undefined;
+  const identitySchemas = identity.postgresSchemas ? [...identity.postgresSchemas].sort() : undefined;
+  if (identity.companionId !== unit.companionId
+    || identity.postgresSchema !== unit.postgresSchema
+    || JSON.stringify(identitySchemas) !== JSON.stringify(expectedSchemas)) {
+    throw new Error('Fleet restore artifact identity does not match its manifest unit');
+  }
 }
 
 function parseFleetManifest(fleetManifestPath: string): ParsedFleetManifest {
@@ -136,6 +196,7 @@ function parseFleetManifest(fleetManifestPath: string): ParsedFleetManifest {
 }
 
 function resolveArtifactDir(manifest: ParsedFleetManifest, unit: FleetBackupUnitOutcome): string {
+  assertCanonicalArtifactLayout(unit);
   const relativePath = unit.artifactDir!;
   if (isAbsolute(relativePath) || relativePath === '..' || relativePath.startsWith('../')) {
     throw new Error('Fleet restore artifactDir must stay beneath the backup root');
@@ -150,6 +211,7 @@ function resolveArtifactDir(manifest: ParsedFleetManifest, unit: FleetBackupUnit
     throw new Error(`Fleet restore artifact resolves outside the backup root: ${relativePath}`);
   }
   verifyBackupContentsManifest(artifactDir);
+  verifyArtifactIdentity(artifactDir, unit);
   return artifactDir;
 }
 
@@ -356,117 +418,78 @@ async function assertTargetDatabaseIsSafe(
   }
 }
 
-function pathsOverlap(first: string, second: string): boolean {
-  return first === second || isStrictSubpath(first, second) || isStrictSubpath(second, first);
+async function expectedSchemaPresence(
+  expectedSchemas: readonly string[],
+  postgres: FleetRestorePostgresOptions,
+): Promise<'none' | 'all' | 'partial'> {
+  const present = new Set((await readTargetSchemaState(postgres)).map(entry => entry.schema));
+  const count = expectedSchemas.filter(schema => present.has(schema)).length;
+  if (count === 0) return 'none';
+  if (count === expectedSchemas.length) return 'all';
+  return 'partial';
 }
 
-function resolveCanonicalDestination(destinationValue: string): string {
-  const requested = resolve(destinationValue);
-  let existingAncestor = requested;
-  while (!existsSync(existingAncestor)) {
-    const parent = dirname(existingAncestor);
-    if (parent === existingAncestor) break;
-    existingAncestor = parent;
-  }
-  return resolve(realpathSync(existingAncestor), relative(existingAncestor, requested));
-}
-
-function cleanupStagedTrees(staged: readonly StagedTree[]): void {
-  for (const tree of staged) {
-    if (existsSync(tree.staging)) rmSync(tree.staging, { recursive: true, force: true });
-  }
-}
-
-function cleanupPublishedTrees(staged: readonly StagedTree[]): void {
-  for (const tree of staged) {
-    if (existsSync(tree.destination)) rmSync(tree.destination, { recursive: true, force: true });
-  }
-}
-
-function stageVerifiedTrees(
-  artifactDirValue: string,
-  backupRootValue: string,
-  specs: ReadonlyArray<{ treeDirName: string; destination: string }>,
-): StagedTree[] {
-  const artifactDir = resolve(artifactDirValue);
-  const backupRoot = resolve(backupRootValue);
-  const resolvedSpecs = specs.map(spec => ({
-    treeDirName: spec.treeDirName,
-    destination: resolveCanonicalDestination(spec.destination),
-  }));
-  for (const spec of resolvedSpecs) {
-    if (existsSync(spec.destination)) {
-      throw new Error(
-        `Fleet restore destination already exists; no-overwrite policy refuses collision: ${spec.destination}`,
-      );
-    }
-    if (pathsOverlap(spec.destination, artifactDir) || pathsOverlap(spec.destination, backupRoot)) {
-      throw new Error(`Fleet restore destination overlaps its immutable backup root: ${spec.destination}`);
-    }
-  }
-  for (let index = 0; index < resolvedSpecs.length; index += 1) {
-    for (let peer = index + 1; peer < resolvedSpecs.length; peer += 1) {
-      if (pathsOverlap(resolvedSpecs[index].destination, resolvedSpecs[peer].destination)) {
-        throw new Error('Fleet restore destinations must be distinct, non-overlapping roots');
-      }
-    }
-  }
-
-  const staged: StagedTree[] = [];
+async function dropRestoreSchemas(
+  expectedSchemas: readonly string[],
+  postgres: FleetRestorePostgresOptions,
+): Promise<void> {
+  const binary = postgres.psqlBinary?.trim() || 'psql';
+  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const query = expectedSchemas
+    .map(schema => `DROP SCHEMA IF EXISTS "${assertValidPostgresSchemaName(schema)}" CASCADE`)
+    .join('; ');
   try {
-    for (const spec of resolvedSpecs) {
-      mkdirSync(dirname(spec.destination), { recursive: true });
-      const staging = join(
-        dirname(spec.destination),
-        `.${basename(spec.destination)}.restore-${randomUUID()}`,
-      );
-      staged.push({ destination: spec.destination, staging });
-      cpSync(join(artifactDir, spec.treeDirName), staging, {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-      });
-    }
-    return staged;
+    await execFileAsync(binary, [
+      '--no-password',
+      '--no-psqlrc',
+      '--dbname',
+      connectionArg,
+      '--command',
+      `${query};`,
+    ], { env: password ? { ...process.env, PGPASSWORD: password } : process.env });
   } catch (error) {
-    cleanupStagedTrees(staged);
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Fleet restore could not roll back target Postgres schemas: ${message}`);
   }
 }
 
 async function commitRestore(options: {
   kind: FleetRestoreResult['kind'];
   artifactDir: string;
+  backupRootDir: string;
   dumpPath: string;
   postgres: FleetRestorePostgresOptions;
   unit: FleetBackupUnitOutcome;
-  staged: StagedTree[];
+  specs: ReadonlyArray<{ treeDirName: string; destination: string }>;
+  prepareStaging?: (trees: readonly StagedRestoreTree[]) => void;
+  faultInjection?: FleetRestoreFaultInjectionOptions['faultInjection'];
 }): Promise<FleetRestoreResult> {
   const expectedSchemas = await assertDumpScope(options.dumpPath, options.unit, options.postgres);
-  await assertTargetDatabaseIsSafe(options.unit, expectedSchemas, options.postgres);
-  const published: StagedTree[] = [];
-  try {
-    for (const tree of options.staged) {
-      // Exclusive directory creation is the publication barrier: a concurrent
-      // destination creator wins with EEXIST before Postgres is touched.
-      mkdirSync(tree.destination);
-      published.push(tree);
-    }
-    for (const tree of options.staged) {
-      cpSync(tree.staging, tree.destination, { recursive: true, errorOnExist: true, force: false });
-    }
-    await restorePostgresDump(options.dumpPath, options.postgres);
-    cleanupStagedTrees(options.staged);
-  } catch (error) {
-    cleanupPublishedTrees(published);
-    cleanupStagedTrees(options.staged);
-    throw error;
-  }
+  const databaseTarget = toCredentialFreePostgresConnection(options.postgres.databaseUrl).connectionArg;
+  const transaction = await executeFleetRestoreTransaction({
+    kind: options.kind,
+    artifactDir: options.artifactDir,
+    backupRootDir: options.backupRootDir,
+    dumpPath: options.dumpPath,
+    databaseTarget,
+    expectedSchemas,
+    specs: options.specs,
+    prepareStaging: options.prepareStaging,
+    faultInjection: options.faultInjection,
+    assertTargetDatabaseSafe: async () => await assertTargetDatabaseIsSafe(
+      options.unit,
+      expectedSchemas,
+      options.postgres,
+    ),
+    inspectDatabaseState: async () => await expectedSchemaPresence(expectedSchemas, options.postgres),
+    restoreDatabase: async () => await restorePostgresDump(options.dumpPath, options.postgres),
+    rollbackDatabase: async () => await dropRestoreSchemas(expectedSchemas, options.postgres),
+  });
   return {
     kind: options.kind,
     artifactDir: options.artifactDir,
     databaseDumpPath: options.dumpPath,
-    restoredDestinations: options.staged.map(tree => tree.destination),
+    restoredDestinations: transaction.restoredDestinations,
   };
 }
 
@@ -487,7 +510,7 @@ export async function restoreFleetCompanionSlice(options: {
   companionId: string;
   destinations: { companionDataDir: string; personalWorkspacePath: string };
   postgres: FleetRestorePostgresOptions;
-}): Promise<FleetRestoreResult> {
+} & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'per-companion') throw new Error('Companion-slice restore requires a per-companion fleet backup');
   const unit = requireSingleUnit(
@@ -499,11 +522,19 @@ export async function restoreFleetCompanionSlice(options: {
   verifyCompanionTreeSnapshot(artifactDir);
   verifyWorkspaceTreeSnapshot(artifactDir);
   const dumpPath = findDatabaseDump(artifactDir);
-  const staged = stageVerifiedTrees(artifactDir, manifest.backupRootDir, [
-    { treeDirName: COMPANION_TREE_DIR_NAME, destination: options.destinations.companionDataDir },
-    { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.personalWorkspacePath },
-  ]);
-  try {
+  return await commitRestore({
+    kind: 'companion',
+    artifactDir,
+    backupRootDir: manifest.backupRootDir,
+    dumpPath,
+    postgres: options.postgres,
+    unit,
+    specs: [
+      { treeDirName: COMPANION_TREE_DIR_NAME, destination: options.destinations.companionDataDir },
+      { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.personalWorkspacePath },
+    ],
+    faultInjection: options.faultInjection,
+    prepareStaging: (staged) => {
     const sessionsSource = join(artifactDir, 'sessions');
     if (existsSync(sessionsSource)) {
       const sessionsDestination = join(staged[0].staging, 'state', 'sessions');
@@ -513,25 +544,15 @@ export async function restoreFleetCompanionSlice(options: {
       mkdirSync(dirname(sessionsDestination), { recursive: true });
       cpSync(sessionsSource, sessionsDestination, { recursive: true, errorOnExist: true, force: false });
     }
-    return await commitRestore({
-      kind: 'companion',
-      artifactDir,
-      dumpPath,
-      postgres: options.postgres,
-      unit,
-      staged,
-    });
-  } catch (error) {
-    cleanupStagedTrees(staged);
-    throw error;
-  }
+    },
+  });
 }
 
 export async function restoreFleetClusterArtifact(options: {
   fleetManifestPath: string;
   destinations: { systemDataDir: string; sharedWorkspacePath: string };
   postgres: FleetRestorePostgresOptions;
-}): Promise<FleetRestoreResult> {
+} & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'per-companion') throw new Error('Cluster restore requires a per-companion fleet backup');
   const unit = requireSingleUnit(manifest, candidate => candidate.kind === 'cluster', 'cluster');
@@ -542,13 +563,15 @@ export async function restoreFleetClusterArtifact(options: {
   return await commitRestore({
     kind: 'cluster',
     artifactDir,
+    backupRootDir: manifest.backupRootDir,
     dumpPath,
     postgres: options.postgres,
     unit,
-    staged: stageVerifiedTrees(artifactDir, manifest.backupRootDir, [
+    specs: [
       { treeDirName: SYSTEM_CONFIG_DIR_NAME, destination: options.destinations.systemDataDir },
       { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.sharedWorkspacePath },
-    ]),
+    ],
+    faultInjection: options.faultInjection,
   });
 }
 
@@ -556,7 +579,7 @@ export async function restoreFleetGroupArtifact(options: {
   fleetManifestPath: string;
   destinations: { groupCompanionDataDir: string; groupWorkspacesRoot: string; systemDataDir: string };
   postgres: FleetRestorePostgresOptions;
-}): Promise<FleetRestoreResult> {
+} & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'group') throw new Error('Group restore requires a group fleet backup');
   const unit = requireSingleUnit(manifest, candidate => candidate.kind === 'group', 'group');
@@ -568,13 +591,15 @@ export async function restoreFleetGroupArtifact(options: {
   return await commitRestore({
     kind: 'group',
     artifactDir,
+    backupRootDir: manifest.backupRootDir,
     dumpPath,
     postgres: options.postgres,
     unit,
-    staged: stageVerifiedTrees(artifactDir, manifest.backupRootDir, [
+    specs: [
       { treeDirName: COMPANION_TREE_DIR_NAME, destination: options.destinations.groupCompanionDataDir },
       { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.groupWorkspacesRoot },
       { treeDirName: SYSTEM_CONFIG_DIR_NAME, destination: options.destinations.systemDataDir },
-    ]),
+    ],
+    faultInjection: options.faultInjection,
   });
 }

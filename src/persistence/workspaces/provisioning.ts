@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -45,6 +45,29 @@ interface CompanionLibrarySourceBundle {
   bundleVersion: string;
   sourceManifestSha256: string;
   files: CompanionLibrarySourceFile[];
+}
+
+interface CompanionLibrarySourceEntry {
+  path: string;
+  type: 'file' | 'directory' | 'symlink' | 'special';
+}
+
+function enumerateSourceEntries(sourceDir: string): CompanionLibrarySourceEntry[] {
+  const entries: CompanionLibrarySourceEntry[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolutePath = join(directory, entry.name);
+      const path = relative(sourceDir, absolutePath).replaceAll('\\', '/');
+      if (entry.isFile()) entries.push({ path, type: 'file' });
+      else if (entry.isDirectory()) {
+        entries.push({ path, type: 'directory' });
+        visit(absolutePath);
+      } else if (entry.isSymbolicLink()) entries.push({ path, type: 'symlink' });
+      else entries.push({ path, type: 'special' });
+    }
+  };
+  visit(sourceDir);
+  return entries.sort((first, second) => first.path.localeCompare(second.path));
 }
 
 function sha256(path: string): string {
@@ -92,15 +115,19 @@ function loadSourceBundle(sourceDir: string): CompanionLibrarySourceBundle {
   });
   const expectedPaths = [...LIBRARY_SOURCE_FILES].sort();
   const actualPaths = files.map(file => file.path).sort();
-  const sourceFiles = readdirSync(sourceDir, { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name !== COMPANION_LIBRARY_MANIFEST_FILE)
-    .map(entry => entry.name)
-    .sort();
+  const sourceEntries = enumerateSourceEntries(sourceDir);
+  const sourceFiles = sourceEntries
+    .filter(entry => entry.type === 'file' && entry.path !== COMPANION_LIBRARY_MANIFEST_FILE)
+    .map(entry => entry.path);
+  const invalidEntries = sourceEntries.filter(entry => entry.type !== 'file');
+  const manifestEntry = sourceEntries.find(entry => entry.path === COMPANION_LIBRARY_MANIFEST_FILE);
   if (new Set(actualPaths).size !== actualPaths.length
     || actualPaths.join('\0') !== expectedPaths.join('\0')
-    || sourceFiles.join('\0') !== expectedPaths.join('\0')) {
+    || sourceFiles.join('\0') !== expectedPaths.join('\0')
+    || invalidEntries.length > 0
+    || manifestEntry?.type !== 'file') {
     throw new Error(
-      `Invalid Companion Library source manifest ${manifestPath}: every bundle file must be declared exactly once`,
+      `Invalid Companion Library source manifest ${manifestPath}: only manifest-declared regular files are allowed and every bundle file must be declared exactly once`,
     );
   }
   for (const file of files) {

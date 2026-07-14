@@ -4,16 +4,19 @@ import {
   realpathSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, extname, join, normalize, relative, resolve } from 'node:path';
 import { isStrictSubpath } from '../layout.js';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import {
+  type DurableWriteStage,
+  fsyncDirectorySync,
+  unlinkDurableSync,
+  writeFileDurableAtomicSync,
+} from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { SHARED_WORKSPACE_POLICY } from './provisioning.js';
 
@@ -109,7 +112,10 @@ interface SharedWorkspaceLockOwner {
 }
 
 export interface SharedWorkspaceStoreOptions {
-  faultInjection?: (stage: 'after_artifact' | 'after_review') => void;
+  faultInjection?: (
+    stage: 'after_artifact' | 'after_review' | DurableWriteStage,
+    path?: string,
+  ) => void;
   /** Crash-recovery lease. Keep identical for every process sharing a root. */
   lockStaleMs?: number;
 }
@@ -209,27 +215,25 @@ function parseTransaction(path: string): SharedWorkspacePublicationTransaction {
   return parsed as unknown as SharedWorkspacePublicationTransaction;
 }
 
-function writeTextAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(temporary, content, { encoding: 'utf8', flag: 'wx' });
-    renameSync(temporary, path);
-  } catch (error) {
-    try { unlinkSync(temporary); } catch { /* best-effort cleanup */ }
-    throw error;
-  }
-}
-
-function writeImmutableJson(path: string, value: unknown): void {
+function writeImmutableJson(
+  path: string,
+  value: unknown,
+  faultInjection?: SharedWorkspaceStoreOptions['faultInjection'],
+): void {
   const encoded = `${JSON.stringify(value, null, 2)}\n`;
   if (existsSync(path)) {
     if (readFileSync(path, 'utf8') !== encoded) {
       throw new Error(`Immutable Shared Companion Workspace record conflicts at ${path}`);
     }
+    // Recovery may see a linked final record after a crash before its parent
+    // directory fsync. Close that durability window before advancing.
+    fsyncDirectorySync(dirname(path));
     return;
   }
-  writeFileSync(path, encoded, { encoding: 'utf8', flag: 'wx' });
+  writeFileDurableAtomicSync(path, encoded, {
+    exclusive: true,
+    faultInjection: (stage, durablePath) => faultInjection?.(stage, durablePath),
+  });
 }
 
 function readProcessStartToken(pid: number): string | null {
@@ -352,10 +356,11 @@ export class SharedCompanionWorkspaceStore {
       proposedRevision: hashContent(input.content),
       status: 'pending',
     };
-    writeFileSync(join(this.root, 'reviews', `${record.reviewId}.json`), `${JSON.stringify(record, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx',
-    });
+    writeImmutableJson(
+      join(this.root, 'reviews', `${record.reviewId}.json`),
+      record,
+      this.faultInjection,
+    );
     this.writeProvenanceEvent(this.buildProvenanceEvent('proposed', record));
     return record;
   }
@@ -379,7 +384,11 @@ export class SharedCompanionWorkspaceStore {
         decidedAt: new Date().toISOString(),
         ...(input.note?.trim() ? { note: input.note.trim() } : {}),
       };
-      writeImmutableJson(join(this.root, 'cogsec-decisions', `${reviewId}.json`), decision);
+      writeImmutableJson(
+        join(this.root, 'cogsec-decisions', `${reviewId}.json`),
+        decision,
+        this.faultInjection,
+      );
       return decision;
     });
   }
@@ -450,7 +459,10 @@ export class SharedCompanionWorkspaceStore {
         }
         // Journal only after the stale-revision precondition passes, but before
         // any artifact/review/provenance mutation becomes visible.
-        writeJsonAtomic(transactionPath, transaction);
+        writeFileDurableAtomicSync(transactionPath, `${JSON.stringify(transaction, null, 2)}\n`, {
+          exclusive: true,
+          faultInjection: (stage, path) => this.faultInjection?.(stage, path),
+        });
         this.applyTransaction(transaction, reviewPath, transactionPath, true);
       });
       return updated;
@@ -479,6 +491,7 @@ export class SharedCompanionWorkspaceStore {
     writeImmutableJson(
       join(this.root, 'provenance', 'events', `${event.reviewId}.${event.event}.json`),
       event,
+      this.faultInjection,
     );
   }
 
@@ -564,16 +577,22 @@ export class SharedCompanionWorkspaceStore {
         ? hashContent(readFileSync(artifact.absolutePath, 'utf8'))
         : null;
       if (currentRevision === transaction.baseRevision) {
-        writeTextAtomic(artifact.absolutePath, transaction.content);
+        writeFileDurableAtomicSync(artifact.absolutePath, transaction.content, {
+          faultInjection: (stage, path) => this.faultInjection?.(stage, path),
+        });
       } else if (currentRevision !== transaction.proposedRevision) {
         throw new Error('Shared workspace artifact changed after proposal; review is stale');
       }
     }
     if (injectFaults) this.faultInjection?.('after_artifact');
-    writeJsonAtomic(reviewPath, transaction.updatedReview);
+    writeFileDurableAtomicSync(
+      reviewPath,
+      `${JSON.stringify(transaction.updatedReview, null, 2)}\n`,
+      { faultInjection: (stage, path) => this.faultInjection?.(stage, path) },
+    );
     if (injectFaults) this.faultInjection?.('after_review');
     this.writeProvenanceEvent(transaction.provenanceEvent);
-    unlinkSync(transactionPath);
+    unlinkDurableSync(transactionPath);
   }
 
   private recoverTransactions(): void {

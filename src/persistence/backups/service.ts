@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   cpSync,
@@ -51,6 +52,7 @@ import {
 } from './kubernetes-helm.js';
 import {
   createBackupContentsManifest,
+  FLEET_ARTIFACT_IDENTITY_NAME,
   verifyBackupContentsManifest,
   type BackupContentsManifest,
 } from './backup-contents.js';
@@ -88,6 +90,14 @@ export interface BackupPostgresOptions {
   pgRestoreBinary?: string;
   /** Override the psql binary used for restore verification (defaults to `psql` on PATH). */
   psqlBinary?: string;
+}
+
+export interface FleetArtifactIdentity {
+  schemaVersion: 1;
+  kind: 'companion' | 'cluster' | 'group';
+  companionId?: string;
+  postgresSchema?: string;
+  postgresSchemas?: string[];
 }
 
 export interface BackupRunOptions {
@@ -130,6 +140,8 @@ export interface BackupRunOptions {
   mirrorDir?: string;
   verifyRestore?: boolean;
   encryption?: BackupEncryptionRuntimeConfig;
+  /** Artifact-local fleet identity, bound by backup-contents.json. */
+  fleetArtifactIdentity?: FleetArtifactIdentity;
   now?: () => number;
 }
 
@@ -479,9 +491,16 @@ export async function runBackupCycle(
         now,
       })
       : undefined;
+    let fleetArtifactIdentitySha256: string | undefined;
+    if (options.fleetArtifactIdentity) {
+      const identityPath = join(backupDir, FLEET_ARTIFACT_IDENTITY_NAME);
+      writeJsonAtomic(identityPath, options.fleetArtifactIdentity);
+      fleetArtifactIdentitySha256 = createHash('sha256').update(readFileSync(identityPath)).digest('hex');
+    }
     const backupContents = createBackupContentsManifest({
       backupDir,
       kubernetesHelmRecovery: Boolean(kubernetesHelm),
+      ...(fleetArtifactIdentitySha256 ? { fleetArtifactIdentitySha256 } : {}),
       now,
     });
 
@@ -922,7 +941,16 @@ export async function runFleetBackupCycle(
     runOptions: BackupRunOptions,
   ): Promise<void> => {
     try {
-      const result = await runBackupCycle(runOptions);
+      const result = await runBackupCycle({
+        ...runOptions,
+        fleetArtifactIdentity: {
+          schemaVersion: 1,
+          kind: descriptor.kind,
+          ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
+          ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+          ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
+        },
+      });
       results.push(result);
       outcomes.push({
         kind: descriptor.kind,

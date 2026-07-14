@@ -1261,20 +1261,64 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     }));
   });
 
-  it('routes discord.sendMedia through the calling companion\'s own bot account', async () => {
+  it('materializes discord.sendMedia inside the calling companion workspace and rejects a peer path', async () => {
     const { options, dockA, dockB } = createMultiAccountOptions();
-    const { connect } = await setupServer(options);
-    const connB = await connect();
-    await identifyAgent(connB, 'comp-b', 1);
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'psfn-discord-media-routing-'));
+    try {
+      const workspaceA = join(workspaceRoot, 'comp-a');
+      const workspaceB = join(workspaceRoot, 'comp-b');
+      mkdirSync(workspaceA);
+      mkdirSync(workspaceB);
+      const peerPath = join(workspaceA, 'peer.png');
+      const ownPath = join(workspaceB, 'own.png');
+      writeFileSync(peerPath, 'peer-bytes');
+      writeFileSync(ownPath, 'own-bytes');
+      options.multiCompanion = {
+        ...options.multiCompanion!,
+        personalWorkspaceByCompanionId: {
+          'comp-a': workspaceA,
+          'comp-b': workspaceB,
+          'comp-c': join(workspaceRoot, 'comp-c'),
+        },
+      };
+      const { connect } = await setupServer(options);
+      const connB = await connect();
+      await identifyAgent(connB, 'comp-b', 1);
 
-    const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
-      channelId: 'ch-2',
-      media: { kind: 'image', name: 'pic.png', url: 'https://example.test/pic.png' },
-      companionId: 'comp-b',
-    });
-    expect(response.result).toEqual({ success: true });
-    expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
-    expect(dockA.sendMedia).not.toHaveBeenCalled();
+      const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
+        channelId: 'ch-2',
+        media: {
+          name: 'pic.png',
+          contentType: 'image/png',
+          url: 'https://example.test/pic.png',
+          localPath: ownPath,
+        },
+        companionId: 'comp-b',
+      });
+      expect(response.result).toEqual({ success: true });
+      expect(dockB.sendMedia).toHaveBeenCalledWith({ channelId: 'ch-2' }, {
+        name: 'pic.png',
+        contentType: 'image/png',
+        url: 'https://example.test/pic.png',
+        dataBase64: Buffer.from('own-bytes').toString('base64'),
+      });
+
+      const peerResponse = await invokeRpc(connB, 14, 'discord.sendMedia', {
+        channelId: 'ch-2',
+        media: {
+          name: 'peer.png',
+          contentType: 'image/png',
+          url: 'https://example.test/peer.png',
+          localPath: peerPath,
+        },
+        companionId: 'comp-b',
+      });
+      expect(peerResponse.error?.message).toMatch(/outside its authenticated root/);
+      expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
+      expect(dockA.sendMedia).not.toHaveBeenCalled();
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('keeps flag-off outbound discord sends on the shared adapter (parity)', async () => {

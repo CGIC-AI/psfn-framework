@@ -9,7 +9,13 @@ import type {
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import type { CorrelationMetadata, CompletionPurpose, LLMModelHint, ObservabilityCallType } from '../../../shared/contracts/runtime.js';
+import type {
+  ContextMessage,
+  CorrelationMetadata,
+  CompletionPurpose,
+  LLMModelHint,
+  ObservabilityCallType,
+} from '../../../shared/contracts/runtime.js';
 import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,
@@ -20,6 +26,12 @@ import {
   applyGatewayCapturedProviderCost,
   withGatewayLLMCostCapture,
 } from '../llm-cost-capture.js';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
+import { GatewayErrors } from '../protocol.js';
+import {
+  GatewayInlineImageRetentionMissError,
+  resolveGatewayInlineImageReferences,
+} from '../inline-image-retention.js';
 
 const log = createComponentLogger('GatewayLLMMethods');
 
@@ -27,6 +39,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
@@ -47,7 +60,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         async () => await runtime.llmProvider.stream(
           {
             systemPrompt: params.systemPrompt,
-            messages: params.messages,
+            messages,
             ...(params.tools?.length ? { tools: params.tools } : {}),
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
@@ -95,6 +108,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
       const modelHint = extractModelHintFromParams(params);
@@ -115,7 +129,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         async () => await runtime.llmProvider.complete(
           {
             systemPrompt: params.systemPrompt,
-            messages: params.messages,
+            messages,
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
             correlation,
@@ -196,6 +210,27 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
 
 export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
   registerAuditedDescriptors(runtime, llmDescriptors);
+}
+
+function resolveRetainedImageReferences(
+  params: LLMChatParams | LLMCompleteParams,
+  runtime: GatewayMethodRuntime,
+): ContextMessage[] {
+  try {
+    const resolved = resolveGatewayInlineImageReferences(
+      params.messages,
+      runtime.inlineImageRetention,
+      params.turnId,
+    );
+    // The gateway wire admits structured provider blocks while the legacy
+    // LLMContext contract still types `content` as text-only.
+    return resolved as unknown as ContextMessage[];
+  } catch (error) {
+    if (error instanceof GatewayInlineImageRetentionMissError) {
+      throw new JSONRPCErrorException(error.message, GatewayErrors.INLINE_IMAGE_RETENTION_MISS);
+    }
+    throw error;
+  }
 }
 
 function requireModelDiscovery(

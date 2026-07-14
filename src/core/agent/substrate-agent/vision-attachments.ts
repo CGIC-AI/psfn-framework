@@ -63,6 +63,7 @@ export interface VisionIntakeImageScreenerPort {
     originRef: string;
     subjectIndex?: number;
     canonicalContactId?: string;
+    requestScope?: string;
   }): Promise<VisionIntakeScreenDecision>;
 }
 
@@ -220,11 +221,14 @@ export async function buildTurnUserContent(input: {
    * local compositions) preserves the unscreened behavior.
    */
   visionIntakeScreener?: VisionIntakeImageScreenerPort | null;
+  /** Turn ID binding for gateway-side retention of screened inline bytes. */
+  imageRetentionScope?: string;
 }): Promise<TurnUserContentBuildResult> {
   const intake = await screenTurnImageAttachments({
     message: input.message,
     screener: input.visionIntakeScreener ?? null,
     logger: input.logger,
+    requestScope: input.imageRetentionScope,
   });
   const message = intake.message;
   const intakeNotes: string[] = intake.noticeText ? [intake.noticeText] : [];
@@ -399,6 +403,7 @@ async function screenTurnImageAttachments(input: {
   message: SubstrateMessage;
   screener: VisionIntakeImageScreenerPort | null;
   logger: VisionLogger;
+  requestScope?: string;
 }): Promise<TurnImageIntakeScreening> {
   const { message, screener } = input;
   const attachments = message.attachments ?? [];
@@ -443,6 +448,7 @@ async function screenTurnImageAttachments(input: {
         originRef: candidate.originRef,
         subjectIndex: candidate.index,
         ...(canonicalContactId ? { canonicalContactId } : {}),
+        ...(input.requestScope ? { requestScope: input.requestScope } : {}),
       });
     } catch (error) {
       // Fail closed: the screener is wired but this screening did not

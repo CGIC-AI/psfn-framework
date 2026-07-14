@@ -2,16 +2,36 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
-import type { NdjsonConnection } from './transport.js';
+import type {
+  GatewayRpcSerializedTransportStats,
+  NdjsonConnection,
+} from './transport.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
   const emitter = new EventEmitter();
   const sent: unknown[] = [];
+  const transportStats: GatewayRpcSerializedTransportStats = {
+    frameCount: 0,
+    serializedBytes: 0,
+    rpcCallCount: 0,
+    byMethod: {},
+  };
 
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
+      const serializedBytes = Buffer.byteLength(JSON.stringify(data), 'utf8');
+      transportStats.frameCount += 1;
+      transportStats.serializedBytes += serializedBytes;
+      const method = (data as { method?: unknown } | null)?.method;
+      if (typeof method === 'string') {
+        transportStats.rpcCallCount += 1;
+        const methodStats = transportStats.byMethod[method] ?? { callCount: 0, serializedBytes: 0 };
+        methodStats.callCount += 1;
+        methodStats.serializedBytes += serializedBytes;
+        transportStats.byMethod[method] = methodStats;
+      }
       return true;
     },
     onMessage(handler: (message: unknown) => void): void {
@@ -25,6 +45,9 @@ function createMockConnection() {
     },
     get destroyed(): boolean {
       return false;
+    },
+    get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+      return structuredClone(transportStats);
     },
     // Emit a message to the client as if received from the gateway
     _emit(message: unknown): void {
@@ -58,6 +81,265 @@ describe('GatewayClient streaming', () => {
   beforeEach(() => {
     conn = createMockConnection();
     client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('sends screened inline image bytes in only the intake frame and references them in the main call', async () => {
+    const imageBase64 = 'A'.repeat(4096);
+    const requestScope = 'turn-inline-retained';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number; method: string };
+    expect(screenRequest.method).toBe('intake.screen_image');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'retained-handle-1',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    });
+    const llmRequest = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: { messages: unknown[] };
+    };
+    expect(llmRequest.method).toBe('llm.chat');
+    expect(llmRequest.params.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'gateway_image_ref', handle: 'retained-handle-1' }],
+    }]);
+    expect(JSON.stringify(llmRequest)).not.toContain(imageBase64);
+    expect(conn.sent.filter(frame => JSON.stringify(frame).includes(imageBase64))).toHaveLength(1);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: llmRequest.id,
+      result: {
+        content: 'saw image',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'saw image' });
+    expect(client.getSerializedTransportStats()).toMatchObject({
+      frameCount: 2,
+      rpcCallCount: 2,
+      byMethod: {
+        'intake.screen_image': { callCount: 1 },
+        'llm.chat': { callCount: 1 },
+      },
+    });
+    expect(client.getSerializedTransportStats().serializedBytes).toBe(
+      conn.sent.reduce(
+        (total, frame) => total + Buffer.byteLength(JSON.stringify(frame), 'utf8'),
+        0,
+      ),
+    );
+  });
+
+  it('explicitly resends inline bytes once when the gateway reports a retention miss', async () => {
+    const imageBase64 = 'A'.repeat(4096);
+    const requestScope = 'turn-inline-miss';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'expired-handle',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    });
+    const referencedRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: referencedRequest.id,
+      error: {
+        code: -32015,
+        message: 'Gateway inline image retention miss; explicit inline image byte resend is required.',
+      },
+    });
+
+    await vi.waitFor(() => expect(conn.sent).toHaveLength(3));
+    const resendRequest = conn.sent[2] as { id: number; method: string; params: unknown };
+    expect(resendRequest.method).toBe('llm.chat');
+    expect(JSON.stringify(resendRequest.params)).toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: resendRequest.id,
+      result: {
+        content: 'saw resent image',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'saw resent image' });
+  });
+
+  it('keeps inline bytes on the wire when a retained handle belongs to another turn scope', async () => {
+    const imageBase64 = 'B'.repeat(4096);
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/jpeg',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope: 'turn-a',
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'turn-a-handle',
+          requestScope: 'turn-a',
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: 'turn-b', callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/jpeg' }],
+      }] as any,
+    });
+    const llmRequest = conn.sent[1] as { id: number; params: unknown };
+    expect(JSON.stringify(llmRequest.params)).toContain(imageBase64);
+    expect(JSON.stringify(llmRequest.params)).not.toContain('turn-a-handle');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: llmRequest.id,
+      result: {
+        content: 'scope isolated',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'scope isolated' });
+  });
+
+  it('uses retained references for complete and explicitly resends bytes on a miss', async () => {
+    const imageBase64 = 'C'.repeat(4096);
+    const requestScope = 'turn-complete-miss';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'complete-handle',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const completePromise = client.complete({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'background', purpose: 'vision' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    }, 'vision');
+    const referencedRequest = conn.sent[1] as { id: number; params: unknown };
+    expect(JSON.stringify(referencedRequest.params)).toContain('complete-handle');
+    expect(JSON.stringify(referencedRequest.params)).not.toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: referencedRequest.id,
+      error: {
+        code: -32015,
+        message: 'Gateway inline image retention miss; explicit inline image byte resend is required.',
+      },
+    });
+
+    await vi.waitFor(() => expect(conn.sent).toHaveLength(3));
+    const resendRequest = conn.sent[2] as { id: number; method: string; params: unknown };
+    expect(resendRequest.method).toBe('llm.complete');
+    expect(JSON.stringify(resendRequest.params)).toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: resendRequest.id,
+      result: {
+        content: 'complete saw resent image',
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(completePromise).resolves.toMatchObject({ content: 'complete saw resent image' });
   });
 
   it('routes chunks to the correct handler by requestId', async () => {

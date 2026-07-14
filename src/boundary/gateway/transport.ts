@@ -39,11 +39,76 @@ export interface SocketServerOptions {
 
 type MessageHandler = (message: unknown) => void;
 
+export interface GatewayRpcMethodSerializedTransportStats {
+  callCount: number;
+  serializedBytes: number;
+}
+
+/** Exact UTF-8 JSON payload bytes written by one RPC connection. */
+export interface GatewayRpcSerializedTransportStats {
+  frameCount: number;
+  serializedBytes: number;
+  rpcCallCount: number;
+  byMethod: Record<string, GatewayRpcMethodSerializedTransportStats>;
+}
+
 export interface GatewayRpcConnection extends EventEmitter {
   send(data: unknown): boolean;
   onMessage(handler: MessageHandler): void;
   destroy(): void;
   readonly destroyed: boolean;
+  readonly serializedTransportStats: GatewayRpcSerializedTransportStats;
+}
+
+interface MutableSerializedTransportStats {
+  frameCount: number;
+  serializedBytes: number;
+  rpcCallCount: number;
+  byMethod: Map<string, GatewayRpcMethodSerializedTransportStats>;
+}
+
+function createSerializedTransportStats(): MutableSerializedTransportStats {
+  return {
+    frameCount: 0,
+    serializedBytes: 0,
+    rpcCallCount: 0,
+    byMethod: new Map(),
+  };
+}
+
+function recordSerializedTransportFrame(
+  stats: MutableSerializedTransportStats,
+  data: unknown,
+  serialized: string,
+): void {
+  const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+  stats.frameCount += 1;
+  stats.serializedBytes += serializedBytes;
+  const method = typeof data === 'object'
+    && data !== null
+    && 'method' in data
+    && typeof data.method === 'string'
+    ? data.method
+    : null;
+  if (!method) return;
+  stats.rpcCallCount += 1;
+  const methodStats = stats.byMethod.get(method) ?? { callCount: 0, serializedBytes: 0 };
+  methodStats.callCount += 1;
+  methodStats.serializedBytes += serializedBytes;
+  stats.byMethod.set(method, methodStats);
+}
+
+function snapshotSerializedTransportStats(
+  stats: MutableSerializedTransportStats,
+): GatewayRpcSerializedTransportStats {
+  return {
+    frameCount: stats.frameCount,
+    serializedBytes: stats.serializedBytes,
+    rpcCallCount: stats.rpcCallCount,
+    byMethod: Object.fromEntries(
+      [...stats.byMethod].map(([method, methodStats]) => [method, { ...methodStats }]),
+    ),
+  };
 }
 
 export interface GatewayRpcTlsFileConfig {
@@ -171,6 +236,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   private socket: net.Socket;
   private rl: readline.Interface;
   private closed = false;
+  private readonly outboundStats = createSerializedTransportStats();
 
   constructor(socket: net.Socket) {
     super();
@@ -202,7 +268,10 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
   send(data: unknown): boolean {
     if (this.socket.destroyed) return false;
-    return this.socket.write(JSON.stringify(data) + '\n');
+    const serialized = JSON.stringify(data);
+    const writable = this.socket.write(serialized + '\n');
+    recordSerializedTransportFrame(this.outboundStats, data, serialized);
+    return writable;
   }
 
   onMessage(handler: MessageHandler): void {
@@ -218,6 +287,10 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
   get destroyed(): boolean {
     return this.socket.destroyed;
+  }
+
+  get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return snapshotSerializedTransportStats(this.outboundStats);
   }
 
   private emitConnectionError(err: unknown): void {
@@ -241,6 +314,8 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 }
 
 class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnection {
+  private readonly outboundStats = createSerializedTransportStats();
+
   constructor(private readonly socket: WebSocket) {
     super();
 
@@ -275,7 +350,9 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
   send(data: unknown): boolean {
     if (this.destroyed || this.socket.readyState !== WebSocket.OPEN) return false;
     try {
-      this.socket.send(JSON.stringify(data));
+      const serialized = JSON.stringify(data);
+      this.socket.send(serialized);
+      recordSerializedTransportFrame(this.outboundStats, data, serialized);
       return true;
     } catch (error) {
       this.emitConnectionError(error);
@@ -302,6 +379,10 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
       this.socket.readyState === WebSocket.CLOSING
       || this.socket.readyState === WebSocket.CLOSED
     );
+  }
+
+  get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return snapshotSerializedTransportStats(this.outboundStats);
   }
 
   private emitConnectionError(err: unknown): void {

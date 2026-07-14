@@ -6,7 +6,11 @@ import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorExcep
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import type {
+  GatewayRpcConnection,
+  GatewayRpcEndpoint,
+  GatewayRpcSerializedTransportStats,
+} from './transport.js';
 import {
   createSocketClient,
   createWebSocketRpcClient,
@@ -141,6 +145,7 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -213,6 +218,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly companionId?: string;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
+  private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -362,12 +368,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
 
     try {
-      const result = await this.rpcInstance.request('llm.chat', {
+      const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
+        context.messages,
+        context.correlation?.turnId,
+      );
+      const requestParams = {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
         ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
-        messages: context.messages,
+        messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
         ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
         stream: !!callbacks?.onText,
@@ -390,7 +400,22 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(context.correlation?.originStage ? { originStage: context.correlation.originStage } : {}),
         purpose,
         ...(context.tools?.length ? { tools: context.tools } : {}),
-      }) as LLMChatResult;
+      };
+      let result: LLMChatResult;
+      try {
+        result = await this.rpcInstance.request('llm.chat', requestParams) as LLMChatResult;
+      } catch (error) {
+        if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
+        this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
+        log.warn('Gateway retained image unavailable; resending explicit inline bytes once', {
+          requestId,
+          imageCount: referencedMessages.usedHintKeys.length,
+        });
+        result = await this.rpcInstance.request('llm.chat', {
+          ...requestParams,
+          messages: context.messages,
+        }) as LLMChatResult;
+      }
 
       const response: LLMResponse = {
         content: result.content,
@@ -435,14 +460,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
-    const result = await this.requestWithAbortSignal<LLMCompleteResult>(
-      'llm.complete',
-      {
+    const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
+      context.messages,
+      correlation.turnId,
+    );
+    const requestParams = {
         model,
         provider,
         ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
-        messages: context.messages,
+        messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
         ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
         purpose,
@@ -463,9 +490,27 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(correlation.callType ? { callType: correlation.callType } : {}),
         ...(correlation.originType ? { originType: correlation.originType } : {}),
         ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
-      },
-      options.signal,
-    );
+    };
+    let result: LLMCompleteResult;
+    try {
+      result = await this.requestWithAbortSignal<LLMCompleteResult>(
+        'llm.complete',
+        requestParams,
+        options.signal,
+      );
+    } catch (error) {
+      if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
+      this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
+      log.warn('Gateway retained image unavailable; resending explicit inline bytes once', {
+        requestId: correlation.requestId,
+        imageCount: referencedMessages.usedHintKeys.length,
+      });
+      result = await this.requestWithAbortSignal<LLMCompleteResult>(
+        'llm.complete',
+        { ...requestParams, messages: context.messages },
+        options.signal,
+      );
+    }
 
     return {
       content: result.content,
@@ -484,6 +529,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   get dims(): number {
     return this.embeddingDims;
+  }
+
+  getSerializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return this.conn.serializedTransportStats;
   }
 
   async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
@@ -625,8 +674,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     originDetail?: string;
     subjectIndex?: number;
     canonicalContactId?: string;
+    requestScope?: string;
   }): Promise<VisionIntakeImageScreenResult> {
-    return await this.rpcInstance.request('intake.screen_image', {
+    const result = await this.rpcInstance.request('intake.screen_image', {
       ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
       ...(input.imageBase64 ? { imageBase64: input.imageBase64 } : {}),
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
@@ -634,7 +684,22 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(input.originDetail ? { originDetail: input.originDetail } : {}),
       ...(typeof input.subjectIndex === 'number' ? { subjectIndex: input.subjectIndex } : {}),
       ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+      ...(input.requestScope ? { requestScope: input.requestScope } : {}),
     }) as VisionIntakeImageScreenResult;
+    if (
+      input.imageBase64
+      && input.mimeType
+      && input.requestScope
+      && result.retainedImage
+    ) {
+      this.inlineImageReferenceHints.record({
+        imageBase64: input.imageBase64,
+        mimeType: input.mimeType,
+        requestScope: input.requestScope,
+        descriptor: result.retainedImage,
+      });
+    }
+    return result;
   }
 
   async webRequestBinary(
@@ -1359,6 +1424,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
     this.closedNotified = true;
     this.stopKeepalive();
+    this.inlineImageReferenceHints.clear();
     for (const handler of this.connectionCloseHandlers) {
       try {
         handler(event);
@@ -1475,6 +1541,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.isDestroying = true;
     this.stopKeepalive();
     this.sessionIntegrityVerifyCache.clear();
+    this.inlineImageReferenceHints.clear();
     this.voiceStreams.clear();
     this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {
@@ -1482,6 +1549,12 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       this.sessionIntegrityWorker = null;
     }
     this.conn.destroy();
+  }
+
+  private shouldResendInlineImages(error: unknown, usedHintKeys: readonly string[]): boolean {
+    return usedHintKeys.length > 0
+      && error instanceof JSONRPCErrorException
+      && error.code === GatewayErrors.INLINE_IMAGE_RETENTION_MISS;
   }
 }
 

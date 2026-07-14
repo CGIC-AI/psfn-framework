@@ -17,6 +17,7 @@ import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
@@ -242,6 +243,10 @@ export class GatewayServer {
   private readonly connections = new Set<GatewayRpcConnection>();
   private readonly rpcClients = new Map<GatewayRpcConnection, JSONRPCServerAndClient>();
   private readonly connectionStatuses = new Map<GatewayRpcConnection, GatewayConnectionStatus>();
+  private readonly inlineImageRetentionByConnection = new Map<
+    GatewayRpcConnection,
+    GatewayInlineImageRetention
+  >();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -381,6 +386,8 @@ export class GatewayServer {
   }
 
   private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
+    const inlineImageRetention = new GatewayInlineImageRetention();
+    this.inlineImageRetentionByConnection.set(conn, inlineImageRetention);
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -393,6 +400,7 @@ export class GatewayServer {
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
       ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
       ...(this.options.visionIntake ? { visionIntake: this.options.visionIntake } : {}),
+      inlineImageRetention,
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,
@@ -1311,6 +1319,8 @@ export class GatewayServer {
       log.info('Companion connection unbound', { companionId: status.companionId });
     }
     this.connections.delete(conn);
+    this.inlineImageRetentionByConnection.get(conn)?.clear();
+    this.inlineImageRetentionByConnection.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
   }
@@ -1683,6 +1693,10 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    for (const retention of this.inlineImageRetentionByConnection.values()) {
+      retention.clear();
+    }
+    this.inlineImageRetentionByConnection.clear();
     for (const conn of this.connections) {
       conn.destroy();
     }

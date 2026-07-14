@@ -14,6 +14,12 @@ import type {
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type {
+  ImageContent,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+} from '@mariozechner/pi-ai';
+import type {
   ImageGenerationResult,
   ImageCreateParams as PrimitiveImageCreateParams,
   ImageEditParams as PrimitiveImageEditParams,
@@ -71,11 +77,28 @@ export interface GatewayCorrelationParams {
   purpose?: string;
 }
 
+export interface GatewayInlineImageReferenceContent {
+  type: 'gateway_image_ref';
+  handle: string;
+}
+
+export type GatewayLLMContentBlock =
+  | TextContent
+  | ImageContent
+  | ThinkingContent
+  | ToolCall
+  | GatewayInlineImageReferenceContent;
+
+/** JSON-RPC wire form; unlike the legacy provider context, it carries structured content blocks. */
+export interface GatewayLLMMessage extends Omit<ContextMessage, 'content'> {
+  content: string | GatewayLLMContentBlock[];
+}
+
 export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
-  messages: ContextMessage[];
+  messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
   promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
@@ -96,7 +119,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
   pin?: boolean;
-  messages: ContextMessage[];
+  messages: GatewayLLMMessage[];
   systemPrompt: string;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
   promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
@@ -875,4 +898,6 @@ export const GatewayErrors = {
   // leaked into egress (prompt leak / hijack tripwire). The error message is
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
+  /** Retained image reference was absent, expired, evicted, or outside its request scope. */
+  INLINE_IMAGE_RETENTION_MISS: -32015,
 } as const;

@@ -69,7 +69,7 @@ describe('healStaleCapturedSessionWindow (psfn-framework-hgw3.1)', () => {
     // reply on top of the current entry.
     const staleSnapshot = makeSnapshot({ storeWindowMaxEntryId: 5255 });
     const healedSnapshot = makeSnapshot({ storeWindowMaxEntryId: 5257, versionPointer: 'healed' });
-    const reconcile = vi.fn().mockReturnValue({ maxEntryId: 5257, lastMessageEntryId: 5257 });
+    const reconcile = vi.fn().mockResolvedValue({ maxEntryId: 5257, lastMessageEntryId: 5257 });
     const recapture = vi.fn().mockResolvedValue(healedSnapshot);
     const emitTelemetry = vi.fn();
 
@@ -102,7 +102,7 @@ describe('healStaleCapturedSessionWindow (psfn-framework-hgw3.1)', () => {
   it('treats an empty raw window after a recorded entry as stale', async () => {
     const staleSnapshot = makeSnapshot();
     const healedSnapshot = makeSnapshot({ storeWindowMaxEntryId: 3 });
-    const reconcile = vi.fn().mockReturnValue({ maxEntryId: 3, lastMessageEntryId: 3 });
+    const reconcile = vi.fn().mockResolvedValue({ maxEntryId: 3, lastMessageEntryId: 3 });
     const recapture = vi.fn().mockResolvedValue(healedSnapshot);
     const emitTelemetry = vi.fn();
 
@@ -126,9 +126,7 @@ describe('healStaleCapturedSessionWindow (psfn-framework-hgw3.1)', () => {
 
   it('never blocks the turn: a failing heal logs, telemeters, and proceeds with the original snapshot', async () => {
     const staleSnapshot = makeSnapshot({ storeWindowMaxEntryId: 5255 });
-    const reconcile = vi.fn().mockImplementation(() => {
-      throw new Error('reload blew up');
-    });
+    const reconcile = vi.fn().mockRejectedValue(new Error('reload blew up'));
     const recapture = vi.fn();
     const emitTelemetry = vi.fn();
 
@@ -155,7 +153,7 @@ describe('healStaleCapturedSessionWindow (psfn-framework-hgw3.1)', () => {
   it('proceeds with the recaptured snapshot even when the heal did not recover the entry', async () => {
     const staleSnapshot = makeSnapshot({ storeWindowMaxEntryId: 5255 });
     const stillStaleSnapshot = makeSnapshot({ storeWindowMaxEntryId: 5255, versionPointer: 'still-stale' });
-    const reconcile = vi.fn().mockReturnValue({ maxEntryId: 5255, lastMessageEntryId: 5255 });
+    const reconcile = vi.fn().mockResolvedValue({ maxEntryId: 5255, lastMessageEntryId: 5255 });
     const recapture = vi.fn().mockResolvedValue(stillStaleSnapshot);
     const emitTelemetry = vi.fn();
 

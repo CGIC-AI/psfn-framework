@@ -220,7 +220,7 @@ function previewCounts(preview: CogSecLineagePreview): AdminCogSecPreviewCounts 
 
 function makeCompactionInvalidator(sessionStore: SessionStore) {
   return {
-    invalidateCompactionSummaries: (input: {
+    invalidateCompactionSummaries: async (input: {
       caseId: string;
       compactionSummaries: readonly CogSecLineageCompactionRef[];
     }) => {
@@ -232,7 +232,7 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
         bySession.set(summary.logicalSessionId, ids);
       }
       for (const [channelId, compactionIds] of bySession.entries()) {
-        const result = sessionStore.applyCogSecCompactionInvalidations({
+        const result = await sessionStore.applyCogSecCompactionInvalidations({
           channelId,
           caseId: input.caseId,
           compactionIds,
@@ -561,16 +561,21 @@ export class AdminSessionDataService implements AdminSessionService {
       safeAgentSummary: draft.safeSummary,
     });
 
-    const tombstones = draft.affectedMessageRanges.map(range => this.deps.sessionStore.applyCogSecTombstones({
-      channelId: range.logicalSessionId ?? draft.sourceChannelId,
-      caseId: draft.caseId,
-      eventStore,
-      forensicArchive,
-      ...(range.messageIds ? { messageIds: range.messageIds } : {}),
-      ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
-      ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
-      actor: draft.actor,
-    }));
+    const tombstones = [];
+    for (const range of draft.affectedMessageRanges) {
+      // Sequential on purpose: each rewrite fences the shared session tail
+      // (epoch bump) before and after touching the journal.
+      tombstones.push(await this.deps.sessionStore.applyCogSecTombstones({
+        channelId: range.logicalSessionId ?? draft.sourceChannelId,
+        caseId: draft.caseId,
+        eventStore,
+        forensicArchive,
+        ...(range.messageIds ? { messageIds: range.messageIds } : {}),
+        ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
+        ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
+        actor: draft.actor,
+      }));
+    }
 
     const eventAfterTombstones = eventStore.getEvent(draft.caseId);
     if (!eventAfterTombstones) {

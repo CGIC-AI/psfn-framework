@@ -3,50 +3,81 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../../../persistence/sessions/store.js';
-import type { SessionTailCachePort } from '../../../persistence/sessions/session-tail-cache-port.js';
+import {
+  sessionTailRowId,
+  type SessionTailCachePort,
+  type SessionTailRow,
+} from '../../../persistence/sessions/session-tail-cache-port.js';
 import type { SessionEntry } from '../types.js';
 import { SessionManager } from '../manager.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
-// In-memory fake of the tail port (no live Redis in unit tests). JSON
-// round-trips entries to mirror real serialization and trims to the bound.
+// In-memory fake of the tail port (no live Redis in unit tests). Mirrors the
+// Redis implementation's epoch fencing, JSON round-trips rows to mirror real
+// serialization, and trims to the bound.
 class FakeSessionTailCache implements SessionTailCachePort {
   readonly maxEntriesPerChannel: number;
-  tails = new Map<string, SessionEntry[]>();
-  calls = { getTail: 0, appendEntry: 0, replaceTail: 0, invalidateChannel: 0 };
+  epochs = new Map<string, number>();
+  rowsByEpochSlot = new Map<string, SessionTailRow[]>();
+  calls = { getTail: 0, appendRow: 0, replaceTail: 0, invalidateChannel: 0, bumpEpoch: 0 };
 
   constructor(maxEntriesPerChannel = 512) {
     this.maxEntriesPerChannel = maxEntriesPerChannel;
   }
 
-  private clone(entry: SessionEntry): SessionEntry {
-    return JSON.parse(JSON.stringify(entry)) as SessionEntry;
+  private clone(row: SessionTailRow): SessionTailRow {
+    return JSON.parse(JSON.stringify(row)) as SessionTailRow;
   }
 
-  async getTail(channelKey: string): Promise<SessionEntry[]> {
+  private slot(channelKey: string): string {
+    return `${channelKey}@e${this.epochs.get(channelKey) ?? 0}`;
+  }
+
+  currentRows(channelKey: string): SessionTailRow[] {
+    return (this.rowsByEpochSlot.get(this.slot(channelKey)) ?? []).map(row => this.clone(row));
+  }
+
+  currentMessages(channelKey: string): SessionEntry[] {
+    return this.currentRows(channelKey)
+      .filter((row): row is Extract<SessionTailRow, { kind: 'message' }> => row.kind === 'message')
+      .map(row => row.entry);
+  }
+
+  setCurrentRows(channelKey: string, rows: SessionTailRow[]): void {
+    this.rowsByEpochSlot.set(this.slot(channelKey), rows.map(row => this.clone(row)));
+  }
+
+  async getTail(channelKey: string): Promise<SessionTailRow[]> {
     this.calls.getTail += 1;
-    return (this.tails.get(channelKey) ?? []).map(entry => this.clone(entry));
+    return this.currentRows(channelKey);
   }
 
-  async appendEntry(channelKey: string, entry: SessionEntry): Promise<void> {
-    this.calls.appendEntry += 1;
-    const tail = this.tails.get(channelKey) ?? [];
-    tail.push(this.clone(entry));
-    tail.sort((left, right) => left.id - right.id);
-    this.tails.set(channelKey, tail.slice(-this.maxEntriesPerChannel));
+  async appendRow(channelKey: string, row: SessionTailRow): Promise<void> {
+    this.calls.appendRow += 1;
+    const rows = this.rowsByEpochSlot.get(this.slot(channelKey)) ?? [];
+    rows.push(this.clone(row));
+    rows.sort((left, right) => sessionTailRowId(left) - sessionTailRowId(right));
+    this.rowsByEpochSlot.set(this.slot(channelKey), rows.slice(-this.maxEntriesPerChannel));
   }
 
-  async replaceTail(channelKey: string, entries: readonly SessionEntry[]): Promise<void> {
+  async replaceTail(channelKey: string, rows: readonly SessionTailRow[]): Promise<void> {
     this.calls.replaceTail += 1;
-    this.tails.set(
-      channelKey,
-      entries.slice(-this.maxEntriesPerChannel).map(entry => this.clone(entry)),
+    this.rowsByEpochSlot.set(
+      this.slot(channelKey),
+      rows.slice(-this.maxEntriesPerChannel).map(row => this.clone(row)),
     );
   }
 
   async invalidateChannel(channelKey: string): Promise<void> {
     this.calls.invalidateChannel += 1;
-    this.tails.delete(channelKey);
+    this.rowsByEpochSlot.delete(this.slot(channelKey));
+  }
+
+  async bumpEpoch(channelKey: string): Promise<number> {
+    this.calls.bumpEpoch += 1;
+    const next = (this.epochs.get(channelKey) ?? 0) + 1;
+    this.epochs.set(channelKey, next);
+    return next;
   }
 }
 
@@ -178,7 +209,7 @@ describe('captureTurnSessionContext with the session tail cache', () => {
       );
     }
     await writer.flushSessionTailWrites();
-    expect(tail.tails.get('ch-bound')).toHaveLength(4);
+    expect(tail.currentRows('ch-bound')).toHaveLength(4);
 
     const { tailSnapshot, fileSnapshot } = await captureBothPaths({
       tail,
@@ -200,9 +231,9 @@ describe('captureTurnSessionContext with the session tail cache', () => {
     const currentUserId = appendMessage(writer, 'ch-behind', 'user', 'current question', Date.now());
     await writer.flushSessionTailWrites();
     // Simulate a lost write-through: wipe the just-recorded entry from the tail.
-    tail.tails.set(
+    tail.setCurrentRows(
       'ch-behind',
-      (tail.tails.get('ch-behind') ?? []).filter(entry => entry.id !== currentUserId),
+      tail.currentRows('ch-behind').filter(row => sessionTailRowId(row) !== currentUserId),
     );
 
     const tailStore = new SessionStore(sessionsDir, { tailCache: tail });
@@ -218,7 +249,7 @@ describe('captureTurnSessionContext with the session tail cache', () => {
     // ...and the tail repopulates for the fleet.
     await tailStore.flushSessionTailWrites();
     expect(tail.calls.replaceTail).toBeGreaterThan(0);
-    expect((tail.tails.get('ch-behind') ?? []).map(entry => entry.id)).toContain(currentUserId);
+    expect(tail.currentMessages('ch-behind').map(entry => entry.id)).toContain(currentUserId);
   });
 
   it('parity holds on a compacted channel (boundary-store read path)', async () => {

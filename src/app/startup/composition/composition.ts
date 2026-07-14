@@ -134,8 +134,11 @@ export interface SessionCompositionOptions {
 /**
  * Build the Redis-backed session tail (psfn-framework-hgw3.5) when
  * settings.json enables it. Fail closed at startup: enabled config with
- * missing/invalid Redis env or an unreachable Redis refuses to start —
- * a silently absent tail would hide the shared-view guarantee.
+ * missing/invalid Redis env, a missing companion identity, or an unreachable
+ * Redis refuses to start — a silently absent tail would hide the shared-view
+ * guarantee. Tail/epoch keys are scoped by COMPANION_ID so multiple
+ * companions sharing one Redis (fleet topology) can never read each other's
+ * session tails.
  */
 async function composeSessionTailCache(
   config: SubstrateConfig,
@@ -144,6 +147,7 @@ async function composeSessionTailCache(
   if (override !== undefined) return override;
   const settings = config.sessionTailCache;
   if (!settings?.enabled) return null;
+  const scope = resolveCompanionIdFromConfig(config);
   const redisConfig = resolveRedisConnectionConfigFromEnv(process.env);
   const clientFactory = await createRedisClientFactoryFromPackage();
   const client = clientFactory(buildRedisClientOptions(redisConfig));
@@ -151,6 +155,7 @@ async function composeSessionTailCache(
   return new RedisSessionTailCache({
     client,
     maxEntriesPerChannel: settings.maxEntriesPerChannel,
+    scope,
   });
 }
 

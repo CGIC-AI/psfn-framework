@@ -214,6 +214,10 @@ secrets:
     # COMPANION_ID. Production operators may supply it through an existing
     # Secret instead of persisting it in Helm values.
     gatewaySessionIntegrityAuthToken: ""
+    # Distinct role-bound agent proof derived from gatewaySessionHmacKey for
+    # COMPANION_ID. Required by multi-companion agents; optional for the
+    # default single-companion topology.
+    gatewayCompanionAuthToken: ""
     # Dedicated satellite-hub bearer credential (Sprint-10 H4: never reuse the
     # shared API_KEY for satellites). Injected into the hub as PSFN_API_KEY and
     # into the gateway inside API_SATELLITE_KEYS, so the hub authenticates as a
@@ -244,6 +248,7 @@ secrets:
     adminToken: ADMIN_TOKEN
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+    gatewayCompanionAuthToken: GATEWAY_COMPANION_AUTH_TOKEN
     satelliteHubApiKey: SATELLITE_HUB_API_KEY
     homeAssistantToken: HOME_ASSISTANT_TOKEN
     satelliteHubControlToken: SATELLITE_HUB_CONTROL_TOKEN

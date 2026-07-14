@@ -179,6 +179,13 @@ assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup w
 assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
+assertIncludes(agentDeployment, 'name: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof env');
+assertIncludes(agentDeployment, 'key: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof Secret key');
+assertIncludes(
+  agentDeployment,
+  'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
+  'agent companion role proof remains optional for single-companion installs',
+);
 for (const [name, value] of [
   ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
@@ -332,6 +339,8 @@ const strictSecretRendered = render([
   '--set-string',
   'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
   '--set-string',
+  'secrets.values.gatewayCompanionAuthToken=verify-agent-proof',
+  '--set-string',
   'secrets.values.backupEncryptionKey=verify-backup-key',
 ]);
 
@@ -342,6 +351,11 @@ assertIncludes(
   strictSecretRendered,
   'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN: "verify-worker-proof"',
   'strict app secret isolated session-integrity proof',
+);
+assertIncludes(
+  strictSecretRendered,
+  'GATEWAY_COMPANION_AUTH_TOKEN: "verify-agent-proof"',
+  'strict app secret companion agent proof',
 );
 assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup-key"', 'strict app secret backup encryption key');
 

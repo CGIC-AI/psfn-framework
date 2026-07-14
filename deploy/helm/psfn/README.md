@@ -59,6 +59,9 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
   `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, the role-bound worker proof consumed
   by the agent; derive it for the configured companion as documented in
   `docs/setup.md`, or provide the same key through `secrets.existingSecret`
+- `secrets.values.gatewayCompanionAuthToken` ->
+  `GATEWAY_COMPANION_AUTH_TOKEN`, the distinct role-bound agent proof required
+  by multi-companion agents; it is optional for single-companion installs
 - `secrets.values.backupEncryptionKey` -> `PSFN_BACKUP_ENCRYPTION_KEY`, consumed by app workloads
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
   `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,

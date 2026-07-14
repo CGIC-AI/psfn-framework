@@ -355,6 +355,7 @@ describe('subsystem config round-trip', () => {
       },
       temporalWakeup: {
         enabled: true,
+        activeChannelLookbackHours: 72,
         morningWake: {
           enabled: true,
           timing: 'fixed',
@@ -373,6 +374,7 @@ describe('subsystem config round-trip', () => {
             upperQuantile: 0.75,
             maxSamplesScanned: 2000,
           },
+          minPartnerIdleMinutes: 60,
           catchUpEntryLimit: 32,
           catchUpSummaryMaxTokens: 160,
           fullTurnMaxIdleHours: 72,

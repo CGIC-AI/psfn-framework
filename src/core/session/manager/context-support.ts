@@ -24,6 +24,15 @@ import {
   isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
+import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
+
+// Minute-resolution provenance stamp for rendered history. Returns undefined on
+// missing/invalid timestamps so context assembly never crashes on bad data.
+function entryStampLabel(timestamp: number): string | undefined {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined;
+  const at = new Date(timestamp);
+  return `${formatActiveWeekdayShort(at)} ${formatActiveDateTimeCompact(at)}`;
+}
 
 function continuityEntryKey(entry: SessionEntry): string {
   return [
@@ -231,7 +240,10 @@ export function entriesToMessages(
   preserveLeadingAssistant: boolean = false,
   renderGroupUserAttribution: boolean = true,
 ): ContextMessage[] {
-  const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
+  const messages: Array<ContextMessage & {
+    sourceRole: SessionEntry['role'];
+    stampLabel?: string;
+  }> = [];
 
   for (const entry of entries) {
     if (isNonConversationalSessionEntry(entry)) {
@@ -277,14 +289,32 @@ export function entriesToMessages(
       toolObservation,
     );
 
+    // Timestamp stamp is trusted runtime provenance, so it wraps OUTSIDE any
+    // untrusted-context envelope applied above.
+    const stampLabel = entryStampLabel(entry.timestamp);
+
     // Merge consecutive same-role messages
     const last = messages.at(-1);
     const canMerge = attribution.role !== 'tool';
     if (canMerge && last && last.role === role && last.sourceRole === entry.role) {
-      last.content += '\n' + content;
+      // Re-stamp appended lines only when the minute-resolution label moved,
+      // so rapid-fire messages in the same minute stay unstamped.
+      const appended = stampLabel !== undefined && stampLabel !== last.stampLabel
+        ? `[${stampLabel}] ${content}`
+        : content;
+      last.content += '\n' + appended;
+      if (stampLabel !== undefined) {
+        last.stampLabel = stampLabel;
+      }
       last.provenance = mergeProvenance(last.provenance, provenance);
     } else {
-      messages.push({ role, content, provenance, sourceRole: entry.role });
+      messages.push({
+        role,
+        content: stampLabel !== undefined ? `[${stampLabel}] ${content}` : content,
+        provenance,
+        sourceRole: entry.role,
+        ...(stampLabel !== undefined ? { stampLabel } : {}),
+      });
     }
   }
 

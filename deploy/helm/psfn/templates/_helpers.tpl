@@ -365,6 +365,8 @@ group: cert-manager.io
 {{- end -}}
 
 {{- define "psfn.commonEnv" -}}
+- name: TZ
+  value: {{ required "runtime.timezone is required (IANA name, e.g. America/New_York)" .Values.runtime.timezone | quote }}
 - name: NODE_ENV
   value: {{ .Values.runtime.nodeEnv | quote }}
 - name: PSFN_RUNTIME_MODE

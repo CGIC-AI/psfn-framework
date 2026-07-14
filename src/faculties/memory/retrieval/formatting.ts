@@ -1,6 +1,7 @@
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
 import { renderSystemLanguageTemplate } from '../../../core/identity/system-language.js';
+import { formatActiveDate, resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { isBoundaryMemory } from '../boundary-log.js';
 import type {
   ContactProfileArtifact,
@@ -121,7 +122,7 @@ function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
       : memory.emotionalValence <= -0.25
         ? ' (-)'
         : '';
-    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}`;
+    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}${recencyBandSuffix(memory.extractedAt)}`;
   });
   return wrapPromptSectionXml({
     id: 'cross_session_emotional_continuity',
@@ -222,9 +223,45 @@ export function compactMemoryTextForPrompt(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-const UTC_MONTH_NAMES = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-] as const;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MEAN_DAYS_PER_MONTH = 30.44;
+
+// Day index of a moment on the active-timezone calendar, so today/yesterday
+// boundaries follow the companion's clock rather than UTC.
+function activeCalendarDayIndex(atMs: number): number {
+  const [year, month, day] = formatActiveDate(new Date(atMs)).split('-').map(Number);
+  return Math.floor(Date.UTC(year, month - 1, day) / MS_PER_DAY);
+}
+
+/**
+ * Coarse age band for a retrieved memory, derived from extraction time:
+ * (today) / (yesterday) / (this week) / (N weeks ago) / (N months ago) /
+ * (N years ago). Returns undefined when extractedAt is missing or invalid —
+ * rendering must degrade to a bandless line, never crash.
+ */
+export function formatMemoryRecencyBand(
+  extractedAtMs: number | undefined,
+  nowMs: number = Date.now(),
+): string | undefined {
+  if (extractedAtMs === undefined || !Number.isFinite(extractedAtMs) || !Number.isFinite(nowMs)) {
+    return undefined;
+  }
+  const dayDiff = activeCalendarDayIndex(nowMs) - activeCalendarDayIndex(extractedAtMs);
+  if (dayDiff <= 0) return 'today';
+  if (dayDiff === 1) return 'yesterday';
+  if (dayDiff < 7) return 'this week';
+  const weeks = Math.floor(dayDiff / 7);
+  if (weeks <= 8) return weeks === 1 ? '1 week ago' : `${weeks} weeks ago`;
+  const months = Math.floor(dayDiff / MEAN_DAYS_PER_MONTH);
+  if (months < 24) return `${months} months ago`;
+  const years = Math.floor(months / 12);
+  return `${years} years ago`;
+}
+
+function recencyBandSuffix(extractedAtMs: number | undefined): string {
+  const band = formatMemoryRecencyBand(extractedAtMs);
+  return band === undefined ? '' : ` (${band})`;
+}
 
 // Auto-generated landmarks end with a raw ISO range that duplicates the
 // readable time range already on the episode line.
@@ -235,22 +272,39 @@ function stripLandmarkTimestampTail(landmark: string): string {
     .trim();
 }
 
+// Episode ranges render in the active timezone so they share one clock with
+// every other temporal signal in the prompt (runtime clock, wake notes,
+// continuity anchor), and carry the active tz label instead of UTC.
 function formatEpisodeTimeRange(startedAt: string, endedAt: string): string {
   const start = new Date(startedAt);
   const end = new Date(endedAt);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
     return `${startedAt} to ${endedAt}`;
   }
-  const day = (date: Date): string => (
-    `${UTC_MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCDate()} ${date.getUTCFullYear()}`
+  const timeZone = resolveActiveTimezone();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = (date: Date): Record<string, string> => Object.fromEntries(
+    formatter
+      .formatToParts(date)
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value]),
   );
-  const clock = (date: Date): string => (
-    `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
-  );
-  if (start.toISOString().slice(0, 10) === end.toISOString().slice(0, 10)) {
-    return `${day(start)}, ${clock(start)}-${clock(end)} UTC`;
+  const startParts = parts(start);
+  const endParts = parts(end);
+  const day = (p: Record<string, string>): string => `${p.month} ${p.day} ${p.year}`;
+  const clock = (p: Record<string, string>): string => `${p.hour}:${p.minute}`;
+  if (formatActiveDate(start) === formatActiveDate(end)) {
+    return `${day(startParts)}, ${clock(startParts)}-${clock(endParts)} ${timeZone}`;
   }
-  return `${day(start)} ${clock(start)} UTC to ${day(end)} ${clock(end)} UTC`;
+  return `${day(startParts)} ${clock(startParts)} to ${day(endParts)} ${clock(endParts)} ${timeZone}`;
 }
 
 function formatMemoriesForPrompt(
@@ -337,7 +391,7 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
       m.emotionalValence > 0.3 ? ' (+)' :
       m.emotionalValence < -0.3 ? ' (-)' : '';
     return [
-      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}`,
+      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}${recencyBandSuffix(m.extractedAt)}`,
       ...formatEvolutionChainLines(s),
     ];
   });
@@ -367,7 +421,7 @@ function renderAttributedMemorySection(
       ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
       : '';
     return [
-      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}`,
+      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}${recencyBandSuffix(memory.extractedAt)}`,
       ...formatEvolutionChainLines(s),
     ];
   });
@@ -416,6 +470,6 @@ export function renderProactiveRecall(memory: PurrMemory): string {
     memory.emotionalValence < -0.3 ? ' (-)' : '';
   return [
     'Spontaneous recall:',
-    `- [${memory.type}] ${compactMemoryTextForPrompt(memory.text)}${valenceSuffix}`,
+    `- [${memory.type}] ${compactMemoryTextForPrompt(memory.text)}${valenceSuffix}${recencyBandSuffix(memory.extractedAt)}`,
   ].join('\n');
 }

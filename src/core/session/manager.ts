@@ -148,6 +148,14 @@ export type {
 
 const log = createComponentLogger('SessionManager');
 
+/**
+ * Shallow per-channel scan depth used by listRecentlyActiveChannels to confirm
+ * genuine partner activity within the lookback window. Deep enough to see past
+ * a burst of recent companion/system entries to the partner's last turn,
+ * bounded so wake-lane fan-out enumeration stays cheap.
+ */
+const RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT = 128;
+
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
   bootstrap?: boolean;
@@ -373,6 +381,43 @@ export class SessionManager {
       return this.store.listSessionsByRecentActivity();
     }
     return this.store.listSessionsByRecentActivity(limit);
+  }
+
+  /**
+   * Recently-active conversational channels for temporal wake-note fan-out
+   * (bead psfn-framework-2x37.3). Returns every channel whose most recent
+   * partner (role 'user') message falls within `lookbackMs`, ordered
+   * most-recent-activity first (same order the store already sorts by).
+   *
+   * Bounded: `listSessionsByRecentActivity` is sorted by last-activity
+   * descending, so the scan stops at the first channel outside the lookback
+   * edge; each surviving candidate is confirmed by a shallow recent-entry scan
+   * for genuine partner (not just assistant/system) activity — a channel where
+   * only the companion emitted something in-window is not a fan-out target.
+   */
+  listRecentlyActiveChannels(input: {
+    lookbackMs: number;
+    nowMs?: number;
+  }): StartupSessionMetadata[] {
+    const nowMs = input.nowMs ?? Date.now();
+    const cutoffMs = nowMs - Math.max(0, input.lookbackMs);
+    const active: StartupSessionMetadata[] = [];
+    for (const summary of this.store.listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)) {
+      // Store list is last-activity-desc: once a channel's newest entry is
+      // older than the lookback edge, every remaining channel is too.
+      if (summary.lastActivityAt < cutoffMs) break;
+      const entries = this.store.getRecent(summary.sessionId, RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT);
+      const hasRecentPartner = entries.some(
+        entry => entry.role === 'user' && entry.timestamp >= cutoffMs,
+      );
+      if (!hasRecentPartner) continue;
+      active.push({
+        sessionId: summary.sessionId,
+        channelType: summary.channelType,
+        timestamp: summary.lastActivityAt,
+      });
+    }
+    return active;
   }
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {

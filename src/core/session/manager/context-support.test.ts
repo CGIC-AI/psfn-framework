@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { countIntentionAppraisalArtifacts, entriesToMessages } from './context-support.js';
 import type { SessionEntry } from '../types.js';
 import {
@@ -6,6 +6,7 @@ import {
   MASKED_TOOL_OBSERVATION_CONTENT,
   normalizeToolObservation,
 } from '../tool-observation.js';
+import { resetActiveTimezone, setActiveTimezone } from '../../../shared/time/active-timezone.js';
 
 function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   return {
@@ -18,7 +19,25 @@ function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   };
 }
 
+// 1_700_000_000_000 ms epoch = 2023-11-14T22:13:20Z, rendered under the pinned
+// UTC timezone below as the minute-resolution stamp 'Tue 11-14-23 22:13'.
+const BASE_STAMP = '[Tue 11-14-23 22:13]';
+
 describe('entriesToMessages', () => {
+  const originalTz = process.env.TZ;
+
+  beforeAll(() => {
+    setActiveTimezone('UTC');
+  });
+
+  afterAll(() => {
+    resetActiveTimezone();
+    if (originalTz === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTz;
+    }
+  });
   it('counts intention appraisal artifacts before they are stripped from runtime context', () => {
     const entries = [
       makeEntry({
@@ -79,7 +98,7 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       role: 'user',
-      content: 'This is the actual partner message.',
+      content: `${BASE_STAMP} This is the actual partner message.`,
       provenance: {
         kind: 'user_direct',
         sourceAuthor: 'partner',
@@ -97,8 +116,8 @@ describe('entriesToMessages', () => {
         channelVisibility: 'invite_only',
         role: 'user',
         content: 'first group message',
-        authorId: 'vega-id',
-        authorName: 'Vega',
+        authorId: 'asha-id',
+        authorName: 'Asha',
       }),
       makeEntry({
         id: 2,
@@ -116,7 +135,7 @@ describe('entriesToMessages', () => {
     expect(messages[0]).toMatchObject({
       role: 'user',
       content: [
-        'Vega (discord:vega-id): first group message',
+        `${BASE_STAMP} Asha (discord:asha-id): first group message`,
         'Iku (discord:iku-id): second group message',
       ].join('\n'),
       provenance: {
@@ -148,7 +167,7 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(2);
     expect(messages[0]).toMatchObject({
       role: 'system',
-      content: '[SYSTEM: Whisper] Your hourly heartbeat is firing.',
+      content: `${BASE_STAMP} [SYSTEM: Whisper] Your hourly heartbeat is firing.`,
       provenance: {
         kind: 'system_note',
         sourceAuthor: 'system',
@@ -157,13 +176,38 @@ describe('entriesToMessages', () => {
     });
     expect(messages[1]).toMatchObject({
       role: 'assistant',
-      content: 'A quiet thought.',
+      content: `${BASE_STAMP} A quiet thought.`,
       provenance: {
         kind: 'companion_direct',
         sourceAuthor: 'companion',
         safeAsPartnerSpeech: false,
       },
     });
+  });
+
+  it('stamps context-visible system notes (appendContextSystemNote shape)', () => {
+    // Mirrors exactly what SessionManager.appendContextSystemNote persists —
+    // the temporal wake notes ride this shape, so their stamp is load-bearing.
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'system',
+        content: '[Temporal wake]\nA new day has started.',
+        authorId: 'system',
+        authorName: 'System',
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'system_note',
+            source: 'temporal_wakeup_morning',
+          },
+        }),
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe('system');
+    expect(messages[0]?.content.startsWith(`${BASE_STAMP} `)).toBe(true);
+    expect(messages[0]?.content).toContain('[Temporal wake]');
   });
 
   it('drops internal-lane instrumentation from assembled context', () => {
@@ -194,7 +238,7 @@ describe('entriesToMessages', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       role: 'user',
-      content: 'What changed?',
+      content: `${BASE_STAMP} What changed?`,
       provenance: {
         kind: 'user_direct',
         safeAsPartnerSpeech: true,
@@ -262,5 +306,81 @@ describe('entriesToMessages', () => {
     ]);
     expect(messages[0]?.provenance?.safeAsPartnerSpeech).toBe(true);
     expect(messages.slice(1).every(message => message.provenance?.safeAsPartnerSpeech === false)).toBe(true);
+  });
+
+  it('re-stamps merged same-role lines only when the minute-resolution label changes', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        content: 'first burst message',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      }),
+      makeEntry({
+        id: 2,
+        content: 'second burst message',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_000_000 + 5_000,
+      }),
+      makeEntry({
+        id: 3,
+        content: 'message a minute later',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_000_000 + 60_000,
+      }),
+      makeEntry({
+        id: 4,
+        content: 'message with a broken clock',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: Number.NaN,
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe([
+      `${BASE_STAMP} first burst message`,
+      'second burst message',
+      '[Tue 11-14-23 22:14] message a minute later',
+      'message with a broken clock',
+    ].join('\n'));
+  });
+
+  it('keeps the timestamp stamp outside the untrusted context wrapper', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        channelVisibility: 'public',
+        content: 'public channel message',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      }),
+    ], 'public');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content.startsWith(`${BASE_STAMP} <untrusted_context source="public">`)).toBe(true);
+    expect(messages[0].content.endsWith('</untrusted_context>')).toBe(true);
+    expect(messages[0].content).toContain('public channel message');
+  });
+
+  it('renders entries without a stamp when the timestamp is missing or invalid', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        content: 'no epoch recorded',
+        timestamp: Number.NaN,
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      }),
+      makeEntry({
+        id: 2,
+        role: 'assistant',
+        content: 'zero epoch reply',
+        timestamp: 0,
+      }),
+    ], 'private');
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toBe('no epoch recorded');
+    expect(messages[1].content).toBe('zero epoch reply');
   });
 });

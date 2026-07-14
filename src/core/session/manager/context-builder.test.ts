@@ -14,6 +14,18 @@ import {
 import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
 import type { SessionEntry } from '../types.js';
 
+// Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps; strip
+// them so content assertions stay deterministic across timezones. Stamp
+// semantics are pinned in context-support.test.ts.
+const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
+function stripHistoryStamps(content: string): string {
+  return content
+    .split('\n')
+    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .join('\n');
+}
+
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
     primaryModel: 'test-model',
@@ -107,7 +119,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'first message intentionally received no reply',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'PrimaryUser',
         timestamp: 1_700_000_000_000,
       },
       {
@@ -116,7 +128,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'second message should be prompted once',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'PrimaryUser',
         timestamp: 1_700_000_001_000,
       },
     ];
@@ -149,12 +161,11 @@ describe('orientation context surface wiring', () => {
       excludeSessionEntryId: 42,
     });
 
-    expect(context.messages).toEqual([
-      expect.objectContaining({
-        role: 'user',
-        content: 'first message intentionally received no reply',
-      }),
-    ]);
+    expect(context.messages).toHaveLength(1);
+    expect(context.messages[0]).toMatchObject({ role: 'user' });
+    expect(context.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(stripHistoryStamps(context.messages[0]?.content ?? ''))
+      .toBe('first message intentionally received no reply');
     expect(context.messages).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ content: expect.stringContaining('second message should be prompted once') }),
     ]));
@@ -617,7 +628,10 @@ describe('orientation context surface wiring', () => {
       const assembled = await assembleSessionHistoryForContextWithLlmSummary({
         entries: spanBound.entries,
         channelVisibility: 'private',
-        tokenBudget: 180,
+        // History stamps ('[MM-DD-YY HH:mm] ' = 17 chars/tokens under the
+        // 1-token-per-char test tokenizer) inflate every rendered message, so
+        // the budget leaves the same relative summary headroom as before.
+        tokenBudget: 300,
         characterName: 'Companion',
         renderGroupUserAttribution: false,
         channelId: 'api:main',

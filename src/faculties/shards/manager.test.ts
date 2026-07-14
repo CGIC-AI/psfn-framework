@@ -1371,7 +1371,90 @@ describe('ShardManager', () => {
     expect(injected).not.toContain('spawn_subagent');
   });
 
-  it('stamps shard source provenance on shard memory writes and quarantines imports behind review', async () => {
+  it('stages shard memory writes with both companion identities without calling the core writer', async () => {
+    const memoryTool = makeTestTool('memory');
+    const foldReviewController = new ShardFoldReviewController(
+      join(dir, 'state', 'shard-fold-reviews.json'),
+    );
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryTool.tool],
+        extended: [],
+      }),
+      foldReviewController,
+    });
+
+    const result = await manager.spawn({ name: 'memory-write-review', task: 'test' });
+    const tools = agentRunConfigs.at(-1)?.tools as Array<{
+      name: string;
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const wrappedMemory = tools.find(tool => tool.name === 'memory');
+    if (!wrappedMemory) {
+      throw new Error('Expected wrapped memory tool to be present');
+    }
+
+    const writeResult = await wrappedMemory.execute('memory-write-call', {
+      action: 'write',
+      text: 'Partner needs follow-up after the deploy.',
+      type: 'emotional',
+      tags: 'relationship,partner',
+      sensitivity: 'intimate',
+    });
+
+    expect(memoryTool.execute).not.toHaveBeenCalled();
+    expect(writeResult).toEqual(expect.objectContaining({
+      details: expect.objectContaining({
+        mutationWorkflow: 'fold_review_only',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        foldReview: expect.objectContaining({
+          outputs: expect.arrayContaining([
+            expect.objectContaining({
+              source: 'memory_write',
+              provenance: expect.objectContaining({
+                coreCompanionId: 'companion-test',
+                shardCompanionId: `companion-test::${result.shardId}`,
+                shardId: result.shardId,
+                source: 'memory_write',
+                sourceToolName: 'memory',
+                toolCallId: 'memory-write-call',
+              }),
+            }),
+          ]),
+        }),
+      }),
+    }));
+
+    const review = await manager.getFoldReview(result.shardId);
+    expect(review).toMatchObject({
+      lineage: {
+        coreCompanionId: 'companion-test',
+        shardCompanionId: `companion-test::${result.shardId}`,
+      },
+      memoryItems: [
+        expect.objectContaining({
+          output: expect.objectContaining({
+            source: 'memory_write',
+            provenance: expect.objectContaining({
+              coreCompanionId: 'companion-test',
+              shardCompanionId: `companion-test::${result.shardId}`,
+            }),
+          }),
+        }),
+      ],
+    });
+  });
+
+  it('quarantines imports behind review with shard provenance', async () => {
     const memoryTool = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
@@ -1395,22 +1478,13 @@ describe('ShardManager', () => {
     const wrappedMemory = tools.find((tool) => tool.name === 'memory');
     expect(wrappedMemory).toBeDefined();
 
-    await wrappedMemory?.execute('mem-call', { action: 'write', text: 'x', type: 'semantic' });
     const importResult = await wrappedMemory?.execute('import-call', {
       action: 'import',
       records: [{ text: 'x', type: 'semantic', tags: 'archive' }],
       source: 'backup',
     });
 
-    expect(memoryTool.execute).toHaveBeenCalledWith(
-      'mem-call',
-      expect.objectContaining({
-        action: 'write',
-        __psfnShardSource: `shard:${result.shardId}`,
-      }),
-      undefined,
-    );
-    expect(memoryTool.execute).toHaveBeenCalledTimes(1);
+    expect(memoryTool.execute).not.toHaveBeenCalled();
     expect(importResult).toEqual(expect.objectContaining({
       content: expect.arrayContaining([
         expect.objectContaining({

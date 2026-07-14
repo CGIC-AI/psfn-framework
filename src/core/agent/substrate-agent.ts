@@ -900,8 +900,15 @@ export class SubstrateAgent {
       sourceId: message.id,
       ingress: 'steer',
     }, async ({ deferredFromExclusive }) => {
-      if (!deferredFromExclusive && await this.trySteerActiveRun(message)) return;
-      await this.turnQueueIngress.runFreshOrdinary(message);
+      // Claim the fresh-ordinary FIFO slot synchronously, before author
+      // resolution, so concurrent idle inputs cannot invert arrival order.
+      const slot = this.turnQueueIngress.reserveFreshOrdinarySlot();
+      try {
+        if (!deferredFromExclusive && await this.trySteerActiveRun(message)) return;
+        await slot.run(message);
+      } finally {
+        slot.dispose();
+      }
     });
   }
 
@@ -939,12 +946,19 @@ export class SubstrateAgent {
       sourceId: message.id,
       ingress: 'follow-up',
     }, async ({ deferredFromExclusive }) => {
-      if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
-      if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-        this.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
-        return;
+      // Claim the fresh-ordinary FIFO slot synchronously, before author
+      // resolution, so concurrent idle inputs cannot invert arrival order.
+      const slot = this.turnQueueIngress.reserveFreshOrdinarySlot();
+      try {
+        if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
+        if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
+          this.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
+          return;
+        }
+        await slot.run(message);
+      } finally {
+        slot.dispose();
       }
-      await this.turnQueueIngress.runFreshOrdinary(message);
     });
   }
 

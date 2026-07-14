@@ -32,7 +32,9 @@ export function createIcpWeightedThoughtCandidateAdapter(input: {
         ...(parsedChannel?.kind === 'room' && sourceChannelId
           ? { currentRoomChannelId: sourceChannelId }
           : {}),
-        sourceRecordId: thought.id,
+        // A scheduler replay of the same reinforcement epoch must dedupe, while
+        // a genuinely new reinforcement after defer/decline may ask again.
+        sourceRecordId: `${thought.id}:r${thought.reinforcementCount}`,
         reasonSummary: thought.content.slice(0, 1_000),
         cause: thought.provenance.icpRootInitiationId
           ? {

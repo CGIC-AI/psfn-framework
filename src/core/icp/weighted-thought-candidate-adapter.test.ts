@@ -50,6 +50,7 @@ describe('ICP weighted-thought candidate adapter', () => {
       .resolves.toMatchObject({ status: 'deferred' });
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       source: 'weighted_thought',
+      sourceRecordId: 'thought-1:r0',
       preferredChannel: 'current_room',
       currentRoomChannelId: 'companion-room:kitchen',
       cause: {

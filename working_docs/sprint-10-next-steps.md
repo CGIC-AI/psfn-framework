@@ -16,6 +16,17 @@ The headline fact governing everything below: the multi-companion substrate is *
 - Final integrated gate: focused session suites 79/79, lint, ESM+DTS build, and
   diff check all passed. The branch is pushed for backup and remains unmerged;
   parent epic `psfn-framework-2z12` remains open for its other children.
+- `psfn-framework-2z12.5` is closed at `5dbc011b` (implementation `0dd8e7c6`,
+  bounded review remediation `5dbc011b`). PostgreSQL transcript projection boot
+  now retains aggregate count/max metadata per channel instead of every message
+  ID, and clean writes skip the no-op drift-row delete while tracked drift still
+  clears normally.
+- The independent review found queued insert/delete reconciliation could overwrite
+  newer replacement metadata. Per-channel epochs now discard superseded
+  reconciliation, with insert-gap-before-replace and missing-delete-before-replace
+  regressions proving cached counts match persisted replacement IDs.
+- Final integrated gate for `2z12.5`: projection/repair 15/15, store/journal
+  79/79, lint, ESM+DTS build, and worktree plus branch-range diff checks passed.
 - Material report-only observations: none.
 
 ## 0. 2026-07-12 update — decided priority order

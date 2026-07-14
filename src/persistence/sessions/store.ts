@@ -525,6 +525,18 @@ export class SessionStore implements TranscriptSearchPort {
       limit,
     );
   }
+  private readEntriesBeforeFromArchive(
+    channelId: string,
+    filePath: string,
+    beforeId: number,
+    limit: number,
+  ): SessionEntry[] {
+    return this.journalRuntime.readEntriesBefore(
+      this.journalRuntime.openArchive(channelId, filePath),
+      beforeId,
+      limit,
+    );
+  }
   private fingerprintArchive(cache: ChannelCache): string | null {
     return this.journalRuntime.fingerprintArchive(
       this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath),
@@ -1084,6 +1096,47 @@ export class SessionStore implements TranscriptSearchPort {
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);
     return entries[entries.length - 1];
+  }
+  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+    if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+    const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded) {
+      const current = this.fullyLoadedCacheIsCurrent(cached)
+        ? cached
+        : this.ensureChannelFullyLoaded(channelId);
+      if (!current) return [];
+      const eligible = current.entries.filter(entry => entry.id < normalizedBeforeId);
+      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+    }
+
+    const resolved = cached
+      ? { sessionId, channelId: cached.channelId, filePath: cached.resolvedPath }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    if (cached) this.syncLightweightCacheFromIndexEntry(cached, indexEntry);
+    if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) return [];
+
+    // Active tombstones require global turn state; preserve the existing
+    // fail-closed projection by replaying the archive before slicing.
+    if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
+      const full = this.ensureChannelFullyLoaded(channelId);
+      if (!full) return [];
+      const eligible = full.entries.filter(entry => entry.id < normalizedBeforeId);
+      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+    }
+
+    return this.readEntriesBeforeFromArchive(
+      resolved.channelId,
+      resolved.filePath,
+      normalizedBeforeId,
+      normalizedLimit,
+    );
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
     if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];

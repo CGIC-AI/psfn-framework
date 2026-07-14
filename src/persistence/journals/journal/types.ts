@@ -43,6 +43,26 @@ export interface ReadJournalTailResult {
   truncated: boolean;
 }
 
+export interface JournalBoundedReadStats {
+  bytesRead: number;
+  readCalls: number;
+  filesRead: number;
+}
+
+export interface ReadJournalBeforeOptions {
+  beforeId: number;
+  messageLimit: number;
+  includeBoundaryEntry?: boolean;
+  scanChunkBytes?: number;
+  stats?: JournalBoundedReadStats;
+}
+
+export interface ReadJournalBeforeResult {
+  entries: JournalEntry[];
+  quarantined: QuarantinedJournalEntry[];
+  truncated: boolean;
+}
+
 export interface SessionHmacKeyring {
   activeVersion: string;
   keys: Record<string, string>;

@@ -1,13 +1,8 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { join } from 'node:path';
 import {
-  closeSync,
   existsSync,
-  fstatSync,
   linkSync,
-  openSync,
-  readSync,
-  readdirSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
@@ -32,6 +27,12 @@ import {
   resolveTurnRecordToolDefinitions,
   slimTurnRecordToolDefinitionsForAppend,
 } from './turn-record-shared-store.js';
+import {
+  fileIdentityKey,
+  listNumberedJsonlSegments,
+  scanJsonlFileBackward,
+  type NumberedJsonlSegment,
+} from '../jsonl-segments.js';
 
 const log = createComponentLogger('TurnRecords');
 
@@ -54,8 +55,6 @@ export const TURN_RECORD_SEGMENT_MAX_BYTES = 64 * 1024 * 1024;
  * how many syscalls a tail read costs.
  */
 const TURN_RECORD_TAIL_SCAN_CHUNK_BYTES = 256 * 1024;
-
-const NEWLINE_BYTE = 0x0a;
 
 /**
  * Rotation lock parameters. Rotation shares the mkdir-based cross-process lock
@@ -531,31 +530,14 @@ function segmentFileName(sanitizedChannelId: string, segmentNumber: number): str
   return `${sanitizedChannelId}.${String(segmentNumber).padStart(5, '0')}.jsonl`;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-interface RotatedSegment {
-  segmentNumber: number;
-  path: string;
-}
-
 /**
  * Discover rotated segments for a channel via a strict filename pattern.
  * Active file: `<sanitized>.jsonl`. Rotated segments: `<sanitized>.00001.jsonl`,
  * `<sanitized>.00002.jsonl`, ... where a higher number is newer. No manifest —
  * the directory listing is the source of truth.
  */
-function listRotatedSegments(dir: string, sanitizedChannelId: string): RotatedSegment[] {
-  if (!existsSync(dir)) return [];
-  const pattern = new RegExp(`^${escapeRegExp(sanitizedChannelId)}\\.(\\d{5,})\\.jsonl$`);
-  const segments: RotatedSegment[] = [];
-  for (const name of readdirSync(dir)) {
-    const match = pattern.exec(name);
-    if (!match) continue;
-    segments.push({ segmentNumber: Number(match[1]), path: join(dir, name) });
-  }
-  return segments;
+function listRotatedSegments(dir: string, sanitizedChannelId: string): NumberedJsonlSegment[] {
+  return listNumberedJsonlSegments(join(dir, `${sanitizedChannelId}.jsonl`));
 }
 
 function nextFreeSegmentNumber(dir: string, sanitizedChannelId: string): number {
@@ -568,10 +550,6 @@ function nextFreeSegmentNumber(dir: string, sanitizedChannelId: string): number 
     candidate += 1;
   }
   return candidate;
-}
-
-function fileIdentityKey(stat: { dev: number | bigint; ino: number | bigint }): string {
-  return `${stat.dev}:${stat.ino}`;
 }
 
 /**
@@ -754,65 +732,22 @@ function scanSegmentBackward(
   const collected: TurnRecord[] = [];
   if (limit <= 0) return collected;
 
-  const fd = openSync(path, 'r');
-  try {
-    const fileStat = fstatSync(fd);
-    // Dedupe by (dev, ino) within one logical read: a rotation between the
-    // active-file scan and the segment listing can surface the SAME inode
-    // twice (once under the active name, once under its new segment name),
-    // which would duplicate every record in it.
-    const identity = fileIdentityKey(fileStat);
-    if (scannedFileIdentities.has(identity)) return collected;
-    scannedFileIdentities.add(identity);
-    const fileSize = fileStat.size;
-    if (fileSize <= 0) return collected;
-
-    // Returns true once `limit` records are collected (caller should stop).
-    const handleLine = (lineBytes: Buffer): boolean => {
-      const text = lineBytes.toString('utf8').trim();
-      if (text.length === 0) return false;
-      try {
-        const parsed = JSON.parse(text) as unknown;
-        collected.push(normalizeTurnRecord(parsed, channelId));
-      } catch (error) {
-        quarantineTurnRecordLine(path, channelId, text, error);
-        return false;
-      }
-      return collected.length >= limit;
-    };
-
-    const buffer = Buffer.allocUnsafe(chunkBytes);
-    let position = fileSize;
-    // Bytes to the LEFT (older) of everything processed so far in the current
-    // window that have not yet been terminated by a preceding newline.
-    let remainder = Buffer.alloc(0);
-
-    while (position > 0) {
-      const bytesToRead = Math.min(chunkBytes, position);
-      position -= bytesToRead;
-      const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
-      if (bytesRead <= 0) break;
-      if (stats) stats.bytesRead += bytesRead;
-
-      // Freshly-read (older) bytes on the left, carried remainder (newer) on the right.
-      const combined = Buffer.concat([buffer.subarray(0, bytesRead), remainder]);
-      let lineEnd = combined.length;
-      for (let i = combined.length - 1; i >= 0; i--) {
-        if (combined[i] !== NEWLINE_BYTE) continue;
-        if (handleLine(combined.subarray(i + 1, lineEnd))) return collected;
-        lineEnd = i;
-      }
-      // Everything before the earliest newline is an unterminated fragment that
-      // continues into the next (older) chunk.
-      remainder = combined.subarray(0, lineEnd);
+  scanJsonlFileBackward(path, {
+    chunkBytes,
+    stats,
+    scannedFileIdentities,
+  }, (line) => {
+    const text = line.trim();
+    if (text.length === 0) return false;
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      collected.push(normalizeTurnRecord(parsed, channelId));
+    } catch (error) {
+      quarantineTurnRecordLine(path, channelId, text, error);
+      return false;
     }
-
-    if (remainder.length > 0) {
-      handleLine(remainder);
-    }
-  } finally {
-    closeSync(fd);
-  }
+    return collected.length >= limit;
+  });
 
   return collected;
 }

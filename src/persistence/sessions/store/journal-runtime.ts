@@ -458,4 +458,62 @@ export class SessionJournalRuntime {
     if (messages.length <= limit) return messages;
     return messages.slice(-limit);
   }
+
+  readEntriesBefore(
+    archive: SessionArchiveHandle,
+    beforeId: number,
+    limit: number,
+  ): SessionEntry[] {
+    const window = this.archivePort.readJournalEntriesBefore(archive, {
+      beforeId,
+      messageLimit: limit,
+      includeBoundaryEntry: true,
+    });
+    if (window.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        window.quarantined.length,
+        window.entries.length,
+      );
+    }
+    if (window.entries.length === 0) return [];
+
+    const messageIndexes: number[] = [];
+    for (let index = 0; index < window.entries.length; index += 1) {
+      if (window.entries[index].type === 'message') messageIndexes.push(index);
+    }
+    if (messageIndexes.length === 0) return [];
+
+    const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - limit)];
+    let previousHmacCandidates: Array<string | null> = [null];
+    if (oldestMessageIndex > 0) {
+      const boundaryEntry = window.entries[oldestMessageIndex - 1];
+      previousHmacCandidates = typeof boundaryEntry._hmac === 'string'
+        ? [boundaryEntry._hmac]
+        : [null];
+    }
+
+    const messages: SessionEntry[] = [];
+    let verificationFailed = false;
+    for (let index = oldestMessageIndex; index < window.entries.length; index += 1) {
+      const rawEntry = window.entries[index];
+      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+      previousHmacCandidates = normalized.nextHmacCandidates;
+      verificationFailed = verificationFailed || !normalized.verified;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message) messages.push(message);
+    }
+
+    // A boundary-backed partial chain cannot safely distinguish a tampered
+    // boundary/window from a key transition. Replay the canonical archive so
+    // integrity normalization remains byte-identical to full history reads.
+    if (verificationFailed && oldestMessageIndex > 0) {
+      const loaded = this.loadChannel(archive);
+      const eligible = loaded.entries.filter(entry => entry.id < beforeId);
+      return eligible.length <= limit ? eligible : eligible.slice(-limit);
+    }
+
+    return messages.length <= limit ? messages : messages.slice(-limit);
+  }
 }

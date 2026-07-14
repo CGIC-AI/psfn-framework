@@ -1327,6 +1327,110 @@ describe('SessionStore', () => {
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
   });
 
+  it('reads entries before a cursor without loading the complete journal', () => {
+    const channelId = 'api:before-cursor';
+    appendSessionMessages(store, channelId, 8);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 3);
+
+    expect(entries.map(entry => entry.id)).toEqual([4, 5, 6]);
+    expect(entries.map(entry => entry.content)).toEqual(['Message 3', 'Message 4', 'Message 5']);
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(beforeSpy).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 7,
+      messageLimit: 3,
+      includeBoundaryEntry: true,
+    });
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to canonical replay when a bounded integrity window is tampered', () => {
+    const channelId = 'api:before-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'signed');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const journalPath = findSessionJournalPath(dir, 'before-integrity');
+    const lines = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[4].content = 'tampered selected message';
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).toHaveBeenCalledOnce();
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered selected message');
+  });
+
+  it('preserves tombstone filtering by replaying before bounded cursor reads', async () => {
+    const channelId = 'api:before-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'redacted user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'redacted assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['visible user']);
+    expect(beforeSpy).not.toHaveBeenCalled();
+    expect(fullReadSpy).toHaveBeenCalledOnce();
+  });
+
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';
     appendSessionMessages(store, channelId, 8);

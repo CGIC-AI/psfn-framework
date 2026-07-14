@@ -16,16 +16,25 @@ import { appendJsonLine } from '../../jsonl.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../../core/turns/id.js';
 import type {
+  JournalBoundedReadStats,
   JournalFileMetadata,
   QuarantinedJournalEntry,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,
   ReadJournalTailResult,
   ScanJournalMetadataOptions,
 } from './types.js';
+import {
+  listNumberedJsonlSegments,
+  scanJsonlFileBackward,
+  scanJsonlFileForward,
+} from '../../jsonl-segments.js';
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
+const JOURNAL_SEGMENT_READ_RETRIES = 3;
 
 function resolveJournalMessageTurnId(entry: JournalEntry): string {
   if (entry.type !== 'message') {
@@ -450,6 +459,152 @@ export function readJournalTailEntries(
     quarantined,
     truncated,
   };
+}
+
+function appendQuarantinedLine(
+  target: QuarantinedJournalEntry[],
+  line: string,
+  error: unknown,
+): void {
+  const quarantined = {
+    lineNumber: -1,
+    error: toErrorMessage(error),
+    raw: line,
+  } satisfies QuarantinedJournalEntry;
+  if (target.some(existing => existing.raw === quarantined.raw && existing.error === quarantined.error)) {
+    return;
+  }
+  target.push(quarantined);
+}
+
+function readJournalEntriesBeforeOnce(
+  filePath: string,
+  beforeId: number,
+  messageLimit: number,
+  includeBoundaryEntry: boolean,
+  chunkBytes: number,
+  stats: JournalBoundedReadStats | undefined,
+): ReadJournalBeforeResult {
+  const parsedDescending: JournalEntry[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  const metadataFileIdentities = new Set<string>();
+  const scannedFileIdentities = new Set<string>();
+  let messageCount = 0;
+  let needBoundaryEntry = false;
+  let truncated = false;
+
+  const scanCandidate = (path: string): void => {
+    if (truncated) return;
+
+    let firstEntry: JournalEntry | null = null;
+    scanJsonlFileForward(path, {
+      chunkBytes,
+      stats,
+      scannedFileIdentities: metadataFileIdentities,
+    }, (line) => {
+      if (line.trim().length === 0) return false;
+      try {
+        firstEntry = parseJournalLine(line);
+        return true;
+      } catch (error) {
+        appendQuarantinedLine(quarantined, line, error);
+        return false;
+      }
+    });
+
+    // Segment ids are monotonic. A first entry at/after the cursor proves the
+    // entire file is too new; only the small boundary metadata read was needed.
+    if (!firstEntry || firstEntry.id >= beforeId) return;
+
+    const stopped = scanJsonlFileBackward(path, {
+      chunkBytes,
+      stats,
+      scannedFileIdentities,
+    }, (line) => {
+      if (line.trim().length === 0) return false;
+      let entry: JournalEntry;
+      try {
+        entry = parseJournalLine(line);
+      } catch (error) {
+        appendQuarantinedLine(quarantined, line, error);
+        return false;
+      }
+      if (entry.id >= beforeId) return false;
+
+      parsedDescending.push(entry);
+      if (needBoundaryEntry) return true;
+      if (entry.type !== 'message') return false;
+
+      messageCount += 1;
+      if (messageCount < messageLimit) return false;
+      if (!includeBoundaryEntry) return true;
+      needBoundaryEntry = true;
+      return false;
+    });
+    if (stopped) truncated = true;
+  };
+
+  if (existsSync(filePath)) {
+    scanCandidate(filePath);
+  }
+
+  if (!truncated) {
+    const sealedSegments = listNumberedJsonlSegments(filePath)
+      .sort((left, right) => right.segmentNumber - left.segmentNumber);
+    for (const segment of sealedSegments) {
+      scanCandidate(segment.path);
+      if (truncated) break;
+    }
+  }
+
+  return {
+    entries: parsedDescending.reverse(),
+    quarantined,
+    truncated,
+  };
+}
+
+/**
+ * Read the message window immediately before an entry id without loading the
+ * complete archive. The active file and hgw3-style numbered sealed siblings
+ * are walked newest-first. Newer segments cost only their first valid entry;
+ * the containing/older segments are scanned backward until the requested
+ * messages plus one HMAC boundary entry are found.
+ */
+export function readJournalEntriesBefore(
+  filePath: string,
+  options: ReadJournalBeforeOptions,
+): ReadJournalBeforeResult {
+  const beforeId = Number.isFinite(options.beforeId)
+    ? Math.max(0, Math.floor(options.beforeId))
+    : 0;
+  const messageLimit = Number.isFinite(options.messageLimit)
+    ? Math.max(0, Math.floor(options.messageLimit))
+    : 0;
+  if (beforeId <= 0 || messageLimit <= 0) {
+    return { entries: [], quarantined: [], truncated: false };
+  }
+  const requestedChunkBytes = options.scanChunkBytes ?? DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+  const chunkBytes = Number.isFinite(requestedChunkBytes)
+    ? Math.max(1, Math.floor(requestedChunkBytes))
+    : DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return readJournalEntriesBeforeOnce(
+        filePath,
+        beforeId,
+        messageLimit,
+        options.includeBoundaryEntry !== false,
+        chunkBytes,
+        options.stats,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {

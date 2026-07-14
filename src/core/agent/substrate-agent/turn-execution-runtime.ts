@@ -74,6 +74,10 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import {
+  MISSING_IMAGE_ATTACHMENT_CORRECTION,
+  rejectsMissingImageAttachmentClaim,
+} from '../../../primitives/images/attachment-claim-guard.js';
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
@@ -1035,6 +1039,24 @@ export async function handleMessageForTurn(
             ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
           },
         });
+
+    if (rejectsMissingImageAttachmentClaim({
+      responseText: safeResponseText,
+      attachmentCount: responseAttachments.length,
+    })) {
+      safeResponseText = MISSING_IMAGE_ATTACHMENT_CORRECTION;
+      log.warn('Rejected assistant image-attachment claim without a current-turn attachment', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.image_attachment_claim.rejected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_attachment_claim.rejected'),
+      });
+    }
 
     // Fail loud, never silently: if a charged image deliverable was produced this
     // turn but is not riding out on the reply, surface it. The response_control

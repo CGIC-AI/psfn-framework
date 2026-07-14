@@ -28,6 +28,12 @@ class FakePostgresPool {
   contactMutationAudit: ContactMutationAuditRow[] = [];
   socialGraphEntities = new Map<string, SocialGraphEntityRow>();
   failNextWriteForChannel: string | null = null;
+  failNextMutationAudit = false;
+  beforeNextContactProfileUpdate: ((row: ContactRow) => void) | null = null;
+  private transactionSnapshot?: {
+    contacts: Map<string, ContactRow>;
+    contactMutationAudit: ContactMutationAuditRow[];
+  };
 
   async connect(): Promise<PoolClient> {
     return {
@@ -52,11 +58,27 @@ class FakePostgresPool {
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
     const normalized = this.normalize(text);
+    if (normalized === 'begin') {
+      this.transactionSnapshot = {
+        contacts: new Map([...this.contacts].map(([id, row]) => [id, { ...row }])),
+        contactMutationAudit: this.contactMutationAudit.map(row => ({ ...row })),
+      };
+      return result();
+    }
+    if (normalized === 'commit') {
+      this.transactionSnapshot = undefined;
+      return result();
+    }
+    if (normalized === 'rollback') {
+      if (this.transactionSnapshot) {
+        this.contacts = this.transactionSnapshot.contacts;
+        this.contactMutationAudit = this.transactionSnapshot.contactMutationAudit;
+        this.transactionSnapshot = undefined;
+      }
+      return result();
+    }
     if (
-      normalized === 'begin'
-      || normalized === 'commit'
-      || normalized === 'rollback'
-      || normalized.startsWith('create table')
+      normalized.startsWith('create table')
       || normalized.startsWith('create index')
       || normalized.startsWith('alter table')
     ) {
@@ -125,6 +147,15 @@ class FakePostgresPool {
       const id = String(values[9] ?? '');
       const row = this.contacts.get(id);
       if (!row) return result();
+      const beforeUpdate = this.beforeNextContactProfileUpdate;
+      this.beforeNextContactProfileUpdate = null;
+      beforeUpdate?.(row);
+      if (
+        normalized.includes('and relationship_type = $11')
+        && row.relationship_type !== String(values[10] ?? '')
+      ) {
+        return result();
+      }
       row.discord_user_id = row.discord_user_id ?? (values[0] == null ? null : String(values[0]));
       row.display_name = String(values[1] ?? row.display_name);
       row.nickname = values[2] == null ? null : String(values[2]);
@@ -136,6 +167,24 @@ class FakePostgresPool {
         row.notes = String(values[7]);
       }
       row.timezone = values[8] == null ? null : String(values[8]);
+      return normalized.endsWith('returning id') ? result([{ id: row.id }]) : result();
+    }
+
+    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, trust_level = $4, emotional_baseline = $5, last_seen = $6, notes = coalesce($7, notes), timezone = $8 where id = $9')) {
+      const id = String(values[8] ?? '');
+      const row = this.contacts.get(id);
+      if (!row) return result();
+      const beforeUpdate = this.beforeNextContactProfileUpdate;
+      this.beforeNextContactProfileUpdate = null;
+      beforeUpdate?.(row);
+      row.discord_user_id = row.discord_user_id ?? (values[0] == null ? null : String(values[0]));
+      row.display_name = String(values[1] ?? row.display_name);
+      row.nickname = values[2] == null ? null : String(values[2]);
+      row.trust_level = String(values[3] ?? row.trust_level);
+      row.emotional_baseline = values[4] ?? row.emotional_baseline;
+      row.last_seen = String(values[5] ?? row.last_seen);
+      if (values[6] !== null && values[6] !== undefined) row.notes = String(values[6]);
+      row.timezone = values[7] == null ? null : String(values[7]);
       return result();
     }
 
@@ -143,6 +192,19 @@ class FakePostgresPool {
       const row = this.contacts.get(String(values[1] ?? ''));
       if (row) row.trust_level = String(values[0] ?? row.trust_level);
       return result();
+    }
+
+    if (normalized.startsWith('update contacts set relationship_type = $1 where id = $2 and relationship_type = $3 returning id')) {
+      const row = this.contacts.get(String(values[1] ?? ''));
+      if (!row || row.relationship_type !== String(values[2] ?? '')) return result();
+      row.relationship_type = String(values[0] ?? row.relationship_type);
+      return result([{ id: row.id }]);
+    }
+
+    if (normalized.startsWith('update contacts set relationship_type = $1 where id = $2')) {
+      const row = this.contacts.get(String(values[1] ?? ''));
+      if (row) row.relationship_type = String(values[0] ?? row.relationship_type);
+      return result(row ? [{ id: row.id }] : []);
     }
 
     if (normalized.startsWith('update contacts set emotional_baseline = $1, emotional_time_series = $2, last_seen = $3 where id = $4')) {
@@ -254,6 +316,10 @@ class FakePostgresPool {
     }
 
     if (normalized.startsWith('insert into contact_mutation_audit')) {
+      if (this.failNextMutationAudit) {
+        this.failNextMutationAudit = false;
+        throw new Error('forced mutation audit failure');
+      }
       const row: ContactMutationAuditRow = {
         id: this.contactMutationAudit.length + 1,
         contact_id: String(values[0] ?? ''),
@@ -423,11 +489,10 @@ class FakePostgresPool {
       return { ...result(), rowCount: existed ? 1 : 0 };
     }
 
-    if (normalized.startsWith('update contacts set trust_level = \'primary\', relationship_type = \'partner\' where id = $1')) {
+    if (normalized.startsWith('update contacts set trust_level = \'primary\' where id = $1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       if (row) {
         row.trust_level = 'primary';
-        row.relationship_type = 'partner';
       }
       return result();
     }
@@ -602,6 +667,87 @@ describe('PostgresContactStore', () => {
     ]);
   });
 
+  it('does not overwrite a relationship changed while an unrelated upsert is in flight', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Concurrent Profile', relationshipType: 'friend' });
+    pool.beforeNextContactProfileUpdate = (row) => {
+      row.relationship_type = 'family';
+    };
+
+    const updated = await store.upsert({
+      id: contact.id,
+      displayName: 'Concurrent Profile Renamed',
+    });
+
+    expect(updated.displayName).toBe('Concurrent Profile Renamed');
+    expect(updated.relationshipType).toBe('family');
+  });
+
+  it('keeps primary trust independent from relationship on an unrelated upsert', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Primary Relationship',
+      discordUserId: 'primary-user-123',
+      relationshipType: 'acquaintance',
+    });
+
+    const updated = await store.upsert({
+      id: contact.id,
+      displayName: 'Primary Relationship Renamed',
+    });
+
+    expect(updated.trustLevel).toBe('primary');
+    expect(updated.relationshipType).toBe('acquaintance');
+  });
+
+  it('audits an operator-authorized relationship assignment through upsert', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Upsert Relationship Audit', relationshipType: 'friend' });
+
+    const updated = await store.upsert({
+      id: contact.id,
+      displayName: contact.displayName,
+      relationshipType: 'family',
+    }, { actor: 'operator:test' });
+
+    expect(updated.relationshipType).toBe('family');
+    expect(pool.contactMutationAudit.filter(entry => entry.field === 'relationship_type')).toEqual([
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'operator:test',
+        old_value: 'friend',
+        new_value: 'family',
+      }),
+    ]);
+  });
+
+  it('rolls back an explicit upsert relationship assignment when audit insertion fails', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Upsert Relationship Rollback', relationshipType: 'friend' });
+    pool.failNextMutationAudit = true;
+
+    await expect(store.upsert({
+      id: contact.id,
+      displayName: contact.displayName,
+      relationshipType: 'family',
+    }, { actor: 'operator:test' })).rejects.toThrow('forced mutation audit failure');
+
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ relationshipType: 'friend' });
+    expect(pool.contactMutationAudit).toEqual([]);
+  });
+
   it('creates and verifies a contact identity link challenge', async () => {
     const pool = new FakePostgresPool();
     const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
@@ -675,5 +821,55 @@ describe('PostgresContactStore', () => {
     expect(await store.getEmotionalTimeSeries(contact.id, 1)).toEqual([
       { valence: -0.55, confidence: 0.65, observedAtMs: 2_000 },
     ]);
+  });
+
+  it('atomically compare-and-sets relationships and records the approved mutation', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Relationship CAS', relationshipType: 'friend' });
+
+    await expect(store.compareAndSetRelationshipType(
+      contact.id,
+      'acquaintance',
+      'family',
+      'operator:confirmation-queue',
+    )).resolves.toBe(false);
+    await expect(store.compareAndSetRelationshipType(
+      contact.id,
+      'friend',
+      'family',
+      'operator:confirmation-queue',
+    )).resolves.toBe(true);
+
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ relationshipType: 'family' });
+    expect(pool.contactMutationAudit).toEqual([
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'operator:confirmation-queue',
+        field: 'relationship_type',
+        old_value: 'friend',
+        new_value: 'family',
+      }),
+    ]);
+  });
+
+  it('rolls back a relationship compare-and-set when its audit insert fails', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Relationship Rollback', relationshipType: 'friend' });
+    pool.failNextMutationAudit = true;
+
+    await expect(store.compareAndSetRelationshipType(
+      contact.id,
+      'friend',
+      'family',
+      'operator:confirmation-queue',
+    )).rejects.toThrow('forced mutation audit failure');
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ relationshipType: 'friend' });
+    expect(pool.contactMutationAudit).toEqual([]);
   });
 });

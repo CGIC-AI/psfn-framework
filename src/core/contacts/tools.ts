@@ -12,7 +12,19 @@ import type {
   ConfirmationQueueEntry,
 } from '../../system/capabilities/approval-queue-port.js';
 import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
-import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel, type Contact } from './types.js';
+import {
+  CHANNEL_PRIVACY_LEVELS,
+  type ChannelPrivacyLevel,
+  type Contact,
+  type RelationshipType,
+} from './types.js';
+import {
+  HUMAN_RELATIONSHIP_TYPES,
+} from './relationship-progression.js';
+import {
+  executeContactProposeRelationship,
+  executeContactSetRelationship,
+} from './relationship-tools.js';
 import type {
   ContactBlockListStore,
   ContactBlockMode,
@@ -33,6 +45,8 @@ const CONTACT_ACTION_NAMES = [
   'note',
   'set_trust',
   'propose_trust',
+  'set_relationship',
+  'propose_relationship',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
@@ -46,6 +60,8 @@ const CONTACT_ACTION_HELP = [
   'note',
   'set_trust',
   'propose_trust',
+  'set_relationship',
+  'propose_relationship',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
@@ -61,6 +77,8 @@ type ContactAction =
   | 'note'
   | 'set_trust'
   | 'propose_trust'
+  | 'set_relationship'
+  | 'propose_relationship'
   | 'link_identity'
   | 'set_channel_privacy'
   | 'set_machine_intelligence'
@@ -95,6 +113,7 @@ interface ContactToolParams extends Partial<ContactSetTrustParams> {
   channelUserId?: string;
   privacyLevel?: ChannelPrivacyLevel;
   rationale?: string;
+  relationshipType?: RelationshipType;
   blockMode?: ContactBlockMode;
   blockScope?: ContactBlockScope;
   reason?: string;
@@ -182,6 +201,10 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
       return 'set_trust';
     case 'propose_trust':
       return 'propose_trust';
+    case 'set_relationship':
+      return 'set_relationship';
+    case 'propose_relationship':
+      return 'propose_relationship';
     case 'link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
@@ -615,7 +638,8 @@ async function executeContactList(
   const lines = contacts.map(formatContactSummaryLine);
   return textResult(
     `Contacts (${contacts.length}):\n${lines.join('\n')}\n`
-    + 'Pass contactId from this list to action=lookup, action=set_trust, or action=note; do not guess from display names.',
+    + 'Pass contactId from this list to action=lookup, action=set_trust, action=set_relationship, or action=note; '
+    + 'do not guess from display names.',
   );
 }
 
@@ -698,7 +722,8 @@ async function executeContactSearch(
 
   return textResult(
     `Contact search results for "${query}" (${matches.length}):\n${matches.map(formatContactSummaryLine).join('\n')}\n`
-    + 'Pass an exact contactId from these results to action=lookup, action=set_trust, or action=note; do not guess from display names.',
+    + 'Pass an exact contactId from these results to action=lookup, action=set_trust, action=set_relationship, '
+    + 'or action=note; do not guess from display names.',
   );
 }
 
@@ -724,6 +749,10 @@ async function executeUnifiedContactAction(
       return await executeContactSetTrust(contactStore, params as ContactSetTrustParams, getIntakeSinkGate);
     case 'propose_trust':
       return await executeContactProposeTrust(contactStore, proposalQueue, params);
+    case 'set_relationship':
+      return await executeContactSetRelationship(contactStore, params);
+    case 'propose_relationship':
+      return await executeContactProposeRelationship(contactStore, proposalQueue, params);
     case 'link_identity':
       return await executeContactLinkIdentity(contactStore, params);
     case 'set_channel_privacy':
@@ -964,12 +993,17 @@ export function createContactTool(
     name: 'contact',
     label: 'contact',
     description:
-      'Unified contact surface for browsing, searching, lookup, notes, trust, identity linking, and channel privacy. '
+      'Unified contact surface for browsing, searching, lookup, notes, trust, relationships, identity linking, and channel privacy. '
       + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
-      + 'then action=lookup with exact contactId for details. action=note and action=set_trust also require contactId. '
+      + 'then action=lookup with exact contactId for details. Mutation actions such as action=note, action=set_trust, '
+      + 'and action=set_relationship also require contactId. '
       + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
       + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
       + 'never changes trust directly. '
+      + 'set_relationship can autonomously progress stranger -> acquaintance -> friend from recorded interaction history; '
+      + 'friend requires stronger evidence than acquaintance. Family and partner require action=propose_relationship '
+      + 'with a rationale so an operator can approve in Garden. Relationship actions derive evidence from durable history '
+      + 'and ignore caller-supplied behavior counts. Relationship and trust are separate axes. '
       + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
       + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
       + 'action=block is your own agency to stop an abusive contact: it drops their inbound at the gateway '
@@ -1002,6 +1036,11 @@ export function createContactTool(
         enum: [...TRUST_LEVELS],
         description: 'Trust level when action=set_trust.',
       })),
+      relationshipType: Type.Optional(Type.Unsafe<RelationshipType>({
+        type: 'string',
+        enum: [...HUMAN_RELATIONSHIP_TYPES],
+        description: 'Human relationship classification for action=set_relationship|propose_relationship.',
+      })),
       behaviorSignals: Type.Optional(Type.Object({
         positiveInteractionCount: Type.Integer({ minimum: 0, description: 'Observed positive interactions' }),
         negativeInteractionCount: Type.Optional(Type.Integer({ minimum: 0, description: 'Observed negative interactions' })),
@@ -1010,7 +1049,7 @@ export function createContactTool(
           description: 'Whether behavior consistently respected boundaries',
         })),
       }, {
-        description: 'Behavior signals for low-tier trust drift suggestion flow when action=set_trust.',
+        description: 'Behavior signals for action=set_trust. Relationship actions ignore caller-supplied counts and derive evidence from recorded history.',
       })),
       confirmSuggestion: Type.Optional(Type.Boolean({
         description: 'Apply a trust drift suggestion after preview when action=set_trust.',
@@ -1018,7 +1057,7 @@ export function createContactTool(
       rationale: Type.Optional(Type.String({
         minLength: 1,
         description:
-          'Required for action=propose_trust: short rationale for promoting this contact to trusted. '
+          'Required for action=propose_trust|propose_relationship: short rationale for the gated promotion. '
           + 'Surfaced to the operator on the Garden Confirmations page.',
       })),
       channel: Type.Optional(Type.String({
@@ -1085,6 +1124,8 @@ export function createContactTool(
         case 'note':
         case 'set_trust':
         case 'propose_trust':
+        case 'set_relationship':
+        case 'propose_relationship':
         case 'link_identity':
         case 'set_channel_privacy':
         case 'set_machine_intelligence':

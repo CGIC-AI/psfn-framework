@@ -2,6 +2,7 @@ import type {
   AdminAdaptiveToolsData as CanonicalAdminAdaptiveToolsData,
   AdminToolAvailabilityView as CanonicalAdminToolAvailabilityView,
   AdminToolFailureEvent as CanonicalAdminToolFailureEvent,
+  AdminToolInvocationEvent as CanonicalAdminToolInvocationEvent,
   AdminToolHealthView as CanonicalAdminToolHealthView,
   AdminToolInventoryGroup as CanonicalAdminToolInventoryGroup,
 } from '../../../../src/operator/garden/services/types.js';
@@ -19,6 +20,7 @@ export type {
 } from '../../../../src/operator/tool-health/types.js';
 
 export type AdminToolFailureEvent = CanonicalAdminToolFailureEvent;
+export type AdminToolInvocationEvent = CanonicalAdminToolInvocationEvent;
 
 export type AdminToolAvailabilityStatus = CanonicalAdminToolAvailabilityView['status'];
 

@@ -37,6 +37,8 @@ describe('contact tools', () => {
       expect(tool.description).toContain('action=search with query');
       expect(tool.description).toContain('action=lookup with exact contactId');
       expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
+      expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const))
+        .toEqual(expect.arrayContaining(['set_relationship', 'propose_relationship']));
       expect((tool.parameters as any).properties.query.description).toContain('Required for action=search');
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe('function');
@@ -86,6 +88,10 @@ describe('contact tools', () => {
       expect(tool.requiredCapability?.({ action: 'lookup', contactId: 'contact-1' })).toBe('identity.read');
       expect(tool.requiredCapability?.({ action: 'note', contactId: 'contact-1', notes: 'x' })).toBe('identity.write.runtime');
       expect(tool.requiredCapability?.({ action: 'set_trust', contactId: 'contact-1', trustLevel: 'public' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'set_relationship', contactId: 'contact-1', relationshipType: 'friend' }))
+        .toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'propose_relationship', contactId: 'contact-1', relationshipType: 'family' }))
+        .toBe('identity.write.runtime');
       expect(tool.requiredCapability?.({ action: 'link_identity', contactId: 'contact-1' })).toBe('identity.write.runtime');
       expect(tool.requiredCapability?.({ action: 'set_channel_privacy', contactId: 'contact-1' })).toBe('identity.write.runtime');
     });
@@ -162,6 +168,264 @@ describe('contact tools', () => {
       expect(text).toContain('Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}');
       expect(text).toContain('do not retry action=search without a non-empty query');
       expect(result.details?.isError).toBe(true);
+    });
+  });
+
+  describe('contact relationship progression actions', () => {
+    function recordPositiveInteractions(contactId: string, count: number, start = 0): void {
+      for (let index = 0; index < count; index += 1) {
+        store.updateEmotionalBaseline(contactId, {
+          valence: 0.5,
+          confidence: 0.9,
+          observedAtMs: 1_700_000_000_000 + start + index,
+        });
+      }
+    }
+
+    function toolWithQueue() {
+      const queue = new ConfirmationQueue({ idFactory: () => 'relationship-proposal-1' });
+      const proposalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+      return { queue, tool: createContactTool(store, { proposalQueue }) };
+    }
+
+    it('autonomously progresses stranger to acquaintance with low-friction evidence', async () => {
+      const contact = store.upsert({ displayName: 'Warm Stranger', relationshipType: 'stranger' });
+      const tool = createContactTool(store);
+      recordPositiveInteractions(contact.id, 3);
+
+      const result = await tool.execute('relationship-acquaintance', {
+        action: 'set_relationship',
+        contactId: contact.id,
+        relationshipType: 'acquaintance',
+        behaviorSignals: {
+          positiveInteractionCount: 3,
+          negativeInteractionCount: 1,
+          verifiedIdentityLinks: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBeUndefined();
+      expect(resultText(result)).toContain('stranger -> acquaintance');
+      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
+      expect(store.getById(contact.id)?.trustLevel).toBe('regular');
+    });
+
+    it('rejects model-supplied interaction counts when canonical history has no supporting evidence', async () => {
+      const contact = store.upsert({ displayName: 'Forged Evidence Target', relationshipType: 'stranger' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('relationship-forged-evidence', {
+        action: 'set_relationship',
+        contactId: contact.id,
+        relationshipType: 'acquaintance',
+        behaviorSignals: {
+          positiveInteractionCount: 10_000,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result).toLowerCase()).toContain('recorded behavior does not support');
+      expect(store.getById(contact.id)?.relationshipType).toBe('stranger');
+    });
+
+    it('requires stronger evidence for acquaintance to friend', async () => {
+      const contact = store.upsert({ displayName: 'Possible Friend', relationshipType: 'acquaintance' });
+      const tool = createContactTool(store);
+      recordPositiveInteractions(contact.id, 3);
+
+      const early = await tool.execute('relationship-friend-early', {
+        action: 'set_relationship',
+        contactId: contact.id,
+        relationshipType: 'friend',
+        behaviorSignals: {
+          positiveInteractionCount: 3,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+      expect(early.details?.isError).toBe(true);
+      expect(resultText(early)).toContain('does not support');
+      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
+
+      recordPositiveInteractions(contact.id, 9, 3);
+      const mature = await tool.execute('relationship-friend-mature', {
+        action: 'set_relationship',
+        contactId: contact.id,
+        relationshipType: 'friend',
+        behaviorSignals: {
+          positiveInteractionCount: 12,
+          negativeInteractionCount: 1,
+          consistentBoundaryRespect: true,
+        },
+      });
+      expect(mature.details?.isError).toBeUndefined();
+      expect(resultText(mature)).toContain('acquaintance -> friend');
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+    });
+
+    it('rejects direct autonomous family and partner assignments', async () => {
+      const contact = store.upsert({ displayName: 'Close Friend', relationshipType: 'friend' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('relationship-family-direct', {
+        action: 'set_relationship',
+        contactId: contact.id,
+        relationshipType: 'family',
+        behaviorSignals: {
+          positiveInteractionCount: 24,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('requires operator approval');
+      expect(resultText(result)).toContain('propose_relationship');
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+    });
+
+    it('queues and applies a family proposal only after operator approval', async () => {
+      const contact = store.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
+      const { queue, tool } = toolWithQueue();
+      recordPositiveInteractions(contact.id, 24);
+
+      const result = await tool.execute('relationship-family-proposal', {
+        action: 'propose_relationship',
+        contactId: contact.id,
+        relationshipType: 'family',
+        rationale: 'A long history of dependable closeness.',
+        behaviorSignals: {
+          positiveInteractionCount: 24,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBeUndefined();
+      expect(resultText(result)).toContain('Relationship proposal queued');
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect(queue.listPending()).toEqual([
+        expect.objectContaining({
+          method: 'contact.relationship.promote',
+          action: 'promote_relationship',
+          params: expect.objectContaining({
+            contactId: contact.id,
+            currentRelationshipType: 'friend',
+            requestedRelationshipType: 'family',
+            behaviorSignals: {
+              positiveInteractionCount: 24,
+              negativeInteractionCount: 0,
+              verifiedIdentityLinks: 0,
+              consistentBoundaryRespect: true,
+            },
+          }),
+        }),
+      ]);
+
+      const resolved = await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
+      expect(resolved).toMatchObject({ status: 'approved', executed: true });
+      expect(store.getById(contact.id)?.relationshipType).toBe('family');
+      expect(store.getById(contact.id)?.trustLevel).toBe('regular');
+      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+        .toEqual([expect.objectContaining({ actor: 'operator:confirmation-queue' })]);
+    });
+
+    it('uses the same HITL boundary for family to partner progression', async () => {
+      const contact = store.upsert({ displayName: 'Family Partner Candidate', relationshipType: 'friend' });
+      store.updateRelationshipType(contact.id, 'family', 'operator:test-setup');
+      const { queue, tool } = toolWithQueue();
+      recordPositiveInteractions(contact.id, 48);
+
+      const result = await tool.execute('relationship-partner-proposal', {
+        action: 'propose_relationship',
+        contactId: contact.id,
+        relationshipType: 'partner',
+        rationale: 'Exceptional sustained mutual closeness.',
+        behaviorSignals: {
+          positiveInteractionCount: 48,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBeUndefined();
+      expect(store.getById(contact.id)?.relationshipType).toBe('family');
+      await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
+      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
+    });
+
+    it('refuses modified approvals that change the proposal subject or evidence', async () => {
+      const contact = store.upsert({ displayName: 'Immutable Proposal', relationshipType: 'friend' });
+      const other = store.upsert({ displayName: 'Wrong Proposal Target', relationshipType: 'friend' });
+      const { queue, tool } = toolWithQueue();
+      recordPositiveInteractions(contact.id, 24);
+      await tool.execute('relationship-modified-proposal', {
+        action: 'propose_relationship',
+        contactId: contact.id,
+        relationshipType: 'family',
+        rationale: 'Long-running closeness.',
+      });
+      const pending = queue.listPending()[0];
+
+      const resolved = await queue.resolve({
+        id: pending.id,
+        decision: 'modify',
+        modifiedParams: {
+          ...pending.params,
+          contactId: other.id,
+        },
+      });
+
+      expect(resolved).toMatchObject({ status: 'failed', executed: false });
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect(store.getById(other.id)?.relationshipType).toBe('friend');
+    });
+
+    it('fails an approval atomically when the source relationship changed before its write', async () => {
+      const contact = store.upsert({ displayName: 'Stale Approval Target', relationshipType: 'friend' });
+      const { queue, tool } = toolWithQueue();
+      recordPositiveInteractions(contact.id, 24);
+      await tool.execute('relationship-stale-proposal', {
+        action: 'propose_relationship',
+        contactId: contact.id,
+        relationshipType: 'family',
+        rationale: 'This approval should become stale.',
+        behaviorSignals: {
+          positiveInteractionCount: 24,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      store.updateRelationshipType(contact.id, 'acquaintance', 'operator:concurrent-change');
+
+      const resolved = await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
+      expect(resolved).toMatchObject({ status: 'failed', executed: false });
+      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
+    });
+
+    it('fails closed when a gated relationship proposal has no confirmation queue', async () => {
+      const contact = store.upsert({ displayName: 'No Queue Friend', relationshipType: 'friend' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('relationship-no-queue', {
+        action: 'propose_relationship',
+        contactId: contact.id,
+        relationshipType: 'family',
+        rationale: 'Should not bypass HITL.',
+        behaviorSignals: {
+          positiveInteractionCount: 24,
+          negativeInteractionCount: 0,
+          consistentBoundaryRespect: true,
+        },
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('require a confirmation queue');
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
     });
   });
 
@@ -639,7 +903,7 @@ describe('contact tools', () => {
       expect(text).toContain('discord:grace-discord[invite_only]');
       expect(text).toContain('Met at conf');
       expect(text).toContain('Hank [regular/acquaintance]');
-      expect(text).toContain('Pass contactId from this list to action=lookup, action=set_trust, or action=note');
+      expect(text).toContain('Pass contactId from this list to action=lookup, action=set_trust, action=set_relationship, or action=note');
     });
 
     it('prefers nickname over display name in list output', async () => {

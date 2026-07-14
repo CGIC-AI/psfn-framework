@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   restoreFleetCompanionSlice,
   type FleetRestoreFaultStage,
@@ -27,7 +29,8 @@ if (!fleetManifestPath
 }
 if (faultStage !== 'after_journal'
   && faultStage !== 'after_database_commit'
-  && faultStage !== 'after_tree_publish') {
+  && faultStage !== 'after_tree_publish'
+  && faultStage !== 'after_rollback_marker_removal') {
   throw new Error(`Unsupported fleet restore fault stage: ${faultStage}`);
 }
 const publishedTreeCount = Number(rawPublishedTreeCount);
@@ -41,6 +44,15 @@ await restoreFleetCompanionSlice({
   destinations: { companionDataDir, personalWorkspacePath },
   postgres: { databaseUrl, pgRestoreBinary, psqlBinary },
   faultInjection: (stage: FleetRestoreFaultStage, count: number) => {
+    if (faultStage === 'after_rollback_marker_removal') {
+      if (stage === 'after_tree_publish' && count === 1) {
+        mkdirSync(personalWorkspacePath, { recursive: true });
+        writeFileSync(join(personalWorkspacePath, 'collision.txt'), 'concurrent owner\n');
+        return;
+      }
+      if (stage === faultStage) process.kill(process.pid, 'SIGKILL');
+      return;
+    }
     if (stage === faultStage
       && (stage !== 'after_tree_publish' || count === publishedTreeCount)) {
       process.kill(process.pid, 'SIGKILL');

@@ -240,9 +240,12 @@ function writeStatefulRestoreStubs(root: string): {
   pgRestoreBinary: string;
   psqlBinary: string;
   statePath: string;
+  markerPath: string;
+  rollbackLogPath: string;
 } {
   const statePath = join(root, 'restore-schema-state.txt');
   const markerPath = join(root, 'restore-operation-marker.txt');
+  const rollbackLogPath = join(root, 'restore-rollback.log');
   const pgRestoreBinary = join(root, 'stub-pg-restore-stateful.sh');
   const psqlBinary = join(root, 'stub-psql-stateful.sh');
   writeFileSync(pgRestoreBinary, [
@@ -278,6 +281,7 @@ function writeStatefulRestoreStubs(root: string): {
     `    rm -f '${markerPath}'`,
     '    ;;',
     '  *"DROP SCHEMA"*)',
+    `    printf 'rollback\\n' >> '${rollbackLogPath}'`,
     `    printf 'public\\t0\\n' > '${statePath}'`,
     '    ;;',
     '  *)',
@@ -286,7 +290,7 @@ function writeStatefulRestoreStubs(root: string): {
     'esac',
     '',
   ].join('\n'), { mode: 0o755 });
-  return { pgRestoreBinary, psqlBinary, statePath };
+  return { pgRestoreBinary, psqlBinary, statePath, markerPath, rollbackLogPath };
 }
 
 function writeSystemOwnerFiles(systemDataDir: string): void {
@@ -1067,6 +1071,83 @@ describe('runFleetBackupCycle', () => {
       expect(restoreEntries.some(name => name.includes('.restore-'))).toBe(false);
     },
   );
+
+  it('preserves recreated trees after SIGKILL loses the rollback marker-removal response', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-sigkill-marker-removal-${Date.now()}`);
+    roots.push(root);
+    const result = await createPerCompanionTestBackup(root);
+    const {
+      pgRestoreBinary,
+      psqlBinary,
+      statePath,
+      markerPath,
+      rollbackLogPath,
+    } = writeStatefulRestoreStubs(root);
+    const destinations = {
+      companionDataDir: join(root, 'restore', 'companion'),
+      personalWorkspacePath: join(root, 'restore', 'workspace'),
+    };
+    const worker = fileURLToPath(new URL(
+      './test-fixtures/fleet-restore-kill-worker.ts',
+      import.meta.url,
+    ));
+    const child = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      worker,
+      result.fleetManifestPath,
+      COMPANION_A,
+      destinations.companionDataDir,
+      destinations.personalWorkspacePath,
+      'postgresql://restore:secret@127.0.0.1:5432/restore',
+      pgRestoreBinary,
+      psqlBinary,
+      'after_rollback_marker_removal',
+      '1',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolveExit, rejectExit) => {
+        child.once('error', rejectExit);
+        child.once('exit', (code, signal) => resolveExit({ code, signal }));
+      },
+    );
+    expect(outcome).toEqual({ code: null, signal: 'SIGKILL' });
+    expect(existsSync(markerPath)).toBe(false);
+    expect(readFileSync(statePath, 'utf8')).toBe('public\t0\n');
+    const rollbackLogBeforeRecovery = readFileSync(rollbackLogPath, 'utf8');
+    const journalNames = readdirSync(join(root, 'restore'))
+      .filter(name => name.startsWith('.restore-operation-'));
+    expect(journalNames).toHaveLength(1);
+
+    mkdirSync(join(destinations.companionDataDir, 'vault'), { recursive: true });
+    const recreatedDataPath = join(destinations.companionDataDir, 'vault', 'recreated.txt');
+    const recreatedWorkspacePath = join(destinations.personalWorkspacePath, 'recreated.txt');
+    writeFileSync(recreatedDataPath, 'recreated data owner\n');
+    writeFileSync(recreatedWorkspacePath, 'recreated workspace owner\n');
+
+    const recovery = () => restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations,
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+        psqlBinary,
+      },
+    });
+    await expect(recovery()).rejects.toThrow(/no matching durable operation marker/);
+    expect(readFileSync(recreatedDataPath, 'utf8')).toBe('recreated data owner\n');
+    expect(readFileSync(recreatedWorkspacePath, 'utf8')).toBe('recreated workspace owner\n');
+    expect(readFileSync(rollbackLogPath, 'utf8')).toBe(rollbackLogBeforeRecovery);
+    expect(existsSync(join(root, 'restore', journalNames[0]))).toBe(true);
+
+    writeFileSync(markerPath, 'foreign\n');
+    await expect(recovery()).rejects.toThrow(/marker.*inconsistent|destructive recovery/);
+    expect(readFileSync(recreatedDataPath, 'utf8')).toBe('recreated data owner\n');
+    expect(readFileSync(recreatedWorkspacePath, 'utf8')).toBe('recreated workspace owner\n');
+    expect(readFileSync(rollbackLogPath, 'utf8')).toBe(rollbackLogBeforeRecovery);
+    expect(existsSync(join(root, 'restore', journalNames[0]))).toBe(true);
+  });
 
   it('restores a group artifact only into explicit whole-fleet destinations', async () => {
     const root = join(tmpdir(), `psfn-fleet-group-restore-${Date.now()}`);

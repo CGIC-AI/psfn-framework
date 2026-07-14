@@ -22,7 +22,8 @@ export type FleetRestoreKind = 'companion' | 'cluster' | 'group';
 export type FleetRestoreFaultStage =
   | 'after_journal'
   | 'after_database_commit'
-  | 'after_tree_publish';
+  | 'after_tree_publish'
+  | 'after_rollback_marker_removal';
 
 export interface FleetRestoreFaultInjectionOptions {
   /** Deterministic crash seam for recovery tests. */
@@ -248,11 +249,13 @@ async function finishRestoreRollback(
   operation: FleetRestoreDatabaseOperation,
   rollbackDatabase: (operation: FleetRestoreDatabaseOperation) => Promise<void>,
   removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>,
+  faultInjection?: FleetRestoreFaultInjectionOptions['faultInjection'],
 ): Promise<void> {
   await rollbackDatabase(operation);
-  await removeDatabaseOperation(operation);
   cleanupPublishedTrees(journal.trees);
   cleanupStagedTrees(journal.trees);
+  await removeDatabaseOperation(operation);
+  faultInjection?.('after_rollback_marker_removal', 0);
   removeRestoreJournal(journalPath);
 }
 
@@ -291,6 +294,7 @@ export async function executeFleetRestoreTransaction(
           operation,
           options.rollbackDatabase,
           options.removeDatabaseOperation,
+          options.faultInjection,
         );
         return await executeFleetRestoreTransaction(options);
       }
@@ -303,10 +307,17 @@ export async function executeFleetRestoreTransaction(
       if (databaseState !== 'none') {
         throw new Error('Fleet restore database state has no matching durable operation marker');
       }
-      // The schema rollback committed before marker cleanup (or the marker was
-      // already removed). Only filesystem/journal finalization remains.
-      cleanupPublishedTrees(interrupted.trees);
-      cleanupStagedTrees(interrupted.trees);
+      const ownedCleanupComplete = interrupted.trees.every(tree => (
+        !existsSync(tree.destination) && !existsSync(tree.staging)
+      ));
+      if (!ownedCleanupComplete) {
+        throw new Error(
+          'Fleet restore rollback has no matching durable operation marker; refusing filesystem cleanup',
+        );
+      }
+      // The exact marker is removed only after database and filesystem
+      // rollback are durable. With every owned path already absent, only the
+      // journal response remains to finalize.
       removeRestoreJournal(journalPath);
       return await executeFleetRestoreTransaction(options);
     }
@@ -450,18 +461,19 @@ export async function executeFleetRestoreTransaction(
           operation,
           options.rollbackDatabase,
           options.removeDatabaseOperation,
+          options.faultInjection,
         );
       } catch (rollbackError) {
         throw new AggregateError([error, rollbackError], 'Fleet restore failed and durable rollback remains pending');
       }
     } else if (markerPrepared) {
       try {
+        cleanupStagedTrees(journal.trees);
         await options.removeDatabaseOperation(operation);
-      } catch (markerError) {
-        throw new AggregateError([error, markerError], 'Fleet restore failed and marker cleanup remains pending');
+        removeRestoreJournal(journalPath);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Fleet restore failed and durable cleanup remains pending');
       }
-      cleanupStagedTrees(journal.trees);
-      removeRestoreJournal(journalPath);
     } else {
       cleanupStagedTrees(journal.trees);
       removeRestoreJournal(journalPath);

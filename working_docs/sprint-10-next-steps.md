@@ -18,6 +18,12 @@ The headline fact governing everything below: the multi-companion substrate is *
   `npm run verify:repository-hygiene`, and `git diff --check` passed. Separate
   standards and spec reviews both passed with no findings. No live host was
   contacted.
+- Security follow-up `psfn-framework-upx0.8` is integrated and pushed at
+  `e2fa8e3e`: `isStrictSubpath` now has one canonical hardened definition in
+  `src/persistence/layout.ts`, used by artifact lifecycle and the surviving
+  Research Library file boundaries. The different-root absolute-relative
+  regression and normal-path coverage passed (24 focused non-SQLite tests),
+  as did lint, build, and the independent final review.
 
 ## 0. 2026-07-12 update — decided priority order
 

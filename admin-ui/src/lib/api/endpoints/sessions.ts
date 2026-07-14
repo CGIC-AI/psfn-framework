@@ -10,6 +10,7 @@ import type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionSearchData,
+  AdminSessionTurnDetailData,
 } from '$lib/types';
 
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
@@ -19,6 +20,12 @@ export interface SessionMessagesRequest {
   limit?: number;
   beforeId?: number | null;
   messagesOnly?: boolean;
+  /**
+   * Send `false` to drop the up-to-50 full turn snapshots and role-envelope
+   * previews while keeping compaction summaries. Omit (server default true) to
+   * keep the turns array for the prompt-monitor/Loom fetch.
+   */
+  includeTurns?: boolean;
 }
 
 export function listSessions(): Promise<AdminSessionListData> {
@@ -39,6 +46,9 @@ export function buildSessionMessagesPath(
   if (request.messagesOnly) {
     params.set('messagesOnly', 'true');
   }
+  if (request.includeTurns === false) {
+    params.set('includeTurns', 'false');
+  }
   const query = params.toString();
   const path = `/api/admin/sessions/${encodeURIComponent(sessionId)}`;
   return query ? `${path}?${query}` : path;
@@ -49,6 +59,17 @@ export function getSessionMessages(
   request: SessionMessagesRequest = {},
 ): Promise<AdminSessionMessagesData> {
   return apiGet<AdminSessionMessagesData>(buildSessionMessagesPath(sessionId, request));
+}
+
+export function buildSessionTurnDetailPath(sessionId: string, turnId: string): string {
+  return `/api/admin/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`;
+}
+
+export function getSessionTurnDetail(
+  sessionId: string,
+  turnId: string,
+): Promise<AdminSessionTurnDetailData> {
+  return apiGet<AdminSessionTurnDetailData>(buildSessionTurnDetailPath(sessionId, turnId));
 }
 
 export function searchSessionMessages(

@@ -5,6 +5,7 @@ import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
 import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import { mergeAuthenticatedJournalWithSessionTail } from '../../../core/session/manager/session-tail-read-store.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CompactionSummary } from '../../../core/session/types.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
@@ -52,6 +53,7 @@ import type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionMessageOntologyView,
+  AdminSessionMessagePaginationOptions,
   AdminSessionDetailData,
   AdminSessionListRow,
   AdminSessionListData,
@@ -705,12 +707,49 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  getSessionMessages(sessionId: string, options: {
-    limit?: number;
-    beforeId?: number | null;
-    messagesOnly?: boolean;
-    includeTurns?: boolean;
-  } = {}): AdminSessionMessagesData {
+  /**
+   * Garden's newest-page read path. Authenticate the current bounded journal
+   * window first, then let the shared tail fill only ids newer than that
+   * window. The latest authenticated message id is also the cross-process
+   * freshness checkpoint: a behind tail is rejected and repopulated even when
+   * this SessionStore's process-local index predates another writer's append.
+   * Redis-disabled/degraded/missing/behind tails return `null` from the store
+   * and fall through to the canonical journal reader. Cursor pages stay
+   * canonical because a bounded hot tail cannot prove it covers older ranges.
+   */
+  async getSessionMessagesForAdminRead(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): Promise<AdminSessionMessagesData> {
+    const beforeId = normalizeBeforeId(options.beforeId);
+    if (beforeId !== null) {
+      return this.getSessionMessages(sessionId, options);
+    }
+
+    const pageLimit = normalizePageLimit(options.limit);
+    const authenticatedJournalMessages = this.deps.sessionStore.getRecent(sessionId, pageLimit);
+    const expectedMinEntryId = authenticatedJournalMessages.at(-1)?.id ?? null;
+    const tailMessages = await this.deps.sessionStore.fetchSessionTailWindow(sessionId, {
+      ...(expectedMinEntryId !== null ? { expectedMinEntryId } : {}),
+    });
+    const authenticatedMessages = tailMessages
+      ? mergeAuthenticatedJournalWithSessionTail(authenticatedJournalMessages, tailMessages).slice(-pageLimit)
+      : authenticatedJournalMessages;
+    return this.buildSessionMessages(sessionId, options, authenticatedMessages);
+  }
+
+  getSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): AdminSessionMessagesData {
+    return this.buildSessionMessages(sessionId, options);
+  }
+
+  private buildSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions,
+    firstPageMessages?: readonly SessionEntry[],
+  ): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
     const totalMessages = this.deps.sessionStore.count(sessionId);
@@ -718,7 +757,9 @@ export class AdminSessionDataService implements AdminSessionService {
       ? null
       : this.deps.sessionStore.getEntriesBefore(sessionId, beforeId, limit + 1);
     const messages = olderThanCursor === null
-      ? this.deps.sessionStore.getRecent(sessionId, limit)
+      ? (firstPageMessages
+          ? firstPageMessages.slice(-limit)
+          : this.deps.sessionStore.getRecent(sessionId, limit))
       : olderThanCursor.slice(-limit);
     const hasMoreOlder = olderThanCursor === null
       ? totalMessages > messages.length

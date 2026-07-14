@@ -424,7 +424,12 @@ export function buildAdminSessionRoutes(options: {
           sendJson(res, 400, { error: parsed.error });
           return;
         }
-        sendCompressedJson(req, res, 200, sessionService.getSessionMessages(channelId, parsed.value));
+        sessionService.getSessionMessagesForAdminRead(channelId, parsed.value).then(
+          payload => sendCompressedJson(req, res, 200, payload),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load session messages'),
+          }),
+        );
       },
     },
   ];

@@ -22,6 +22,24 @@ The headline fact governing everything below: the multi-companion substrate is *
   lint, and worktree plus branch-range diff checks passed. The two known,
   untouched prompt-monitor Svelte diagnostics remain report-only. Parent epic
   `psfn-framework-t5z7` remains open for its other children.
+- `psfn-framework-t5z7.8` is closed at `582f3160` (bounded JSONL/memo slice
+  `47626be8`, list/detail API and explicit-click Garden UI slice `1165cfba`,
+  independent-review remediation `582f3160`). Garden audit history now reads a
+  bounded 16 MiB/2,000-entry tail, memoizes unchanged file identities, and
+  fails closed when the file changes during a read. List responses omit raw
+  source blobs and internal record IDs; authenticated no-store detail resolves
+  raw data only after an explicit operator click.
+- The single independent review at `1165cfba` found three important privacy and
+  consistency issues. The one allowed remediation replaced predictable hashes
+  with companion-bound HMAC opaque IDs backed by the canonical session-HMAC
+  keyring, sanitized gateway error text in list-visible data, and made list and
+  detail use the same bounded unfiltered source window before local filtering.
+  Final integrated gate at `582f3160`: server/service/routes 33/33, Garden
+  endpoint 2/2, lint, Garden build, root ESM+DTS build, and worktree plus
+  branch-range diff checks passed. The inherited, untouched diagnostics at
+  `admin-ui/src/lib/events/prompt-monitor.ts:336` and
+  `admin-ui/src/lib/events/prompt-monitor.test.ts:260` remain report-only.
+  Parent epic `psfn-framework-t5z7` remains open for its other children.
 
 ## 0. 2026-07-12 update — decided priority order
 

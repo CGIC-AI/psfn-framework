@@ -1,6 +1,6 @@
 # Multi-Companion Substrate
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-13.
 
 This is the canonical page for running more than one companion on a single PSFN
 cluster: the topology, the opt-in flag, the fleet manifest, and the fleet
@@ -17,10 +17,12 @@ explicit opt-in and is inert — byte-identically so — when the flag is off.
   companion ID, data dir, character card, and Postgres schema. All agents
   connect to the one gateway over the existing Unix-socket protocol; the
   gateway keeps sole ownership of secrets and external egress.
-- **Process/schema boundaries isolate only their declared domains.** The process
-  boundary isolates agent-local execution and failures; the Postgres schema
-  isolates tenant database state. This does not yet isolate workspace-backed
-  files—see [Workspace scopes](#workspace-scopes-current-behavior-and-target-contract).
+- **Process/schema/workspace boundaries isolate their declared domains.** The
+  process boundary isolates agent-local execution and failures, the Postgres
+  schema isolates tenant database state, and the authenticated companion
+  identity selects exactly one deterministic Personal Workspace. Shell
+  interpreters are denied until an OS-mediated filesystem sandbox exists;
+  other allowlisted commands retain the existing cwd and argument-path checks.
 - **Companion ID is a UUID.** The fleet keys on lowercase RFC-4122 UUIDs
   (`src/system/config/companions-config.ts`, `COMPANION_ID_PATTERN`).
 - **Peers, not shards.** A fleet companion is independently rooted. A shard is
@@ -68,13 +70,13 @@ operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
 and the per-companion admin socket back to that one manifest entry; an unknown
 ID or any drift refuses startup before persistence or character-card loading.
 
-**What is NOT in `companions.json` today:** per-companion Discord tokens,
-model/settings selections, or a personal workspace path. Discord identity +
+**What is NOT in `companions.json`:** per-companion Discord tokens,
+model/settings selections, or a mutable personal workspace path. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
-var. The manifest currently owns identity, data location, tenant schema, and
-Garden port only. A validated personal-workspace field or deterministic
-per-companion derivation is required before workspace isolation can be claimed.
+var. The manifest owns identity, data location, tenant schema, and Garden port;
+the runtime deterministically derives `workspaces/personal/<companionId>` from
+the validated runtime root rather than accepting another path override.
 
 ## Postgres tenancy: schema-per-companion + one shared schema
 
@@ -113,6 +115,7 @@ fleet and spawns one agent process per companion.
   (`scripts/resolve-companion-fleet.ts`) reuses `resolveCompanionFleet` and emits
   an internal tab-delimited spawn plan, one line per companion:
   `companionId, companionDataDir, characterCardPath, postgresSchema,
+  personalWorkspacePath,
   role-bound agent proof, role-bound session-integrity proof,
   adminTransportSocket, gardenPort` (`gardenPort` is `-` when absent). A
   single-companion topology prints nothing — the launcher reads empty stdout as
@@ -128,8 +131,10 @@ fleet and spawns one agent process per companion.
   The default single-companion launcher derives the same role separation for
   its isolated worker even though normal agent methods retain local-socket
   trust for flag-off compatibility.
-- `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) prints the spawn plan and exits
-  without launching anything.
+- `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) resolves and prints the spawn
+  plan without creating workspace directories. The real launcher acquires its
+  socket-scoped lock before migration or provisioning, so a rejected concurrent
+  launcher cannot mutate workspace state.
 - Shared fate: any supervised process exit tears down the whole fleet.
 
 Gateway registration is authenticated in multi-companion mode. The gateway
@@ -141,7 +146,7 @@ topologies; selecting the internal role always requires its proof.
 Network admin-transport mode is rejected fail-closed under the supervisor:
 per-companion Gardens currently support socket mode only.
 
-## Workspace scopes: current behavior and target contract
+## Workspace scopes: runtime contract
 
 PSFN distinguishes four domains: system-owned configuration and policy,
 companion-owned runtime state, one **Personal Workspace** per companion, and an
@@ -181,14 +186,28 @@ then injects only `workspaces/personal/<uuid>` as that process's
 `WORKSPACE_PATH`. Missing, overlapping, symlink-escaping, or tuple-mismatched
 roots fail startup.
 
-The Shared Companion Workspace is exposed through authenticated Garden routes,
-not through an environment variable or the normal companion filesystem tools.
-Companions are read-only by policy. Operator publication requires an actor,
-provenance, a content revision, an independent reviewer, and an approved CogSec
-decision; writes are contained and atomic. Shared content is stored only below
-`artifacts/`, accepts non-executable text formats, and is never auto-loaded into
-skills, modules, prompts, wikis, or memory. The versioned Companion Library seed
-lands under `docs/companion-library/` and uses no-overwrite copies.
+The Shared Companion Workspace is published through authenticated Garden
+routes, not through an environment variable or normal companion filesystem
+tools. Publication uses three distinct credentials
+(`SHARED_WORKSPACE_PROPOSER_TOKEN`, `SHARED_WORKSPACE_REVIEWER_TOKEN`, and
+`SHARED_WORKSPACE_COGSEC_TOKEN`); proposer/reviewer/CogSec identities are
+derived from those credentials and JSON identity assertions are rejected.
+Each secret must contain at least 24 non-whitespace characters and all three
+must differ. A write request supplies only its role's secret in
+`x-companion-shared-workspace-credential`, in addition to normal Garden
+authentication; persisted principal records do not expose credential digests.
+CogSec produces a revision-bound decision artifact before the independent
+reviewer can approve. Publication re-reads under a lock and journals artifact,
+decision, and immutable provenance updates for crash recovery.
+
+Authenticated companion connections have only `shared.workspace.list` and
+`shared.workspace.read`; there is no companion write or autoload method.
+Shared content is stored only below `artifacts/`, accepts non-executable text
+formats, and is never auto-loaded into skills, modules, prompts, wikis, or
+memory. The versioned Companion Library seed lands under
+`docs/companion-library/` with no-overwrite copies. Its checked-in manifest
+contains every source hash; source changes without a versioned manifest update
+fail startup.
 
 ## Per-companion channels (Discord)
 
@@ -235,15 +254,16 @@ Each companion has its own Discord bot identity. Discord accounts in
 Backups are per-companion by default, with an optional whole-family artifact.
 
 - **Per-companion slices.** Each companion in the shared database is backed up as
-  its own slice (its own `postgresSchema` dump + its own companion-data tree), so
-  one companion can be moved to another cluster as a slice
+  its own slice (its own `postgresSchema` dump + its own companion-data tree and
+  Personal Workspace), so one companion can be moved to another cluster as a slice
   (`src/persistence/backups/service.ts`).
 - **Cluster artifact.** A separate `cluster` artifact captures the shared-world
-  schema (`shared`) plus system-data owner files — the data that belongs to the
-  cluster rather than to any one companion.
+  schema (`shared`), system-data owner files, and the Shared Companion Workspace
+  — the data that belongs to the cluster rather than to any one companion.
 - **Group mode.** With `groupMode` enabled (`backup.json`, env override
   `BACKUP_GROUP_MODE`) the fleet collapses into one whole-database family
-  artifact instead of per-companion slices.
+  artifact, including the complete workspace family, instead of per-companion
+  slices.
 - **Leader election is deterministic.** Exactly one process runs the fleet backup
   cycle: the leader is `fleet.companions[0].companionId`
   (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`) — first
@@ -253,8 +273,13 @@ Backups are per-companion by default, with an optional whole-family artifact.
 - Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown,
   never swallowed.
 
-Restore currently mirrors the single-companion path; per-companion fleet restore
-build-out is a tracked follow-up.
+`src/persistence/backups/fleet-restore.ts` restores exactly one selected scope:
+a companion slice into explicit companion-data + Personal Workspace
+destinations, the cluster artifact into explicit system-data + Shared Workspace
+destinations, or a group artifact into explicit whole-fleet roots. Every tree is
+hash-verified before restore, existing destinations are rejected (never merged
+or overwritten), and the matching Postgres dump is restored with owner/ACL
+replay disabled.
 
 ## Locations, presence, and the shared world
 
@@ -297,11 +322,8 @@ notes but are not wired in this branch:
 
 - The shared-wiki **caretaker** layer (dedup, rewrite, cleanup, LLM-assisted
   updates). Today shared-world writes are operator-driven maintenance commands.
-- Per-companion Personal Workspace wiring, Companion Library/Seed Bundle
-  provisioning, and the governed Shared Companion Workspace. These must land
-  before a fleet can claim personal filesystem isolation.
 - Cross-cluster companion communication and cross-cluster world sync (one world =
   one cluster).
 - A "management" capability tier acting on other companions' settings.
-- Voice subsystem rewrite; per-companion fleet restore build-out.
+- Voice subsystem rewrite.
 - Fatigue/charge and tool-error metrics on the fleet-status page.

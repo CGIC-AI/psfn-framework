@@ -37,6 +37,17 @@ Supported until beta:
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These paths are read/migration support only, not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
+- One-time legacy Personal Workspace assignment during the multi-companion alpha
+  cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its
+  deterministic tree digest. An operator must select exactly one configured
+  companion with `PSFN_LEGACY_WORKSPACE_COMPANION_ID` and approve the exact
+  digest with `PSFN_LEGACY_WORKSPACE_SHA256`; migration copies without merging
+  or overwriting and retains the source. Validation is the immutable migration
+  receipt plus exact source-tree integrity and verification that every migrated
+  source entry remains unchanged at the destination; later provisioned Personal
+  Workspace files are allowed. Remove this startup migration
+  and both env inputs before beta after every live installation has a verified
+  receipt.
 
 Out of boundary:
 
@@ -120,9 +131,11 @@ or manifest override.
 
 Personal and shared workspace roots are canonicalized,
 non-overlapping with each other and with system/companion/runtime roots, and
-contained beneath the configured runtime root. Garden-mediated shared writes require explicit
-actor and provenance records, review policy, atomic writes, containment checks,
-and CogSec approval. Shared material does not automatically reach prompts,
+contained beneath the configured runtime root. Garden-mediated shared writes
+derive proposer, reviewer, and CogSec principals from three distinct
+credentials; body identity claims are rejected. Publication requires provenance,
+a revision-bound CogSec artifact, independent review, a crash-recoverable
+transaction, and containment checks. Shared material does not automatically reach prompts,
 wikis, memory, skills, or modules.
 
 ## Artifact Ownership

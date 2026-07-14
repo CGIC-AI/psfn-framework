@@ -83,6 +83,7 @@ import {
   type CompanionId,
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
+import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -263,12 +264,16 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
+    this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
+      ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
+      : null;
     if (options.companionChannels && !this.multiCompanion.enabled) {
       throw new Error(
         'GatewayServer received a companionChannels lane while multi-companion is disabled; '
@@ -470,9 +475,49 @@ export class GatewayServer {
       return null;
     });
     target.addMethod('companion.event.publish', async (params: unknown) => {
-      await this.dispatchCompanionEventPublish(params);
+      await this.dispatchCompanionEventPublish(conn, params);
       return null;
     });
+    target.addMethod('shared.workspace.list', this.audited(
+      'shared.workspace.list',
+      (params: unknown) => this.listSharedWorkspaceArtifacts(conn, params),
+    ));
+    target.addMethod('shared.workspace.read', this.audited(
+      'shared.workspace.read',
+      (params: unknown) => this.readSharedWorkspaceArtifact(conn, params),
+      (params: unknown) => ({
+        ...(isRecord(params) && typeof params.artifactPath === 'string'
+          ? { artifactPath: params.artifactPath }
+          : {}),
+      }),
+    ));
+  }
+
+  private requireSharedWorkspaceReader(conn: GatewayRpcConnection): SharedCompanionWorkspaceReader {
+    const status = this.connectionStatuses.get(conn);
+    if (!this.multiCompanion.enabled
+      || status?.role !== 'agent'
+      || !status.companionId
+      || !this.sharedWorkspaceReader) {
+      throw new Error('Shared workspace reads require an authenticated fleet companion connection');
+    }
+    return this.sharedWorkspaceReader;
+  }
+
+  private listSharedWorkspaceArtifacts(conn: GatewayRpcConnection, params: unknown) {
+    if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
+      throw new Error('shared.workspace.list accepts no parameters or identity assertions');
+    }
+    return { artifacts: this.requireSharedWorkspaceReader(conn).listArtifacts() };
+  }
+
+  private readSharedWorkspaceArtifact(conn: GatewayRpcConnection, params: unknown) {
+    if (!isRecord(params)
+      || Object.keys(params).length !== 1
+      || typeof params.artifactPath !== 'string') {
+      throw new Error('shared.workspace.read requires only artifactPath; identity assertions are forbidden');
+    }
+    return this.requireSharedWorkspaceReader(conn).readArtifact(params.artifactPath);
   }
 
   private resolveConnectionWorkspacePath(conn: GatewayRpcConnection): string {
@@ -520,12 +565,20 @@ export class GatewayServer {
    * published. Approval events cannot arrive here — they originate inside
    * the gateway approval boundary.
    */
-  private async dispatchCompanionEventPublish(params: unknown): Promise<void> {
+  private async dispatchCompanionEventPublish(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): Promise<void> {
     const parsed = parseCompanionRelayPublishParams(params);
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    if (this.multiCompanion.enabled && !companionId) {
+      throw new Error('companion.event.publish requires an authenticated companion identity');
+    }
     if (parsed.kind === 'tool.activity') {
       await this.options.eventBus.emit('companion.tool.activity', {
         payload: parsed.payload,
         ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+        ...(companionId ? { companionId } : {}),
         timestamp: Date.now(),
       });
       return;
@@ -534,6 +587,7 @@ export class GatewayServer {
       payload: parsed.payload,
       ...(parsed.preview ? { preview: parsed.preview } : {}),
       ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+      ...(companionId ? { companionId } : {}),
       timestamp: Date.now(),
     });
   }

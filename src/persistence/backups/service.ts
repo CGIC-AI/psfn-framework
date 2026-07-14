@@ -718,9 +718,9 @@ export function registerScheduledBackupTask(
 // pg_dump (every companion schema + `shared`) plus the system tree plus every
 // companion's files under the common companion-data parent.
 //
-// Restore is intentionally out of scope for this phase; the fleet manifest below
-// records the exact artifact layout and the schema/tree → destination mapping a
-// future restore needs.
+// Destination-aware restore is implemented in fleet-restore.ts. It verifies
+// every captured tree, refuses destination collisions, and restores the matching
+// Postgres slice without combining companion, shared-cluster, or group scopes.
 
 export const FLEET_BACKUP_MANIFEST_NAME = 'fleet-backup-manifest.json';
 export const FLEET_BACKUP_MANIFEST_SCHEMA_VERSION = 1;
@@ -834,7 +834,7 @@ interface FleetBackupManifest {
   overallStatus: 'success' | 'failure';
   sharedSchema?: string;
   units: FleetBackupUnitOutcome[];
-  /** Human/tooling-readable layout + restore mapping (restore build-out is deferred). */
+  /** Human/tooling-readable layout + restore mapping consumed by fleet-restore.ts. */
   layout: Record<string, string>;
 }
 

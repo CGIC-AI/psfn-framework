@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,11 @@ import {
   runFleetBackupCycle,
   type FleetBackupCompanionUnit,
 } from './service.js';
+import {
+  restoreFleetClusterArtifact,
+  restoreFleetCompanionSlice,
+  restoreFleetGroupArtifact,
+} from './fleet-restore.js';
 import {
   KUBERNETES_HELM_RECOVERY_MANIFEST_NAME,
   type KubernetesHelmBackupConfig,
@@ -51,6 +57,22 @@ function writeSchemaLoggingStubPgDump(root: string): { stubPath: string; logPath
       'done',
       `printf '%s\\t%s\\n' "\${schema:-ALL}" "$out" >> '${logPath}'`,
       'printf "stub-dump" > "$out"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return { stubPath, logPath };
+}
+
+function writeLoggingStubPgRestore(root: string): { stubPath: string; logPath: string } {
+  const stubPath = join(root, 'stub-pg-restore.sh');
+  const logPath = join(root, 'pg-restore-log.txt');
+  writeFileSync(
+    stubPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${logPath}'`,
+      'exit 0',
       '',
     ].join('\n'),
     { mode: 0o755 },
@@ -345,5 +367,157 @@ describe('runFleetBackupCycle', () => {
       groupMode: true,
       now: FIXED_NOW,
     })).rejects.toThrow('groupCompanionDataDir');
+  });
+
+  it('restores one companion slice and the shared cluster artifact without cross-contamination', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    writeSystemOwnerFiles(systemDataDir);
+    const backupRootDir = join(root, 'backups');
+    const { stubPath: pgDumpBinary } = writeSchemaLoggingStubPgDump(root);
+    const { stubPath: pgRestoreBinary, logPath } = writeLoggingStubPgRestore(root);
+    const companions = [
+      makeCompanion(root, COMPANION_A, 'companion_alpha'),
+      makeCompanion(root, COMPANION_B, 'companion_beta'),
+    ];
+    const result = await runFleetBackupCycle({
+      postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary },
+      companions,
+      systemDataDir,
+      sharedWorkspacePath: makeSharedWorkspace(root),
+      backupRootDir,
+      now: FIXED_NOW,
+    });
+
+    const companionDataDir = join(root, 'restore', 'companion-a');
+    const personalWorkspacePath = join(root, 'restore', 'workspace-a');
+    const overlappingDestination = join(root, 'restore-overlap', 'same-root');
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: {
+        companionDataDir: overlappingDestination,
+        personalWorkspacePath: overlappingDestination,
+      },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    })).rejects.toThrow(/distinct, non-overlapping roots/);
+    expect(existsSync(join(root, 'restore-overlap'))).toBe(false);
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: {
+        companionDataDir: join(backupRootDir, 'forbidden-restore-target'),
+        personalWorkspacePath: join(root, 'unused-restore-target'),
+      },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    })).rejects.toThrow(/overlaps its immutable backup root/);
+    expect(existsSync(join(backupRootDir, 'forbidden-restore-target'))).toBe(false);
+    const backupAlias = join(root, 'backup-alias');
+    symlinkSync(backupRootDir, backupAlias, 'dir');
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: {
+        companionDataDir: join(backupAlias, 'symlinked-restore-target'),
+        personalWorkspacePath: join(root, 'unused-symlink-restore-target'),
+      },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    })).rejects.toThrow(/overlaps its immutable backup root/);
+    expect(existsSync(join(backupRootDir, 'symlinked-restore-target'))).toBe(false);
+
+    await restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: { companionDataDir, personalWorkspacePath },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    });
+    expect(readFileSync(join(companionDataDir, 'vault/note.md'), 'utf8')).toContain(COMPANION_A);
+    expect(readFileSync(join(companionDataDir, 'state/sessions/channel.jsonl'), 'utf8')).toContain('"id":1');
+    expect(readFileSync(join(personalWorkspacePath, 'journal/personal.md'), 'utf8')).toContain(COMPANION_A);
+    expect(existsSync(join(companionDataDir, COMPANION_B))).toBe(false);
+    expect(existsSync(join(personalWorkspacePath, COMPANION_B))).toBe(false);
+
+    const restoredSystemDataDir = join(root, 'restore', 'system');
+    const restoredSharedWorkspace = join(root, 'restore', 'shared');
+    await restoreFleetClusterArtifact({
+      fleetManifestPath: result.fleetManifestPath,
+      destinations: {
+        systemDataDir: restoredSystemDataDir,
+        sharedWorkspacePath: restoredSharedWorkspace,
+      },
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    });
+    expect(existsSync(join(restoredSystemDataDir, 'settings.json'))).toBe(true);
+    expect(readFileSync(join(restoredSharedWorkspace, 'artifacts/world.md'), 'utf8')).toBe('shared world\n');
+    expect(existsSync(join(restoredSharedWorkspace, 'personal'))).toBe(false);
+
+    expect(readFileSync(logPath, 'utf8').trim().split('\n')).toHaveLength(2);
+    expect(readFileSync(logPath, 'utf8')).not.toContain('secret');
+    await expect(restoreFleetCompanionSlice({
+      fleetManifestPath: result.fleetManifestPath,
+      companionId: COMPANION_A,
+      destinations: { companionDataDir, personalWorkspacePath: join(root, 'restore', 'other') },
+      postgres: { databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore', pgRestoreBinary },
+    })).rejects.toThrow(/no-overwrite policy refuses collision/);
+    expect(readFileSync(join(companionDataDir, 'vault/note.md'), 'utf8')).toContain(COMPANION_A);
+  });
+
+  it('restores a group artifact only into explicit whole-fleet destinations', async () => {
+    const root = join(tmpdir(), `psfn-fleet-group-restore-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    writeSystemOwnerFiles(systemDataDir);
+    const backupRootDir = join(root, 'backups');
+    const { stubPath: pgDumpBinary } = writeSchemaLoggingStubPgDump(root);
+    const { stubPath: pgRestoreBinary } = writeLoggingStubPgRestore(root);
+    const companions = [
+      makeCompanion(root, COMPANION_A, 'companion_alpha'),
+      makeCompanion(root, COMPANION_B, 'companion_beta'),
+    ];
+    const result = await runFleetBackupCycle({
+      postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary },
+      companions,
+      systemDataDir,
+      sharedWorkspacePath: makeSharedWorkspace(root),
+      backupRootDir,
+      groupMode: true,
+      groupCompanionDataDir: join(root, 'companion-data'),
+      groupWorkspacesRoot: join(root, 'workspaces'),
+      now: FIXED_NOW,
+    });
+    const destinations = {
+      groupCompanionDataDir: join(root, 'restore', 'companions'),
+      groupWorkspacesRoot: join(root, 'restore', 'workspaces'),
+      systemDataDir: join(root, 'restore', 'system'),
+    };
+    await restoreFleetGroupArtifact({
+      fleetManifestPath: result.fleetManifestPath,
+      destinations,
+      postgres: {
+        databaseUrl: 'postgresql://restore:secret@127.0.0.1:5432/restore',
+        pgRestoreBinary,
+      },
+    });
+    expect(existsSync(join(destinations.groupCompanionDataDir, COMPANION_A, 'vault/note.md'))).toBe(true);
+    expect(existsSync(join(destinations.groupCompanionDataDir, COMPANION_B, 'vault/note.md'))).toBe(true);
+    expect(existsSync(join(destinations.groupWorkspacesRoot, 'personal', COMPANION_A, 'journal/personal.md'))).toBe(true);
+    expect(existsSync(join(destinations.groupWorkspacesRoot, 'shared', 'artifacts/world.md'))).toBe(true);
+    expect(existsSync(join(destinations.systemDataDir, 'settings.json'))).toBe(true);
   });
 });

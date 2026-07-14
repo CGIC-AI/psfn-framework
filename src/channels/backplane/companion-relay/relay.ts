@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { resolve as resolvePath, sep as pathSep } from 'node:path';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type {
@@ -43,7 +44,9 @@ export interface CompanionEventRelayOptions {
    * of a preview source outside every root is rejected (fail closed). An
    * empty list disables previews entirely.
    */
-  previewRoots: readonly string[];
+  previewRoots?: readonly string[];
+  /** Authenticated companion id -> its Personal Workspace image root. */
+  previewRootByCompanionId?: Readonly<Record<string, string>>;
   maxPreviewBytes?: number;
 }
 
@@ -66,12 +69,23 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
 export class CompanionEventRelay {
   private readonly subscribers = new Set<CompanionEventSubscriber>();
   private readonly previews = new Map<string, CompanionArtifactPreviewEntry>();
+  private readonly previewAllowedRoots = new Map<string, string>();
   private readonly previewRoots: readonly string[];
+  private readonly previewRootByCompanionId: Readonly<Record<string, string>> | null;
   private readonly maxPreviewBytes: number;
   private readonly unsubscribes: Array<() => void> = [];
 
   constructor(options: CompanionEventRelayOptions) {
-    this.previewRoots = options.previewRoots.map((root) => resolvePath(root));
+    if (options.previewRoots && options.previewRootByCompanionId) {
+      throw new Error('CompanionEventRelay preview roots must be single-companion or identity-bound, not both');
+    }
+    this.previewRoots = (options.previewRoots ?? []).map((root) => realpathSync(resolvePath(root)));
+    this.previewRootByCompanionId = options.previewRootByCompanionId
+      ? Object.fromEntries(Object.entries(options.previewRootByCompanionId).map(([id, root]) => [
+        id,
+        realpathSync(resolvePath(root)),
+      ]))
+      : null;
     this.maxPreviewBytes = options.maxPreviewBytes ?? DEFAULT_MAX_ARTIFACT_PREVIEW_BYTES;
 
     this.unsubscribes.push(
@@ -81,8 +95,8 @@ export class CompanionEventRelay {
       options.eventBus.on('companion.approval.resolved', ({ payload }) => {
         this.publish({ kind: 'approval.resolved', payload, emittedAt: new Date().toISOString() });
       }),
-      options.eventBus.on('companion.artifact.created', ({ payload, preview, channelId }) => {
-        this.registerPreview(payload, preview);
+      options.eventBus.on('companion.artifact.created', ({ payload, preview, channelId, companionId }) => {
+        this.registerPreview(payload, preview, companionId);
         this.publish({
           kind: 'artifact.created',
           payload,
@@ -107,6 +121,7 @@ export class CompanionEventRelay {
     }
     this.subscribers.clear();
     this.previews.clear();
+    this.previewAllowedRoots.clear();
   }
 
   subscribe(subscriber: CompanionEventSubscriber): () => void {
@@ -124,7 +139,22 @@ export class CompanionEventRelay {
   }
 
   getPreviewSource(artifactId: string): CompanionArtifactPreviewEntry | null {
-    return this.previews.get(artifactId) ?? null;
+    const preview = this.previews.get(artifactId);
+    const allowedRoot = this.previewAllowedRoots.get(artifactId);
+    if (!preview || !allowedRoot) return null;
+    try {
+      const canonicalPath = realpathSync(preview.localPath);
+      if (!isPathInsideRoot(canonicalPath, allowedRoot)) {
+        this.previews.delete(artifactId);
+        this.previewAllowedRoots.delete(artifactId);
+        return null;
+      }
+      return { ...preview, localPath: canonicalPath };
+    } catch {
+      this.previews.delete(artifactId);
+      this.previewAllowedRoots.delete(artifactId);
+      return null;
+    }
   }
 
   private publish(envelope: CompanionEventEnvelope): void {
@@ -145,6 +175,7 @@ export class CompanionEventRelay {
   private registerPreview(
     payload: CompanionArtifactCreatedPayload,
     preview: CompanionArtifactPreviewSource | undefined,
+    companionId: string | undefined,
   ): void {
     if (!preview) return;
     if (preview.artifactId !== payload.id) {
@@ -165,24 +196,43 @@ export class CompanionEventRelay {
       });
       return;
     }
-    const insideRoot = this.previewRoots.some((root) => isPathInsideRoot(preview.localPath, root));
-    if (!insideRoot) {
-      log.warn('Rejected artifact preview registration: path outside preview roots', {
+    const allowedRoots = this.previewRootByCompanionId
+      ? (companionId && this.previewRootByCompanionId[companionId]
+        ? [this.previewRootByCompanionId[companionId]]
+        : [])
+      : this.previewRoots;
+    let canonicalPreviewPath: string;
+    try {
+      canonicalPreviewPath = realpathSync(resolvePath(preview.localPath));
+    } catch {
+      log.warn('Rejected artifact preview registration: source path does not exist', {
         artifactId: payload.id,
+      });
+      return;
+    }
+    const allowedRoot = allowedRoots.find((root) => isPathInsideRoot(canonicalPreviewPath, root));
+    if (!allowedRoot) {
+      log.warn('Rejected artifact preview registration: path outside authenticated companion preview root', {
+        artifactId: payload.id,
+        ...(companionId ? { companionId } : {}),
       });
       return;
     }
     if (this.previews.size >= MAX_PREVIEW_REGISTRY_ENTRIES) {
       const oldest = this.previews.keys().next().value;
-      if (oldest !== undefined) this.previews.delete(oldest);
+      if (oldest !== undefined) {
+        this.previews.delete(oldest);
+        this.previewAllowedRoots.delete(oldest);
+      }
     }
     this.previews.set(payload.id, {
       artifactId: payload.id,
-      localPath: resolvePath(preview.localPath),
+      localPath: canonicalPreviewPath,
       mediaType: preview.mediaType,
       sizeBytes: preview.sizeBytes,
       previewable: preview.sizeBytes <= this.maxPreviewBytes,
     });
+    this.previewAllowedRoots.set(payload.id, allowedRoot);
   }
 
   maxPreviewSizeBytes(): number {

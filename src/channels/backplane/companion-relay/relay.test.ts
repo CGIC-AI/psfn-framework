@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
@@ -112,6 +112,59 @@ describe('CompanionEventRelay', () => {
     const source = relay.getPreviewSource('art-1');
     expect(source?.localPath).toBe(filePath);
     expect(source?.previewable).toBe(true);
+  });
+
+  it('binds multi-companion previews to the authenticated companion Personal Workspace', async () => {
+    relay.stop();
+    const companionA = join(tempDir, 'comp-a', 'images');
+    const companionB = join(tempDir, 'comp-b', 'images');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    const ownPath = join(companionA, 'own.png');
+    const peerPath = join(companionB, 'peer.png');
+    const peerSymlink = join(companionA, 'peer-link.png');
+    writeFileSync(ownPath, Buffer.alloc(10));
+    writeFileSync(peerPath, Buffer.alloc(10));
+    symlinkSync(peerPath, peerSymlink);
+    relay = new CompanionEventRelay({
+      eventBus,
+      previewRootByCompanionId: { 'comp-a': companionA, 'comp-b': companionB },
+    });
+    const payload = (id: string) => ({
+      id,
+      label: `${id}.png`,
+      mediaType: 'image/png',
+      provenance: 'image_generation',
+      createdAt: new Date(3).toISOString(),
+      previewable: true,
+    });
+
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('peer-attempt'),
+      preview: { artifactId: 'peer-attempt', localPath: peerPath, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('symlink-attempt'),
+      preview: { artifactId: 'symlink-attempt', localPath: peerSymlink, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('own-preview'),
+      preview: { artifactId: 'own-preview', localPath: ownPath, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+
+    expect(relay.getPreviewSource('peer-attempt')).toBeNull();
+    expect(relay.getPreviewSource('symlink-attempt')).toBeNull();
+    expect(relay.getPreviewSource('own-preview')?.localPath).toBe(ownPath);
+
+    unlinkSync(ownPath);
+    symlinkSync(peerPath, ownPath);
+    expect(relay.getPreviewSource('own-preview')).toBeNull();
   });
 
   it('rejects preview registrations outside every preview root (fail closed)', async () => {

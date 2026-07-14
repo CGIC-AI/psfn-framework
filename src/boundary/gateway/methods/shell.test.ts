@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
@@ -17,7 +17,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     ...policyConfig,
     ...(policyConfig.shellExec ? {
       shellExec: {
-        pathOverride: dirname(process.execPath),
+        pathOverride: [dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter),
         ...policyConfig.shellExec,
       },
     } : {}),
@@ -85,14 +85,14 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
 
     const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("ok")'],
+      command: 'printf',
+      args: ['ok'],
     });
 
     expect(result.exitCode).toBe(0);
@@ -106,7 +106,7 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: false,
-        allowlist: ['node'],
+        allowlist: ['sleep'],
         allowedCwd: [process.cwd()],
       },
     });
@@ -144,15 +144,15 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['sleep'],
         allowedCwd: [process.cwd()],
         maxTimeoutMs: 150,
       },
     });
 
     const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'setTimeout(() => process.stdout.write("late"), 500)'],
+      command: 'sleep',
+      args: ['0.5'],
       timeoutMs: 50,
     });
 
@@ -165,18 +165,18 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['false'],
         allowedCwd: [process.cwd()],
       },
     });
     const params = {
-      command: 'node',
-      args: ['-e', 'process.exit(7)'],
+      command: 'false',
+      args: [],
     };
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await harness.invoke(params);
-      expect(result.exitCode).toBe(7);
+      expect(result.exitCode).toBe(1);
     }
 
     await expect(harness.invoke(params)).rejects.toMatchObject({
@@ -190,15 +190,15 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
         maxOutputChars: 120,
       },
     });
 
     const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("x".repeat(300)); process.stderr.write("e".repeat(300));'],
+      command: 'printf',
+      args: ['x'.repeat(300)],
       maxOutputChars: 80,
     });
 
@@ -211,14 +211,14 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
 
     await expect(harness.invoke({
-      command: 'node',
-      args: ['-v'],
+      command: 'printf',
+      args: ['ok'],
       cwd: '/tmp',
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
@@ -261,26 +261,20 @@ describe('registerShellMethods', () => {
         workspacePath: process.cwd(),
         shellExec: {
           enabled: true,
-          allowlist: ['node'],
+          allowlist: ['printenv'],
           envAllowlist: ['PSFN_ALLOWED_TOKEN'],
           allowedCwd: [process.cwd()],
         },
       });
 
       const result = await harness.invoke({
-        command: 'node',
-        args: [
-          '-e',
-          'process.stdout.write(JSON.stringify({allowed: process.env.PSFN_ALLOWED_TOKEN ?? null, blocked: Object.prototype.hasOwnProperty.call(process.env, "PSFN_BLOCKED_TOKEN"), home: Object.prototype.hasOwnProperty.call(process.env, "HOME")}))',
-        ],
+        command: 'printenv',
+        args: ['PSFN_ALLOWED_TOKEN', 'PSFN_BLOCKED_TOKEN', 'HOME'],
         envVars: ['PSFN_ALLOWED_TOKEN'],
       });
 
-      expect(JSON.parse(result.stdout)).toEqual({
-        allowed: 'visible-token',
-        blocked: false,
-        home: false,
-      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('visible-token\n');
     } finally {
       if (previousAllowed === undefined) delete process.env.PSFN_ALLOWED_TOKEN;
       else process.env.PSFN_ALLOWED_TOKEN = previousAllowed;
@@ -294,15 +288,15 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         envAllowlist: ['PSFN_ALLOWED_TOKEN'],
         allowedCwd: [process.cwd()],
       },
     });
 
     await expect(harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("never")'],
+      command: 'printf',
+      args: ['never'],
       envVars: ['PSFN_BLOCKED_TOKEN'],
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
@@ -321,14 +315,14 @@ describe('registerShellMethods', () => {
       workspacePath: process.cwd(),
       shellExec: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [allowedRoot],
       },
     });
 
     await expect(harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("blocked")'],
+      command: 'printf',
+      args: ['blocked'],
       cwd: join(escapeLink, 'real-cwd'),
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,

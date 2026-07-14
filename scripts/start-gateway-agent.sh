@@ -221,6 +221,9 @@ build_agent_env() {
     SHELL_EXEC_ENV_ALLOWLIST \
     SHELL_EXEC_MAX_OUTPUT_CHARS \
     SHELL_EXEC_MAX_TIMEOUT_MS \
+    SHARED_WORKSPACE_COGSEC_TOKEN \
+    SHARED_WORKSPACE_PROPOSER_TOKEN \
+    SHARED_WORKSPACE_REVIEWER_TOKEN \
     SHUTDOWN_FORCE_EXIT_TIMEOUT_MS \
     SYSTEM_DATA_DIR \
     TELEGRAM_PRIMARY_USER_ID \
@@ -572,6 +575,18 @@ resolve_companion_fleet() {
   fi
 }
 
+provision_companion_fleet() {
+  if [ "${SUPERVISOR_MODE}" -ne 1 ]; then
+    return 0
+  fi
+  echo "[supervisor] provisioning fleet workspaces under the launcher lock..."
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx scripts/provision-companion-fleet.ts
+  else
+    npm run provision:companion-fleet
+  fi
+}
+
 resolve_single_companion_auth() {
   if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
     return 0
@@ -723,6 +738,8 @@ trap 'handle_shutdown_signal TERM' TERM
 trap cleanup EXIT
 
 acquire_launcher_lock
+
+provision_companion_fleet
 
 echo "[${MODE_LABEL}] verifying startup owner files..."
 if [ -x "./node_modules/.bin/tsx" ]; then

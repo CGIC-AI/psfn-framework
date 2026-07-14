@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
@@ -825,6 +826,84 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
 });
 
 describe('GatewayServer multi-companion routing (flag on)', () => {
+  it('exposes reviewed shared artifacts read-only to authenticated companions', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-shared-reader-'));
+    mkdirSync(join(root, 'artifacts', 'world'), { recursive: true });
+    mkdirSync(join(root, 'artifacts', 'private'), { recursive: true });
+    mkdirSync(join(root, 'reviews'), { recursive: true });
+    mkdirSync(join(root, 'provenance', 'events'), { recursive: true });
+    const reviewedContent = '# Reviewed guide\n';
+    const reviewedRevision = createHash('sha256').update(reviewedContent).digest('hex');
+    const reviewId = '11111111-1111-4111-8111-111111111111';
+    writeFileSync(join(root, 'artifacts', 'world', 'guide.md'), reviewedContent);
+    writeFileSync(join(root, 'artifacts', 'private', 'pending.md'), 'not reviewed');
+    writeFileSync(join(root, 'reviews', `${reviewId}.json`), JSON.stringify({
+      reviewId,
+      artifactPath: 'world/guide.md',
+      proposedRevision: reviewedRevision,
+      status: 'approved',
+    }));
+    writeFileSync(join(root, 'provenance', 'events', `${reviewId}.approved.json`), JSON.stringify({
+      schemaVersion: 1,
+      event: 'approved',
+      at: '2026-07-13T00:00:00.000Z',
+      reviewId,
+      artifactPath: 'world/guide.md',
+      proposedRevision: reviewedRevision,
+    }));
+    writeFileSync(join(root, 'reviews', 'pending.json'), JSON.stringify({
+      artifactPath: 'private/pending.md',
+      status: 'pending',
+      content: 'not reviewed',
+    }));
+    try {
+      const config = multiCompanion({});
+      config.sharedWorkspacePath = root;
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: config,
+      });
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, 'comp-a', 1);
+      await identifyAgent(connB, 'comp-b', 2);
+
+      const listA = await invokeRpc(connA, 3, 'shared.workspace.list', {});
+      const listB = await invokeRpc(connB, 4, 'shared.workspace.list', {});
+      expect(listA.result.artifacts).toEqual([
+        expect.objectContaining({ artifactPath: 'world/guide.md' }),
+      ]);
+      expect(listB.result).toEqual(listA.result);
+      expect(JSON.stringify(listA.result)).not.toContain('pending.md');
+
+      const read = await invokeRpc(connA, 5, 'shared.workspace.read', {
+        artifactPath: 'world/guide.md',
+      });
+      expect(read.result.content).toBe('# Reviewed guide\n');
+
+      const traversal = await invokeRpc(connB, 6, 'shared.workspace.read', {
+        artifactPath: '../reviews/pending.json',
+      });
+      expect(traversal.error).toBeDefined();
+      const identityClaim = await invokeRpc(connB, 7, 'shared.workspace.read', {
+        artifactPath: 'world/guide.md',
+        companionId: 'comp-b',
+      });
+      expect(identityClaim.error.message).toContain('identity assertions are forbidden');
+      const write = await invokeRpc(connA, 8, 'shared.workspace.write', {
+        artifactPath: 'world/guide.md',
+        content: 'changed',
+      });
+      expect(write.error).toBeDefined();
+
+      writeFileSync(join(root, 'artifacts', 'world', 'guide.md'), 'unreviewed mutation\n');
+      const tamperedList = await invokeRpc(connA, 9, 'shared.workspace.list', {});
+      expect(tamperedList.error.message).toContain('no longer matches its approved revision');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('delivers inbound channel messages to exactly the routed companion', async () => {
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),

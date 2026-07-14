@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -24,7 +23,7 @@ const REVIEW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 
 export interface SharedWorkspaceActor {
   id: string;
-  role: 'operator';
+  role: 'proposer' | 'reviewer' | 'cogsec';
 }
 
 export interface SharedWorkspaceProposalInput {
@@ -35,11 +34,26 @@ export interface SharedWorkspaceProposalInput {
   provenance: string;
 }
 
+export interface SharedWorkspaceCogSecInput {
+  reviewId: string;
+  reviewer: SharedWorkspaceActor;
+  decision: 'approved' | 'rejected';
+  note?: string;
+}
+
 export interface SharedWorkspaceReviewInput {
   reviewId: string;
   reviewer: SharedWorkspaceActor;
   decision: 'approve' | 'reject';
-  cogSecDecision: 'approved' | 'rejected';
+  note?: string;
+}
+
+export interface SharedWorkspaceCogSecDecisionRecord {
+  reviewId: string;
+  proposedRevision: string;
+  reviewer: SharedWorkspaceActor;
+  decision: 'approved' | 'rejected';
+  decidedAt: string;
   note?: string;
 }
 
@@ -54,10 +68,40 @@ export interface SharedWorkspaceReviewRecord {
   baseRevision: string | null;
   proposedRevision: string;
   status: 'pending' | 'approved' | 'rejected';
+  cogSecDecision?: SharedWorkspaceCogSecDecisionRecord;
   reviewer?: SharedWorkspaceActor;
   reviewedAt?: string;
-  cogSecDecision?: SharedWorkspaceReviewInput['cogSecDecision'];
   note?: string;
+}
+
+interface SharedWorkspaceProvenanceEvent {
+  schemaVersion: 1;
+  event: 'proposed' | 'approved' | 'rejected';
+  at: string;
+  reviewId: string;
+  artifactPath: string;
+  proposedRevision: string;
+  proposer: SharedWorkspaceActor;
+  provenance: string;
+  reviewer?: SharedWorkspaceActor;
+  cogSecDecision?: SharedWorkspaceCogSecDecisionRecord;
+}
+
+interface SharedWorkspacePublicationTransaction {
+  schemaVersion: 1;
+  transactionId: string;
+  reviewId: string;
+  artifactPath: string;
+  baseRevision: string | null;
+  proposedRevision: string;
+  content: string;
+  decision: 'approve' | 'reject';
+  updatedReview: SharedWorkspaceReviewRecord;
+  provenanceEvent: SharedWorkspaceProvenanceEvent;
+}
+
+export interface SharedWorkspaceStoreOptions {
+  faultInjection?: (stage: 'after_artifact' | 'after_review') => void;
 }
 
 function hashContent(content: string): string {
@@ -69,6 +113,12 @@ function requireNonEmpty(value: string, field: string): string {
   if (!trimmed) throw new Error(`${field} must be a non-empty string`);
   if (trimmed.length > 4_096) throw new Error(`${field} exceeds the maximum length`);
   return trimmed;
+}
+
+function requireReviewId(value: string): string {
+  const reviewId = requireNonEmpty(value, 'reviewId');
+  if (!REVIEW_ID_PATTERN.test(reviewId)) throw new Error('reviewId must be a UUID');
+  return reviewId;
 }
 
 function resolveArtifactPath(root: string, artifactPath: string): { relativePath: string; absolutePath: string } {
@@ -98,16 +148,55 @@ function resolveArtifactPath(root: string, artifactPath: string): { relativePath
   return { relativePath: normalized, absolutePath };
 }
 
+function isActor(value: unknown, role?: SharedWorkspaceActor['role']): value is SharedWorkspaceActor {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && (value.role === 'proposer' || value.role === 'reviewer' || value.role === 'cogsec')
+    && (role === undefined || value.role === role);
+}
+
 function parseReview(path: string): SharedWorkspaceReviewRecord {
   const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!isRecord(parsed)
     || typeof parsed.reviewId !== 'string'
     || typeof parsed.artifactPath !== 'string'
     || typeof parsed.content !== 'string'
+    || typeof parsed.proposedRevision !== 'string'
+    || !isActor(parsed.proposer, 'proposer')
     || (parsed.status !== 'pending' && parsed.status !== 'approved' && parsed.status !== 'rejected')) {
     throw new Error(`Malformed Shared Companion Workspace review record: ${path}`);
   }
   return parsed as unknown as SharedWorkspaceReviewRecord;
+}
+
+function parseCogSecDecision(path: string): SharedWorkspaceCogSecDecisionRecord {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (!isRecord(parsed)
+    || typeof parsed.reviewId !== 'string'
+    || typeof parsed.proposedRevision !== 'string'
+    || !isActor(parsed.reviewer, 'cogsec')
+    || (parsed.decision !== 'approved' && parsed.decision !== 'rejected')
+    || typeof parsed.decidedAt !== 'string') {
+    throw new Error(`Malformed Shared Companion Workspace CogSec decision: ${path}`);
+  }
+  return parsed as unknown as SharedWorkspaceCogSecDecisionRecord;
+}
+
+function parseTransaction(path: string): SharedWorkspacePublicationTransaction {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (!isRecord(parsed)
+    || parsed.schemaVersion !== 1
+    || typeof parsed.transactionId !== 'string'
+    || typeof parsed.reviewId !== 'string'
+    || typeof parsed.artifactPath !== 'string'
+    || typeof parsed.proposedRevision !== 'string'
+    || typeof parsed.content !== 'string'
+    || (parsed.decision !== 'approve' && parsed.decision !== 'reject')
+    || !isRecord(parsed.updatedReview)
+    || !isRecord(parsed.provenanceEvent)) {
+    throw new Error(`Malformed Shared Companion Workspace publication transaction: ${path}`);
+  }
+  return parsed as unknown as SharedWorkspacePublicationTransaction;
 }
 
 function writeTextAtomic(path: string, content: string): void {
@@ -122,14 +211,31 @@ function writeTextAtomic(path: string, content: string): void {
   }
 }
 
+function writeImmutableJson(path: string, value: unknown): void {
+  const encoded = `${JSON.stringify(value, null, 2)}\n`;
+  if (existsSync(path)) {
+    if (readFileSync(path, 'utf8') !== encoded) {
+      throw new Error(`Immutable Shared Companion Workspace record conflicts at ${path}`);
+    }
+    return;
+  }
+  writeFileSync(path, encoded, { encoding: 'utf8', flag: 'wx' });
+}
+
 export class SharedCompanionWorkspaceStore {
-  constructor(private readonly root: string) {}
+  private readonly faultInjection?: SharedWorkspaceStoreOptions['faultInjection'];
+
+  constructor(private readonly root: string, options: SharedWorkspaceStoreOptions = {}) {
+    this.faultInjection = options.faultInjection;
+    this.recoverTransactions();
+  }
 
   getPolicy(): typeof SHARED_WORKSPACE_POLICY {
     return SHARED_WORKSPACE_POLICY;
   }
 
   listReviews(): SharedWorkspaceReviewRecord[] {
+    this.recoverTransactions();
     const reviewsDir = join(this.root, 'reviews');
     return readdirSync(reviewsDir, { withFileTypes: true })
       .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
@@ -138,6 +244,7 @@ export class SharedCompanionWorkspaceStore {
   }
 
   listArtifacts(): Array<{ artifactPath: string; revision: string }> {
+    this.recoverTransactions();
     const artifactsRoot = join(this.root, 'artifacts');
     const results: Array<{ artifactPath: string; revision: string }> = [];
     const visit = (dir: string): void => {
@@ -158,14 +265,17 @@ export class SharedCompanionWorkspaceStore {
   }
 
   readArtifact(artifactPath: string): { artifactPath: string; content: string; revision: string } {
+    this.recoverTransactions();
     const resolved = resolveArtifactPath(this.root, artifactPath);
     const content = readFileSync(resolved.absolutePath, 'utf8');
     return { artifactPath: resolved.relativePath, content, revision: hashContent(content) };
   }
 
   propose(input: SharedWorkspaceProposalInput): SharedWorkspaceReviewRecord {
+    this.recoverTransactions();
     const resolved = resolveArtifactPath(this.root, input.artifactPath);
     requireNonEmpty(input.actor.id, 'actor.id');
+    if (input.actor.role !== 'proposer') throw new Error('Shared workspace proposal actor must be an authenticated proposer');
     const provenance = requireNonEmpty(input.provenance, 'provenance');
     if (Buffer.byteLength(input.content, 'utf8') > MAX_ARTIFACT_BYTES) {
       throw new Error(`Shared workspace artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`);
@@ -190,58 +300,115 @@ export class SharedCompanionWorkspaceStore {
       encoding: 'utf8',
       flag: 'wx',
     });
-    this.appendProvenance('proposed', record);
+    this.writeProvenanceEvent(this.buildProvenanceEvent('proposed', record));
     return record;
   }
 
-  review(input: SharedWorkspaceReviewInput): SharedWorkspaceReviewRecord {
+  recordCogSecDecision(input: SharedWorkspaceCogSecInput): SharedWorkspaceCogSecDecisionRecord {
+    this.recoverTransactions();
+    const reviewId = requireReviewId(input.reviewId);
     requireNonEmpty(input.reviewer.id, 'reviewer.id');
-    const reviewId = requireNonEmpty(input.reviewId, 'reviewId');
-    if (!REVIEW_ID_PATTERN.test(reviewId)) throw new Error('reviewId must be a UUID');
-    const reviewPath = join(this.root, 'reviews', `${reviewId}.json`);
-    const record = parseReview(reviewPath);
-    if (record.status !== 'pending') throw new Error(`Shared workspace review ${record.reviewId} is already resolved`);
-    if (record.proposer.id === input.reviewer.id) {
-      throw new Error('Shared workspace publication requires an independent reviewer');
-    }
-    if (input.decision === 'approve' && input.cogSecDecision !== 'approved') {
-      throw new Error('Shared workspace publication requires CogSec approval');
-    }
-
-    const resolved = resolveArtifactPath(this.root, record.artifactPath);
-    const lockPath = join(this.root, '.locks', `${createHash('sha256').update(record.artifactPath).digest('hex')}.lock`);
-    const lock = openSync(lockPath, 'wx', 0o600);
-    closeSync(lock);
-    try {
-      if (input.decision === 'approve') {
-        const current = existsSync(resolved.absolutePath)
-          ? hashContent(readFileSync(resolved.absolutePath, 'utf8'))
-          : null;
-        if (current !== record.baseRevision) {
-          throw new Error('Shared workspace artifact changed after proposal; review is stale');
-        }
-        writeTextAtomic(resolved.absolutePath, record.content);
+    if (input.reviewer.role !== 'cogsec') throw new Error('CogSec decision actor must be an authenticated CogSec principal');
+    return this.withLock(`review-${reviewId}`, () => {
+      const record = parseReview(join(this.root, 'reviews', `${reviewId}.json`));
+      if (record.status !== 'pending') throw new Error(`Shared workspace review ${reviewId} is already resolved`);
+      if (record.proposer.id === input.reviewer.id) {
+        throw new Error('Shared workspace CogSec decision requires an independent principal');
       }
+      const decision: SharedWorkspaceCogSecDecisionRecord = {
+        reviewId,
+        proposedRevision: record.proposedRevision,
+        reviewer: input.reviewer,
+        decision: input.decision,
+        decidedAt: new Date().toISOString(),
+        ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      };
+      writeImmutableJson(join(this.root, 'cogsec-decisions', `${reviewId}.json`), decision);
+      return decision;
+    });
+  }
+
+  review(input: SharedWorkspaceReviewInput): SharedWorkspaceReviewRecord {
+    this.recoverTransactions();
+    requireNonEmpty(input.reviewer.id, 'reviewer.id');
+    if (input.reviewer.role !== 'reviewer') throw new Error('Review actor must be an authenticated reviewer');
+    const reviewId = requireReviewId(input.reviewId);
+    return this.withLock(`review-${reviewId}`, () => {
+      // Re-read only after holding the review lock. A stale pre-lock snapshot is
+      // never used to authorize or publish a decision.
+      const reviewPath = join(this.root, 'reviews', `${reviewId}.json`);
+      const record = parseReview(reviewPath);
+      if (record.status !== 'pending') throw new Error(`Shared workspace review ${record.reviewId} is already resolved`);
+      if (record.proposer.id === input.reviewer.id) {
+        throw new Error('Shared workspace publication requires an independent reviewer');
+      }
+      const cogSecPath = join(this.root, 'cogsec-decisions', `${reviewId}.json`);
+      if (!existsSync(cogSecPath)) {
+        throw new Error('Shared workspace publication requires an authoritative CogSec decision artifact');
+      }
+      const cogSecDecision = parseCogSecDecision(cogSecPath);
+      if (cogSecDecision.proposedRevision !== record.proposedRevision) {
+        throw new Error('Shared workspace CogSec decision does not match the proposed revision');
+      }
+      if (cogSecDecision.reviewer.id === input.reviewer.id) {
+        throw new Error('Shared workspace review and CogSec decision require distinct principals');
+      }
+      if (input.decision === 'approve' && cogSecDecision.decision !== 'approved') {
+        throw new Error('Shared workspace publication requires CogSec approval');
+      }
+
+      const reviewedAt = new Date().toISOString();
       const updated: SharedWorkspaceReviewRecord = {
         ...record,
         status: input.decision === 'approve' ? 'approved' : 'rejected',
+        cogSecDecision,
         reviewer: input.reviewer,
-        reviewedAt: new Date().toISOString(),
-        cogSecDecision: input.cogSecDecision,
+        reviewedAt,
         ...(input.note?.trim() ? { note: input.note.trim() } : {}),
       };
-      writeJsonAtomic(reviewPath, updated);
-      this.appendProvenance(updated.status, updated);
+      const transaction: SharedWorkspacePublicationTransaction = {
+        schemaVersion: 1,
+        transactionId: randomUUID(),
+        reviewId,
+        artifactPath: record.artifactPath,
+        baseRevision: record.baseRevision,
+        proposedRevision: record.proposedRevision,
+        content: record.content,
+        decision: input.decision,
+        updatedReview: updated,
+        provenanceEvent: this.buildProvenanceEvent(
+          input.decision === 'approve' ? 'approved' : 'rejected',
+          updated,
+        ),
+      };
+      const transactionPath = join(this.root, 'transactions', `${reviewId}.json`);
+      this.withArtifactLock(record.artifactPath, () => {
+        if (input.decision === 'approve') {
+          const artifact = resolveArtifactPath(this.root, record.artifactPath);
+          const currentRevision = existsSync(artifact.absolutePath)
+            ? hashContent(readFileSync(artifact.absolutePath, 'utf8'))
+            : null;
+          if (currentRevision !== record.baseRevision) {
+            throw new Error('Shared workspace artifact changed after proposal; review is stale');
+          }
+        }
+        // Journal only after the stale-revision precondition passes, but before
+        // any artifact/review/provenance mutation becomes visible.
+        writeJsonAtomic(transactionPath, transaction);
+        this.applyTransaction(transaction, reviewPath, transactionPath, true);
+      });
       return updated;
-    } finally {
-      unlinkSync(lockPath);
-    }
+    });
   }
 
-  private appendProvenance(event: string, record: SharedWorkspaceReviewRecord): void {
-    appendFileSync(join(this.root, 'provenance', 'ledger.jsonl'), `${JSON.stringify({
+  private buildProvenanceEvent(
+    event: SharedWorkspaceProvenanceEvent['event'],
+    record: SharedWorkspaceReviewRecord,
+  ): SharedWorkspaceProvenanceEvent {
+    return {
+      schemaVersion: 1,
       event,
-      at: new Date().toISOString(),
+      at: event === 'proposed' ? record.proposedAt : record.reviewedAt!,
       reviewId: record.reviewId,
       artifactPath: record.artifactPath,
       proposedRevision: record.proposedRevision,
@@ -249,6 +416,82 @@ export class SharedCompanionWorkspaceStore {
       provenance: record.provenance,
       ...(record.reviewer ? { reviewer: record.reviewer } : {}),
       ...(record.cogSecDecision ? { cogSecDecision: record.cogSecDecision } : {}),
-    })}\n`, 'utf8');
+    };
+  }
+
+  private writeProvenanceEvent(event: SharedWorkspaceProvenanceEvent): void {
+    writeImmutableJson(
+      join(this.root, 'provenance', 'events', `${event.reviewId}.${event.event}.json`),
+      event,
+    );
+  }
+
+  private withArtifactLock<T>(artifactPath: string, action: () => T): T {
+    const digest = createHash('sha256').update(artifactPath).digest('hex');
+    return this.withLock(`artifact-${digest}`, action);
+  }
+
+  private withLock<T>(name: string, action: () => T): T {
+    const lockPath = join(this.root, '.locks', `${name}.lock`);
+    let descriptor: number;
+    try {
+      descriptor = openSync(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`Shared workspace operation is busy: ${name}`);
+      }
+      throw error;
+    }
+    closeSync(descriptor);
+    try {
+      return action();
+    } finally {
+      unlinkSync(lockPath);
+    }
+  }
+
+  private applyTransaction(
+    transaction: SharedWorkspacePublicationTransaction,
+    reviewPath: string,
+    transactionPath: string,
+    injectFaults: boolean,
+  ): void {
+    if (transaction.decision === 'approve') {
+      const artifact = resolveArtifactPath(this.root, transaction.artifactPath);
+      const currentRevision = existsSync(artifact.absolutePath)
+        ? hashContent(readFileSync(artifact.absolutePath, 'utf8'))
+        : null;
+      if (currentRevision === transaction.baseRevision) {
+        writeTextAtomic(artifact.absolutePath, transaction.content);
+      } else if (currentRevision !== transaction.proposedRevision) {
+        throw new Error('Shared workspace artifact changed after proposal; review is stale');
+      }
+    }
+    if (injectFaults) this.faultInjection?.('after_artifact');
+    writeJsonAtomic(reviewPath, transaction.updatedReview);
+    if (injectFaults) this.faultInjection?.('after_review');
+    this.writeProvenanceEvent(transaction.provenanceEvent);
+    unlinkSync(transactionPath);
+  }
+
+  private recoverTransactions(): void {
+    const transactionsDir = join(this.root, 'transactions');
+    if (!existsSync(transactionsDir)) return;
+    for (const entry of readdirSync(transactionsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const transactionPath = join(transactionsDir, entry.name);
+      const transaction = parseTransaction(transactionPath);
+      const reviewId = requireReviewId(transaction.reviewId);
+      this.withLock(`review-${reviewId}`, () => {
+        this.withArtifactLock(transaction.artifactPath, () => {
+          this.applyTransaction(
+            transaction,
+            join(this.root, 'reviews', `${reviewId}.json`),
+            transactionPath,
+            false,
+          );
+        });
+      });
+    }
   }
 }

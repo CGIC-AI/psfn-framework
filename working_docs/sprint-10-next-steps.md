@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the CompanionId dependency status refreshed in §0.4 on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the CompanionId dependency status refreshed in §0.4 and the c337 workspace/restore branch status refreshed in §0.5 on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -36,7 +36,7 @@ was dependency-wired end to end, and the release path got tracker structure.
   Rest of the charter-gap epic stays parked.
 - **Deliberately deferred**: `cam` cost-accounting review (accepted tail risk —
   it blocks only ICP `6.7` breaker + `6.9` cert), `lpro` kube lane (operator
-  reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
+  reboot approval), `opl1` fleet SSO, `0ggv.4` Artie link
   (hardware being assembled; ICP epic lands first). `w05a` experiment window
   closes 2026-07-20 and resurfaces its own decision beads.
 
@@ -60,8 +60,8 @@ two-real-agent certification.
 
 **MC substrate (parallel once charter items land):** the `z7qe.4` dependency is
 satisfied by the reviewed CompanionId branch (§0.4); `s10mc.1` is already
-code-complete. `s10mc.2` flagship cutover remains blocked by `z7qe.1` and
-restore proof `s10d7` (§2d hard gate unchanged). `s10mc.3` per-companion owners
+code-complete. `s10mc.2` flagship cutover remains blocked by `z7qe.1` and the
+real-snapshot restore proof (§2d hard gate unchanged). `s10mc.3` per-companion owners
 and the `s10mc.8`/`s10f8` live demo remain open.
 
 **Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
@@ -109,6 +109,36 @@ claimed or performed for this type-safety branch. The `z7qe.4` dependency is
 therefore satisfied; the feature branch still requires the planned operator
 merge/integration step before it is present on `feat/multi-companion` or `main`.
 
+### 0.5 Fleet workspace isolation + restore branch (2026-07-13)
+
+`psfn-framework-c337` is code-complete on `feat/fleet-workspace-isolation`,
+including remediation of the independent acceptance review. The branch derives
+one canonical Personal Workspace per companion, migrates a legacy workspace
+only after explicit companion + tree-digest approval, provisions hash-manifested
+no-overwrite Companion Library seeds, publishes shared artifacts through
+separate proposer/CogSec/reviewer credentials and a crash-recoverable
+transaction, and exposes only approved revisions to companions through a
+read-only gateway surface. Shell interpreters remain disabled until an
+OS-mediated filesystem sandbox exists. Generated-image storage and previews are
+bound to the authenticated Personal Workspace, including symlink revalidation.
+
+Fleet backups now carry each Personal Workspace, the Shared Companion Workspace,
+or the whole workspace family in their matching companion/cluster/group scope.
+Destination-aware Postgres restore helpers verify manifests, reject existing or
+overlapping roots, and never combine those scopes. This completes the restore
+implementation formerly tracked as `s10d7`; the separate hard gate in §2d is
+still a restore rehearsal of a real flagship snapshot before any live schema
+cutover.
+
+Branch-local evidence so far: 224 focused tests, `npm run lint`, `npm run build`,
+`npm run verify:settings-contract`, and `npm run verify:backup-restore` pass.
+Repository hygiene still reports only the known identity-literal and shared-type-
+guard baselines. The full suite reports 7,671 passing and 3 skipped tests, with
+the two inherited scheduler-fixture assertion failures plus one load-only
+large-session timeout that passes in isolation (2.9 seconds); merge,
+combined-branch testing, and live runtime/real-Postgres certification remain
+pending.
+
 ## 1. Where things stand
 
 | Merge (→ `feat/multi-companion`) | Delivered | Status |
@@ -137,7 +167,7 @@ In order — later steps assume earlier ones are done, except (b) and (a) can ru
 
 **(c) W6 — same-cluster inter-companion channels** (`psfn-framework-s10mc.6`) — the last unbuilt workstream. The building blocks are already in place: `presence.companion.co_located` fires from `companion_presence` (merged @ `ac389e5b`), the `ChannelAdapterPort` abstraction already treats a companion-to-companion channel as "just another channel," and `companion_room`/`quiet_companion_room` fatigue budgets already exist in `charge-policy.seed.json`. What's missing is the wiring: peer-as-contact (`isMachineIntelligence`, operator-assigned trust tier), the IPC one-to-one shape, the ad-hoc many-to-many room shape, and extending `two-companion-loop.test.ts` through the real channel path (not just the engine).
 
-**(d) Flagship cutover off `public` schema + shard schema derivation** (remainder of `psfn-framework-s10mc.2`) — **hard gate: verify a restore round-trip of a real flagship snapshot first.** The cutover helper moves the flagship's live data out of the `public` schema into its own `companion_<uuid>` schema; doing that against production data without first proving restore works is the one step in this plan with irreversible-mistake risk. Restore build-out itself is tracked separately as `psfn-framework-s10d7` (deferred, but needed before (d) touches anything real) — sequence: prove restore on a copy, then cut over.
+**(d) Flagship cutover off `public` schema + shard schema derivation** (remainder of `psfn-framework-s10mc.2`) — **hard gate: verify a restore round-trip of a real flagship snapshot first.** The cutover helper moves the flagship's live data out of the `public` schema into its own `companion_<uuid>` schema; doing that against production data without first proving restore works is the one step in this plan with irreversible-mistake risk. Restore functions are code-complete on `feat/fleet-workspace-isolation` (§0.5), but that is not the real-data proof: merge the branch, restore a flagship snapshot into a disposable Postgres + destination tree, verify it, then cut over.
 
 **(e) Presence-windowed private-room delivery** (remainder of `psfn-framework-s10rm`, locations-side). Entry-event system notes already merged (`144fb5c9` → `98e964eb`); what remains is delivering room chat only between join and exit for private/invite rooms (so L0 naturally holds only what was witnessed, no extraction-pipeline change needed), the group-chat exemption (public/group-marked channels see everything regardless of presence), and the who-related/privacy-level memory-tag tweaks.
 
@@ -166,7 +196,7 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 4. **Per-companion trust/charge/capability-tier owners** — W3 phase 2 (temperament), the remainder of `psfn-framework-s10mc.3`: today only `companions.json` itself and backup `groupMode` are per-companion; trust-policy, charge-policy, capability-tier, and settings are still system-global singletons.
 5. **Free-time world-wandering lanes** — companions visiting places and each other during idle/free-time budgets, using the co-location events and run-charge lane quotas already described in W6.
 6. **Voice**: land `s10f1` (per-account Discord voice lane) first as the pragmatic unblock, then `s10d6` (the fuller voice subsystem rewrite — the Wyoming-based approach is explicitly flagged as likely non-final).
-7. **Restore build-out** (`psfn-framework-s10d7`) — per-companion and group restore mirroring the one-to-one backup model; needed in full before the flagship cutover (§2d) touches production data, and independently useful before any real fleet operates unattended.
+7. **Restore rehearsal** — merge the destination-aware restore functions from `feat/fleet-workspace-isolation`, then prove a real flagship snapshot round-trip on disposable Postgres and filesystem destinations before the cutover in §2d.
 8. **Horizon** (all explicitly deferred, tracked as future-idea beads, not scoped into this sprint): cross-cluster ICP trust model (`s10d1`) → cognitive security firewall at the gateway (`s10d2`, blocks full rollout of `s10d1`) → management capability tier above autonomy (`s10d4`). Cross-cluster world-info sync (`s10d3`) sits alongside these, gated on the intra-cluster shared wiki + caretaker being proven first.
 
 ## 5. Bead index
@@ -190,7 +220,8 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10d4` | Future-idea: management capability tier above autonomy — deferred |
 | `psfn-framework-s10d5` | Future-idea: shared-wiki caretaker/meta layer detailed design — deferred |
 | `psfn-framework-s10d6` | Future-idea: voice subsystem rewrite — deferred |
-| `psfn-framework-s10d7` | Future-idea: restore functions build-out — deferred but hard-gates flagship cutover (§2d) |
+| `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — code-complete on `feat/fleet-workspace-isolation`; pending merge and combined/runtime certification (§0.5) |
+| `psfn-framework-s10d7` | Fleet restore functions — code-complete with c337 on `feat/fleet-workspace-isolation`; real flagship restore rehearsal still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |
 | `psfn-framework-s10f3` | P2 open: docs pass — `docs/operations.md`/`docs/setup.md` don't cover multi-companion yet |

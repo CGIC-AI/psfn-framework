@@ -43,9 +43,10 @@ import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
-  resolveGeneratedImagesDir,
+  resolvePersonalImagesDir,
 } from '../../persistence/layout.js';
 import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
+import { migrateLegacyWorkspaceForFleet } from '../../persistence/workspaces/legacy-workspace-migration.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
@@ -151,6 +152,11 @@ async function main(): Promise<void> {
     mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
   }
   if (config.companionFleet) {
+    migrateLegacyWorkspaceForFleet({
+      fleet: config.companionFleet,
+      legacyWorkspacePath: process.env.WORKSPACE_PATH,
+      env: process.env,
+    });
     provisionFleetWorkspaces(config.companionFleet);
   } else {
     ensurePersonalFilesLayout(bootstrap.workspaceRoot);
@@ -299,7 +305,14 @@ async function main(): Promise<void> {
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
-    previewRoots: [resolveGeneratedImagesDir(startupHydration.companionDataDir)],
+    ...(config.companionFleet
+      ? {
+        previewRootByCompanionId: Object.fromEntries(config.companionFleet.companions.map(companion => [
+          companion.companionId,
+          resolvePersonalImagesDir(companion.personalWorkspacePath),
+        ])),
+      }
+      : { previewRoots: [resolvePersonalImagesDir(bootstrap.workspaceRoot)] }),
   });
 
   const apiServer = await startOptionalGatewayApiServer({

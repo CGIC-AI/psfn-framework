@@ -49,6 +49,33 @@ const RESERVED_SANDBOX_ENV_VARS = new Set([
   'SHELLOPTS',
 ]);
 const RESERVED_SANDBOX_ENV_PREFIXES = ['LD_', 'DYLD_'] as const;
+// An allowlist and cwd check do not confine an interpreter: `node -e`,
+// `python -c`, and shells can open arbitrary absolute paths without placing
+// those paths in argv. Until shell.exec has an OS-enforced filesystem sandbox,
+// these executable classes are prohibited as commands (including through
+// symlinks, because the check is applied to the canonical executable).
+const UNMEDIATED_INTERPRETER_NAMES = new Set([
+  'ash',
+  'bash',
+  'busybox',
+  'bun',
+  'csh',
+  'dash',
+  'deno',
+  'env',
+  'fish',
+  'ksh',
+  'lua',
+  'node',
+  'nodejs',
+  'perl',
+  'php',
+  'ruby',
+  'sh',
+  'tcsh',
+  'xargs',
+  'zsh',
+]);
 
 function isReservedSandboxEnvVar(name: string): boolean {
   const upper = name.toUpperCase();
@@ -109,6 +136,15 @@ function resolveCurrentNodeExecutable(): string | null {
     return realpathSync(process.execPath);
   } catch {
     return null;
+  }
+}
+
+function assertExecutableHasMediatedConfinement(canonicalExecutable: string): void {
+  const name = basename(canonicalExecutable).toLowerCase();
+  if (UNMEDIATED_INTERPRETER_NAMES.has(name) || /^python(?:\d+(?:\.\d+)*)?$/u.test(name)) {
+    throw new ShellExecPolicyError(
+      `shell.exec interpreter command is prohibited until OS-mediated filesystem confinement is available: ${name}`,
+    );
   }
 }
 
@@ -352,11 +388,13 @@ function resolveAllowedCommandExecutable(
     if (normalizedAllowlist.names.has(commandLower)) {
       const resolvedCommand = canonicalCommand ?? currentNodeExecutable;
       if (resolvedCommand) {
+        assertExecutableHasMediatedConfinement(resolvedCommand);
         return resolvedCommand;
       }
       throw new ShellExecPolicyError(`shell.exec command not executable or not found: ${command}`);
     }
     if (canonicalCommand && normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
+      assertExecutableHasMediatedConfinement(canonicalCommand);
       return canonicalCommand;
     }
     throw new ShellExecPolicyError(`shell.exec command not allowlisted: ${command}`);
@@ -367,6 +405,7 @@ function resolveAllowedCommandExecutable(
   }
 
   if (normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
+    assertExecutableHasMediatedConfinement(canonicalCommand);
     return canonicalCommand;
   }
 
@@ -377,6 +416,7 @@ function resolveAllowedCommandExecutable(
       (expectedCanonical && expectedCanonical === canonicalCommand)
       || (canonicalBase === 'node' && currentNodeExecutable === canonicalCommand)
     ) {
+      assertExecutableHasMediatedConfinement(canonicalCommand);
       return canonicalCommand;
     }
   }

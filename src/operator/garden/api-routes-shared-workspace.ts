@@ -5,10 +5,30 @@ import { exactPath, paramWithSuffix } from './route-matchers.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
 import type { AdminApiRoute } from './routes/types.js';
-import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import {
+  SHARED_WORKSPACE_CREDENTIAL_HEADER,
+  SharedWorkspaceAuthenticationError,
+  type AdminSharedWorkspaceService,
+} from './services/shared-workspace-service.js';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function credentialFromRequest(req: IncomingMessage): string | undefined {
+  const value = req.headers[SHARED_WORKSPACE_CREDENTIAL_HEADER];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function sendActionError(res: ServerResponse, error: unknown): void {
+  sendJson(res, error instanceof SharedWorkspaceAuthenticationError ? 401 : 400, {
+    error: errorMessage(error),
+  });
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(value).every(key => allowedSet.has(key));
 }
 
 export function buildAdminSharedWorkspaceRoutes(options: {
@@ -54,28 +74,59 @@ export function buildAdminSharedWorkspaceRoutes(options: {
           return;
         }
         const value = parsed.value;
-        if (typeof value.artifactPath !== 'string'
+        if (!hasOnlyKeys(value, ['artifactPath', 'content', 'mediaType', 'provenance'])
+          || typeof value.artifactPath !== 'string'
           || typeof value.content !== 'string'
           || (value.mediaType !== 'text/markdown'
             && value.mediaType !== 'text/plain'
             && value.mediaType !== 'application/json')
-          || typeof value.actorId !== 'string'
           || typeof value.provenance !== 'string') {
           sendJson(res, 400, {
-            error: 'artifactPath, content, mediaType, actorId, and provenance are required',
+            error: 'artifactPath, content, mediaType, and provenance are required; identity claims are forbidden',
           });
           return;
         }
         try {
-          sendJson(res, 201, options.service.propose({
+          sendJson(res, 201, options.service.propose(credentialFromRequest(req), {
             artifactPath: value.artifactPath,
             content: value.content,
             mediaType: value.mediaType,
-            actor: { id: value.actorId, role: 'operator' },
             provenance: value.provenance,
           }));
         } catch (error) {
-          sendJson(res, 400, { error: errorMessage(error) });
+          sendActionError(res, error);
+        }
+      }),
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/shared-workspace/reviews/', 'reviewId', '/cogsec'),
+      handle: (req, res, { reviewId }) => options.withBody(req, res, (body) => {
+        const parsed = parseAdminJsonBody(body);
+        if (!parsed.ok || !isRecord(parsed.value)) {
+          sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
+          return;
+        }
+        const value = parsed.value;
+        if (!hasOnlyKeys(value, ['decision', 'note'])
+          || (value.decision !== 'approved' && value.decision !== 'rejected')
+          || (value.note !== undefined && typeof value.note !== 'string')) {
+          sendJson(res, 400, {
+            error: 'decision must be approved or rejected; note must be a string; identity claims are forbidden',
+          });
+          return;
+        }
+        try {
+          sendJson(res, 201, options.service.recordCogSecDecision(
+            credentialFromRequest(req),
+            {
+              reviewId,
+              decision: value.decision,
+              ...(value.note ? { note: value.note } : {}),
+            },
+          ));
+        } catch (error) {
+          sendActionError(res, error);
         }
       }),
     },
@@ -89,25 +140,25 @@ export function buildAdminSharedWorkspaceRoutes(options: {
           return;
         }
         const value = parsed.value;
-        if (typeof value.reviewerId !== 'string'
+        if (!hasOnlyKeys(value, ['decision', 'note'])
           || (value.decision !== 'approve' && value.decision !== 'reject')
-          || (value.cogSecDecision !== 'approved' && value.cogSecDecision !== 'rejected')
           || (value.note !== undefined && typeof value.note !== 'string')) {
           sendJson(res, 400, {
-            error: 'reviewerId, decision, and cogSecDecision are required; note must be a string',
+            error: 'decision must be approve or reject; note must be a string; identity claims are forbidden',
           });
           return;
         }
         try {
-          sendJson(res, 200, options.service.review({
-            reviewId,
-            reviewer: { id: value.reviewerId, role: 'operator' },
-            decision: value.decision,
-            cogSecDecision: value.cogSecDecision,
-            ...(value.note ? { note: value.note } : {}),
-          }));
+          sendJson(res, 200, options.service.review(
+            credentialFromRequest(req),
+            {
+              reviewId,
+              decision: value.decision,
+              ...(value.note ? { note: value.note } : {}),
+            },
+          ));
         } catch (error) {
-          sendJson(res, 400, { error: errorMessage(error) });
+          sendActionError(res, error);
         }
       }),
     },

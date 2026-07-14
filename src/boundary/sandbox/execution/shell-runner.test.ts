@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -282,5 +282,49 @@ describe('executeShellCommandWithPolicy', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('/usr/bin');
+  });
+
+  it('prohibits an allowlisted interpreter from reading a peer workspace', async () => {
+    const { workspace, outside } = makeWorkspaceFixture();
+    const secretPath = join(outside, 'secret.txt');
+
+    await expect(executeShellCommandWithPolicy(
+      {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(secretPath)}, 'utf8'))`],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: [process.execPath],
+          allowedCwd: [workspace],
+        },
+      },
+    )).rejects.toThrow(/interpreter command is prohibited.*OS-mediated filesystem confinement/);
+  });
+
+  it('prohibits an allowlisted interpreter from writing a peer workspace', async () => {
+    const { workspace, outside } = makeWorkspaceFixture();
+    const peerPath = join(outside, 'peer.txt');
+
+    await expect(executeShellCommandWithPolicy(
+      {
+        command: process.execPath,
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(peerPath)}, 'compromised')`],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: [process.execPath],
+          allowedCwd: [workspace],
+        },
+      },
+    )).rejects.toThrow(/interpreter command is prohibited.*OS-mediated filesystem confinement/);
+
+    expect(() => readFileSync(peerPath, 'utf8')).toThrow();
   });
 });

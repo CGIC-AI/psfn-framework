@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveCompanionFleetPaths, type CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import {
+  COMPANION_LIBRARY_MANIFEST_FILE,
   COMPANION_LIBRARY_SEED_VERSION,
   provisionFleetWorkspaces,
   SHARED_WORKSPACE_POLICY,
 } from './provisioning.js';
+import { createHash } from 'node:crypto';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const FLEET: CompanionsFleetConfig = {
@@ -32,6 +34,14 @@ describe('fleet workspace provisioning', () => {
     roots.push(root, source);
     writeFileSync(join(source, 'welcome.md'), 'seed welcome\n');
     writeFileSync(join(source, 'privacy-boundary-reference.md'), 'seed privacy\n');
+    writeFileSync(join(source, COMPANION_LIBRARY_MANIFEST_FILE), `${JSON.stringify({
+      schemaVersion: 1,
+      bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
+      files: [
+        { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
+        { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update('seed privacy\n').digest('hex') },
+      ],
+    }, null, 2)}\n`);
     return { root, source, fleet: resolveCompanionFleetPaths(FLEET, root) };
   }
 
@@ -45,7 +55,7 @@ describe('fleet workspace provisioning', () => {
     expect(JSON.parse(readFileSync(
       join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
       'utf8',
-    ))).toMatchObject({ version: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
+    ))).toMatchObject({ bundleVersion: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
     expect(JSON.parse(readFileSync(join(fixture.fleet.sharedWorkspacePath, 'policy.json'), 'utf8')))
       .toEqual(SHARED_WORKSPACE_POLICY);
   });
@@ -70,5 +80,34 @@ describe('fleet workspace provisioning', () => {
     expect(() => provisionFleetWorkspaces(fixture.fleet, {
       companionLibrarySourceDir: fixture.source,
     })).toThrow(/policy.*malformed or differs/);
+  });
+
+  it('fails closed when seed content changes without an immutable manifest update', () => {
+    const fixture = makeFixture();
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
+    writeFileSync(join(fixture.source, 'welcome.md'), 'silently changed\n');
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: fixture.source,
+    })).toThrow(/does not match its checked-in manifest digest/);
+  });
+
+  it('fails closed when a manifest changes without a bundle version bump', () => {
+    const fixture = makeFixture();
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
+    const privacy = 'seed privacy changed\n';
+    writeFileSync(join(fixture.source, 'privacy-boundary-reference.md'), privacy);
+    writeFileSync(join(fixture.source, COMPANION_LIBRARY_MANIFEST_FILE), `${JSON.stringify({
+      schemaVersion: 1,
+      bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
+      files: [
+        { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
+        { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update(privacy).digest('hex') },
+      ],
+    }, null, 2)}\n`);
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: fixture.source,
+    })).toThrow(/source bundle changed without a versioned re-application/);
   });
 });

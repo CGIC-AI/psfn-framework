@@ -31,11 +31,7 @@
  * launcher never derives socket names itself. Network admin transport mode is
  * rejected fail-closed: per-companion Gardens currently support socket mode only.
  */
-import { resolveRuntimePathLayout } from '../src/persistence/layout.js';
 import {
-  isMultiCompanionEnabled,
-  resolveCompanionFleet,
-  resolveCompanionFleetPaths,
   type ResolvedCompanionFleetEntry,
 } from '../src/system/config/companions-config.js';
 import {
@@ -44,7 +40,7 @@ import {
 } from '../src/operator/garden/transport-paths.js';
 import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
 import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
-import { provisionFleetWorkspaces } from '../src/persistence/workspaces/provisioning.js';
+import { resolveConfiguredCompanionFleet } from './companion-fleet-runtime.js';
 
 const FIELD_SEPARATOR = '\t';
 const NO_GARDEN_PORT_SENTINEL = '-';
@@ -88,44 +84,12 @@ function formatPlanLine(
 function main(): void {
   const env = process.env;
 
-  // Mirror load-config.ts exactly so the fleet manifest is read from the same
-  // resolved system-data root the runtime itself uses.
-  const runtimePathLayout = resolveRuntimePathLayout({
-    mode: env.PSFN_RUNTIME_LAYOUT_MODE,
-    nodeEnv: env.NODE_ENV,
-    runtimeRootDir: env.PSFN_RUNTIME_ROOT,
-    systemDataDir: env.SYSTEM_DATA_DIR,
-    companionDataDir: env.COMPANION_DATA_DIR,
-    legacyDataDir: env.DATA_DIR,
-    workspacePath: env.WORKSPACE_PATH,
-    logsDir: env.PSFN_LOGS_DIR,
-    tempDir: env.PSFN_TEMP_DIR,
-    backupsDir: env.BACKUP_ROOT_DIR,
-  });
-
-  const multiCompanion = isMultiCompanionEnabled(env);
-  const rawFleet = resolveCompanionFleet({
-    dataDir: runtimePathLayout.systemDataDir,
-    multiCompanion,
-    seedDir: env.CONFIG_DIR?.trim() ? env.CONFIG_DIR : undefined,
-  });
-
-  if (!rawFleet) {
+  const fleet = resolveConfiguredCompanionFleet(env);
+  if (!fleet) {
     // Single-companion topology: emit nothing; the launcher keeps its existing
     // single-agent behavior byte-identically.
     return;
   }
-  const fleet = resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir, [
-    { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
-    { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
-    { label: 'logsDir', path: runtimePathLayout.logsDir },
-    { label: 'tempDir', path: runtimePathLayout.tempDir },
-    { label: 'backupsDir', path: runtimePathLayout.backupsDir },
-  ]);
-  // Provision before the supervisor starts any process so no agent or Garden
-  // can race workspace creation or observe a partially seeded fleet.
-  provisionFleetWorkspaces(fleet);
-
   // Per-companion Gardens bind one admin transport socket per agent process;
   // a single shared network admin transport cannot serve N agents. Fail closed
   // rather than letting every agent race to bind the same listener.

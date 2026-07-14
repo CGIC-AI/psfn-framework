@@ -1,5 +1,4 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import { resolveConfiguredCompanionDataDir } from '../../../../persistence/layout.js';
 import { collectGeneratedImageAttachments } from '../../../../primitives/images/generated-media.js';
 import { emitCompanionArtifactCreatedEvents } from '../../../../channels/backplane/companion-relay/artifact-emission.js';
 import type {
@@ -58,7 +57,7 @@ export async function collectTurnResponseAttachments(input: {
 }): Promise<NonNullable<AgentResponse['attachments']>> {
   const attachments = await collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
-    companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
+    personalFilesDir: input.runtime.config.workspacePath,
     paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
   });

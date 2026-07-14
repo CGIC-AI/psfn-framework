@@ -7,7 +7,7 @@ describe('createSandboxBrokerExecutionPort', () => {
       workspacePath: process.cwd(),
       policy: {
         enabled: false,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
@@ -21,7 +21,7 @@ describe('createSandboxBrokerExecutionPort', () => {
       brokerId: 'test-broker',
       policy: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
@@ -46,11 +46,11 @@ describe('createSandboxBrokerExecutionPort', () => {
     });
     expect(port?.codeExecutionBoundary.reason).toContain('child process');
 
-    const result = await port?.shellExec('node', ['-e', 'process.stdout.write("ok")'], {});
+    const result = await port?.shellExec('printf', ['ok'], {});
 
     expect(result).toMatchObject({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("ok")'],
+      command: 'printf',
+      args: ['ok'],
       exitCode: 0,
       stdout: 'ok',
       stderr: '',
@@ -77,19 +77,20 @@ describe('createSandboxBrokerExecutionPort', () => {
       workspacePath: process.cwd(),
       policy: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printenv'],
         allowedCwd: [process.cwd()],
       },
     });
 
     try {
       const result = await port?.shellExec(
-        'node',
-        ['-e', 'process.stdout.write(process.env.SANDBOX_BROKER_SECRET ?? "missing")'],
+        'printenv',
+        ['SANDBOX_BROKER_SECRET'],
         {},
       );
 
-      expect(result?.stdout).toBe('missing');
+      expect(result?.exitCode).toBe(1);
+      expect(result?.stdout).toBe('');
     } finally {
       delete process.env.SANDBOX_BROKER_SECRET;
     }

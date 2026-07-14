@@ -209,6 +209,43 @@ describe('reconcileChargeCosts', () => {
     expect(classifiedChargeUnits).toBe(data.sourceTotals.chargeUnits);
     expect(classifiedCalls).toBe(data.sourceTotals.calls);
     expect(classifiedEffectiveCost).toBe(data.sourceTotals.effectiveCostUsd);
+    expect(data.ledgerReconciliation).toEqual({
+      charge: {
+        sourceUnits: 15,
+        classifiedUnits: 15,
+        sourceEvents: 4,
+        classifiedEvents: 4,
+        reconciled: true,
+      },
+      usage: {
+        sourceCalls: 3,
+        classifiedCalls: 3,
+        sourceTotalTokens: 45,
+        classifiedTotalTokens: 45,
+        sourceProviderCostUsd: 6,
+        classifiedProviderCostUsd: 6,
+        sourceEstimatedCostUsd: 0,
+        classifiedEstimatedCostUsd: 0,
+        sourceEffectiveCostUsd: 6,
+        classifiedEffectiveCostUsd: 6,
+        reconciled: true,
+      },
+    });
+  });
+
+  it('uses model metadata to disambiguate lineage charges even when provider metadata is absent', () => {
+    const modeledCharge = {
+      ...chargeEntry({ eventId: 'modeled-charge' }),
+      metadata: { model: 'model-a' },
+    };
+    const data = reconcileChargeCosts({
+      tenantCompanionId: 'companion-a',
+      chargeEntries: [modeledCharge],
+      usageEvents: [usageEvent({ id: 'modeled-usage', providerCostUsd: 1, effectiveCostUsd: 1 })],
+    });
+
+    expect(data.buckets.attributable).toMatchObject({ chargeUnits: 4, calls: 1 });
+    expect(data.buckets.chargedWithoutUsage.chargeUnits).toBe(0);
   });
 
   it('matches nested shard lineages independently and allocates fallback units deterministically', () => {

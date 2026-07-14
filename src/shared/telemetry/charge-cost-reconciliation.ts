@@ -1,134 +1,27 @@
-import type {
-  ChargePolicyRuntimeLane,
-  ChargePolicySurface,
-} from '../contracts/charge-policy.js';
 import type { RunChargeLedgerEntry } from './charge-ledger.js';
 import type { ModelUsageEvent } from './model-usage.js';
-import { roundModelUsageUsd } from './model-usage-accounting.js';
 import { MODEL_USAGE_UNKNOWN_DIMENSION } from './model-usage-attribution.js';
+import {
+  addChargeCostMetrics,
+  chargeCostMetricsFor,
+  createChargeCostBreakdowns,
+  emptyChargeCostMetrics,
+  finalizeChargeCostMetrics,
+  roundChargeCost,
+} from './charge-cost-reconciliation-accounting.js';
+import {
+  MODEL_BEARING_CHARGE_SURFACES,
+  type ChargeCostAllocationMethod,
+  type ChargeCostDisposition,
+  type ChargeCostGroup,
+  type ChargeCostLedgerReconciliation,
+  type ChargeCostMetrics,
+  type ChargeCostReconciliationData,
+  type ChargeCostReconciliationQuery,
+  type ReconcileChargeCostsInput,
+} from './charge-cost-reconciliation-contracts.js';
 
-export const MODEL_BEARING_CHARGE_SURFACES = [
-  'localEmbedding',
-  'externalEmbedding',
-  'localImageGeneration',
-  'paidImageGeneration',
-  'analysisWorkbenchExtensionBand',
-  'externalModelConsult',
-] as const satisfies readonly ChargePolicySurface[];
-
-export type ChargeCostDisposition =
-  | 'attributable'
-  | 'charged_without_usage'
-  | 'usage_without_charge'
-  | 'ambiguous'
-  | 'non_model_charge';
-
-export type ChargeCostAllocationMethod =
-  | 'exact_charge_event'
-  | 'exact_charge_event_even_calls'
-  | 'lineage_single_charge_single_call'
-  | 'single_charge_even_calls'
-  | 'combined_charges_single_call'
-  | 'ambiguous_many_to_many'
-  | 'ambiguous_scope_conflict'
-  | 'charged_without_usage'
-  | 'usage_without_charge'
-  | 'non_model_charge';
-
-export interface ChargeCostMetrics {
-  chargeUnits: number;
-  chargeEvents: number;
-  calls: number;
-  successfulCalls: number;
-  failedCalls: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  providerCostUsd: number;
-  estimatedCostUsd: number;
-  effectiveCostUsd: number;
-  unknownCostCalls: number;
-  dollarsPerChargeUnit: number | null;
-}
-
-export interface ChargeCostBreakdown extends ChargeCostMetrics {
-  key: string;
-}
-
-export interface ChargeCostAllocation {
-  usageEventId: string;
-  logicalCallId: string;
-  attempt: number;
-  allocatedChargeUnits: number;
-}
-
-export interface ChargeCostGroup {
-  disposition: ChargeCostDisposition;
-  allocationMethod: ChargeCostAllocationMethod;
-  confidence: 'exact' | 'lineage' | 'ambiguous' | 'unmatched' | 'not_applicable';
-  lane: string;
-  surface: string;
-  runId: string;
-  rootRunId: string;
-  parentRunId: string;
-  companionId: string;
-  channelId: string;
-  shardId: string;
-  subagentId: string;
-  chargeEventIds: string[];
-  usageEventIds: string[];
-  allocations: ChargeCostAllocation[];
-  metrics: ChargeCostMetrics;
-}
-
-export interface ChargeCostReconciliationQuery {
-  sinceMs?: number;
-  untilMs?: number;
-  companionId?: string;
-  channelId?: string;
-  lane?: ChargePolicyRuntimeLane;
-  surface?: ChargePolicySurface;
-  runId?: string;
-  rootRunId?: string;
-}
-
-export interface ChargeCostReconciliationData {
-  query: ChargeCostReconciliationQuery;
-  sourceTotals: ChargeCostMetrics;
-  buckets: {
-    attributable: ChargeCostMetrics;
-    chargedWithoutUsage: ChargeCostMetrics;
-    usageWithoutCharge: ChargeCostMetrics;
-    ambiguous: ChargeCostMetrics;
-    nonModelCharges: ChargeCostMetrics;
-  };
-  coverage: {
-    charge: { totalUnits: number; attributableUnits: number; coveragePercent: number };
-    usage: { totalCalls: number; attributableCalls: number; coveragePercent: number };
-  };
-  breakdowns: {
-    byLane: ChargeCostBreakdown[];
-    bySurface: ChargeCostBreakdown[];
-    byRun: ChargeCostBreakdown[];
-    byRootRun: ChargeCostBreakdown[];
-    byCompanion: ChargeCostBreakdown[];
-    byModel: ChargeCostBreakdown[];
-    byChannel: ChargeCostBreakdown[];
-    byDay: ChargeCostBreakdown[];
-  };
-  groups: ChargeCostGroup[];
-}
-
-export interface ReconcileChargeCostsInput {
-  tenantCompanionId: string;
-  chargeEntries: readonly RunChargeLedgerEntry[];
-  usageEvents: readonly ModelUsageEvent[];
-  query?: ChargeCostReconciliationQuery;
-}
-
-interface MutableMetrics extends Omit<ChargeCostMetrics, 'dollarsPerChargeUnit'> {}
+export * from './charge-cost-reconciliation-contracts.js';
 
 interface InternalGroup {
   chargeEntries: RunChargeLedgerEntry[];
@@ -137,98 +30,7 @@ interface InternalGroup {
   exact?: boolean;
 }
 
-interface InternalAllocation extends ChargeCostAllocation {
-  allocatedChargeEvents: number;
-  usage: ModelUsageEvent;
-  group: ChargeCostGroup;
-}
-
 const MODEL_BEARING_SURFACE_SET: ReadonlySet<string> = new Set(MODEL_BEARING_CHARGE_SURFACES);
-
-function emptyMutableMetrics(): MutableMetrics {
-  return {
-    chargeUnits: 0,
-    chargeEvents: 0,
-    calls: 0,
-    successfulCalls: 0,
-    failedCalls: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 0,
-    providerCostUsd: 0,
-    estimatedCostUsd: 0,
-    effectiveCostUsd: 0,
-    unknownCostCalls: 0,
-  };
-}
-
-function roundAccountingNumber(value: number): number {
-  return roundModelUsageUsd(value);
-}
-
-function addCharge(target: MutableMetrics, entry: RunChargeLedgerEntry): void {
-  target.chargeUnits = roundAccountingNumber(target.chargeUnits + entry.event.amount);
-  target.chargeEvents += 1;
-}
-
-function eventCost(event: ModelUsageEvent, field: 'providerCostUsd' | 'estimatedCostUsd' | 'effectiveCostUsd'): number {
-  const value = event[field];
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
-function addUsage(target: MutableMetrics, event: ModelUsageEvent): void {
-  target.calls += 1;
-  if (event.status === 'success') target.successfulCalls += 1;
-  else target.failedCalls += 1;
-  target.inputTokens += event.inputTokens;
-  target.outputTokens += event.outputTokens;
-  target.cacheReadTokens += event.cacheReadTokens;
-  target.cacheWriteTokens += event.cacheWriteTokens;
-  target.totalTokens += event.totalTokens;
-  target.providerCostUsd = roundAccountingNumber(target.providerCostUsd + eventCost(event, 'providerCostUsd'));
-  target.estimatedCostUsd = roundAccountingNumber(target.estimatedCostUsd + eventCost(event, 'estimatedCostUsd'));
-  target.effectiveCostUsd = roundAccountingNumber(target.effectiveCostUsd + eventCost(event, 'effectiveCostUsd'));
-  if (event.costSource === 'none') target.unknownCostCalls += 1;
-}
-
-function addMetrics(target: MutableMetrics, source: ChargeCostMetrics): void {
-  target.chargeUnits = roundAccountingNumber(target.chargeUnits + source.chargeUnits);
-  target.chargeEvents = roundAccountingNumber(target.chargeEvents + source.chargeEvents);
-  target.calls += source.calls;
-  target.successfulCalls += source.successfulCalls;
-  target.failedCalls += source.failedCalls;
-  target.inputTokens += source.inputTokens;
-  target.outputTokens += source.outputTokens;
-  target.cacheReadTokens += source.cacheReadTokens;
-  target.cacheWriteTokens += source.cacheWriteTokens;
-  target.totalTokens += source.totalTokens;
-  target.providerCostUsd = roundAccountingNumber(target.providerCostUsd + source.providerCostUsd);
-  target.estimatedCostUsd = roundAccountingNumber(target.estimatedCostUsd + source.estimatedCostUsd);
-  target.effectiveCostUsd = roundAccountingNumber(target.effectiveCostUsd + source.effectiveCostUsd);
-  target.unknownCostCalls += source.unknownCostCalls;
-}
-
-function finalizeMetrics(metrics: MutableMetrics, attributable: boolean): ChargeCostMetrics {
-  return {
-    ...metrics,
-    dollarsPerChargeUnit: attributable && metrics.calls > 0 && metrics.chargeUnits > 0
-      ? roundAccountingNumber(metrics.effectiveCostUsd / metrics.chargeUnits)
-      : null,
-  };
-}
-
-function metricsFor(
-  chargeEntries: readonly RunChargeLedgerEntry[],
-  usageEvents: readonly ModelUsageEvent[],
-  attributable: boolean,
-): ChargeCostMetrics {
-  const metrics = emptyMutableMetrics();
-  for (const entry of chargeEntries) addCharge(metrics, entry);
-  for (const event of usageEvents) addUsage(metrics, event);
-  return finalizeMetrics(metrics, attributable);
-}
 
 function known(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -423,21 +225,21 @@ function classifyGroup(group: InternalGroup): {
 function finalizeGroup(group: InternalGroup, tenantCompanionId: string): ChargeCostGroup {
   const classification = classifyGroup(group);
   const dimensions = groupDimensions(group, tenantCompanionId);
-  const metrics = metricsFor(
+  const metrics = chargeCostMetricsFor(
     group.chargeEntries,
     group.usageEvents,
     classification.disposition === 'attributable',
   );
   const perCallUnits = classification.disposition === 'attributable' && group.usageEvents.length > 0
-    ? roundAccountingNumber(metrics.chargeUnits / group.usageEvents.length)
+    ? roundChargeCost(metrics.chargeUnits / group.usageEvents.length)
     : 0;
   let allocatedUnits = 0;
   const allocations = classification.disposition === 'attributable'
     ? group.usageEvents.map((event, index) => {
         const allocation = index === group.usageEvents.length - 1
-          ? roundAccountingNumber(metrics.chargeUnits - allocatedUnits)
+          ? roundChargeCost(metrics.chargeUnits - allocatedUnits)
           : perCallUnits;
-        allocatedUnits = roundAccountingNumber(allocatedUnits + allocation);
+        allocatedUnits = roundChargeCost(allocatedUnits + allocation);
         return {
           usageEventId: event.id,
           logicalCallId: event.logicalCallId,
@@ -483,12 +285,21 @@ function addMatchedCorrelationGroups(
 
     const modelSpecificCharges = chargeBucket.filter(entry => known(entry.metadata?.model));
     const genericCharges = chargeBucket.filter(entry => !known(entry.metadata?.model));
-    const modelChargeBuckets = bucketByCorrelation(modelSpecificCharges, entry => (
-      `${known(entry.metadata?.provider) ?? MODEL_USAGE_UNKNOWN_DIMENSION}:${known(entry.metadata?.model)}`
-    ));
-    for (const [modelKey, matchingCharges] of [...modelChargeBuckets.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const modelChargeBuckets = bucketByCorrelation(modelSpecificCharges, entry => correlationKey([
+      known(entry.metadata?.provider) ?? '',
+      known(entry.metadata?.model) ?? MODEL_USAGE_UNKNOWN_DIMENSION,
+    ]));
+    const sortedModelChargeBuckets = [...modelChargeBuckets.entries()].sort(([leftKey, left], [rightKey, right]) => {
+      const leftHasProvider = known(left[0]?.metadata?.provider) ? 1 : 0;
+      const rightHasProvider = known(right[0]?.metadata?.provider) ? 1 : 0;
+      return rightHasProvider - leftHasProvider || leftKey.localeCompare(rightKey);
+    });
+    for (const [, matchingCharges] of sortedModelChargeBuckets) {
+      const provider = known(matchingCharges[0]?.metadata?.provider);
+      const model = known(matchingCharges[0]?.metadata?.model);
       const matchingUsage = usageBucket.filter(event => (
-        `${known(event.provider) ?? MODEL_USAGE_UNKNOWN_DIMENSION}:${known(event.model)}` === modelKey
+        known(event.model) === model
+        && (!provider || known(event.provider) === provider)
         && !consumedUsageIds.has(event.id)
       ));
       if (matchingUsage.length === 0) continue;
@@ -565,61 +376,50 @@ function buildInternalGroups(
 }
 
 function bucketMetrics(groups: readonly ChargeCostGroup[], disposition: ChargeCostDisposition): ChargeCostMetrics {
-  const metrics = emptyMutableMetrics();
+  const metrics = emptyChargeCostMetrics();
   for (const group of groups) {
-    if (group.disposition === disposition) addMetrics(metrics, group.metrics);
+    if (group.disposition === disposition) addChargeCostMetrics(metrics, group.metrics);
   }
-  return finalizeMetrics(metrics, disposition === 'attributable');
-}
-
-function createBreakdowns(
-  groups: readonly ChargeCostGroup[],
-  usageById: ReadonlyMap<string, ModelUsageEvent>,
-): ChargeCostReconciliationData['breakdowns'] {
-  const allocations: InternalAllocation[] = [];
-  for (const group of groups) {
-    if (group.disposition !== 'attributable') continue;
-    const allocatedChargeEvents = group.metrics.chargeEvents / Math.max(1, group.allocations.length);
-    for (const allocation of group.allocations) {
-      const usage = usageById.get(allocation.usageEventId);
-      if (!usage) throw new Error(`Missing usage event ${allocation.usageEventId} while building reconciliation breakdowns`);
-      allocations.push({ ...allocation, allocatedChargeEvents, usage, group });
-    }
-  }
-
-  const breakdown = (keyFor: (allocation: InternalAllocation) => string): ChargeCostBreakdown[] => {
-    const byKey = new Map<string, MutableMetrics>();
-    for (const allocation of allocations) {
-      const key = keyFor(allocation);
-      const metrics = byKey.get(key) ?? emptyMutableMetrics();
-      metrics.chargeUnits = roundAccountingNumber(metrics.chargeUnits + allocation.allocatedChargeUnits);
-      metrics.chargeEvents = roundAccountingNumber(metrics.chargeEvents + allocation.allocatedChargeEvents);
-      addUsage(metrics, allocation.usage);
-      byKey.set(key, metrics);
-    }
-    return [...byKey.entries()]
-      .map(([key, metrics]) => ({ key, ...finalizeMetrics(metrics, true) }))
-      .sort((left, right) => (
-        right.effectiveCostUsd - left.effectiveCostUsd
-        || right.chargeUnits - left.chargeUnits
-        || left.key.localeCompare(right.key)
-      ));
-  };
-
-  return {
-    byLane: breakdown(allocation => allocation.group.lane),
-    bySurface: breakdown(allocation => allocation.group.surface),
-    byRun: breakdown(allocation => allocation.group.runId),
-    byRootRun: breakdown(allocation => allocation.group.rootRunId),
-    byCompanion: breakdown(allocation => allocation.usage.attribution.companionId),
-    byModel: breakdown(allocation => `${allocation.usage.provider}:${allocation.usage.model}`),
-    byChannel: breakdown(allocation => allocation.usage.attribution.channelId),
-    byDay: breakdown(allocation => new Date(allocation.usage.recordedAtMs).toISOString().slice(0, 10)),
-  };
+  return finalizeChargeCostMetrics(metrics, disposition === 'attributable');
 }
 
 function coveragePercent(numerator: number, denominator: number): number {
   return denominator <= 0 ? 0 : Math.round((numerator / denominator) * 10_000) / 100;
+}
+
+function createLedgerReconciliation(
+  sourceTotals: ChargeCostMetrics,
+  buckets: readonly ChargeCostMetrics[],
+): ChargeCostLedgerReconciliation {
+  const classified = emptyChargeCostMetrics();
+  for (const bucket of buckets) addChargeCostMetrics(classified, bucket);
+  return {
+    charge: {
+      sourceUnits: sourceTotals.chargeUnits,
+      classifiedUnits: classified.chargeUnits,
+      sourceEvents: sourceTotals.chargeEvents,
+      classifiedEvents: classified.chargeEvents,
+      reconciled: sourceTotals.chargeUnits === classified.chargeUnits
+        && sourceTotals.chargeEvents === classified.chargeEvents,
+    },
+    usage: {
+      sourceCalls: sourceTotals.calls,
+      classifiedCalls: classified.calls,
+      sourceTotalTokens: sourceTotals.totalTokens,
+      classifiedTotalTokens: classified.totalTokens,
+      sourceProviderCostUsd: sourceTotals.providerCostUsd,
+      classifiedProviderCostUsd: classified.providerCostUsd,
+      sourceEstimatedCostUsd: sourceTotals.estimatedCostUsd,
+      classifiedEstimatedCostUsd: classified.estimatedCostUsd,
+      sourceEffectiveCostUsd: sourceTotals.effectiveCostUsd,
+      classifiedEffectiveCostUsd: classified.effectiveCostUsd,
+      reconciled: sourceTotals.calls === classified.calls
+        && sourceTotals.totalTokens === classified.totalTokens
+        && sourceTotals.providerCostUsd === classified.providerCostUsd
+        && sourceTotals.estimatedCostUsd === classified.estimatedCostUsd
+        && sourceTotals.effectiveCostUsd === classified.effectiveCostUsd,
+    },
+  };
 }
 
 export function reconcileChargeCosts(input: ReconcileChargeCostsInput): ChargeCostReconciliationData {
@@ -642,7 +442,7 @@ export function reconcileChargeCosts(input: ReconcileChargeCostsInput): ChargeCo
       || (left.usageEventIds[0] ?? '').localeCompare(right.usageEventIds[0] ?? '')
     ));
 
-  const sourceTotals = metricsFor(chargeEntries, usageEvents, false);
+  const sourceTotals = chargeCostMetricsFor(chargeEntries, usageEvents, false);
   const buckets = {
     attributable: bucketMetrics(groups, 'attributable'),
     chargedWithoutUsage: bucketMetrics(groups, 'charged_without_usage'),
@@ -650,6 +450,7 @@ export function reconcileChargeCosts(input: ReconcileChargeCostsInput): ChargeCo
     ambiguous: bucketMetrics(groups, 'ambiguous'),
     nonModelCharges: bucketMetrics(groups, 'non_model_charge'),
   };
+  const ledgerReconciliation = createLedgerReconciliation(sourceTotals, Object.values(buckets));
   return {
     query,
     sourceTotals,
@@ -666,7 +467,8 @@ export function reconcileChargeCosts(input: ReconcileChargeCostsInput): ChargeCo
         coveragePercent: coveragePercent(buckets.attributable.calls, sourceTotals.calls),
       },
     },
-    breakdowns: createBreakdowns(groups, new Map(usageEvents.map(event => [event.id, event]))),
+    ledgerReconciliation,
+    breakdowns: createChargeCostBreakdowns(groups, new Map(usageEvents.map(event => [event.id, event]))),
     groups,
   };
 }

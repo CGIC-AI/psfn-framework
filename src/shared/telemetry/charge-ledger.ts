@@ -235,6 +235,11 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event`);
   }
+  const eventId = normalizeOptionalString(entry.eventId);
+  const nestedEventId = normalizeOptionalString(event.eventId);
+  if (nestedEventId && nestedEventId !== eventId) {
+    throw new Error(`Invalid charge ledger entry at line ${lineNumber}: eventId does not match event.eventId`);
+  }
   if (normalizePositiveFiniteNumber(event.timestampMs) === undefined) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event timestamp`);
   }

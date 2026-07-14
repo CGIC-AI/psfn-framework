@@ -28,6 +28,17 @@ export interface AdminToolFailureEvent {
   timestamp: number;
 }
 
+export interface AdminToolInvocationEvent {
+  toolName: string;
+  toolCallId: string;
+  channelId: string;
+  action?: string;
+  status: 'ok' | 'error';
+  timestamp: number;
+  turnId?: string;
+  requestId?: string;
+}
+
 export interface AdminToolAvailabilityView {
   status: 'active' | 'available' | 'unavailable' | 'not_applicable';
   detail: string;
@@ -64,6 +75,7 @@ export interface AdminAdaptiveToolsData {
   serviceHealth: RuntimeServiceHealth[];
   toolHealth: AdminToolHealthView[];
   inventory: AdminToolInventoryGroup[];
+  recentInvocations: AdminToolInvocationEvent[];
   recentFailures: AdminToolFailureEvent[];
   recentTelemetry: AdminAdaptiveToolTelemetryEvent[];
 }

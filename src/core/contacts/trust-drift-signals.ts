@@ -6,6 +6,10 @@ import {
 import { isHighTierTrustLevel, type TrustLevel } from '../../system/trust/types.js';
 import type { Contact } from './types.js';
 import type { EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
+import {
+  evaluateRelationshipProgressionSuggestion,
+  type RelationshipProgressionSuggestion,
+} from './relationship-progression.js';
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -192,6 +196,33 @@ export function evaluateContactTrustDriftCandidate(input: {
     contactId: input.contact.id,
     displayName: input.contact.displayName,
     trustLevel: input.contact.trustLevel,
+    signals,
+    suggestion,
+  };
+}
+
+export interface ContactRelationshipProgressionReviewCandidate {
+  contactId: string;
+  displayName: string;
+  relationshipType: Contact['relationshipType'];
+  signals: TrustDriftBehaviorSignals;
+  suggestion: RelationshipProgressionSuggestion;
+}
+
+export function evaluateContactRelationshipProgressionCandidate(input: {
+  contact: Pick<Contact, 'id' | 'displayName' | 'relationshipType'>;
+  evidence: ContactTrustDriftEvidence;
+}): ContactRelationshipProgressionReviewCandidate | null {
+  const signals = deriveTrustDriftBehaviorSignals(input.evidence);
+  const suggestion = evaluateRelationshipProgressionSuggestion(
+    input.contact.relationshipType,
+    signals,
+  );
+  if (!suggestion) return null;
+  return {
+    contactId: input.contact.id,
+    displayName: input.contact.displayName,
+    relationshipType: input.contact.relationshipType,
     signals,
     suggestion,
   };

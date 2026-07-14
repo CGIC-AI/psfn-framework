@@ -685,6 +685,7 @@ export class AdminSessionDataService implements AdminSessionService {
     limit?: number;
     beforeId?: number | null;
     messagesOnly?: boolean;
+    includeTurns?: boolean;
   } = {}): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);

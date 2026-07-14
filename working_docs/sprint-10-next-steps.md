@@ -47,6 +47,15 @@ The headline fact governing everything below: the multi-companion substrate is *
   bead: explicitly setting projected Secret `defaultMode: 0440` would document
   least-privilege intent more clearly than relying on Kubernetes defaults plus
   pod `fsGroup: 999`; no current multi-user pod exposure was identified.
+- Runtime-fallback provenance follow-up `psfn-framework-upx0.12` is integrated
+  into `fix/orphans-stubs-bugfixes` and pushed at `5102b0ad` (implementation
+  `42a4be0b`). Forced vision-failure and datetime-contradiction notices now
+  retain explicit runtime-authored model/strategy provenance in response,
+  session/L0, and durable turn-record metadata; ordinary model-authored replies
+  remain untagged and existing consumers remain compatible. The single
+  independent review passed with no important or material report-only findings.
+  Final integrated validation passed all 75 focused tests, `npm run lint`, and
+  the ESM+DTS build.
 
 ## 0. 2026-07-12 update — decided priority order
 

@@ -13,6 +13,12 @@ import type {
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import {
+  createTurnRecordSharedStore,
+  resolveTurnRecordToolDefinitions,
+  slimTurnRecordToolDefinitionsForAppend,
+  type TurnRecordSharedStore,
+} from './turn-record-shared-store.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
@@ -464,6 +470,7 @@ function readRecentTurnRecordsFromPath(
   path: string,
   channelId: string,
   limit: number,
+  sharedStore: TurnRecordSharedStore,
 ): TurnRecord[] {
   if (limit <= 0) return [];
   const records = readJsonLines<TurnRecord>(
@@ -479,18 +486,25 @@ function readRecentTurnRecordsFromPath(
     },
   ).entries;
 
-  if (records.length <= limit) return records;
-  return records.slice(-limit);
+  const recent = records.length <= limit ? records : records.slice(-limit);
+  // Content-addressed refs (bead hgw3.3) resolve at the read boundary — only
+  // for the records actually returned — so every consumer above persistence
+  // sees fully inline records. Fail closed: a dangling ref is a loud error.
+  return recent.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
 }
 
 export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRecordStorePort {
+  const sharedStore = createTurnRecordSharedStore(join(sessionsDir, TURN_RECORDS_DIR));
   return {
     appendTurnRecord: (record) => {
       const normalized = normalizeTurnRecord(record, record.channelId);
-      appendJsonLine(turnRecordPath(sessionsDir, record.channelId), normalized);
+      appendJsonLine(
+        turnRecordPath(sessionsDir, record.channelId),
+        slimTurnRecordToolDefinitionsForAppend(normalized, sharedStore),
+      );
     },
     readRecentTurnRecords: (channelId, limit) => (
-      readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit)
+      readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit, sharedStore)
     ),
   };
 }

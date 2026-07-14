@@ -855,7 +855,14 @@ export interface LLMProviderObservability {
   backendBaseUrl?: string;
   systemRole: LLMSystemRoleCapabilityMetadata;
   promptCaching: LLMPromptCacheObservability;
-  providerWireMessages: LLMProviderWireMessage[];
+  /**
+   * Flattened provider wire capture. Live captures always carry it; SLIM
+   * persisted turn snapshots omit it when the view is byte-derivable from the
+   * canonical PromptPlan (bead hgw3.3). Consumers must preserve absence —
+   * never coerce a missing capture to [] (the Garden read path treats absence
+   * as "derive from the plan" and an empty array as "captured empty").
+   */
+  providerWireMessages?: LLMProviderWireMessage[];
 }
 
 export interface ToolCall {

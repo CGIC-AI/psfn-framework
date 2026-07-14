@@ -477,6 +477,11 @@ class RealtimeConnection {
         });
       }
     } catch (error) {
+      console.error("Touch interaction delivery failed", {
+        sessionId: this.sessionId,
+        deviceId: this.deviceId,
+        error,
+      });
       const messageText = error instanceof CompanionRequestError && error.status === 429
         ? "Touch interaction is cooling down"
         : "Touch interaction delivery failed";

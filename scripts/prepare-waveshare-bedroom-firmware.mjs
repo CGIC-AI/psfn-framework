@@ -125,15 +125,9 @@ replaceRequired(
 // reducer's hit target and debounce.
 replaceRequired(
   "    on_touch:\n      - script.execute: backlight_timer\n      - if:\n          condition:\n            runtime_controller.is_active:\n              id: runtime\n              activity: timer_ringing\n          then:\n            - runtime_controller.event:\n                id: runtime\n                event: timer_stopped\n",
-  "    on_touch:\n      - script.execute: backlight_timer\n      - lambda: |-\n          if (id(current_mode) != 0 ||\n              id(voice_assistant_phase) != ${voice_assist_idle_phase_id}) {\n            return;\n          }\n          static psfn::satellite::UiState headpat_state;\n          const auto result = headpat_state.handle(\n              psfn::satellite::Gesture::Tap, touch.x, touch.y, millis());\n          if (result.action == psfn::satellite::InteractionAction::Headpat) {\n            id(headpat_feedback).execute();\n            id(headpat_event).trigger(\"headpat\");\n          }\n      - if:\n          condition:\n            runtime_controller.is_active:\n              id: runtime\n              activity: timer_ringing\n          then:\n            - runtime_controller.event:\n                id: runtime\n                event: timer_stopped\n",
+  "    on_touch:\n      - script.execute: backlight_timer\n      - lambda: |-\n          if (id(current_mode) != 0 ||\n              id(voice_assistant_phase) != ${voice_assist_idle_phase_id}) {\n            return;\n          }\n          static psfn::satellite::UiState headpat_state;\n          const auto result = headpat_state.handle(\n              psfn::satellite::Gesture::Tap, touch.x, touch.y, millis());\n          if (result.action == psfn::satellite::InteractionAction::Headpat) {\n            id(headpat_feedback).execute();\n            id(headpat_signal).publish_state(true);\n          }\n      - if:\n          condition:\n            runtime_controller.is_active:\n              id: runtime\n              activity: timer_ringing\n          then:\n            - runtime_controller.event:\n                id: runtime\n                event: timer_stopped\n",
   "touchscreen headpat dispatch",
 );
-replaceRequired(
-  'id(headpat_event).trigger("headpat");',
-  "id(headpat_signal).publish_state(true);",
-  "headpat native-API signal",
-);
-
 // Preserve the upstream widget IDs and lifecycle scripts while replacing its
 // borrowed character art with the repo-owned Purrsephone state sprites.
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;

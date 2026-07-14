@@ -179,6 +179,11 @@ from its existing `PSFN_SATELLITE_ID` / `PSFN_ENDPOINT_ID` /
 missing scope. An incomplete identity disables the bridge at startup — fail
 closed.
 
+Touch is authorized separately from relay telemetry: the Hub's PSFN endpoint
+must list `touch` in `maxCapabilities`, and each authenticated browser device
+that sends `touch.interaction` must list `touch` under the Hub device
+registry's `maxCapabilities.control`.
+
 All of these message families are capability-gated through `hello`:
 
 - `touch.interaction` requires the `touch` control capability.

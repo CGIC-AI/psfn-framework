@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import {
   CompressionFailureLogStore,
@@ -31,6 +31,63 @@ function makeMockLLM(content: string): LLMProviderPort {
 }
 
 describe('CompressionGuidelineRuntime', () => {
+  it('skips idle file reads and resumes review when a failure entry is appended', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-guideline-idle-'));
+    try {
+      const now = () => 1_700_000_000_000;
+      const guidelineStore = new CompressionGuidelineStore(join(dir, 'guideline.json'), { now });
+      const failureStore = new CompressionFailureLogStore(join(dir, 'failures.jsonl'), { now });
+      const runtime = new CompressionGuidelineRuntime(guidelineStore, failureStore, {
+        now,
+        minimumFailuresForUpdate: 1,
+      });
+      const llm = makeMockLLM(JSON.stringify({
+        updatedGuideline: 'Preserve unresolved asks and identifiers verbatim.',
+      }));
+      const completeSpy = vi.spyOn(llm, 'complete');
+      const guidelineReadSpy = vi.spyOn(guidelineStore, 'load');
+      const failureReadSpy = vi.spyOn(failureStore, 'listSince');
+
+      await expect(runtime.runPeriodicGuidelineUpdate(llm)).resolves.toMatchObject({
+        status: 'skipped',
+        reason: 'no_new_failures',
+      });
+      guidelineReadSpy.mockClear();
+      failureReadSpy.mockClear();
+
+      await expect(runtime.runPeriodicGuidelineUpdate(llm)).resolves.toMatchObject({
+        status: 'skipped',
+        reason: 'no_new_failures',
+      });
+      expect(guidelineReadSpy).not.toHaveBeenCalled();
+      expect(failureReadSpy).not.toHaveBeenCalled();
+      expect(completeSpy).not.toHaveBeenCalled();
+
+      failureStore.append({
+        channelId: 'api:idle-review',
+        sourceMessageId: 'message-1',
+        indicator: 'asked_for_reminder',
+        assistantResponse: 'Can you remind me what task we were in?',
+        originalContext: 'Original task context',
+        compressedContext: 'Compressed task context',
+        guidelineVersion: 1,
+        compactionCapturedAt: now(),
+      });
+      guidelineReadSpy.mockClear();
+      failureReadSpy.mockClear();
+
+      await expect(runtime.runPeriodicGuidelineUpdate(llm)).resolves.toMatchObject({
+        status: 'updated',
+        reviewedFailureCount: 1,
+      });
+      expect(guidelineReadSpy).toHaveBeenCalledTimes(1);
+      expect(failureReadSpy).toHaveBeenCalledTimes(1);
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('stores defaults and persists guideline revisions', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-guideline-'));
     try {

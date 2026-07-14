@@ -782,7 +782,7 @@ export class AdminSessionDataService implements AdminSessionService {
     }
     // Decode channel visibility from a single recent entry (bounded read),
     // mirroring the list endpoint's fallback to channel-disclosure policy.
-    const recentEntry = this.deps.sessionStore.getRecent(sessionId, 1)[0];
+    const recentEntry = this.deps.sessionStore.getRecent(sessionId, 1).at(0);
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
       ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
     const turnData = this.turnObservability.buildTurnData(record);

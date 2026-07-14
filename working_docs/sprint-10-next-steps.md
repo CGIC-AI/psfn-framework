@@ -77,6 +77,16 @@ The headline fact governing everything below: the multi-companion substrate is *
   memory-port/trust-policy support 87/87, lint, ESM+DTS build, and worktree plus
   branch-range diff checks passed. The parent epic `psfn-framework-2z12` remains
   open for its other children.
+- Tracker reconciliation at `d9ba500c`: the epic has nine direct children,
+  five closed and four genuinely open. No stale child was closed during this
+  pass. `2z12.1` has its code/config portion on canonical `origin/main` at
+  `84c0089e`, but still needs the one-companion telemetry/pricing soak;
+  `2z12.3` still sends the audited keepalive, now correctly scoped as a
+  PostgreSQL audit-write issue rather than SQLite work; `2z12.4` has a candidate
+  implementation at `6c9c7186` on another pushed branch but is not integrated
+  into this feature branch or main; and all eight `2z12.9` small-win checklist
+  items remain open. The original epic therefore stays open; no residual-fixes
+  epic was created.
 
 ## 0. 2026-07-12 update — decided priority order
 

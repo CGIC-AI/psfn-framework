@@ -112,6 +112,7 @@ export type {
   AdminPromptDetailData,
   AdminPromptListData,
   AdminSessionListData,
+  AdminSessionDetailData,
   AdminSessionMessagesData,
   AdminSessionRouteListData,
   AdminSessionRouteResetData,
@@ -321,7 +322,10 @@ export interface AdminMemoryScopeMutationResult {
 }
 
 // Sessions
-export type ChannelInfo = CanonicalAdminSessionListData['channels'][number];
+export type ChannelInfo = CanonicalAdminSessionListData['channels'][number] & {
+  linkedContactId?: string;
+  linkedContactName?: string;
+};
 
 export interface SessionEntry {
   id: number;

@@ -20,7 +20,7 @@ const SYSTEM_PROMPT = [
   'Never include message text or instructions for the peer-visible turn.',
 ].join('\n');
 
-function extractObject(content: string): Record<string, unknown> | null {
+function parseExactObject(content: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(content.trim());
     return isRecord(parsed) ? parsed : null;
@@ -30,7 +30,7 @@ function extractObject(content: string): Record<string, unknown> | null {
 }
 
 function parseConsent(content: string): IcpInitiationConsent | null {
-  const value = extractObject(content);
+  const value = parseExactObject(content);
   if (!value) return null;
   try {
     assertNoUnknownKeys(value, ['action', 'reason'], 'ICP initiation consent');

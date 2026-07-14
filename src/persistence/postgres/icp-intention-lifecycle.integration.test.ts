@@ -34,11 +34,11 @@ import {
 import { POSTGRES_INTENTION_MIGRATIONS } from './migrations.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import {
+  DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 
-const TEST_IMAGE = 'postgres:16-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const LOCAL_COMPANION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PEER_COMPANION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -47,7 +47,7 @@ let harness: PostgresTestHarness | null = null;
 const tempDirs: string[] = [];
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: TEST_IMAGE });
+  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
 }, INTEGRATION_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -97,6 +97,12 @@ function candidateStore(): IcpInitiationCandidateStorePort {
     },
     async getCandidate(candidateId) {
       const candidate = candidates.get(candidateId);
+      return candidate ? structuredClone(candidate) : null;
+    },
+    async getCandidateByPendingFollowUpId(pendingFollowUpId) {
+      const candidate = [...candidates.values()].find(
+        row => row.pendingFollowUpId === pendingFollowUpId,
+      );
       return candidate ? structuredClone(candidate) : null;
     },
     async listCandidates() {
@@ -270,6 +276,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         const firstAdapter = createIcpIntentionCandidateAdapter({
           sourceRuntime,
           peers,
+          candidateStore: store,
           pendingFollowUpStore: firstPorts.pendingFollowUpStore,
           concernStore: firstPorts.concernStore,
           now: () => Date.parse('2026-07-14T01:00:00.000Z'),
@@ -316,6 +323,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         const restartedAdapter = createIcpIntentionCandidateAdapter({
           sourceRuntime,
           peers,
+          candidateStore: store,
           pendingFollowUpStore: restartedPorts.pendingFollowUpStore,
           concernStore: restartedPorts.concernStore,
           now: () => Date.parse('2026-07-14T01:01:00.000Z'),
@@ -441,6 +449,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
             Date.parse('2026-07-14T02:00:00.000Z'),
           ),
           peers,
+          candidateStore,
           pendingFollowUpStore: firstPorts.pendingFollowUpStore,
           concernStore: firstPorts.concernStore,
           now: () => Date.parse('2026-07-14T02:00:00.000Z'),
@@ -517,6 +526,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
             Date.parse('2026-07-14T02:01:00.000Z'),
           ),
           peers,
+          candidateStore,
           pendingFollowUpStore: restartedPorts.pendingFollowUpStore,
           concernStore: restartedPorts.concernStore,
           now: () => Date.parse('2026-07-14T02:01:00.000Z'),

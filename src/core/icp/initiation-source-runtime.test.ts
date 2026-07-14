@@ -31,6 +31,12 @@ function createStore(): IcpInitiationCandidateStorePort {
       const row = rows.get(candidateId);
       return row ? structuredClone(row) : null;
     },
+    async getCandidateByPendingFollowUpId(pendingFollowUpId) {
+      const row = [...rows.values()].find(
+        candidate => candidate.pendingFollowUpId === pendingFollowUpId,
+      );
+      return row ? structuredClone(row) : null;
+    },
     async listCandidates(options) {
       const statuses = new Set(options?.statuses ?? []);
       return [...rows.values()]
@@ -189,6 +195,133 @@ describe('ICP initiation source runtime', () => {
     expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
     expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
     expect((await deps.store.getCandidate(result.candidateId))?.status).toBe('deferred');
+  });
+
+  it('starts a deferral cooldown when the durable transition occurs after slow preflight', async () => {
+    const startedAt = 1_700_000_000_000;
+    let nowMs = startedAt;
+    const store = createStore();
+    const preflight = vi.fn().mockImplementation(async () => {
+      nowMs += 60_000;
+      return {
+        eligible: false as const,
+        reasonCode: 'peer_busy' as const,
+        reasonClass: 'deferrable' as const,
+      };
+    });
+    const { deps } = dependencies({
+      store,
+      now: () => nowMs,
+      gateway: {
+        companionInitiationPreflight: preflight,
+        companionIssueInitiationPermit: vi.fn(),
+      },
+    });
+    const sourceRequest = request('intention');
+
+    const deferred = await createIcpInitiationSourceRuntime(deps).submit(sourceRequest);
+    await expect(store.getCandidate(deferred.candidateId)).resolves.toMatchObject({
+      retryEligibleAtMs: startedAt + 60_000 + ICP_INITIATION_RETRY_COOLDOWN_MS,
+    });
+
+    nowMs = startedAt + ICP_INITIATION_RETRY_COOLDOWN_MS;
+    await expect(createIcpInitiationSourceRuntime(deps).submit(sourceRequest)).resolves.toMatchObject({
+      outcome: 'deduped',
+      status: 'deferred',
+    });
+    expect(preflight).toHaveBeenCalledOnce();
+  });
+
+  it('expires after slow preflight before asking for consent', async () => {
+    const startedAt = 1_700_000_000_000;
+    let nowMs = startedAt;
+    const { deps, consent } = dependencies({
+      now: () => nowMs,
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockImplementation(async () => {
+          nowMs += 1_001;
+          return { eligible: true as const };
+        }),
+        companionIssueInitiationPermit: vi.fn(),
+      },
+    });
+
+    await expect(createIcpInitiationSourceRuntime(deps).submit({
+      ...request('intention'),
+      ttlMs: 1_000,
+    })).resolves.toMatchObject({
+      outcome: 'deduped',
+      status: 'expired',
+      reasonCode: 'candidate_expired',
+    });
+    expect(consent.evaluate).not.toHaveBeenCalled();
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('expires after slow consent before requesting a permit', async () => {
+    const startedAt = 1_700_000_000_000;
+    let nowMs = startedAt;
+    const consent: IcpInitiationConsentEvaluator = {
+      evaluate: vi.fn().mockImplementation(async () => {
+        nowMs += 1_001;
+        return { action: 'send' as const };
+      }),
+    };
+    const { deps } = dependencies({
+      now: () => nowMs,
+      consent,
+    });
+
+    await expect(createIcpInitiationSourceRuntime(deps).submit({
+      ...request('intention'),
+      ttlMs: 1_000,
+    })).resolves.toMatchObject({
+      outcome: 'deduped',
+      status: 'expired',
+      reasonCode: 'candidate_expired',
+    });
+    expect(consent.evaluate).toHaveBeenCalledOnce();
+    expect(deps.gateway.companionIssueInitiationPermit).not.toHaveBeenCalled();
+    expect(deps.peers.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('starts the permit TTL after slow preflight instead of from the submit timestamp', async () => {
+    const startedAt = 1_700_000_000_000;
+    let nowMs = startedAt;
+    const { deps } = dependencies({
+      now: () => nowMs,
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockImplementation(async () => {
+          nowMs += 60_000;
+          return { eligible: true as const };
+        }),
+        companionIssueInitiationPermit: vi.fn().mockImplementation(async ({ candidate }) => ({
+          decision: { eligible: true as const },
+          permit: {
+            permitId: '33333333-3333-4333-8333-333333333333',
+            candidateId: candidate.candidateId,
+            conversationId: '44444444-4444-4444-8444-444444444444',
+            senderCompanionId: LOCAL,
+            recipientCompanionId: PEER,
+            channelId: `companion-dm:${LOCAL}:${PEER}`,
+            provenanceRef: candidate.provenanceRef,
+            issuedAtMs: nowMs,
+            expiresAtMs: nowMs + 5 * 60_000,
+            status: 'issued' as const,
+            revision: 1,
+          },
+        })),
+      },
+    });
+
+    await createIcpInitiationSourceRuntime(deps).submit(request('intention'));
+
+    expect(deps.gateway.companionIssueInitiationPermit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permitExpiresAtMs: startedAt + 60_000 + 5 * 60_000,
+      }),
+    );
   });
 
   it.each([

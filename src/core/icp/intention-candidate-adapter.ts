@@ -15,6 +15,9 @@ import type {
   IcpInitiationSourceResult,
   IcpInitiationSourceRuntime,
 } from './initiation-source-runtime.js';
+import type {
+  IcpInitiationCandidateStatus,
+} from './initiation-candidate.js';
 
 export type IcpIntentionCandidateAdapterResult =
   | { kind: 'not_companion' }
@@ -22,6 +25,9 @@ export type IcpIntentionCandidateAdapterResult =
   | { kind: 'submitted'; result: IcpInitiationSourceResult };
 
 export interface IcpIntentionCandidateAdapter {
+  getLinkedCandidateStatus(
+    pendingFollowUpId: string,
+  ): Promise<IcpInitiationCandidateStatus | null>;
   submit(input: {
     action: {
       id: string;
@@ -54,10 +60,20 @@ export function createIcpIntentionCandidateAdapter(input: {
   peers: { resolveKnownPeer(contactId: string): Promise<KnownCompanionPeer> };
   pendingFollowUpStore: Pick<PendingFollowUpStorePort, 'peek'>;
   concernStore: Pick<ConcernStorePort, 'getById'>;
+  candidateStore: {
+    getCandidateByPendingFollowUpId(
+      pendingFollowUpId: string,
+    ): Promise<{ status: IcpInitiationCandidateStatus } | null>;
+  };
   now?: () => number;
 }): IcpIntentionCandidateAdapter {
   const now = input.now ?? Date.now;
   return {
+    async getLinkedCandidateStatus(pendingFollowUpId) {
+      return (
+        await input.candidateStore.getCandidateByPendingFollowUpId(pendingFollowUpId)
+      )?.status ?? null;
+    },
     async submit({ action, payload }) {
       const contactIds = new Set<string>();
       const lineageRoots = new Set<string>();

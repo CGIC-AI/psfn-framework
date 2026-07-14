@@ -189,6 +189,9 @@ export interface IcpInitiationCandidateTransitionInput {
 export interface IcpInitiationCandidateStorePort {
   createCandidate(candidate: IcpInitiationCandidate): Promise<IcpInitiationCandidate>;
   getCandidate(candidateId: string): Promise<IcpInitiationCandidate | null>;
+  getCandidateByPendingFollowUpId(
+    pendingFollowUpId: string,
+  ): Promise<IcpInitiationCandidate | null>;
   listCandidates(options?: IcpInitiationCandidateListOptions): Promise<IcpInitiationCandidate[]>;
   transitionCandidate(
     input: IcpInitiationCandidateTransitionInput,

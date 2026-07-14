@@ -298,6 +298,22 @@ export function wireHeartbeatPostTurnRuntime(
       });
       return false;
     }
+    const linkedCandidateStatus = await runtimeOptions.icpIntentionCandidateAdapter
+      ?.getLinkedCandidateStatus(payload.pendingFollowUpId);
+    if (linkedCandidateStatus) {
+      log.info('Intention follow-up activation blocked by linked ICP candidate', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        candidateStatus: linkedCandidateStatus,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'linked_icp_candidate',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        candidateStatus: linkedCandidateStatus,
+      });
+      return false;
+    }
     const activationState = evaluatePendingFollowUpActivationState(followUp, {
       now: nowMs,
       isBackgroundTurn: isBackgroundAppraisalChannel(payload.channelId),
@@ -1155,10 +1171,14 @@ export function wireHeartbeatPostTurnRuntime(
                 recordOutreachSessionAudit(action, payload, 'blocked', 'icp_candidate_suppressed');
               } else if (isLinkedPendingFollowUp
                 && (icpCandidate.result.status === 'declined'
-                  || icpCandidate.result.status === 'cancelled')) {
+                  || icpCandidate.result.status === 'cancelled'
+                  || icpCandidate.result.status === 'expired'
+                  || icpCandidate.result.status === 'rejected')) {
                 const dampeningReason = icpCandidate.result.status === 'declined'
                   ? 'icp_candidate_declined'
-                  : 'icp_candidate_retry_exhausted';
+                  : icpCandidate.result.status === 'cancelled'
+                    ? 'icp_candidate_retry_exhausted'
+                    : `icp_candidate_${icpCandidate.result.status}`;
                 await reconcileDampenedIcpPendingFollowUp(pendingFollowUpId, dampeningReason);
                 runtimeOptions.outreachOutbox?.append({
                   ...baseOutboxRecord,
@@ -1173,8 +1193,18 @@ export function wireHeartbeatPostTurnRuntime(
                 });
                 recordOutreachSessionAudit(action, payload, 'blocked', dampeningReason);
               }
-              return {
+              const handlerResult = {
                 detail: `icp_candidate:${icpCandidate.result.outcome}:${icpCandidate.result.status}`,
+              };
+              if (icpCandidate.result.status !== 'deferred') {
+                return handlerResult;
+              }
+              if (icpCandidate.result.retryEligibleAtMs === undefined) {
+                throw new Error('Deferred ICP intention candidate has no durable retry eligibility');
+              }
+              return {
+                ...handlerResult,
+                rescheduleAt: icpCandidate.result.retryEligibleAtMs,
               };
             }
             if (!proactiveOutbound) {

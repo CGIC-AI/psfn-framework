@@ -28,19 +28,19 @@ import {
 } from './migrations.js';
 import { bootstrapSharedSchema, ensureSharedSchema } from './shared-schema.js';
 import {
+  DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 
 // The tenancy plumbing does not need pgvector; use the plain postgres image so
 // this runs against a locally available base image and stays fast.
-const TEST_IMAGE = 'postgres:16-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
 
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: TEST_IMAGE });
+  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
 }, INTEGRATION_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -97,6 +97,11 @@ function memoryCandidateStore(): IcpInitiationCandidateStorePort {
     async getCandidate(candidateId) {
       return candidates.get(candidateId) ?? null;
     },
+    async getCandidateByPendingFollowUpId(pendingFollowUpId) {
+      return [...candidates.values()].find(
+        candidate => candidate.pendingFollowUpId === pendingFollowUpId,
+      ) ?? null;
+    },
     async listCandidates() {
       return [...candidates.values()];
     },
@@ -135,6 +140,7 @@ function recursiveRejectingSourceRuntime(input: {
   localCompanionId: string;
   peerCompanionId: string;
 }) {
+  const candidateStore = memoryCandidateStore();
   const consent = vi.fn().mockResolvedValue({ action: 'send' as const });
   const issuePermit = vi.fn();
   const peers = {
@@ -146,12 +152,13 @@ function recursiveRejectingSourceRuntime(input: {
     executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' as const }),
   };
   return {
+    candidateStore,
     consent,
     issuePermit,
     peers,
     runtime: createIcpInitiationSourceRuntime({
       localCompanionId: input.localCompanionId,
-      store: memoryCandidateStore(),
+      store: candidateStore,
       peers,
       gateway: {
         companionInitiationPreflight: vi.fn().mockImplementation(async ({ candidate }) => (
@@ -832,6 +839,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const adapter = createIcpIntentionCandidateAdapter({
           sourceRuntime: source.runtime,
           peers: source.peers,
+          candidateStore: source.candidateStore,
           pendingFollowUpStore: restartedRuntime.pendingFollowUpStore,
           concernStore: restartedRuntime.concernStore,
           now: () => Date.parse('2026-07-13T20:01:00.000Z'),

@@ -73,6 +73,9 @@ function harness(input: {
     pendingFollowUpStore: {
       peek: vi.fn().mockResolvedValue(input.pending === undefined ? followUp() : input.pending),
     },
+    candidateStore: {
+      getCandidateByPendingFollowUpId: vi.fn().mockResolvedValue(null),
+    },
     concernStore: {
       getById: vi.fn().mockResolvedValue(input.concern === undefined ? concern() : input.concern),
     },
@@ -89,6 +92,21 @@ const action = {
 };
 
 describe('ICP intention candidate adapter', () => {
+  it('exposes the durable candidate status linked to a pending follow-up', async () => {
+    const getCandidateByPendingFollowUpId = vi.fn().mockResolvedValue({ status: 'deferred' });
+    const adapter = createIcpIntentionCandidateAdapter({
+      sourceRuntime: { submit: vi.fn() },
+      peers: { resolveKnownPeer: vi.fn() },
+      pendingFollowUpStore: { peek: vi.fn() },
+      concernStore: { getById: vi.fn() },
+      candidateStore: { getCandidateByPendingFollowUpId },
+      now: () => NOW,
+    });
+
+    await expect(adapter.getLinkedCandidateStatus('follow-up-1')).resolves.toBe('deferred');
+    expect(getCandidateByPendingFollowUpId).toHaveBeenCalledWith('follow-up-1');
+  });
+
   it.each(['invalid_companion_identity', 'reverse_identity_mismatch'] as const)(
     'blocks %s without legacy dispatch eligibility',
     async (reason) => {
@@ -101,6 +119,7 @@ describe('ICP intention candidate adapter', () => {
           ),
         },
         pendingFollowUpStore: { peek: vi.fn().mockResolvedValue(followUp()) },
+        candidateStore: { getCandidateByPendingFollowUpId: vi.fn().mockResolvedValue(null) },
         concernStore: { getById: vi.fn().mockResolvedValue(concern()) },
         now: () => NOW,
       });

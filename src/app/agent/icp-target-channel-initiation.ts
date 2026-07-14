@@ -177,6 +177,21 @@ export function createIcpTargetChannelInitiator(input: {
   ): Promise<IcpTargetChannelInitiationResult> => {
     const peerContactId = requirePeerContactId(request.peerContactId);
     const sourceMessageId = `icp-initiation:${permit.candidateId}`;
+    const validateRecordedCorrelation = (
+      value: IcpConversationCorrelation,
+    ): IcpConversationCorrelation => {
+      const parsed = parseIcpConversationCorrelation(value);
+      if (parsed.localCompanionId !== localCompanionId
+        || parsed.peerCompanionId !== permit.recipientCompanionId
+        || parsed.peerContactId !== peerContactId
+        || parsed.channelId !== permit.channelId
+        || parsed.conversationId !== permit.conversationId
+        || parsed.rootInitiationId !== request.rootInitiationId
+        || parsed.requestId !== sourceMessageId) {
+        throw new Error('Recorded ICP initiation turn does not match the permit binding');
+      }
+      return parsed;
+    };
     const previousObservation = await input.agent.findIcpDeliveryObservation(
       permit.channelId,
       sourceMessageId,
@@ -190,32 +205,27 @@ export function createIcpTargetChannelInitiator(input: {
         previousObservation.recoveryResponse,
         'ICP target-channel recovery',
       );
+      validateRecordedCorrelation(
+        previousObservation.recoveryResponse.metadata.icpCorrelation,
+      );
     }
     const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
     if (!recorded
       && previousObservation?.turnCompleted
       && previousObservation.status === 'suppressed') {
-      throw new Error('ICP target-channel initiation was already durably suppressed');
+      return {
+        disposition: 'suppressed',
+        recoveredTurn: true,
+        correlation: validateRecordedCorrelation(
+          previousObservation.recoveryResponse.metadata.icpCorrelation,
+        ),
+      };
     }
     let recoveredTurn = recorded !== null;
     let content: string;
     let correlation: IcpConversationCorrelation;
     let turnResponse: AgentResponse | undefined;
     let lastDeliveryObservation: IcpDeliveryObservation | null = previousObservation;
-
-    const validateRecordedCorrelation = (value: IcpConversationCorrelation): IcpConversationCorrelation => {
-      const parsed = parseIcpConversationCorrelation(value);
-      if (parsed.localCompanionId !== localCompanionId
-        || parsed.peerCompanionId !== permit.recipientCompanionId
-        || parsed.peerContactId !== peerContactId
-        || parsed.channelId !== permit.channelId
-        || parsed.conversationId !== permit.conversationId
-        || parsed.rootInitiationId !== request.rootInitiationId
-        || parsed.requestId !== sourceMessageId) {
-        throw new Error('Recorded ICP initiation turn does not match the permit binding');
-      }
-      return parsed;
-    };
 
     const finalizeDelivery = async (): Promise<IcpTargetChannelInitiationResult> => {
       if (lastDeliveryObservation?.status === 'delivered') {
@@ -382,7 +392,7 @@ export function createIcpTargetChannelInitiator(input: {
       };
       if (previousObservation?.turnCompleted) {
         if (previousObservation.status === 'suppressed') {
-          throw new Error('ICP target-channel initiation was already durably suppressed');
+          return { disposition: 'suppressed', recoveredTurn: true, correlation };
         }
         if (previousObservation.status === 'delivered') {
           return await finalizeDelivery();

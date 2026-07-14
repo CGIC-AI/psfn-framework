@@ -68,6 +68,16 @@ function requirePositiveInteger(value: number, field: string): number {
   return value;
 }
 
+function requirePendingFollowUpId(value: string): string {
+  if (!value || value.trim() !== value) {
+    throw new Error('pendingFollowUpId must be a non-empty trimmed string');
+  }
+  if (value.length > 1_024) {
+    throw new Error('pendingFollowUpId must be 1024 characters or fewer');
+  }
+  return value;
+}
+
 function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
   return parseIcpInitiationCandidate({
     candidateId: row.candidate_id,
@@ -169,6 +179,17 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       FROM icp_initiation_candidates
       WHERE candidate_id = $1
     `, [requireUuid(candidateId, 'candidateId')]);
+    return row ? mapCandidate(row) : null;
+  }
+
+  async getCandidateByPendingFollowUpId(
+    pendingFollowUpId: string,
+  ): Promise<IcpInitiationCandidate | null> {
+    const row = await queryOne<CandidateRow>(this.pool, `
+      SELECT ${CANDIDATE_COLUMNS}
+      FROM icp_initiation_candidates
+      WHERE pending_follow_up_id = $1
+    `, [requirePendingFollowUpId(pendingFollowUpId)]);
     return row ? mapCandidate(row) : null;
   }
 

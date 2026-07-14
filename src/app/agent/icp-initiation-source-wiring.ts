@@ -59,6 +59,7 @@ export function wireIcpInitiationSources(
         peers: input.peers,
         pendingFollowUpStore: input.pendingFollowUpStore,
         concernStore: input.concernStore,
+        candidateStore: input.candidateStore,
       })
     : undefined;
   const unregisterCoLocationThoughtAdapter = (

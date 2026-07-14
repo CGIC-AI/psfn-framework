@@ -110,6 +110,8 @@ function wire(
               outcome: 'deferred',
               candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
               status: 'deferred',
+              pendingFollowUpId: 'follow-up-1',
+              retryEligibleAtMs: 1_700_000_300_000,
             },
           }
         : kind === 'declined'
@@ -218,7 +220,10 @@ function wire(
       onIntentionFollowUpDampened,
       proactiveOutbound,
       outreachOutbox,
-      icpIntentionCandidateAdapter: { submit },
+      icpIntentionCandidateAdapter: {
+        submit,
+        getLinkedCandidateStatus: vi.fn().mockResolvedValue(null),
+      },
     },
   );
   const handler = handlers.get(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
@@ -360,6 +365,7 @@ describe('heartbeat ICP intention candidate integration', () => {
     } = wire('deferred');
     await expect(handler(ACTION)).resolves.toEqual({
       detail: 'icp_candidate:deferred:deferred',
+      rescheduleAt: 1_700_000_300_000,
     });
     expect(submit).toHaveBeenCalledOnce();
     expect(onIntentionFollowUpActivated).not.toHaveBeenCalled();

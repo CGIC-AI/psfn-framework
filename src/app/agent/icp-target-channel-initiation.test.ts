@@ -462,7 +462,13 @@ describe('ICP target-channel initiation', () => {
       permit: permit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
-    })).rejects.toThrow('already durably suppressed');
+    })).resolves.toMatchObject({
+      disposition: 'suppressed',
+      recoveredTurn: true,
+      correlation: expect.objectContaining({
+        requestId: `icp-initiation:${CANDIDATE}`,
+      }),
+    });
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.consumeInitiationPermit).toHaveBeenCalledTimes(1);
   });
@@ -505,6 +511,43 @@ describe('ICP target-channel initiation', () => {
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
       status: 'suppressed',
     }));
+  });
+
+  it('rejects durable suppression recovery whose correlation is not bound to the permit', async () => {
+    const harness = createHarness();
+    const mismatchedCorrelation = {
+      ...correlation(),
+      rootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    };
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      status: 'suppressed',
+      recoveryResponse: {
+        content: '',
+        channelId: CHANNEL,
+        metadata: {
+          model: 'deterministic-test-model',
+          inputTokens: 1,
+          outputTokens: 0,
+          durationMs: 1,
+          turnId: mismatchedCorrelation.turnId,
+          requestId: mismatchedCorrelation.requestId,
+          icpCorrelation: mismatchedCorrelation,
+        },
+      },
+      turnCompleted: true,
+    });
+
+    await expect(harness.initiator.initiate({
+      permit: consumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow('does not match the permit binding');
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
   });
 
   it('fails closed when a consumed permit has no durable assistant or prepared observation', async () => {

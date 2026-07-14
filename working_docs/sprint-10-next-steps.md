@@ -44,6 +44,21 @@ The headline fact governing everything below: the multi-companion substrate is *
   diff checks passed. The known full-suite dependency on the untracked
   `purrsephone/satellites.json` owner file remains report-only; no rerun was
   needed for this bounded closeout.
+- `psfn-framework-2z12.7` is closed on integration merge `05ec2557`
+  (implementations `d311f9e0`, `a8561fe7`, `5d73270b`, and `ad0c37cc`; bounded
+  review remediation `75dc46aa`). Successfully screened inline images are now
+  retained behind opaque connection-local handles so the main-model call crosses
+  the gateway transport once on a retention hit. Screening/main behavior is
+  unchanged; retention is connection-, companion-, and turn-scoped with a 60s
+  TTL, entry/byte caps, disconnect/stop cleanup, exact-byte one-shot resend on a
+  miss, an unchanged URL-image path, and exact serialized transport counters.
+- The single independent review found two important issues: idle connections did
+  not physically prune expired partner bytes, and the gateway wire union omitted
+  `gateway_image_ref`. The bounded remediation added proactive unref'd expiry and
+  shutdown cleanup with regression coverage, and made the wire contract explicit.
+- Final integrated gate for `2z12.7`: image/privacy/transport 192/192 plus merged
+  gateway/server regressions 53/53, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. Material remaining image observations: none.
 
 ## 0. 2026-07-12 update — decided priority order
 

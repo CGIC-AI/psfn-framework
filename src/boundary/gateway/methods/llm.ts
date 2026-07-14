@@ -9,7 +9,13 @@ import type {
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import type { CorrelationMetadata, CompletionPurpose, LLMModelHint, ObservabilityCallType } from '../../../shared/contracts/runtime.js';
+import type {
+  ContextMessage,
+  CorrelationMetadata,
+  CompletionPurpose,
+  LLMModelHint,
+  ObservabilityCallType,
+} from '../../../shared/contracts/runtime.js';
 import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,
@@ -209,13 +215,16 @@ export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
 function resolveRetainedImageReferences(
   params: LLMChatParams | LLMCompleteParams,
   runtime: GatewayMethodRuntime,
-): LLMChatParams['messages'] {
+): ContextMessage[] {
   try {
-    return resolveGatewayInlineImageReferences(
+    const resolved = resolveGatewayInlineImageReferences(
       params.messages,
       runtime.inlineImageRetention,
       params.turnId,
     );
+    // The gateway wire admits structured provider blocks while the legacy
+    // LLMContext contract still types `content` as text-only.
+    return resolved as unknown as ContextMessage[];
   } catch (error) {
     if (error instanceof GatewayInlineImageRetentionMissError) {
       throw new JSONRPCErrorException(error.message, GatewayErrors.INLINE_IMAGE_RETENTION_MISS);

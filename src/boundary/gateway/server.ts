@@ -1693,6 +1693,10 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    for (const retention of this.inlineImageRetentionByConnection.values()) {
+      retention.clear();
+    }
+    this.inlineImageRetentionByConnection.clear();
     for (const conn of this.connections) {
       conn.destroy();
     }

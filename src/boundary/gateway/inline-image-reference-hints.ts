@@ -5,6 +5,10 @@ import {
   GATEWAY_INLINE_IMAGE_REFERENCE_TYPE,
   type GatewayRetainedImageDescriptor,
 } from './inline-image-retention.js';
+import type {
+  GatewayLLMContentBlock,
+  GatewayLLMMessage,
+} from './protocol.js';
 
 const GATEWAY_INLINE_IMAGE_HINT_MAX_ENTRIES = 64;
 
@@ -13,7 +17,7 @@ interface GatewayInlineImageHandleHint {
 }
 
 export interface GatewayReferencedMessages {
-  messages: ContextMessage[];
+  messages: GatewayLLMMessage[];
   usedHintKeys: string[];
 }
 
@@ -65,34 +69,47 @@ export class GatewayInlineImageReferenceHints {
     this.pruneExpired();
 
     const usedHintKeys = new Set<string>();
-    let changedAny = false;
-    const referencedMessages = messages.map((message) => {
-      const content = (message as unknown as { content?: unknown }).content;
-      if (!Array.isArray(content)) return message;
-
+    const referencedMessages: GatewayLLMMessage[] = [];
+    for (const message of messages) {
+      const content: unknown = message.content;
+      if (!Array.isArray(content)) {
+        referencedMessages.push(message);
+        continue;
+      }
+      const wireContent = content as GatewayLLMContentBlock[];
       let changedMessage = false;
-      const referencedContent = content.map((block) => {
-        if (!isRecord(block) || block.type !== 'image') return block;
+      const referencedContent: GatewayLLMContentBlock[] = [];
+      for (const block of wireContent) {
+        if (block.type !== 'image') {
+          referencedContent.push(block);
+          continue;
+        }
         const image = normalizeInlineImage(block.data, block.mimeType);
-        if (!image) return block;
+        if (!image) {
+          referencedContent.push(block);
+          continue;
+        }
         const key = fingerprintInlineImage(image, scope);
         const hint = this.hints.get(key);
-        if (!hint || hint.descriptor.requestScope !== scope) return block;
-        changedAny = true;
+        if (!hint || hint.descriptor.requestScope !== scope) {
+          referencedContent.push(block);
+          continue;
+        }
         changedMessage = true;
         usedHintKeys.add(key);
-        return {
+        referencedContent.push({
           type: GATEWAY_INLINE_IMAGE_REFERENCE_TYPE,
           handle: hint.descriptor.handle,
-        };
-      });
+        });
+      }
 
-      if (!changedMessage) return message;
-      return { ...message, content: referencedContent } as unknown as ContextMessage;
-    });
+      referencedMessages.push(changedMessage
+        ? { ...message, content: referencedContent }
+        : message);
+    }
 
     return {
-      messages: changedAny ? referencedMessages : messages,
+      messages: usedHintKeys.size > 0 ? referencedMessages : messages,
       usedHintKeys: [...usedHintKeys],
     };
   }
@@ -113,10 +130,11 @@ export class GatewayInlineImageReferenceHints {
   }
 }
 
-function normalizeDescriptor(value: GatewayRetainedImageDescriptor): GatewayRetainedImageDescriptor | null {
-  const handle = typeof value?.handle === 'string' ? value.handle.trim() : '';
-  const requestScope = typeof value?.requestScope === 'string' ? value.requestScope.trim() : '';
-  const expiresAt = value?.expiresAt;
+function normalizeDescriptor(value: unknown): GatewayRetainedImageDescriptor | null {
+  if (!isRecord(value)) return null;
+  const handle = typeof value.handle === 'string' ? value.handle.trim() : '';
+  const requestScope = typeof value.requestScope === 'string' ? value.requestScope.trim() : '';
+  const expiresAt = value.expiresAt;
   if (!handle || !requestScope || typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
     return null;
   }

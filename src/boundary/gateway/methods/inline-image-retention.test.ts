@@ -53,6 +53,54 @@ function createHarness(options: {
 }
 
 describe('gateway inline image retention RPC flow', () => {
+  it('proactively removes retained partner bytes at TTL without later cache activity', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const retention = new GatewayInlineImageRetention({
+        ttlMs: 10,
+        maxEntries: 1,
+        createHandle: () => 'idle-expiry-handle',
+      });
+
+      retention.retain({
+        dataBase64: 'aGVsbG8=',
+        mimeType: 'image/png',
+        requestScope: 'turn-idle-expiry',
+      });
+      expect(retention.getRetentionStats()).toEqual({ entryCount: 1, decodedBytes: 5 });
+      expect(vi.getTimerCount()).toBe(1);
+
+      vi.advanceTimersByTime(5);
+      retention.retain({
+        dataBase64: 'd29ybGQ=',
+        mimeType: 'image/png',
+        requestScope: 'turn-idle-expiry',
+      });
+      expect(retention.getRetentionStats()).toEqual({ entryCount: 1, decodedBytes: 5 });
+      expect(vi.getTimerCount()).toBe(1);
+
+      vi.advanceTimersByTime(5);
+      expect(retention.getRetentionStats()).toEqual({ entryCount: 1, decodedBytes: 5 });
+
+      vi.advanceTimersByTime(5);
+
+      expect(retention.getRetentionStats()).toEqual({ entryCount: 0, decodedBytes: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+
+      retention.retain({
+        dataBase64: 'YWdhaW4=',
+        mimeType: 'image/png',
+        requestScope: 'turn-idle-expiry',
+      });
+      expect(vi.getTimerCount()).toBe(1);
+      retention.clear();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('retains a screened inline image and resolves it for the scoped main model call', async () => {
     const { methods, stream } = createHarness();
     const imageBase64 = 'aGVsbG8=';

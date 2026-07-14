@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import type { ContextMessage } from '../../shared/contracts/runtime.js';
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import type {
+  GatewayLLMContentBlock,
+  GatewayLLMMessage,
+} from './protocol.js';
 
 export const GATEWAY_INLINE_IMAGE_REFERENCE_TYPE = 'gateway_image_ref';
 export const GATEWAY_INLINE_IMAGE_RETENTION_TTL_MS = 60_000;
@@ -26,6 +29,11 @@ export interface GatewayInlineImageRetentionOptions {
   createHandle?: () => string;
 }
 
+export interface GatewayInlineImageRetentionStats {
+  entryCount: number;
+  decodedBytes: number;
+}
+
 interface GatewayRetainedImageEntry extends GatewayRetainedImage {
   descriptor: GatewayRetainedImageDescriptor;
   decodedBytes: number;
@@ -46,6 +54,7 @@ export class GatewayInlineImageRetention {
   private readonly createHandle: () => string;
   private readonly entries = new Map<string, GatewayRetainedImageEntry>();
   private retainedBytes = 0;
+  private expirationTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: GatewayInlineImageRetentionOptions = {}) {
     this.ttlMs = options.ttlMs ?? GATEWAY_INLINE_IMAGE_RETENTION_TTL_MS;
@@ -104,12 +113,13 @@ export class GatewayInlineImageRetention {
       decodedBytes,
     });
     this.retainedBytes += decodedBytes;
+    this.scheduleExpiration(now);
     return descriptor;
   }
 
   resolve(handle: string, requestScope: string): GatewayRetainedImage | null {
     const now = this.now();
-    this.pruneExpired(now);
+    if (this.pruneExpired(now)) this.scheduleExpiration(now);
     const entry = this.entries.get(handle);
     if (!entry || entry.descriptor.requestScope !== requestScope) return null;
     return {
@@ -119,14 +129,26 @@ export class GatewayInlineImageRetention {
   }
 
   clear(): void {
+    this.cancelExpiration();
     this.entries.clear();
     this.retainedBytes = 0;
   }
 
-  private pruneExpired(now: number): void {
+  getRetentionStats(): GatewayInlineImageRetentionStats {
+    return {
+      entryCount: this.entries.size,
+      decodedBytes: this.retainedBytes,
+    };
+  }
+
+  private pruneExpired(now: number): boolean {
+    let removed = false;
     for (const [handle, entry] of this.entries) {
-      if (entry.descriptor.expiresAt <= now) this.deleteEntry(handle);
+      if (entry.descriptor.expiresAt > now) continue;
+      this.deleteEntry(handle);
+      removed = true;
     }
+    return removed;
   }
 
   private deleteEntry(handle: string): void {
@@ -135,35 +157,67 @@ export class GatewayInlineImageRetention {
     this.entries.delete(handle);
     this.retainedBytes = Math.max(0, this.retainedBytes - entry.decodedBytes);
   }
+
+  private scheduleExpiration(now: number): void {
+    this.cancelExpiration();
+    let nextExpiry = Number.POSITIVE_INFINITY;
+    for (const entry of this.entries.values()) {
+      nextExpiry = Math.min(nextExpiry, entry.descriptor.expiresAt);
+    }
+    if (!Number.isFinite(nextExpiry)) return;
+    this.expirationTimer = setTimeout(() => {
+      this.expirationTimer = null;
+      const expirationNow = this.now();
+      this.pruneExpired(expirationNow);
+      this.scheduleExpiration(expirationNow);
+    }, Math.max(0, nextExpiry - now));
+    this.expirationTimer.unref();
+  }
+
+  private cancelExpiration(): void {
+    if (!this.expirationTimer) return;
+    clearTimeout(this.expirationTimer);
+    this.expirationTimer = null;
+  }
 }
 
 export function resolveGatewayInlineImageReferences(
-  messages: ContextMessage[],
+  messages: GatewayLLMMessage[],
   retention: GatewayInlineImageRetention | undefined,
   requestScope: string | undefined,
-): ContextMessage[] {
-  let resolvedAny = false;
-  const resolved = messages.map((message) => {
-    const content = (message as unknown as { content?: unknown }).content;
-    if (!Array.isArray(content)) return message;
+): GatewayLLMMessage[] {
+  let resolvedCount = 0;
+  const resolved: GatewayLLMMessage[] = [];
+  for (const message of messages) {
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      resolved.push(message);
+      continue;
+    }
     let resolvedMessage = false;
-    const resolvedContent = content.map((block) => {
-      if (!isRecord(block) || block.type !== GATEWAY_INLINE_IMAGE_REFERENCE_TYPE) return block;
-      const handle = typeof block.handle === 'string' ? block.handle.trim() : '';
+    const resolvedContent: GatewayLLMContentBlock[] = [];
+    for (const block of content) {
+      const candidate: unknown = block;
+      if (!isRecord(candidate) || candidate.type !== GATEWAY_INLINE_IMAGE_REFERENCE_TYPE) {
+        resolvedContent.push(block);
+        continue;
+      }
+      const handle = typeof candidate.handle === 'string' ? candidate.handle.trim() : '';
       const scope = requestScope?.trim() ?? '';
       if (!handle || !scope || !retention) throw new GatewayInlineImageRetentionMissError();
       const image = retention.resolve(handle, scope);
       if (!image) throw new GatewayInlineImageRetentionMissError();
-      resolvedAny = true;
+      resolvedCount += 1;
       resolvedMessage = true;
-      return {
+      resolvedContent.push({
         type: 'image',
         data: image.dataBase64,
         mimeType: image.mimeType,
-      };
-    });
-    if (!resolvedMessage) return message;
-    return { ...message, content: resolvedContent } as unknown as ContextMessage;
-  });
-  return resolvedAny ? resolved : messages;
+      });
+    }
+    resolved.push(resolvedMessage
+      ? { ...message, content: resolvedContent }
+      : message);
+  }
+  return resolvedCount > 0 ? resolved : messages;
 }

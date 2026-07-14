@@ -1011,7 +1011,7 @@ describe('intention appraisal action mapping', () => {
       contactId: 'peer-contact',
       originIcpRootInitiationId: rootInitiationId,
     }]);
-    expect(normalizeIntentionFollowUpActionPayload(resurfaced?.payload)).toMatchObject({
+    expect(normalizeIntentionFollowUpActionPayload(resurfaced.payload)).toMatchObject({
       originIcpRootInitiationId: rootInitiationId,
     });
 
@@ -1033,7 +1033,7 @@ describe('intention appraisal action mapping', () => {
         routing: { originIcpRootInitiationId: rootInitiationId },
       },
     });
-    expect(normalizeIntentionOutboundMessageActionPayload(outbound?.payload)).toMatchObject({
+    expect(normalizeIntentionOutboundMessageActionPayload(outbound.payload)).toMatchObject({
       originIcpRootInitiationId: rootInitiationId,
     });
   });

@@ -145,6 +145,7 @@ describe('wireIntentionRuntime', () => {
     });
     expect(typeof recentResolved[0]?.resolvedAt).toBe('number');
 
+    const concernCreateSpy = vi.spyOn(runtime.concernStore, 'create');
     await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
@@ -161,7 +162,11 @@ describe('wireIntentionRuntime', () => {
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-1',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
+    expect(concernCreateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    }));
 
     const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',

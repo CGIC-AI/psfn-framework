@@ -27,12 +27,19 @@ function text(result: { content: Array<{ text: string }> }): string {
   return result.content.map(part => part.text).join('');
 }
 
-function context(channelId: string, icpRoot?: string) {
+function context(channelId: string, icpRoot?: string, durableRoot?: string) {
   return {
     message: {
       id: 'source-message',
       channelId,
-      ...(icpRoot ? { routing: { icpCorrelation: { rootInitiationId: icpRoot } } } : {}),
+      ...((icpRoot || durableRoot)
+        ? {
+            routing: {
+              ...(icpRoot ? { icpCorrelation: { rootInitiationId: icpRoot } } : {}),
+              ...(durableRoot ? { originIcpRootInitiationId: durableRoot } : {}),
+            },
+          }
+        : {}),
     } as never,
     response: {} as never,
     turnMessages: [
@@ -65,9 +72,26 @@ describe('notify companion candidate action', () => {
 
   it('returns only a queued marker and does not send during the tool call', async () => {
     const dispatcher: NotifyDispatcher = { dispatch: vi.fn() };
-    const tool = createNotifyTool(dispatcher, { companionCandidateEnabled: true });
-    const output = await tool.execute('candidate-call', params as never);
+    const authorizedTool = createNotifyTool(dispatcher, {
+      companionCandidateEnabled: true,
+      isCompanionCandidateAuthorized: () => true,
+    });
+    const output = await authorizedTool.execute('candidate-call', params as never);
     expect(text(output)).toBe(COMPANION_CANDIDATE_QUEUED_TEXT);
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not report queued success when live companion authorization is unavailable', async () => {
+    const dispatcher: NotifyDispatcher = { dispatch: vi.fn() };
+    const tool = createNotifyTool(dispatcher, {
+      companionCandidateEnabled: true,
+      isCompanionCandidateAuthorized: () => false,
+    });
+
+    const output = await tool.execute('candidate-call', params as never);
+
+    expect(output.details).toMatchObject({ isError: true });
+    expect(text(output)).toContain('not capability/tool-policy authorized');
     expect(dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
@@ -97,6 +121,26 @@ describe('notify companion candidate action', () => {
     expect(actions[0]?.payload).toMatchObject({
       request: { cause: { kind: 'icp_conversation', rootInitiationId: root } },
     });
+  });
+
+  it('consumes durable generated-turn lineage and rejects malformed or conflicting roots', () => {
+    const root = '55555555-5555-4555-8555-555555555555';
+    const otherRoot = '66666666-6666-4666-8666-666666666666';
+    const durable = inferIcpInitiationCandidateActions(
+      context('discord:owner', undefined, root),
+      'extended_loaded',
+    );
+    expect(durable[0]?.payload).toMatchObject({
+      request: { cause: { kind: 'icp_conversation', rootInitiationId: root } },
+    });
+    expect(() => inferIcpInitiationCandidateActions(
+      context('companion-dm:a:b', root, otherRoot),
+      'extended_loaded',
+    )).toThrow('conflicting ICP root lineage');
+    expect(() => inferIcpInitiationCandidateActions(
+      context('discord:owner', undefined, 'not-a-root'),
+      'extended_loaded',
+    )).toThrow('malformed ICP root lineage (durable)');
   });
 
   it('registers a foreground-idle handler and revalidates capability before submit', async () => {

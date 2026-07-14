@@ -26,6 +26,7 @@ interface ActiveConcernRow {
   next_review_at: string | null;
   merged_from_ids: unknown;
   split_from_id: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 interface PendingFollowUpRow {
@@ -116,6 +117,7 @@ class FakeIntentionPool {
         nextReviewAt,
         mergedFromIds,
         splitFromId,
+        originIcpRootInitiationId,
       ] = values as [
         string,
         string,
@@ -135,6 +137,7 @@ class FakeIntentionPool {
         string,
         string | null,
         unknown,
+        string | null,
         string | null,
       ];
       this.activeConcerns.set(id, {
@@ -158,6 +161,7 @@ class FakeIntentionPool {
         next_review_at: nextReviewAt,
         merged_from_ids: mergedFromIds,
         split_from_id: splitFromId,
+        origin_icp_root_initiation_id: originIcpRootInitiationId,
       });
       return { rows: [this.activeConcerns.get(id)! as Row] };
     }
@@ -242,7 +246,8 @@ class FakeIntentionPool {
         nextReviewAt,
         mergedFromIds,
         splitFromId,
-      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null];
+        originIcpRootInitiationId,
+      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null, string | null];
       row.priority = priority;
       row.status = status;
       row.expires_at = expiresAt;
@@ -254,6 +259,7 @@ class FakeIntentionPool {
       row.next_review_at = nextReviewAt;
       row.merged_from_ids = mergedFromIds;
       row.split_from_id = splitFromId;
+      row.origin_icp_root_initiation_id = originIcpRootInitiationId;
       return { rows: [row as Row] };
     }
 
@@ -604,6 +610,7 @@ describe('postgres intention adapters', () => {
       text: 'Check hydration reminder',
       contactId: 'contact-a',
       source: 'agent',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(created.id).toBeTruthy();
 
@@ -616,6 +623,7 @@ describe('postgres intention adapters', () => {
       priority: 'medium',
       source: 'agent',
       status: 'active',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const duplicate = await ports.concernStore.create({
@@ -630,7 +638,14 @@ describe('postgres intention adapters', () => {
       priority: 'high',
       status: 'blocked',
       evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
+
+    await expect(ports.concernStore.create({
+      text: 'Check the hydration reminder again',
+      contactId: 'contact-a',
+      originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    })).rejects.toThrow('conflicting ICP roots');
 
     const resolved = await ports.concernStore.resolveConcern(created.id, {
       outcome: 'Handled already',

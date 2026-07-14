@@ -116,6 +116,7 @@ export interface HeartbeatRuntimeOptions {
     canonicalContactKey?: string;
     sourceMessageId: string;
     formationVAD?: { valence: number; arousal: number; dominance: number };
+    originIcpRootInitiationId?: string;
   }) => Promise<void> | void;
   onIntentionFollowUpDecision?: (input: {
     decision: IntentionActionDecision;

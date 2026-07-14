@@ -15,6 +15,7 @@ import {
   mergeConcernStatus,
   mergeConcernStringLists,
   normalizeConcernEvidenceRefs,
+  normalizeOptionalConcernIcpRootInitiationId,
   validateConcernStatusTransition,
 } from '../concerns.js';
 import type {
@@ -61,7 +62,8 @@ const ACTIVE_CONCERN_SELECT_COLUMNS = `
   id, text, priority, source, status, created_at, expires_at,
   salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
   resolved_at, resolution_outcome, contact_id, formation_vad,
-  last_reviewed_at, next_review_at, merged_from_ids, split_from_id
+  last_reviewed_at, next_review_at, merged_from_ids, split_from_id,
+  origin_icp_root_initiation_id
 `;
 
 function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
@@ -151,6 +153,9 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       : undefined;
     const mergedFromIds = input.mergedFromIds ? [...new Set(input.mergedFromIds)] : [];
     const splitFromId = normalizeContactId(input.splitFromId);
+    const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
+      input.originIcpRootInitiationId,
+    );
 
     if (isConcernAttentionStatus(status)) {
       await this.resolveStaleConcerns({
@@ -176,6 +181,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           nextReviewAt,
           mergedFromIds,
           splitFromId,
+          originIcpRootInitiationId,
         });
       }
 
@@ -208,6 +214,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
             nextReviewAt,
             mergedFromIds,
             splitFromId,
+            originIcpRootInitiationId,
           });
         }
         return recentlyResolved;
@@ -233,10 +240,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           id, text, priority, source, status, created_at, expires_at,
           salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
           resolved_at, contact_id, formation_vad, last_reviewed_at, next_review_at,
-          merged_from_ids, split_from_id
+          merged_from_ids, split_from_id, origin_icp_root_initiation_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
-          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19
+          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20
         )
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -260,6 +267,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         nextReviewAt ?? null,
         serializeStringList(mergedFromIds),
         splitFromId ?? null,
+        originIcpRootInitiationId ?? null,
       ],
     );
 
@@ -554,6 +562,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       nextReviewAt?: string;
       mergedFromIds: readonly string[];
       splitFromId?: string;
+      originIcpRootInitiationId?: string;
     },
   ): Promise<ActiveConcern> {
     if (isConcernTerminalStatus(existing.status)) {
@@ -567,6 +576,13 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     });
     const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
     const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
+    if (existing.originIcpRootInitiationId
+      && input.originIcpRootInitiationId
+      && existing.originIcpRootInitiationId !== input.originIcpRootInitiationId) {
+      throw new Error(`Cannot merge active concern "${existing.id}" across conflicting ICP roots`);
+    }
+    const originIcpRootInitiationId = existing.originIcpRootInitiationId
+      ?? input.originIcpRootInitiationId;
     const row = await queryOne<ActiveConcernRow>(
       this.pool,
       `
@@ -582,7 +598,8 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           last_reviewed_at = $9,
           next_review_at = $10,
           merged_from_ids = $11::jsonb,
-          split_from_id = $12
+          split_from_id = $12,
+          origin_icp_root_initiation_id = $13
         WHERE id = $1
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -602,6 +619,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         nextReviewAt ?? null,
         serializeStringList(mergeConcernStringLists(existing.mergedFromIds ?? [], input.mergedFromIds)),
         input.splitFromId ?? existing.splitFromId ?? null,
+        originIcpRootInitiationId ?? null,
       ],
     );
     if (!row) {

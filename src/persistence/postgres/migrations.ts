@@ -724,6 +724,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     next_review_at TEXT,
     merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     split_from_id TEXT,
+    origin_icp_root_initiation_id UUID,
     CHECK (priority IN ('high', 'medium', 'low')),
     CHECK (source IN ('appraisal', 'agent', 'heartbeat')),
     CHECK (status IN ('candidate', 'active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed')),
@@ -742,6 +743,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS next_review_at TEXT;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS split_from_id TEXT;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
   `
   UPDATE active_concerns
   SET status = 'resolved'

@@ -237,6 +237,11 @@ export function buildAgentControlPlane(
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
     companionCandidateEnabled: icpInitiationSourceRuntime !== undefined,
+    isCompanionCandidateAuthorized: () => (
+      resolveCompanionOutreachOriginActivationSource(
+        deferredCompanionOutreachAuthorizationRuntime,
+      ) !== null
+    ),
   }), 'extended');
 
   return { lifecycleNotifier, stopFn };

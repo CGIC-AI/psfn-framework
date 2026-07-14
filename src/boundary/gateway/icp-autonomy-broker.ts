@@ -370,6 +370,11 @@ export class GatewayIcpAutonomyBroker {
         return { decision: closed };
       }
       if (!(error instanceof IcpOutstandingInvitationConflictError)) throw error;
+      const existing = await this.reconcilePermitIssue(senderCompanionId, input);
+      if (existing) {
+        await this.emitGate(input, senderCompanionId, existing.decision);
+        return existing;
+      }
       const closed = closedDecision('invitation_outstanding', 'deferrable');
       await this.emitGate(input, senderCompanionId, closed);
       return { decision: closed };
@@ -427,9 +432,6 @@ export class GatewayIcpAutonomyBroker {
     if (permit.status === 'expired'
       || (permit.status === 'issued' && permit.expiresAtMs <= this.now())) {
       return { decision: closedDecision('permit_expired', 'terminal') };
-    }
-    if (permit.status !== 'issued' && permit.status !== 'consumed') {
-      return { decision: closedDecision('permit_mismatch', 'terminal') };
     }
     return { decision: { eligible: true }, permit };
   }

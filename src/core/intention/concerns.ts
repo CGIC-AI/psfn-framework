@@ -1,4 +1,5 @@
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
+import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { getConcernSofteningConfig } from './concern-softening.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
@@ -80,6 +81,8 @@ export interface ActiveConcern {
   nextReviewAt?: string;
   mergedFromIds?: string[];
   splitFromId?: string;
+  /** Originating ICP root preserved across durable concern review/restart. */
+  originIcpRootInitiationId?: string;
 }
 
 export interface ActiveConcernCreateInput {
@@ -98,6 +101,7 @@ export interface ActiveConcernCreateInput {
   nextReviewAt?: string;
   mergedFromIds?: readonly string[];
   splitFromId?: string;
+  originIcpRootInitiationId?: string;
   reopenResolved?: boolean;
   createdAt?: string;
   expiresAt?: string;
@@ -176,6 +180,7 @@ export interface ActiveConcernRow {
   next_review_at: string | null;
   merged_from_ids: string | null;
   split_from_id: string | null;
+  origin_icp_root_initiation_id: string | null | undefined;
 }
 
 export const MAX_CONCERN_TEXT_CHARS = 500;
@@ -223,6 +228,16 @@ export function normalizeOptionalText(
     throw new Error(`Active concern optional text exceeds max length (${maxChars})`);
   }
   return normalized;
+}
+
+export function normalizeOptionalConcernIcpRootInitiationId(
+  value: string | null | undefined,
+): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!isRfc4122Uuid(value)) {
+    throw new Error('Active concern originIcpRootInitiationId must be a lowercase RFC-4122 UUID');
+  }
+  return value;
 }
 
 export function normalizeIsoTimestamp(value: string, fieldName: string): string {
@@ -716,6 +731,9 @@ export function mapRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeIsoTimestamp(row.next_review_at, 'next_review_at');
   const mergedFromIds = parseStringList(row.merged_from_ids, 'merged_from_ids');
   const splitFromId = row.split_from_id === null ? undefined : normalizeOptionalId(row.split_from_id);
+  const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
+    row.origin_icp_root_initiation_id,
+  );
 
   return {
     id: row.id,
@@ -738,6 +756,7 @@ export function mapRow(row: ActiveConcernRow): ActiveConcern {
     ...(nextReviewAt ? { nextReviewAt } : {}),
     ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),
     ...(splitFromId ? { splitFromId } : {}),
+    ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
   };
 }
 
@@ -805,4 +824,3 @@ export function buildActiveConcernsRuntimeData(
     omittedCount: Math.max(0, deduped.length - selected.length),
   };
 }
-

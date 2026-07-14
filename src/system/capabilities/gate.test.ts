@@ -233,6 +233,10 @@ describe('capability tool gating', () => {
       action: 'send',
       target_kind: 'companion',
     })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'consider',
+      target_kind: 'companion',
+    })).toEqual(['external.companion']);
     expect(resolveToolRequiredCapabilities(createTool('response_control').tool, { action: 'no_reply' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
@@ -244,6 +248,23 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'search' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'write' })).toEqual(['memory.write']);
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'append' })).toEqual(['memory.write']);
+  });
+
+  it('denies apprentice companion consideration before tool execution', async () => {
+    const notify = createTool('notify');
+    const gated = gateToolWithCapabilities(
+      notify.tool,
+      () => accessForTier('apprentice'),
+    );
+
+    const denied = await gated.execute('consider-companion', {
+      action: 'consider',
+      target_kind: 'companion',
+    });
+
+    expect(notify.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain('external.companion');
   });
 
   it('grants companion egress only to autonomous and explicit custom tiers', () => {

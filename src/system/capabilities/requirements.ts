@@ -252,6 +252,9 @@ function resolveNotifyRequirement(
   if (action === 'brief' || action === 'notify_operator' || action === 'approval_request') {
     return 'external.web';
   }
+  if (action === 'consider' && params.target_kind === 'companion') {
+    return 'external.companion';
+  }
   if (action !== 'send') return NOTIFY_REQUIREMENTS;
 
   if (params.target_kind === 'companion') return 'external.companion';

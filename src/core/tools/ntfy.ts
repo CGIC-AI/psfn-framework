@@ -632,6 +632,7 @@ export interface NotifyToolOptions {
   gatewayMode?: boolean;
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
   companionCandidateEnabled?: boolean;
+  isCompanionCandidateAuthorized?: () => boolean;
 }
 
 const notifyToolParameters = Type.Union([
@@ -723,6 +724,7 @@ export function createNotifyTool(
         return executeCompanionCandidateConsider(
           rawParams,
           options.companionCandidateEnabled === true,
+          options.isCompanionCandidateAuthorized?.() === true,
         );
       }
       let action: NotifyAction;

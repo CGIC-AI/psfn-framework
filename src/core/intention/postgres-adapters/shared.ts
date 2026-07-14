@@ -3,6 +3,7 @@ import {
   ACTIVE_CONCERN_SENSITIVITIES,
   normalizeConcernEvidenceRefs,
   normalizeConcernStatus,
+  normalizeOptionalConcernIcpRootInitiationId,
   type ActiveConcern,
   type ActiveConcernEvidenceRef,
   type ActiveConcernOwner,
@@ -37,6 +38,7 @@ export interface ActiveConcernRow {
   next_review_at: string | null;
   merged_from_ids: unknown;
   split_from_id: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 export interface PendingFollowUpRow {
@@ -438,6 +440,9 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeIsoTimestamp(row.next_review_at, 'next_review_at');
   const mergedFromIds = parseStringList(row.merged_from_ids, 'merged_from_ids');
   const splitFromId = row.split_from_id === null ? undefined : normalizeContactId(row.split_from_id);
+  const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
+    row.origin_icp_root_initiation_id,
+  );
   return {
     id: row.id,
     text: row.text,
@@ -462,6 +467,7 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     ...(nextReviewAt ? { nextReviewAt } : {}),
     ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),
     ...(splitFromId ? { splitFromId } : {}),
+    ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
   };
 }
 

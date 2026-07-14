@@ -67,6 +67,7 @@ export interface IntentionAppraisalHooks {
     canonicalContactKey?: string;
     sourceMessageId: string;
     formationVAD?: ActiveConcernVAD;
+    originIcpRootInitiationId?: string;
   }): Promise<void>;
   onIntentionFollowUpDecision(input: {
     decision: IntentionActionDecision;
@@ -166,6 +167,7 @@ export function createIntentionAppraisalHooks(
       canonicalContactKey,
       sourceMessageId,
       formationVAD,
+      originIcpRootInitiationId,
     }) => {
       if (decision.type !== 'concern') {
         return;
@@ -179,6 +181,7 @@ export function createIntentionAppraisalHooks(
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
         ...(formationVAD ? { formationVAD } : {}),
+        ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         sourceMessageId,
       });
     },

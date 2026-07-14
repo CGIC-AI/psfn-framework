@@ -141,6 +141,46 @@ describe('ICP intention candidate adapter', () => {
     }));
   });
 
+  it('derives inherited causality from a cited durable concern after payload lineage is absent', async () => {
+    const { adapter, submit } = harness({
+      concern: concern({ originIcpRootInitiationId: ROOT }),
+    });
+
+    await expect(adapter.submit({
+      action,
+      payload: {
+        channelId: 'human-dm',
+        channelType: 'discord',
+        content: 'Hi',
+        concernIds: ['concern-1'],
+      },
+    })).resolves.toMatchObject({ kind: 'submitted' });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      cause: { kind: 'icp_conversation', rootInitiationId: ROOT },
+    }));
+  });
+
+  it('fails closed when cited durable records carry conflicting ICP roots', async () => {
+    const { adapter, submit } = harness({
+      pending: followUp({ originIcpRootInitiationId: ROOT }),
+      concern: concern({
+        originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      }),
+    });
+
+    await expect(adapter.submit({
+      action,
+      payload: {
+        channelId: 'human-dm',
+        channelType: 'discord',
+        content: 'Hi',
+        pendingFollowUpId: 'follow-up-1',
+        concernIds: ['concern-1'],
+      },
+    })).resolves.toEqual({ kind: 'blocked', reason: 'stale_provenance' });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it('blocks stale follow-up provenance without reaching the broker', async () => {
     const { adapter, submit } = harness({
       pending: followUp({ activatedAt: new Date(NOW - 100).toISOString() }),

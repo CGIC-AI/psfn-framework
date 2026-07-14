@@ -7,6 +7,7 @@ import type {
   IcpInitiationSourceRequest,
   IcpInitiationSourceRuntime,
 } from '../icp/initiation-source-runtime.js';
+import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
 import { textResult, textResultWithError } from './results.js';
 import {
   parseDeferredCompanionOutreachAuthorizationEvidence,
@@ -55,9 +56,16 @@ export function parseCompanionCandidateParams(value: unknown): CompanionCandidat
   };
 }
 
-export function executeCompanionCandidateConsider(value: unknown, enabled: boolean) {
+export function executeCompanionCandidateConsider(
+  value: unknown,
+  enabled: boolean,
+  isLiveExecutionAuthorized: boolean,
+) {
   try {
     if (!enabled) throw new Error('companion candidate runtime is not wired');
+    if (!isLiveExecutionAuthorized) {
+      throw new Error('companion candidate is not capability/tool-policy authorized');
+    }
     parseCompanionCandidateParams(value);
     return textResult(COMPANION_CANDIDATE_QUEUED_TEXT);
   } catch (error) {
@@ -158,7 +166,7 @@ export function inferIcpInitiationCandidateActions(
     if (!isSuccessfulCandidateResult(message) || !message.toolCallId) continue;
     const params = requested.get(message.toolCallId);
     if (!params) continue;
-    const inheritedRoot = context.message.routing?.icpCorrelation?.rootInitiationId;
+    const inheritedRoot = resolveIcpOriginRootInitiationId(context.message.routing);
     const payload: CandidateActionPayload = {
       request: {
         source,

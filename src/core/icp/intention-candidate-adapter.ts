@@ -32,11 +32,11 @@ export interface IcpIntentionCandidateAdapter {
   }): Promise<IcpIntentionCandidateAdapterResult>;
 }
 
-function liveFollowUpContact(followUp: PendingFollowUp | null, nowMs: number): string | null {
+function isLiveFollowUp(followUp: PendingFollowUp | null, nowMs: number): followUp is PendingFollowUp {
   if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, nowMs)) {
-    return null;
+    return false;
   }
-  return followUp.contactId?.trim() || null;
+  return true;
 }
 
 /**
@@ -55,12 +55,23 @@ export function createIcpIntentionCandidateAdapter(input: {
   return {
     async submit({ action, payload }) {
       const contactIds = new Set<string>();
+      const lineageRoots = new Set<string>();
+      const addLineageRoot = (root: string | undefined): boolean => {
+        if (root === undefined) return true;
+        if (!isRfc4122Uuid(root)) return false;
+        lineageRoots.add(root);
+        return lineageRoots.size <= 1;
+      };
       if (payload.pendingFollowUpId) {
-        const contactId = liveFollowUpContact(
-          await input.pendingFollowUpStore.peek(payload.pendingFollowUpId),
-          now(),
-        );
+        const followUp = await input.pendingFollowUpStore.peek(payload.pendingFollowUpId);
+        if (!isLiveFollowUp(followUp, now())) {
+          return { kind: 'blocked', reason: 'stale_provenance' };
+        }
+        const contactId = followUp.contactId?.trim() || null;
         if (!contactId) return { kind: 'blocked', reason: 'stale_provenance' };
+        if (!addLineageRoot(followUp.originIcpRootInitiationId)) {
+          return { kind: 'blocked', reason: 'stale_provenance' };
+        }
         contactIds.add(contactId);
       }
 
@@ -72,6 +83,9 @@ export function createIcpIntentionCandidateAdapter(input: {
           || ['resolved', 'dismissed', 'suppressed'].includes(concern.status)
           || Date.parse(concern.expiresAt) <= now()
         ) {
+          return { kind: 'blocked', reason: 'stale_provenance' };
+        }
+        if (!addLineageRoot(concern.originIcpRootInitiationId)) {
           return { kind: 'blocked', reason: 'stale_provenance' };
         }
         const contactId = concern.contactId?.trim();
@@ -93,10 +107,10 @@ export function createIcpIntentionCandidateAdapter(input: {
       }
 
       const parsedChannel = parseCompanionChannelId(payload.channelId);
-      const inheritedRoot = payload.originIcpRootInitiationId;
-      if (inheritedRoot !== undefined && !isRfc4122Uuid(inheritedRoot)) {
+      if (!addLineageRoot(payload.originIcpRootInitiationId)) {
         return { kind: 'blocked', reason: 'stale_provenance' };
       }
+      const inheritedRoot = [...lineageRoots][0];
       const result = await input.sourceRuntime.submit({
         source: 'intention',
         peerContactId: contactId!,

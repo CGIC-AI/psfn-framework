@@ -7,6 +7,7 @@ import {
   type SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import { isRfc4122Uuid } from '../../../shared/utils/types.js';
+import { resolveIcpOriginRootInitiationId } from '../../icp/initiation-lineage.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
 import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
 import { evaluateProactiveOutboundTimeGate } from '../proactive-time-gate.js';
@@ -131,13 +132,7 @@ function normalizeConcernIds(value: readonly string[] | undefined): string[] {
 function resolveOriginIcpRootInitiationId(
   message: IntentionDecisionActionContext['message'],
 ): string | undefined {
-  const value = message.routing?.icpCorrelation?.rootInitiationId
-    ?? message.routing?.originIcpRootInitiationId;
-  if (value === undefined) return undefined;
-  if (!isRfc4122Uuid(value)) {
-    throw new Error('Generated intention message has malformed ICP root lineage');
-  }
-  return value;
+  return resolveIcpOriginRootInitiationId(message.routing);
 }
 
 export function decisionsToPostTurnActionCandidates(

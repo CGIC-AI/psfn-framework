@@ -44,6 +44,7 @@ import type {
   HeartbeatAgent,
   HeartbeatRuntimeOptions,
 } from './heartbeat-runtime-contracts.js';
+import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
 import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
 import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 import type { Scheduler } from './scheduler.js';
@@ -573,6 +574,9 @@ export function wireHeartbeatPostTurnRuntime(
             }),
           )
           : undefined;
+        const originIcpRootInitiationId = resolveIcpOriginRootInitiationId(
+          context.message.routing,
+        );
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
           ...(context.message.routing?.icpCorrelation
@@ -602,6 +606,7 @@ export function wireHeartbeatPostTurnRuntime(
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
               formationVAD: { ...internalState.emotional.vad },
+              ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
           }
         }
@@ -614,17 +619,7 @@ export function wireHeartbeatPostTurnRuntime(
               channelType: context.message.channelType,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
-              ...(context.message.routing?.icpCorrelation?.rootInitiationId
-                ? {
-                    originIcpRootInitiationId:
-                      context.message.routing.icpCorrelation.rootInitiationId,
-                  }
-                : context.message.routing?.originIcpRootInitiationId
-                  ? {
-                      originIcpRootInitiationId:
-                        context.message.routing.originIcpRootInitiationId,
-                    }
-                  : {}),
+              ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
             });
             if (pendingFollowUpId) {
               if (!decision.followUp) {

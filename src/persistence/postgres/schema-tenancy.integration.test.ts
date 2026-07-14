@@ -1,10 +1,26 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createPostgresPool,
   ensurePostgresSchemaExists,
   runPostgresMigrations,
 } from '../postgres.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
+import { createIcpIntentionCandidateAdapter } from '../../core/icp/intention-candidate-adapter.js';
+import { createIcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
+import type {
+  IcpInitiationCandidate,
+} from '../../core/icp/initiation-candidate.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import {
+  normalizeIntentionFollowUpActionPayload,
+  pendingFollowUpsToPostTurnActionCandidates,
+} from '../../core/intention/appraisal/action-translation.js';
+import {
+  COMPANION_CANDIDATE_QUEUED_TEXT,
+  inferIcpInitiationCandidateActions,
+  registerIcpInitiationCandidatePostTurnRuntime,
+} from '../../core/tools/notify-companion-candidate.js';
+import type { PostTurnActionHandler } from '../../core/agent/post-turn-action-runtime.js';
 import {
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_INTENTION_MIGRATIONS,
@@ -46,6 +62,83 @@ async function tableSchemas(pool: import('pg').Pool, table: string): Promise<str
     [table],
   );
   return result.rows.map(row => row.table_schema);
+}
+
+function memoryCandidateStore(): IcpInitiationCandidateStorePort {
+  const candidates = new Map<string, IcpInitiationCandidate>();
+  return {
+    async createCandidate(candidate) {
+      const existing = candidates.get(candidate.candidateId);
+      if (existing) return existing;
+      candidates.set(candidate.candidateId, candidate);
+      return candidate;
+    },
+    async getCandidate(candidateId) {
+      return candidates.get(candidateId) ?? null;
+    },
+    async listCandidates() {
+      return [...candidates.values()];
+    },
+    async transitionCandidate(input) {
+      const current = candidates.get(input.candidateId);
+      if (!current
+        || current.status !== input.expectedStatus
+        || current.revision !== input.expectedRevision) {
+        throw new Error('candidate transition conflict');
+      }
+      const next: IcpInitiationCandidate = {
+        ...current,
+        status: input.status,
+        revision: current.revision + 1,
+        ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+        ...(input.permitId ? { permitId: input.permitId } : {}),
+      };
+      candidates.set(next.candidateId, next);
+      return next;
+    },
+    async close() {},
+  };
+}
+
+function recursiveRejectingSourceRuntime(input: {
+  localCompanionId: string;
+  peerCompanionId: string;
+}) {
+  const consent = vi.fn().mockResolvedValue({ action: 'send' as const });
+  const issuePermit = vi.fn();
+  const peers = {
+    resolveKnownPeer: vi.fn().mockResolvedValue({
+      contactId: 'peer-contact',
+      displayName: 'Peer',
+      peerCompanionId: input.peerCompanionId,
+    }),
+    executeCompanionOutreach: vi.fn().mockResolvedValue({ disposition: 'delivered' as const }),
+  };
+  return {
+    consent,
+    issuePermit,
+    peers,
+    runtime: createIcpInitiationSourceRuntime({
+      localCompanionId: input.localCompanionId,
+      store: memoryCandidateStore(),
+      peers,
+      gateway: {
+        companionInitiationPreflight: vi.fn().mockImplementation(async ({ candidate }) => (
+          candidate.rootInitiationId === candidate.candidateId
+            ? { eligible: true as const }
+            : {
+                eligible: false as const,
+                reasonCode: 'recursive_trigger' as const,
+                reasonClass: 'terminal' as const,
+              }
+        )),
+        companionIssueInitiationPermit: issuePermit,
+      },
+      consent: { evaluate: consent },
+      isExternalCompanionAuthorized: () => true,
+      now: () => Date.parse('2026-07-13T20:01:00.000Z'),
+    }),
+  };
 }
 
 describe('Postgres schema tenancy plumbing', () => {
@@ -156,10 +249,157 @@ describe('Postgres schema tenancy plumbing', () => {
         const restartedRuntime = createPostgresIntentionPortsFromPool(pool, {
           now: () => new Date('2026-07-13T20:01:00.000Z'),
         });
-        await expect(restartedRuntime.pendingFollowUpStore.peek('follow-up-lineage'))
-          .resolves.toMatchObject({
-            originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          });
+        const restartedFollowUp = await restartedRuntime.pendingFollowUpStore.peek(
+          'follow-up-lineage',
+        );
+        expect(restartedFollowUp).toMatchObject({
+          originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        });
+        if (!restartedFollowUp) throw new Error('restarted follow-up is missing');
+        const [resurfaceAction] = pendingFollowUpsToPostTurnActionCandidates([
+          restartedFollowUp,
+        ]);
+        const generatedPayload = normalizeIntentionFollowUpActionPayload(
+          resurfaceAction.payload,
+        );
+        if (!generatedPayload?.originIcpRootInitiationId) {
+          throw new Error('generated follow-up lost ICP root lineage');
+        }
+        const source = recursiveRejectingSourceRuntime({
+          localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          peerCompanionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        });
+        let handler: PostTurnActionHandler | undefined;
+        registerIcpInitiationCandidatePostTurnRuntime({
+          agentLoop: { registerPostTurnActionInferer: () => () => undefined },
+          postTurnActions: {
+            registerHandler: (_kind, callback) => {
+              handler = callback;
+              return () => undefined;
+            },
+          } as never,
+          runtime: source.runtime,
+          resolveOriginActivationSource: () => 'extended_loaded',
+          isExecutionAuthorized: () => true,
+        });
+        const candidateActions = inferIcpInitiationCandidateActions({
+          message: {
+            id: 'generated-follow-up-turn',
+            channelId: generatedPayload.channelId,
+            channelType: generatedPayload.channelType,
+            authorId: generatedPayload.authorId,
+            authorName: generatedPayload.authorName,
+            content: generatedPayload.content,
+            timestamp: new Date('2026-07-13T20:01:00.000Z'),
+            routing: {
+              originIcpRootInitiationId: generatedPayload.originIcpRootInitiationId,
+            },
+          },
+          response: {} as never,
+          turnMessages: [
+            {
+              role: 'assistant',
+              content: [{
+                type: 'toolCall',
+                id: 'candidate-call',
+                name: 'notify',
+                arguments: {
+                  action: 'consider',
+                  target_kind: 'companion',
+                  contact_id: 'peer-contact',
+                  reason_summary: 'Reconsider outreach.',
+                },
+              }],
+            } as never,
+            {
+              role: 'toolResult',
+              toolCallId: 'candidate-call',
+              toolName: 'notify',
+              isError: false,
+              content: [{ type: 'text', text: COMPANION_CANDIDATE_QUEUED_TEXT }],
+            } as never,
+          ],
+          turnId: 'generated-follow-up-turn' as never,
+          completedAt: Date.parse('2026-07-13T20:01:00.000Z'),
+        }, 'extended_loaded');
+        if (!handler || !candidateActions[0]) throw new Error('candidate action handler is missing');
+
+        await expect(handler({
+          id: 'candidate-action',
+          kind: candidateActions[0].kind,
+          payload: candidateActions[0].payload,
+        })).resolves.toEqual({ detail: 'rejected:rejected' });
+        expect(source.consent).not.toHaveBeenCalled();
+        expect(source.issuePermit).not.toHaveBeenCalled();
+      } finally {
+        await pool.end();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'rejects same-root outreach derived from a restarted PostgreSQL concern before consent',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-concern-lineage-restart',
+        allowExitOnIdle: true,
+        max: 1,
+        schema: 'companion_concern_lineage',
+      });
+      const rootInitiationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const localCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const peerCompanionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+      try {
+        await runPostgresMigrations(pool, POSTGRES_INTENTION_MIGRATIONS, {
+          schema: 'companion_concern_lineage',
+        });
+        const firstRuntime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:00:00.000Z'),
+          idFactory: () => 'concern-lineage',
+        });
+        await firstRuntime.concernStore.create({
+          text: 'Reconsider peer outreach after the conversation.',
+          source: 'appraisal',
+          contactId: 'peer-contact',
+          expiresAt: '2026-07-14T20:00:00.000Z',
+          originIcpRootInitiationId: rootInitiationId,
+        });
+
+        const restartedRuntime = createPostgresIntentionPortsFromPool(pool, {
+          now: () => new Date('2026-07-13T20:01:00.000Z'),
+        });
+        const source = recursiveRejectingSourceRuntime({
+          localCompanionId,
+          peerCompanionId,
+        });
+        const adapter = createIcpIntentionCandidateAdapter({
+          sourceRuntime: source.runtime,
+          peers: source.peers,
+          pendingFollowUpStore: restartedRuntime.pendingFollowUpStore,
+          concernStore: restartedRuntime.concernStore,
+          now: () => Date.parse('2026-07-13T20:01:00.000Z'),
+        });
+
+        await expect(adapter.submit({
+          action: {
+            id: 'concern-outreach-action',
+            dedupeKey: 'intention.outbound_message:concern-lineage',
+            sourceMessageId: 'generated-after-restart',
+          },
+          payload: {
+            channelId: 'api:test',
+            channelType: 'api',
+            content: 'This draft must never bypass recursive-root policy.',
+            concernIds: ['concern-lineage'],
+          },
+        })).resolves.toMatchObject({
+          kind: 'submitted',
+          result: { outcome: 'rejected', reasonCode: 'recursive_trigger' },
+        });
+        expect(source.consent).not.toHaveBeenCalled();
+        expect(source.issuePermit).not.toHaveBeenCalled();
       } finally {
         await pool.end();
       }

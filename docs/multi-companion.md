@@ -294,9 +294,10 @@ Multi-companion layers on top of the single-companion locations/world surface
   outstanding permits through the shared store, and persists `enabled:false`
   for the next start.
 - **Garden exposes a bounded control plane per companion.** `/autonomy` reads
-  `GET /api/admin/icp-autonomy` and shows coarse availability, redacted local
-  candidates, content-free episodes/provenance, permit lifecycle without bearer
-  IDs, fatigue aggregates, latest cost decisions, breaker posture, and
+  `GET /api/admin/icp-autonomy` and shows the local coarse availability lease,
+  redacted local candidates, and only episodes/provenance, permit lifecycle,
+  fatigue aggregates, and cost decisions in which the local companion
+  participates. Bearer permit IDs remain withheld. It also reports breaker posture and
   machine-readable reasons/failures. It never reads candidate motivation,
   peer-contact IDs, transcripts, message bodies, private model reasoning, or
   chain-of-thought. Audited mutations can cancel one local revision-checked

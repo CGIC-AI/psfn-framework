@@ -19,6 +19,13 @@ const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333';
 const CONVERSATION_ID = '44444444-4444-4444-8444-444444444444';
 const PERMIT_ID = '55555555-5555-4555-8555-555555555555';
 const PROVENANCE = 'icp-prov:66666666-6666-4666-8666-666666666666';
+const OTHER_B = '77777777-7777-4777-8777-777777777777';
+const OTHER_C = '88888888-8888-4888-8888-888888888888';
+const OTHER_CONVERSATION = '99999999-9999-4999-8999-999999999999';
+const OTHER_ROOT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const OTHER_CANDIDATE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const OTHER_PERMIT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const OTHER_PROVENANCE = 'icp-prov:dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 function candidate(status: IcpInitiationCandidate['status'] = 'pending'): IcpInitiationCandidate {
   return {
@@ -120,6 +127,7 @@ function projectionStore(
   overrides: Partial<IcpAdminSharedProjection> = {},
 ): IcpAdminProjectionStore {
   return {
+    localCompanionId: LOCAL_ID,
     shared,
     readProjection: vi.fn(async () => ({
       availability: [],
@@ -170,6 +178,188 @@ describe('AdminIcpAutonomyDataService', () => {
       permitBearerIds: 'withheld',
       transcripts: 'not_collected',
     });
+  });
+
+  it('excludes unrelated B-to-C tenant lifecycle, cost, reasons, and failures from local A', async () => {
+    const candidates = candidateStore(candidate());
+    vi.mocked(candidates.listCandidates).mockResolvedValue([
+      candidate(),
+      {
+        ...candidate('rejected'),
+        candidateId: OTHER_CANDIDATE,
+        rootInitiationId: OTHER_ROOT,
+        localCompanionId: OTHER_B,
+        peerCompanionId: OTHER_C,
+        peerContactId: 'unrelated-private-contact',
+        provenanceRef: OTHER_PROVENANCE,
+        reasonSummary: 'unrelated private motivation',
+        reasonCode: 'delivery_failed',
+      },
+    ]);
+    const service = new AdminIcpAutonomyDataService({
+      localCompanionId: LOCAL_ID,
+      candidateStore: candidates,
+      projectionStore: projectionStore(sharedStore(), {
+        availability: [
+          {
+            companionId: LOCAL_ID,
+            state: 'available',
+            issuedAtMs: 1_000,
+            expiresAtMs: 50_000,
+            source: 'runtime',
+            revision: 1,
+          },
+          {
+            companionId: OTHER_B,
+            state: 'do_not_disturb',
+            issuedAtMs: 1_000,
+            expiresAtMs: 50_000,
+            source: 'operator',
+            revision: 9,
+          },
+        ],
+        episodes: [
+          {
+            conversationId: CONVERSATION_ID,
+            channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+            participantCompanionIds: [LOCAL_ID, PEER_ID],
+            rootInitiationId: CANDIDATE_ID,
+            initiatedByCompanionId: LOCAL_ID,
+            initiationSource: 'weighted_thought',
+            provenanceRef: PROVENANCE,
+            openedAtMs: 1_000,
+            lastActivityAtMs: 2_000,
+            status: 'active',
+            revision: 2,
+          },
+          {
+            conversationId: OTHER_CONVERSATION,
+            channelId: `companion-dm:${OTHER_B}:${OTHER_C}`,
+            participantCompanionIds: [OTHER_B, OTHER_C],
+            rootInitiationId: OTHER_ROOT,
+            initiatedByCompanionId: OTHER_B,
+            initiationSource: 'intention',
+            provenanceRef: OTHER_PROVENANCE,
+            openedAtMs: 4_000,
+            lastActivityAtMs: 5_000,
+            status: 'suppressed',
+            closeReasonCode: 'delivery_failed',
+            revision: 8,
+          },
+        ],
+        permits: [
+          {
+            permitId: PERMIT_ID,
+            candidateId: CANDIDATE_ID,
+            conversationId: CONVERSATION_ID,
+            senderCompanionId: LOCAL_ID,
+            recipientCompanionId: PEER_ID,
+            channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+            provenanceRef: PROVENANCE,
+            issuedAtMs: 1_000,
+            expiresAtMs: 50_000,
+            status: 'issued',
+            revision: 2,
+          },
+          {
+            permitId: OTHER_PERMIT,
+            candidateId: OTHER_CANDIDATE,
+            conversationId: OTHER_CONVERSATION,
+            senderCompanionId: OTHER_B,
+            recipientCompanionId: OTHER_C,
+            channelId: `companion-dm:${OTHER_B}:${OTHER_C}`,
+            provenanceRef: OTHER_PROVENANCE,
+            issuedAtMs: 4_000,
+            expiresAtMs: 50_000,
+            status: 'revoked',
+            revokedAtMs: 5_000,
+            reasonCode: 'delivery_failed',
+            revision: 9,
+          },
+        ],
+        fatigue: [
+          {
+            conversationId: CONVERSATION_ID,
+            rootInitiationId: CANDIDATE_ID,
+            localCompanionId: LOCAL_ID,
+            peerCompanionId: PEER_ID,
+            channelId: `companion-dm:${LOCAL_ID}:${PEER_ID}`,
+            chargedUnits: 1,
+            overchargeUnits: 0,
+            turnCount: 1,
+            pendingCount: 0,
+            deliveredCount: 1,
+            failedCount: 0,
+            latestReservedAtMs: 2_000,
+          },
+          {
+            conversationId: OTHER_CONVERSATION,
+            rootInitiationId: OTHER_ROOT,
+            localCompanionId: OTHER_B,
+            peerCompanionId: OTHER_C,
+            channelId: `companion-dm:${OTHER_B}:${OTHER_C}`,
+            chargedUnits: 99,
+            overchargeUnits: 99,
+            turnCount: 99,
+            pendingCount: 0,
+            deliveredCount: 0,
+            failedCount: 99,
+            latestReservedAtMs: 5_000,
+          },
+        ],
+        costs: [
+          {
+            conversationId: CONVERSATION_ID,
+            rootInitiationId: CANDIDATE_ID,
+            recordedAtMs: 2_000,
+            actualCostUsd: 0.01,
+            pendingProjectedCostUsd: 0,
+            projectedTotalCostUsd: 0.01,
+            warningThresholdUsd: 1,
+            hardLimitUsd: 2,
+            unknownCostAttemptCount: 0,
+            allowed: true,
+            reason: 'below_warning',
+            participantCompanionIds: [LOCAL_ID, PEER_ID],
+          },
+          {
+            conversationId: OTHER_CONVERSATION,
+            rootInitiationId: OTHER_ROOT,
+            recordedAtMs: 5_000,
+            actualCostUsd: 99.99,
+            pendingProjectedCostUsd: 99.99,
+            projectedTotalCostUsd: 199.98,
+            warningThresholdUsd: 1,
+            hardLimitUsd: 2,
+            unknownCostAttemptCount: 9,
+            allowed: false,
+            reason: 'hard_limit_exceeded',
+            participantCompanionIds: [OTHER_B, OTHER_C],
+          },
+        ],
+      }),
+      runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+      settingsService: settings(),
+      operatorLeaseTtlMs: 1_000,
+      now: () => 6_000,
+    });
+
+    const data = await service.getData();
+    const serialized = JSON.stringify(data);
+    expect(data.availability).toHaveLength(1);
+    expect(data.candidates).toHaveLength(1);
+    expect(data.episodes).toHaveLength(1);
+    expect(data.permits).toHaveLength(1);
+    expect(data.fatigue).toHaveLength(1);
+    expect(data.costs).toHaveLength(1);
+    expect(data.failureCount).toBe(0);
+    expect(data.reasonCounts).toEqual([]);
+    expect(data.quietState).toBe('active');
+    expect(serialized).not.toContain(OTHER_C);
+    expect(serialized).not.toContain(OTHER_CONVERSATION);
+    expect(serialized).not.toContain(OTHER_PROVENANCE);
+    expect(serialized).not.toContain('delivery_failed');
+    expect(serialized).not.toContain('99.99');
   });
 
   it('revokes an issued permit before cancelling a permitted candidate', async () => {

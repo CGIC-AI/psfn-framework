@@ -97,12 +97,17 @@ export async function startOptionalAdminTransportServer(
   const fleetCompanionIds = options.config.companionFleet?.companions
     .map(companion => companion.companionId)
     ?? (options.config.companionId ? [options.config.companionId] : []);
+  const localCompanionId = options.config.companionId;
   const icpAdminProjectionStore = options.config.multiCompanion === true
     && options.config.postgresDatabaseUrl
+    && localCompanionId
     && fleetCompanionIds.length > 0
     ? await PostgresIcpAdminProjectionStore.connect(
       options.config.postgresDatabaseUrl,
-      fleetCompanionIds,
+      {
+        localCompanionId,
+        knownCompanionIds: fleetCompanionIds,
+      },
     )
     : null;
   const services = createInProcessGardenAdminContract({

@@ -187,8 +187,10 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - Peer-visible content is authored by the target ordinary channel turn. The
   source handoff never accepts message content, and ICP-correlated turns cannot
   recursively initiate another channel.
-- Garden `/autonomy` exposes only bounded/redacted control-plane state and
-  effective/on-disk/restart owner semantics. Audited local controls are
+- Garden `/autonomy` exposes only bounded/redacted local-participant
+  control-plane state and effective/on-disk/restart owner semantics. Unrelated
+  peer↔peer lifecycle, provenance, reason, fatigue, cost, and derived counts are
+  excluded. Audited local controls are
   revision-checked candidate cancellation, operator DND, and one-way live
   emergency disable plus persisted owner disable.
 - Not shipped: cross-cluster communication, fleet-wide/cross-companion control,

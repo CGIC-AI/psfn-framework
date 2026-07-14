@@ -70,6 +70,10 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
   constructor(private readonly deps: AdminIcpAutonomyServiceDependencies) {
     this.now = deps.now ?? Date.now;
     positiveInteger(deps.operatorLeaseTtlMs, 'operatorLeaseTtlMs');
+    if (deps.localCompanionId && deps.projectionStore
+      && deps.projectionStore.localCompanionId !== deps.localCompanionId) {
+      throw new Error('ICP admin projection is bound to a different companion');
+    }
   }
 
   async getData(): Promise<AdminIcpAutonomyData> {
@@ -82,20 +86,44 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
     const projection = this.deps.projectionStore
       ? await this.deps.projectionStore.readProjection(ADMIN_ICP_LIMIT)
       : { availability: [], episodes: [], permits: [], fatigue: [], costs: [] };
-    const candidates = this.deps.candidateStore
+    const localCompanionId = this.deps.localCompanionId;
+    const candidates = this.deps.candidateStore && localCompanionId
       ? (await this.deps.candidateStore.listCandidates({ limit: ADMIN_ICP_LIMIT }))
+        .filter(candidate => candidate.localCompanionId === localCompanionId)
         .map(projectCandidate)
+      : [];
+    const availability = localCompanionId
+      ? projection.availability.filter(lease => lease.companionId === localCompanionId)
+      : [];
+    const episodes = localCompanionId
+      ? projection.episodes.filter(episode =>
+        episode.participantCompanionIds.includes(localCompanionId))
+      : [];
+    const permits = localCompanionId
+      ? projection.permits.filter(permit =>
+        permit.senderCompanionId === localCompanionId
+        || permit.recipientCompanionId === localCompanionId)
+      : [];
+    const fatigue = localCompanionId
+      ? projection.fatigue.filter(item =>
+        item.localCompanionId === localCompanionId
+        || item.peerCompanionId === localCompanionId)
+      : [];
+    const costs = localCompanionId
+      ? projection.costs
+        .filter(cost => cost.participantCompanionIds.includes(localCompanionId))
+        .map(({ participantCompanionIds: _participantCompanionIds, ...cost }) => cost)
       : [];
     const nowMs = this.now();
     const reasonCounts = new Map<IcpAutonomyReasonCode, number>();
     for (const candidate of candidates) addReason(reasonCounts, candidate.reasonCode);
-    for (const episode of projection.episodes) addReason(reasonCounts, episode.closeReasonCode);
-    for (const permit of projection.permits) addReason(reasonCounts, permit.reasonCode);
+    for (const episode of episodes) addReason(reasonCounts, episode.closeReasonCode);
+    for (const permit of permits) addReason(reasonCounts, permit.reasonCode);
 
     const failureCount = candidates.filter(candidate => candidate.status === 'rejected').length
-      + projection.episodes.filter(episode => episode.status === 'suppressed').length
-      + projection.fatigue.reduce((sum, item) => sum + item.failedCount, 0)
-      + projection.costs.filter(cost => !cost.allowed).length;
+      + episodes.filter(episode => episode.status === 'suppressed').length
+      + fatigue.reduce((sum, item) => sum + item.failedCount, 0)
+      + costs.filter(cost => !cost.allowed).length;
     const runtimeEnabled = this.deps.runtimeEnablement.isEnabled();
     const quietState = !runtimeEnabled
       ? 'disabled'
@@ -117,13 +145,13 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
       localCompanionId: this.deps.localCompanionId ?? null,
       runtimeEnabled,
       settings,
-      availability: projection.availability.map(lease => ({
+      availability: availability.map(lease => ({
         ...lease,
         local: lease.companionId === this.deps.localCompanionId,
         current: lease.issuedAtMs <= nowMs && lease.expiresAtMs > nowMs,
       })),
       candidates,
-      episodes: projection.episodes.map(episode => ({
+      episodes: episodes.map(episode => ({
         ...episode,
         links: {
           sessions: '/sessions',
@@ -131,9 +159,9 @@ export class AdminIcpAutonomyDataService implements AdminIcpAutonomyService {
           modelUsage: '/models',
         },
       })),
-      permits: projection.permits.map(projectPermit),
-      fatigue: projection.fatigue,
-      costs: projection.costs,
+      permits: permits.map(projectPermit),
+      fatigue,
+      costs,
       reasonCounts: [...reasonCounts.entries()]
         .map(([reasonCode, count]) => ({ reasonCode, count }))
         .sort((left, right) => right.count - left.count

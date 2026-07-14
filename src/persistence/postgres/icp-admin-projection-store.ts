@@ -13,6 +13,7 @@ import type {
   AdminIcpCostView,
   AdminIcpFatigueView,
 } from '../../operator/garden/services/types/icp-autonomy.js';
+import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createPostgresPool, queryRows } from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
@@ -87,6 +88,12 @@ interface CostRow extends QueryResultRow {
   unknown_cost_attempt_count: string | number;
   allowed: boolean;
   reason: string;
+  participant_companion_ids: unknown;
+}
+
+export interface IcpAdminCostProjection extends AdminIcpCostView {
+  /** Internal tenant-correlation field; stripped by the Garden service. */
+  participantCompanionIds: string[];
 }
 
 export interface IcpAdminSharedProjection {
@@ -94,10 +101,11 @@ export interface IcpAdminSharedProjection {
   episodes: IcpConversationEpisode[];
   permits: IcpInitiationPermit[];
   fatigue: AdminIcpFatigueView[];
-  costs: AdminIcpCostView[];
+  costs: IcpAdminCostProjection[];
 }
 
 export interface IcpAdminProjectionStore {
+  readonly localCompanionId: string;
   readonly shared: IcpSharedAutonomyStorePort;
   readProjection(limit?: number): Promise<IcpAdminSharedProjection>;
   close(): Promise<void>;
@@ -117,6 +125,15 @@ function finiteNumber(value: string | number, field: string): number {
     throw new Error(`${field} must be a finite non-negative number`);
   }
   return parsed;
+}
+
+function participantCompanionIds(value: unknown): string[] {
+  if (!Array.isArray(value)
+    || value.length < 2
+    || value.some(id => !isRfc4122Uuid(id))) {
+    throw new Error('cost.participantCompanionIds must contain at least two companion UUIDs');
+  }
+  return value as string[];
 }
 
 function mapAvailability(row: AvailabilityRow): IcpAvailabilityLease {
@@ -187,7 +204,7 @@ function mapFatigue(row: FatigueRow): AdminIcpFatigueView {
   };
 }
 
-function mapCost(row: CostRow): AdminIcpCostView {
+function mapCost(row: CostRow): IcpAdminCostProjection {
   return {
     conversationId: row.conversation_id,
     rootInitiationId: row.root_initiation_id,
@@ -206,6 +223,7 @@ function mapCost(row: CostRow): AdminIcpCostView {
     ),
     allowed: row.allowed,
     reason: row.reason,
+    participantCompanionIds: participantCompanionIds(row.participant_companion_ids),
   };
 }
 
@@ -214,12 +232,20 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     private readonly sharedPool: Pool,
     private readonly costPool: Pool,
     readonly shared: IcpSharedAutonomyStorePort,
+    readonly localCompanionId: string,
   ) {}
 
   static async connect(
     databaseUrl: string,
-    knownCompanionIds: readonly string[],
+    options: {
+      localCompanionId: string;
+      knownCompanionIds: readonly string[];
+    },
   ): Promise<PostgresIcpAdminProjectionStore> {
+    if (!isRfc4122Uuid(options.localCompanionId)
+      || !options.knownCompanionIds.includes(options.localCompanionId)) {
+      throw new Error('ICP admin projection requires a known local companion identity');
+    }
     const sharedPool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-admin-projection',
       allowExitOnIdle: true,
@@ -233,9 +259,14 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
     });
     try {
       const shared = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
-        knownCompanionIds,
+        knownCompanionIds: options.knownCompanionIds,
       });
-      return new PostgresIcpAdminProjectionStore(sharedPool, costPool, shared);
+      return new PostgresIcpAdminProjectionStore(
+        sharedPool,
+        costPool,
+        shared,
+        options.localCompanionId,
+      );
     } catch (error) {
       await Promise.allSettled([sharedPool.end(), costPool.end()]);
       throw error;
@@ -248,26 +279,29 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
       queryRows<AvailabilityRow>(this.sharedPool, `
         SELECT companion_id, state, issued_at_ms, expires_at_ms, source, revision
         FROM icp_availability_leases
+        WHERE companion_id = $1
         ORDER BY companion_id
-        LIMIT $1
-      `, [boundedLimit]),
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]),
       queryRows<EpisodeRow>(this.sharedPool, `
         SELECT conversation_id, channel_id, participant_companion_ids,
           root_initiation_id, initiated_by_companion_id, initiation_source,
           provenance_ref, opened_at_ms, last_activity_at_ms, status,
           close_reason_code, revision
         FROM icp_conversation_episodes
+        WHERE $1::uuid = ANY(participant_companion_ids)
         ORDER BY last_activity_at_ms DESC, conversation_id
-        LIMIT $1
-      `, [boundedLimit]),
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]),
       queryRows<PermitRow>(this.sharedPool, `
         SELECT permit_id, candidate_id, conversation_id, sender_companion_id,
           recipient_companion_id, channel_id, provenance_ref, issued_at_ms,
           expires_at_ms, status, consumed_at_ms, revoked_at_ms, reason_code, revision
         FROM icp_initiation_permits
+        WHERE sender_companion_id = $1 OR recipient_companion_id = $1
         ORDER BY issued_at_ms DESC, permit_id
-        LIMIT $1
-      `, [boundedLimit]),
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]),
       queryRows<FatigueRow>(this.sharedPool, `
         SELECT conversation_id, root_initiation_id, local_companion_id,
           peer_companion_id, channel_id,
@@ -279,21 +313,28 @@ export class PostgresIcpAdminProjectionStore implements IcpAdminProjectionStore 
           COUNT(*) FILTER (WHERE outcome = 'failed') AS failed_count,
           MAX(reserved_at_ms) AS latest_reserved_at_ms
         FROM icp_fatigue_turn_reservations
+        WHERE local_companion_id = $1 OR peer_companion_id = $1
         GROUP BY conversation_id, root_initiation_id, local_companion_id,
           peer_companion_id, channel_id
         ORDER BY MAX(reserved_at_ms) DESC, conversation_id
-        LIMIT $1
-      `, [boundedLimit]),
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]),
       queryRows<CostRow>(this.costPool, `
-        SELECT DISTINCT ON (conversation_id)
-          conversation_id, root_initiation_id, recorded_at_ms, actual_cost_usd,
-          pending_projected_cost_usd, projected_total_cost_usd,
-          warning_threshold_usd, hard_limit_usd, unknown_cost_attempt_count,
-          allowed, reason
-        FROM icp_conversation_cost_decisions
-        ORDER BY conversation_id, recorded_at_ms DESC, decision_id DESC
-        LIMIT $1
-      `, [boundedLimit]),
+        SELECT DISTINCT ON (decision.conversation_id)
+          decision.conversation_id, decision.root_initiation_id,
+          decision.recorded_at_ms, decision.actual_cost_usd,
+          decision.pending_projected_cost_usd, decision.projected_total_cost_usd,
+          decision.warning_threshold_usd, decision.hard_limit_usd,
+          decision.unknown_cost_attempt_count, decision.allowed, decision.reason,
+          episode.participant_companion_ids
+        FROM icp_conversation_cost_decisions AS decision
+        INNER JOIN shared.icp_conversation_episodes AS episode
+          ON episode.conversation_id::text = decision.conversation_id
+        WHERE $1::uuid = ANY(episode.participant_companion_ids)
+        ORDER BY decision.conversation_id, decision.recorded_at_ms DESC,
+          decision.decision_id DESC
+        LIMIT $2
+      `, [this.localCompanionId, boundedLimit]),
     ]);
     return {
       availability: availabilityRows.map(mapAvailability),

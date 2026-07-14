@@ -366,10 +366,12 @@ ordinary companion channels, and fatigue/charge policy are ready:
 Routine operation:
 
 - Garden **Autonomy** (`GET /api/admin/icp-autonomy`) shows at most 50 recent
-  records in each bounded lifecycle: coarse availability, local candidates,
-  content-free episodes and provenance handles, permit status without bearer
-  IDs, fatigue aggregates, latest durable cost decisions, and reason/failure
-  counts. Empty candidates are reported as healthy quiet, not guessed failure.
+  records in each bounded lifecycle: the local coarse availability lease, local
+  candidates, and local-participant content-free episodes/provenance, permit
+  status without bearer IDs, fatigue aggregates, latest durable cost decisions,
+  and reason/failure counts. Unrelated peer↔peer rows are excluded and do not
+  influence quiet/failure summaries. Empty candidates are reported as healthy
+  quiet, not guessed failure.
 - `POST /api/admin/icp-autonomy/candidates/:candidateId/cancel` accepts only the
   current local candidate revision. A permitted candidate's issued permit is
   revoked before the candidate transitions to cancelled. Stale or terminal

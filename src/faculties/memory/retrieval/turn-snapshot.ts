@@ -47,6 +47,10 @@ import {
   type RetrievalRoomVisibilityContext,
 } from './access.js';
 import type { MemoryQuarantineCandidate } from './session-quarantine.js';
+import type {
+  RetrievalQueryEmbeddingProvenance,
+  TurnRetrievalQueryEmbedding,
+} from '../../../shared/retrieval-query-embedding.js';
 
 export interface CaptureTurnMemorySnapshotInput {
   contextText: string;
@@ -58,11 +62,18 @@ export interface CaptureTurnMemorySnapshotInput {
   scopeQuery?: MemoryScopeQuery;
   callerContext?: RetrievalCallerContext;
   retrievalMode?: RetrievalModeInput;
+  retrievalQueryEmbedding?: {
+    value: TurnRetrievalQueryEmbedding;
+    turnId: string;
+    requestId: string;
+    companionId: string;
+  };
 }
 
 export interface CaptureTurnMemorySnapshotDeps {
   memoryStore: MemoryStorePort;
   embeddingService: EmbeddingProviderPort;
+  embeddingProvenance?: RetrievalQueryEmbeddingProvenance;
   retrievalThreshold: number;
   resolveRetrievalBudget(turn?: ContextBudgetTurnCharacteristics): ResolvedContextBudget;
   resolveRoomVisibilityContext(
@@ -173,7 +184,20 @@ export async function captureTurnMemorySnapshot(
   let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
 
   if (contextText.trim().length > 0) {
-    const embedding = await deps.embeddingService.embed(contextText);
+    if (input.retrievalQueryEmbedding && !deps.embeddingProvenance) {
+      throw new Error('Shared turn retrieval query embedding requires configured memory embedding provenance');
+    }
+    const embedding = input.retrievalQueryEmbedding
+      ? await input.retrievalQueryEmbedding.value.resolve({
+        turnId: input.retrievalQueryEmbedding.turnId,
+        requestId: input.retrievalQueryEmbedding.requestId,
+        companionId: input.retrievalQueryEmbedding.companionId,
+        channelId,
+        ...(canonicalContactId ? { canonicalContactId } : {}),
+        queryText: contextText,
+        provenance: deps.embeddingProvenance!,
+      })
+      : await deps.embeddingService.embed(contextText);
     const candidateLimit = Math.max(40, limit * 4);
     semanticCandidates = await deps.memoryStore.searchByEmbedding(
       embedding,

@@ -5,6 +5,11 @@ import type {
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
 import { createHash } from 'node:crypto';
+import {
+  createTurnRetrievalQueryEmbedding as createTurnRetrievalQueryEmbeddingValue,
+  type TurnRetrievalQueryEmbedding,
+} from '../../shared/retrieval-query-embedding.js';
+import { resolveEmbeddingProviderProvenanceFromConfig } from './embedding.js';
 import type {
   ContactProfileArtifact,
   MemoryStorePort,
@@ -327,6 +332,28 @@ export class MemoryRetriever implements MemoryProvider {
     return resolveMemoryRetrieverBudget(this.runtimeConfig, this.fallbackBudgetConfig, turnBudgetCharacteristics);
   }
 
+  createTurnRetrievalQueryEmbedding(input: {
+    turnId: string;
+    requestId: string;
+    companionId: string;
+    channelId: string;
+    canonicalContactId?: string;
+    queryText: string;
+  }): TurnRetrievalQueryEmbedding {
+    if (!this.runtimeConfig) {
+      throw new Error('Turn retrieval query embedding requires canonical runtime embedding configuration');
+    }
+    const provenance = resolveEmbeddingProviderProvenanceFromConfig(
+      this.runtimeConfig,
+      this.embeddingService.dims,
+    );
+    return createTurnRetrievalQueryEmbeddingValue({
+      ...input,
+      provenance,
+      embed: text => this.embeddingService.embed(text),
+    });
+  }
+
   getActiveMemoryContext(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null {
     const identity = resolveActiveMemoryContextIdentity(request);
     const state = this.activeMemoryContexts.get(identity.key);
@@ -424,6 +451,14 @@ export class MemoryRetriever implements MemoryProvider {
           request.scopeQuery,
           request.callerContext,
           request.retrievalMode,
+          request.retrievalQueryEmbedding
+            ? {
+              value: request.retrievalQueryEmbedding,
+              turnId: request.turnId ?? '',
+              requestId: request.requestId ?? '',
+              companionId: request.companionId ?? '',
+            }
+            : undefined,
         )
         : undefined;
 
@@ -558,6 +593,12 @@ export class MemoryRetriever implements MemoryProvider {
     scopeQuery?: MemoryScopeQuery,
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
+    retrievalQueryEmbedding?: {
+      value: TurnRetrievalQueryEmbedding;
+      turnId: string;
+      requestId: string;
+      companionId: string;
+    },
   ): Promise<TurnMemorySnapshot> {
     return captureTurnMemorySnapshotWithDeps(
       {
@@ -570,10 +611,19 @@ export class MemoryRetriever implements MemoryProvider {
         scopeQuery,
         callerContext,
         retrievalMode,
+        ...(retrievalQueryEmbedding ? { retrievalQueryEmbedding } : {}),
       },
       {
         memoryStore: this.memoryStore,
         embeddingService: this.embeddingService,
+        ...(this.runtimeConfig
+          ? {
+            embeddingProvenance: resolveEmbeddingProviderProvenanceFromConfig(
+              this.runtimeConfig,
+              this.embeddingService.dims,
+            ),
+          }
+          : {}),
         retrievalThreshold: this.retrievalThreshold,
         resolveRetrievalBudget: turn => this.resolveRetrievalBudget(turn),
         resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (

@@ -76,6 +76,7 @@ import {
 import { createAppCacheFromEnv } from '../../shared/cache/runtime.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import { resolveEmbeddingProviderProvenanceFromConfig } from '../../faculties/memory/embedding.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
@@ -355,6 +356,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     databaseUrl: postgresDatabaseUrl,
     ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
     embedding: gateway,
+    embeddingProvenance: resolveEmbeddingProviderProvenanceFromConfig(config, gateway.dims),
     eventBus,
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,

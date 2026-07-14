@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 import { normalizeMemoryScopeQuery } from './types.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
+import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 
 export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 
@@ -31,6 +32,10 @@ export interface ActiveMemoryContextRequest {
    * identity; gating does not consume it yet.
    */
   conversationScope?: ConversationScope;
+  turnId?: string;
+  requestId?: string;
+  companionId?: string;
+  retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
 }
 
 export interface ActiveMemoryContextSnapshot {

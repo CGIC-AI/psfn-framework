@@ -278,6 +278,12 @@ function writeNegotiatedJson(
   const isCacheable = method === 'GET' && status === 200 && !cacheControlForbidsStorage(headers);
 
   if (isCacheable) {
+    // Admin JSON is authenticated and per-session: never let a shared cache
+    // store it, and require revalidation. Routes may still opt into stricter
+    // policies (no-store) explicitly.
+    if (!responseHeaders['Cache-Control']) {
+      responseHeaders['Cache-Control'] = 'private, no-cache';
+    }
     const etag = computeWeakEtag(payload, byteLength);
     responseHeaders.ETag = etag;
     if (ifNoneMatchSatisfied(req.headers['if-none-match'], etag)) {

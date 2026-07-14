@@ -272,6 +272,20 @@ describe('canonical ICP conversation cost breaker', () => {
         requestedAtMs: 1_752_500_000_030,
       });
       expect(beyondHard).toMatchObject({ allowed: false, reason: 'hard_limit_exceeded' });
+
+      const precisionBoundary = await stores.fleetB.reserveIcpConversationCost({
+        logicalCallId: 'closeout-precision-boundary',
+        attempt: 1,
+        projectedCostUsd: 0.1000000000004,
+        correlation: correlation(COMPANION_B, { fatigueDecision: 'allow_overcharge' }),
+        policy: POLICY,
+        requestedAtMs: 1_752_500_000_040,
+      });
+      expect(precisionBoundary).toMatchObject({
+        allowed: false,
+        reason: 'hard_limit_exceeded',
+        projectedRequestCostUsd: 0.100000000001,
+      });
     } finally {
       await Promise.all(stores.pools.map(pool => pool.end()));
     }

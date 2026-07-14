@@ -452,6 +452,43 @@ describe('GatewayClient streaming', () => {
     await expect(malformedPromise).rejects.not.toMatchObject({
       code: 'icp_conversation_cost_blocked',
     });
+
+    const mismatchedProjectionPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked with mismatched projection' }],
+    });
+    const mismatchedProjectionRequest = conn.sent[2] as { id: number };
+    conn._emit({
+      id: mismatchedProjectionRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque mismatched projection block',
+        data: {
+          ...event,
+          projection: {
+            conversationId: '55555555-5555-4555-8555-555555555555',
+            rootInitiationId: event.rootInitiationId,
+            actualCostUsd: 0.5,
+            pendingProjectedCostUsd: 0,
+            projectedTotalCostUsd: 0.5,
+            warningThresholdUsd: 0.4,
+            hardLimitUsd: 0.5,
+            remainingToHardLimitUsd: 0,
+            actualAttemptCount: 1,
+            unknownCostAttemptCount: 0,
+            pendingReservationCount: 0,
+            staleReservationCount: 0,
+            settledReservationCount: 1,
+            attributedCompanionCount: 1,
+            enforcementState: 'hard_stop',
+          },
+        },
+      },
+    });
+    await expect(mismatchedProjectionPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
   });
 
   it.each([

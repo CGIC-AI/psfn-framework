@@ -71,6 +71,7 @@ import {
 } from '../../shared/telemetry/model-usage-attribution.js';
 import {
   reconcileModelUsageAccounting,
+  ceilModelUsageUsd,
   roundModelUsageUsd,
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
@@ -1216,11 +1217,11 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     if (!row) {
       throw new Error('ICP conversation cost projection query returned no aggregate row');
     }
-    const actualCostUsd = roundModelUsageUsd(nonNegativeCost(row.actual_cost_usd) ?? 0);
-    const pendingProjectedCostUsd = roundModelUsageUsd(
+    const actualCostUsd = ceilModelUsageUsd(nonNegativeCost(row.actual_cost_usd) ?? 0);
+    const pendingProjectedCostUsd = ceilModelUsageUsd(
       nonNegativeCost(row.pending_projected_cost_usd) ?? 0,
     );
-    const projectedTotalCostUsd = roundModelUsageUsd(actualCostUsd + pendingProjectedCostUsd);
+    const projectedTotalCostUsd = ceilModelUsageUsd(actualCostUsd + pendingProjectedCostUsd);
     const unknownCostAttemptCount = nonNegativeInteger(row.unknown_cost_attempt_count);
     const enforcementState = unknownCostAttemptCount > 0
       ? 'unknown_cost'
@@ -1337,10 +1338,10 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     const logicalCallId = normalizeText(input.logicalCallId, '');
     if (!logicalCallId) throw new Error('ICP cost reservation requires logicalCallId');
     const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
-    const projectedCostUsd = inputNonNegativeCost(
+    const projectedCostUsd = ceilModelUsageUsd(inputNonNegativeCost(
       input.projectedCostUsd,
       'projectedCostUsd',
-    );
+    ));
     const requestedAtMs = inputNonNegativeInteger(input.requestedAtMs, 'requestedAtMs', Date.now());
     const closeoutEligible = correlation.costPurpose === 'conversation_turn'
       && correlation.fatigueDecision === 'allow_overcharge';
@@ -1410,7 +1411,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         policy,
         nowMs: requestedAtMs,
       });
-      const projectedTotalAfterAttemptUsd = roundModelUsageUsd(
+      const projectedTotalAfterAttemptUsd = ceilModelUsageUsd(
         before.projectedTotalCostUsd + projectedCostUsd,
       );
       let allowed = true;

@@ -123,6 +123,17 @@ export function parseIcpConversationCostBreakerEvent(
   const event = record(value, 'ICP conversation cost breaker event');
   exactKeys(event, EVENT_KEYS, 'ICP conversation cost breaker event');
   const projection = event.projection === undefined ? undefined : parseProjection(event.projection);
+  const conversationId = text(event.conversationId, 'event.conversationId');
+  const rootInitiationId = text(event.rootInitiationId, 'event.rootInitiationId');
+  if (
+    projection
+    && (
+      projection.conversationId !== conversationId
+      || projection.rootInitiationId !== rootInitiationId
+    )
+  ) {
+    throw new Error('ICP conversation cost event projection correlation does not match the event');
+  }
   const projectedRequestCostUsd = event.projectedRequestCostUsd === undefined
     ? undefined
     : number(event.projectedRequestCostUsd, 'event.projectedRequestCostUsd');
@@ -134,8 +145,8 @@ export function parseIcpConversationCostBreakerEvent(
     reason: choice(event.reason, DECISION_REASONS, 'event.reason'),
     logicalCallId: text(event.logicalCallId, 'event.logicalCallId'),
     attempt: integer(event.attempt, 'event.attempt'),
-    conversationId: text(event.conversationId, 'event.conversationId'),
-    rootInitiationId: text(event.rootInitiationId, 'event.rootInitiationId'),
+    conversationId,
+    rootInitiationId,
     localCompanionId: text(event.localCompanionId, 'event.localCompanionId'),
     costPurpose: choice(event.costPurpose, ICP_COST_PURPOSE_VALUES, 'event.costPurpose'),
     costOriginStage: choice(

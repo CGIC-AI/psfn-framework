@@ -6,7 +6,7 @@ import type {
   IcpConversationCostBreakerEvent,
   IcpConversationCostReservationResult,
 } from '../../shared/telemetry/model-usage.js';
-import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
+import { estimateConservativeModelUsageCostUsd } from '../../shared/telemetry/model-usage-accounting.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { resolveModelUsageCostRates } from './model-budget.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
@@ -110,16 +110,13 @@ export class IcpConversationCostBreaker {
     );
 
     const rates = resolveModelUsageCostRates(this.config, input.candidate, input.purpose);
-    const projected = reconcileModelUsageAccounting({
-      usage: {
-        inputTokens: estimatedInputTokens,
-        outputTokens: estimatedOutputTokens,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        totalTokens: estimatedInputTokens + estimatedOutputTokens,
-      },
-      ...(rates ? { estimatedRates: rates } : {}),
-    }).estimatedCost.total;
+    const projected = estimateConservativeModelUsageCostUsd({
+      inputTokens: estimatedInputTokens,
+      outputTokens: estimatedOutputTokens,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: estimatedInputTokens + estimatedOutputTokens,
+    }, rates);
     if (projected === undefined) {
       const event = blockedEvent(input, 'missing_cost_metadata', timestampMs);
       this.onDecision?.(event);

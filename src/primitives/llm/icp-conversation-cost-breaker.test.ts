@@ -52,7 +52,12 @@ const CANDIDATE: RoutingCandidate = {
   maxTokens: 1_000,
 };
 
-function makeConfig(options: { enabled?: boolean; includeRates?: boolean } = {}): SubstrateConfig {
+function makeConfig(options: {
+  enabled?: boolean;
+  includeRates?: boolean;
+  inputRateUsd?: number;
+  outputRateUsd?: number;
+} = {}): SubstrateConfig {
   return {
     chargePolicy: {
       icpCostBreaker: options.enabled === false ? { enabled: false } : POLICY,
@@ -68,8 +73,8 @@ function makeConfig(options: { enabled?: boolean; includeRates?: boolean } = {})
           ? {}
           : {
               cost: {
-                inputPer1MUsd: 1,
-                outputPer1MUsd: 2,
+                inputPer1MUsd: options.inputRateUsd ?? 1,
+                outputPer1MUsd: options.outputRateUsd ?? 2,
                 currency: 'USD' as const,
               },
             }),
@@ -158,6 +163,35 @@ describe('IcpConversationCostBreaker', () => {
     }));
     expect(onDecision.mock.calls[0]?.[0]).not.toHaveProperty('peerContactId');
     expect(onDecision.mock.calls[0]?.[0]).not.toHaveProperty('peerCompanionId');
+  });
+
+  it('rounds provider admission projections upward so sub-picodollar excess cannot cross hard', async () => {
+    const reserve = vi.fn<IcpConversationCostAccountingPort['reserveIcpConversationCost']>(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: projection(),
+    }));
+    const breaker = new IcpConversationCostBreaker(
+      makeConfig({ inputRateUsd: 1.0000000000004, outputRateUsd: 0 }),
+      accountingPort(reserve),
+    );
+
+    await expect(breaker.reservePhysicalAttempt({
+      candidate: { ...CANDIDATE, maxTokens: 0 },
+      purpose: 'chat',
+      estimatedInputTokens: 1_000_000,
+      logicalCallId: 'precision-boundary',
+      attempt: 1,
+      correlation: { icpCorrelation: CORRELATION },
+    })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({
+      projectedCostUsd: 1.000000000001,
+    }));
   });
 
   it('fails closed before accounting when model pricing is missing', async () => {

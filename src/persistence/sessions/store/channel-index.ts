@@ -458,6 +458,7 @@ export function createLightweightCache(
     lastExtractionCoveredUpTo: normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0,
     lastJournalEntry: rehydrateLastJournalEntry(channelId, indexEntry),
     resolvedPath: filePath,
+    archiveFingerprint: null,
     messageCount,
     lastTimestamp,
     lastMessageTimestamp,

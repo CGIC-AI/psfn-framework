@@ -31,6 +31,7 @@ export interface ChannelCache {
   lastExtractionCoveredUpTo: number;
   lastJournalEntry: JournalEntry | null;
   resolvedPath: string;
+  archiveFingerprint: string | null;
   messageCount: number;
   lastTimestamp: number;
   lastMessageTimestamp: number;

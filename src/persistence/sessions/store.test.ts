@@ -1389,6 +1389,43 @@ describe('SessionStore', () => {
     const id3 = store2.append({ channelId: 'ch1', role: 'user', content: 'C', timestamp: 3000 });
     expect(id3).toBe(3);
   });
+
+  it('skips archive metadata scans when the write-cache fingerprint still matches', () => {
+    const archivePort = createFilesystemSessionArchivePort();
+    const scanSpy = vi.spyOn(archivePort, 'scanJournalFileMetadata');
+    const writer = new SessionStore(dir, { sessionArchivePort: archivePort });
+
+    expect(writer.append({ channelId: 'api:fingerprint-match', role: 'user', content: 'first', timestamp: 1_000 })).toBe(1);
+    scanSpy.mockClear();
+
+    expect(writer.append({ channelId: 'api:fingerprint-match', role: 'assistant', content: 'second', timestamp: 2_000 })).toBe(2);
+    expect(scanSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps clean append filesystem work constant for a large journal', () => {
+    const channelId = 'api:fingerprint-large';
+    appendSessionMessages(store, channelId, 2_000);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const fingerprintSpy = vi.spyOn(archivePort, 'fingerprintArchive');
+    const scanSpy = vi.spyOn(archivePort, 'scanJournalFileMetadata');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const appendSpy = vi.spyOn(archivePort, 'appendJournalEntry');
+    const writer = new SessionStore(dir, { sessionArchivePort: archivePort });
+
+    expect(writer.append({ channelId, role: 'user', content: 'prime fingerprint', timestamp: 1_700_000_002_000 })).toBe(2_001);
+    fingerprintSpy.mockClear();
+    scanSpy.mockClear();
+    fullReadSpy.mockClear();
+    appendSpy.mockClear();
+
+    expect(writer.append({ channelId, role: 'assistant', content: 'constant work', timestamp: 1_700_000_002_001 })).toBe(2_002);
+    expect(fingerprintSpy).toHaveBeenCalledTimes(2);
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(scanSpy).not.toHaveBeenCalled();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
   it('reconciles stale cross-instance HMAC cursors before append', () => {
     const channelId = 'api:stale-integrity';
     const keyring = buildSessionHmacKeyring({
@@ -1397,14 +1434,21 @@ describe('SessionStore', () => {
     });
     expect(keyring).not.toBeNull();
 
-    const writer = new SessionStore(dir, { integrityKeyring: keyring });
-    expect(writer.append({ channelId, role: 'user', content: 'first', timestamp: 1_000 })).toBe(1);
+    const staleArchivePort = createFilesystemSessionArchivePort();
+    const staleScanSpy = vi.spyOn(staleArchivePort, 'scanJournalFileMetadata');
+    const staleWriter = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: staleArchivePort,
+    });
+    expect(staleWriter.append({ channelId, role: 'user', content: 'first', timestamp: 1_000 })).toBe(1);
 
-    const staleWriter = new SessionStore(dir, { integrityKeyring: keyring });
-    expect(staleWriter.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['first']);
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(writer.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['first']);
 
     expect(writer.append({ channelId, role: 'assistant', content: 'second', timestamp: 2_000 })).toBe(2);
+    staleScanSpy.mockClear();
     expect(staleWriter.append({ channelId, role: 'user', content: 'third', timestamp: 3_000 })).toBe(3);
+    expect(staleScanSpy).toHaveBeenCalledTimes(1);
 
     const file = readdirSync(dir)
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('user_'))

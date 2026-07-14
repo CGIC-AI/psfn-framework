@@ -218,6 +218,7 @@ export class SessionJournalRuntime {
       lastExtractionCoveredUpTo: 0,
       lastJournalEntry: null,
       resolvedPath: filePath,
+      archiveFingerprint: null,
       messageCount: 0,
       lastTimestamp: 0,
       lastMessageTimestamp: 0,

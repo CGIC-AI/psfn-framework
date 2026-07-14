@@ -444,6 +444,7 @@ export class SessionStore implements TranscriptSearchPort {
       lastExtractionCoveredUpTo: 0,
       lastJournalEntry: null,
       resolvedPath: newPath,
+      archiveFingerprint: null,
       messageCount: 0,
       lastTimestamp: 0,
       lastMessageTimestamp: 0,
@@ -466,6 +467,7 @@ export class SessionStore implements TranscriptSearchPort {
       journal,
       upsertChannelIndex: (channelId, entry) => this.upsertChannelIndex(channelId, entry),
     });
+    cache.archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
   }
   private resolveCacheSessionKey(cache: ChannelCache): string {
     for (const [sessionId, candidate] of this.channels.entries()) {
@@ -475,6 +477,11 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private reconcileWriteCache(cache: ChannelCache): ChannelCache {
     const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+    const archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
+    if (cache.archiveFingerprint !== null && archiveFingerprint === cache.archiveFingerprint) {
+      return cache;
+    }
+
     const metadata = this.journalRuntime.scanArchiveMetadata(archive);
     if (metadata.quarantined.length > 0) {
       this.journalRuntime.warnAboutQuarantinedEntries(
@@ -498,10 +505,12 @@ export class SessionStore implements TranscriptSearchPort {
       && cacheLastJournalType === diskLastJournalType
     );
     if (cacheMatchesDisk) {
+      cache.archiveFingerprint = archiveFingerprint;
       return cache;
     }
 
     const loaded = this.journalRuntime.loadChannel(archive);
+    loaded.archiveFingerprint = archiveFingerprint;
     const sessionId = this.resolveCacheSessionKey(cache);
     this.channels.set(sessionId, loaded);
     this.upsertChannelIndex(sessionId, snapshotIndexEntry(loaded));

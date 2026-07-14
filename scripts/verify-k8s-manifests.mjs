@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseAllDocuments } from 'yaml';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,6 +28,16 @@ function assertNotIncludes(haystack, needle, label) {
   }
 }
 
+function findDeploymentWithContainer(rendered, containerName) {
+  return parseAllDocuments(rendered)
+    .map(document => document.toJS())
+    .find(resource => (
+      resource?.kind === 'Deployment'
+      && resource?.spec?.template?.spec?.containers
+        ?.some(container => container?.name === containerName)
+    ));
+}
+
 for (const target of ['k8s/base', 'k8s/overlays/dev', 'k8s/overlays/production']) {
   const rendered = kustomizeBuild(target);
 
@@ -36,6 +47,25 @@ for (const target of ['k8s/base', 'k8s/overlays/dev', 'k8s/overlays/production']
   assertNotIncludes(rendered, ':changeme@', `${target} committed weak DSN`);
   assertNotIncludes(rendered, 'postgresql://psfn:', `${target} committed DSN credential`);
   assertIncludes(rendered, 'POSTGRES_DATABASE_URL: ""', `${target} empty DSN placeholder`);
+
+  const deployment = findDeploymentWithContainer(rendered, 'agent');
+  const agentContainer = deployment?.spec?.template?.spec?.containers
+    ?.find(container => container?.name === 'agent');
+  if (!agentContainer) {
+    throw new Error(`${target} agent container missing`);
+  }
+  const agentEnv = Object.fromEntries(
+    (agentContainer.env ?? []).map(entry => [entry.name, entry.value]),
+  );
+  if (agentEnv.POSTGRES_DATABASE_URL_FILE !== '/var/run/secrets/psfn-postgres/database-url') {
+    throw new Error(`${target} agent Postgres credential file env is missing or invalid`);
+  }
+  if ('POSTGRES_DATABASE_URL' in agentEnv) {
+    throw new Error(`${target} agent raw Postgres credential env is present`);
+  }
+  if ((agentContainer.envFrom ?? []).some(entry => entry.secretRef)) {
+    throw new Error(`${target} agent imports a Secret into its environment`);
+  }
 }
 
 // Production ExternalName Postgres host must be explicitly configured

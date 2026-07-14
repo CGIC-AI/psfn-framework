@@ -632,6 +632,12 @@
     },
     {
       "path": "scripts/verify-k8s-manifests.mjs",
+      "contains": "/var/run/secrets/psfn-postgres/database-url",
+      "reason": "Kubernetes verifier pins the project-scoped Postgres Secret mount path; this is infrastructure naming, not companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-k8s-manifests.mjs",
       "contains": "psfn-framework-mlwk.32",
       "reason": "Kubernetes verifier comment cites the bead that owns the empty externalName contract.",
       "pattern": "identity-legacy-slug"

@@ -170,9 +170,10 @@ describe('admin session turn-detail route', () => {
   });
 
   it('forwards includeTurns=false on the generic messages route', async () => {
-    const getSessionMessages = vi.fn().mockReturnValue({ sessionId: 'api:target', turns: [] });
+    const getSessionMessagesForAdminRead = vi.fn()
+      .mockResolvedValue({ sessionId: 'api:target', turns: [] });
     const path = '/api/admin/sessions/api%3Atarget';
-    const route = findFirstMatch({ getSessionMessages }, path);
+    const route = findFirstMatch({ getSessionMessagesForAdminRead }, path);
     if (!route) throw new Error('messages route not matched');
 
     const res = new CapturingResponse();
@@ -184,7 +185,7 @@ describe('admin session turn-detail route', () => {
     await res.done;
 
     expect(res.statusCode).toBe(200);
-    expect(getSessionMessages).toHaveBeenCalledWith('api:target', { includeTurns: false });
+    expect(getSessionMessagesForAdminRead).toHaveBeenCalledWith('api:target', { includeTurns: false });
   });
 });
 

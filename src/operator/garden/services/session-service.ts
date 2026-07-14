@@ -52,6 +52,7 @@ import type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionMessageOntologyView,
+  AdminSessionMessagePaginationOptions,
   AdminSessionDetailData,
   AdminSessionListRow,
   AdminSessionListData,
@@ -705,12 +706,42 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  getSessionMessages(sessionId: string, options: {
-    limit?: number;
-    beforeId?: number | null;
-    messagesOnly?: boolean;
-    includeTurns?: boolean;
-  } = {}): AdminSessionMessagesData {
+  /**
+   * Garden's newest-page read path. Prefer the shared bounded tail, guarded by
+   * the canonical latest-entry checkpoint so a pending local write-through is
+   * a cache miss rather than a stale response or a Redis-induced wait.
+   * Redis-disabled/degraded/missing/behind tails return `null` from the store
+   * and fall through to the canonical journal reader. Cursor pages stay
+   * canonical because a bounded hot tail cannot prove it covers older ranges.
+   */
+  async getSessionMessagesForAdminRead(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): Promise<AdminSessionMessagesData> {
+    const beforeId = normalizeBeforeId(options.beforeId);
+    if (beforeId !== null) {
+      return this.getSessionMessages(sessionId, options);
+    }
+
+    const expectedMinEntryId = this.deps.sessionStore.getLatestJournalEntryId(sessionId);
+    const tailMessages = await this.deps.sessionStore.fetchSessionTailWindow(sessionId, {
+      ...(expectedMinEntryId !== null ? { expectedMinEntryId } : {}),
+    });
+    return this.buildSessionMessages(sessionId, options, tailMessages ?? undefined);
+  }
+
+  getSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): AdminSessionMessagesData {
+    return this.buildSessionMessages(sessionId, options);
+  }
+
+  private buildSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions,
+    firstPageMessages?: readonly SessionEntry[],
+  ): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
     const totalMessages = this.deps.sessionStore.count(sessionId);
@@ -718,7 +749,9 @@ export class AdminSessionDataService implements AdminSessionService {
       ? null
       : this.deps.sessionStore.getEntriesInRange(sessionId, 0, beforeId - 1);
     const messages = olderThanCursor === null
-      ? this.deps.sessionStore.getRecent(sessionId, limit)
+      ? (firstPageMessages
+          ? firstPageMessages.slice(-limit)
+          : this.deps.sessionStore.getRecent(sessionId, limit))
       : olderThanCursor.slice(-limit);
     const hasMoreOlder = olderThanCursor === null
       ? totalMessages > messages.length

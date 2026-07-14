@@ -1393,6 +1393,17 @@ export class SessionStore implements TranscriptSearchPort {
     const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
+  /**
+   * Latest journal entry id known to this store's canonical write/index state.
+   * A local durable append advances this synchronously before its Redis
+   * write-through runs, so cache readers can reject a lagging tail without
+   * waiting for Redis. This is a freshness checkpoint, not cached content.
+   */
+  getLatestJournalEntryId(channelId: string): number | null {
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (!cached || cached.nextId <= 1) return null;
+    return cached.nextId - 1;
+  }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
     const cache = this.ensureChannelFullyLoaded(channelId);
     return cache ? [...cache.compactions] : [];

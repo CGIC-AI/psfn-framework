@@ -337,18 +337,23 @@ export function buildAdminOverviewRoutes(options: {
         const url = parseRequestUrl(req, '/api/admin/dashboard');
         const costWindowParam = url.searchParams.get('costWindow');
         if (costWindowParam !== null && !isDashboardCostWindow(costWindowParam)) {
-          sendJson(res, 400, { error: 'Invalid costWindow query parameter. Expected today, week, or month.' });
+          sendJson(
+            res,
+            400,
+            { error: 'Invalid costWindow query parameter. Expected today, week, or month.' },
+            ADMIN_DYNAMIC_JSON_HEADERS,
+          );
           return;
         }
         const costWindow = resolveDashboardCostWindow(costWindowParam);
         dashboardService.getDashboardData({ costWindow }).then(
           (payload) => {
-            sendJson(res, 200, payload);
+            sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS);
           },
           (error) => {
             sendJson(res, 500, {
               error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
-            });
+            }, ADMIN_DYNAMIC_JSON_HEADERS);
           },
         );
       },

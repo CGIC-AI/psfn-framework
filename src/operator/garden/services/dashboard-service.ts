@@ -7,39 +7,40 @@ import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
 import type {
   AnalysisWorkbenchTraceView,
   DashboardCostWindow,
+  DashboardModelUsageProjection,
   DashboardSessionContextPressure,
   DashboardToolStatus,
 } from '../types.js';
-import type { AdminAdaptiveToolsService, AdminDashboardData, AdminDashboardService } from './types.js';
+import type {
+  AdminAdaptiveToolsService,
+  AdminDashboardData,
+  AdminDashboardService,
+  AdminModelUsageService,
+} from './types.js';
 import {
-  aggregateDashboardCostWindows,
-  createEmptyDashboardCostWindowTotals,
-  startOfDashboardUtcMonth,
-  type DashboardUsageSample,
+  DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+  mapModelUsageTotalsToDashboardUsage,
+  resolveDashboardCostWindowRange,
 } from './dashboard-cost-windows.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 
-interface UsageTotals {
-  turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  llmCalls: number;
-  toolCalls: number;
-  estimatedCostUsd: number;
+interface CachedDashboardModelUsage {
+  usage: NonNullable<DashboardModelUsageProjection['usage']>;
+  refreshedAtMs: number;
+  dataThroughMs: number;
+  latestEventAtMs: number | null;
 }
 
-export class AdminDashboardDataService implements AdminDashboardService {
-  private usageTotals: UsageTotals = {
-    turns: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    llmCalls: 0,
-    toolCalls: 0,
-    estimatedCostUsd: 0,
-  };
+const log = createComponentLogger('AdminDashboardDataService');
 
-  private usageSamples: DashboardUsageSample[] = [];
+export class AdminDashboardDataService implements AdminDashboardService {
+  private transientTurnsSinceOperatorStart = 0;
+
+  private modelUsageRequestSequence = 0;
+
+  private readonly latestModelUsageRequestByWindow = new Map<DashboardCostWindow, number>();
+
+  private readonly lastSuccessfulModelUsageByWindow = new Map<DashboardCostWindow, CachedDashboardModelUsage>();
 
   private readonly sessionContextUtilizationBySession = new Map<string, number>();
 
@@ -57,25 +58,14 @@ export class AdminDashboardDataService implements AdminDashboardService {
     scheduler: Scheduler;
     shardManager: ShardExecutionPort;
     eventBus: EventBus;
+    modelUsageService?: AdminModelUsageService | null;
     adaptiveToolsService?: AdminAdaptiveToolsService | null;
     resolveLastActiveSessionId?: () => string | null;
+    now?: () => number;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {
-      const inputTokens = AdminDashboardDataService.normalizeCount(usage.inputTokens);
-      const outputTokens = AdminDashboardDataService.normalizeCount(usage.outputTokens);
-      const cacheReadTokens = AdminDashboardDataService.normalizeCount(usage.cacheReadTokens);
-      const llmCalls = AdminDashboardDataService.normalizeCount(usage.llmCalls);
-      const toolCalls = AdminDashboardDataService.normalizeCount(usage.toolCalls);
       const contextUtilization = AdminDashboardDataService.normalizeContextUtilization(usage.contextUtilization);
-      const estimatedCostUsd = AdminDashboardDataService.normalizeCost(usage.estimatedCostUsd);
-
-      this.usageTotals.turns += 1;
-      this.usageTotals.inputTokens += inputTokens;
-      this.usageTotals.outputTokens += outputTokens;
-      this.usageTotals.cacheReadTokens += cacheReadTokens;
-      this.usageTotals.llmCalls += llmCalls;
-      this.usageTotals.toolCalls += toolCalls;
-      this.usageTotals.estimatedCostUsd += estimatedCostUsd;
+      this.transientTurnsSinceOperatorStart += 1;
 
       const usageSessionId = this.resolveUsageSessionId(message.channelId);
       if (usageSessionId) {
@@ -83,17 +73,6 @@ export class AdminDashboardDataService implements AdminDashboardService {
         this.latestUsageSessionId = usageSessionId;
       }
 
-      const timestampMs = AdminDashboardDataService.normalizeTimestamp(message.timestamp);
-      if (timestampMs === null) {
-        return;
-      }
-
-      this.usageSamples.push({
-        timestampMs,
-        llmCalls,
-        toolCalls,
-        estimatedCostUsd,
-      });
     });
 
     this.deps.eventBus.on('agent.turn.stage', (payload) => {
@@ -131,25 +110,8 @@ export class AdminDashboardDataService implements AdminDashboardService {
     });
   }
 
-  private static normalizeTimestamp(timestamp: Date): number | null {
-    const value = timestamp.getTime();
-    return Number.isFinite(value) ? value : null;
-  }
-
-  private static normalizeCount(value: number): number {
-    return Number.isFinite(value) && value > 0
-      ? Math.trunc(value)
-      : 0;
-  }
-
   private static normalizeContextUtilization(value: number): number {
     return Number.isFinite(value) && value > 0
-      ? value
-      : 0;
-  }
-
-  private static normalizeCost(value: number | undefined): number {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0
       ? value
       : 0;
   }
@@ -158,18 +120,6 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0
       ? value
       : null;
-  }
-
-  private pruneUsageSamples(nowMs: number): void {
-    const monthStartMs = startOfDashboardUtcMonth(nowMs);
-    let removeCount = 0;
-    for (const sample of this.usageSamples) {
-      if (sample.timestampMs >= monthStartMs) break;
-      removeCount += 1;
-    }
-    if (removeCount > 0) {
-      this.usageSamples.splice(0, removeCount);
-    }
   }
 
   private static normalizeSessionId(value: string | null | undefined): string | null {
@@ -234,16 +184,101 @@ export class AdminDashboardDataService implements AdminDashboardService {
       ));
   }
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  private unavailableModelUsage(selected: DashboardCostWindow): DashboardModelUsageProjection {
+    return {
+      selected,
+      usage: null,
+      freshness: {
+        state: 'unavailable',
+        source: 'postgres_model_usage',
+        refreshedAtMs: null,
+        dataThroughMs: null,
+        latestEventAtMs: null,
+        refreshIntervalMs: DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+        message: 'Durable model-usage storage is unavailable.',
+      },
+    };
+  }
+
+  private staleModelUsage(
+    selected: DashboardCostWindow,
+    cached: CachedDashboardModelUsage,
+  ): DashboardModelUsageProjection {
+    return {
+      selected,
+      usage: cached.usage,
+      freshness: {
+        state: 'stale',
+        source: 'postgres_model_usage',
+        refreshedAtMs: cached.refreshedAtMs,
+        dataThroughMs: cached.dataThroughMs,
+        latestEventAtMs: cached.latestEventAtMs,
+        refreshIntervalMs: DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+        message: 'Latest refresh failed; showing the last successful durable snapshot.',
+      },
+    };
+  }
+
+  private async getModelUsage(selected: DashboardCostWindow): Promise<DashboardModelUsageProjection> {
+    if (!this.deps.modelUsageService) {
+      return this.unavailableModelUsage(selected);
+    }
+
+    const dataThroughMs = this.now();
+    const range = resolveDashboardCostWindowRange(selected, dataThroughMs);
+    const requestSequence = ++this.modelUsageRequestSequence;
+    this.latestModelUsageRequestByWindow.set(selected, requestSequence);
+
+    try {
+      const data = await this.deps.modelUsageService.getModelUsageData({
+        ...range,
+        limit: 1,
+      });
+      const snapshot: CachedDashboardModelUsage = {
+        usage: mapModelUsageTotalsToDashboardUsage(data.totals),
+        refreshedAtMs: this.now(),
+        dataThroughMs,
+        latestEventAtMs: data.recentEvents[0]?.recordedAtMs ?? null,
+      };
+      if (this.latestModelUsageRequestByWindow.get(selected) === requestSequence) {
+        this.lastSuccessfulModelUsageByWindow.set(selected, snapshot);
+      }
+      return {
+        selected,
+        usage: snapshot.usage,
+        freshness: {
+          state: 'fresh',
+          source: 'postgres_model_usage',
+          refreshedAtMs: snapshot.refreshedAtMs,
+          dataThroughMs: snapshot.dataThroughMs,
+          latestEventAtMs: snapshot.latestEventAtMs,
+          refreshIntervalMs: DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+        },
+      };
+    } catch (error) {
+      log.warn('Failed to refresh dashboard model usage from durable storage', {
+        selected,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const cached = this.lastSuccessfulModelUsageByWindow.get(selected);
+      return cached
+        ? this.staleModelUsage(selected, cached)
+        : this.unavailableModelUsage(selected);
+    }
+  }
+
   async getDashboardData(options: { costWindow?: DashboardCostWindow } = {}): Promise<AdminDashboardData> {
     const selectedCostWindow = options.costWindow ?? 'today';
-    const nowMs = Date.now();
-    this.pruneUsageSamples(nowMs);
-    const costByWindow = this.usageSamples.length > 0
-      ? aggregateDashboardCostWindows(this.usageSamples, nowMs)
-      : createEmptyDashboardCostWindowTotals();
-    const memStats = await this.deps.memoryStore.getStats();
+    const [modelUsage, memStats, toolStatus] = await Promise.all([
+      this.getModelUsage(selectedCostWindow),
+      this.deps.memoryStore.getStats(),
+      this.getToolStatus(),
+    ]);
     const channels = this.deps.sessionStore.listChannels();
-    const toolStatus = await this.getToolStatus();
     return {
       stats: {
         memoryTotal: memStats.total,
@@ -252,23 +287,15 @@ export class AdminDashboardDataService implements AdminDashboardService {
         sessionCount: channels.length,
         schedulerTasks: this.deps.scheduler.taskCount,
         activeShards: this.deps.shardManager.getActiveCount(),
-        sessionUsage: {
-          turns: this.usageTotals.turns,
-          inputTokens: this.usageTotals.inputTokens,
-          outputTokens: this.usageTotals.outputTokens,
-          cacheReadTokens: this.usageTotals.cacheReadTokens,
-          llmCalls: this.usageTotals.llmCalls,
-          toolCalls: this.usageTotals.toolCalls,
+        modelUsage,
+        transientSessionTelemetry: {
+          source: 'live_event_bus',
+          turnsSinceOperatorStart: this.transientTurnsSinceOperatorStart,
           lastTtftMs: this.latestTtftMs,
           averageTtftMs: this.ttftSampleCount > 0
             ? this.ttftTotalMs / this.ttftSampleCount
             : null,
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
-          estimatedCostUsd: this.usageTotals.estimatedCostUsd,
-          costWindows: {
-            selected: selectedCostWindow,
-            byWindow: costByWindow,
-          },
         },
         toolStatus,
         recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces,

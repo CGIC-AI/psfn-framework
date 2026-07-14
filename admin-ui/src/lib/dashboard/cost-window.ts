@@ -1,10 +1,9 @@
 import type {
   DashboardCostWindow,
-  DashboardCostWindowTotals,
-  DashboardCostWindowUsage,
 } from '$lib/types';
 
 export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month'];
+export const DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS = 15_000;
 
 export interface DashboardCostWindowOption {
   value: DashboardCostWindow;
@@ -32,40 +31,6 @@ export function buildDashboardCostWindowPath(costWindow: DashboardCostWindow): s
   return `/api/admin/dashboard?costWindow=${encodeURIComponent(costWindow)}`;
 }
 
-type DashboardCostWindowUsageInput = Partial<Record<keyof DashboardCostWindowUsage, unknown>> | null | undefined;
-type DashboardCostWindowTotalsInput = Partial<Record<DashboardCostWindow, DashboardCostWindowUsageInput>> | null | undefined;
-
-function asNonNegativeFiniteNumber(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    return 0;
-  }
-  return value;
-}
-
-export function normalizeDashboardCostWindowUsage(
-  usage: DashboardCostWindowUsageInput,
-): DashboardCostWindowUsage {
-  return {
-    turns: asNonNegativeFiniteNumber(usage?.turns),
-    llmCalls: asNonNegativeFiniteNumber(usage?.llmCalls),
-    toolCalls: asNonNegativeFiniteNumber(usage?.toolCalls),
-    estimatedCostUsd: asNonNegativeFiniteNumber(usage?.estimatedCostUsd),
-  };
-}
-
-export function normalizeDashboardCostWindowTotals(
-  byWindow: DashboardCostWindowTotalsInput,
-): DashboardCostWindowTotals {
-  return {
-    today: normalizeDashboardCostWindowUsage(byWindow?.today),
-    week: normalizeDashboardCostWindowUsage(byWindow?.week),
-    month: normalizeDashboardCostWindowUsage(byWindow?.month),
-  };
-}
-
-export function resolveSelectedDashboardCostWindowUsage(
-  byWindow: DashboardCostWindowTotalsInput,
-  selected: DashboardCostWindow,
-): DashboardCostWindowUsage {
-  return normalizeDashboardCostWindowTotals(byWindow)[selected];
+export function shouldPublishDashboardResponse(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
 }

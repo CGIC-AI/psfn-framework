@@ -21,6 +21,11 @@ import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-a
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { AdminModelUsageDataService } from '../../operator/garden/services/model-usage-service.js';
+import { AdminDashboardDataService } from '../../operator/garden/services/dashboard-service.js';
+import { startOfDashboardUtcDay } from '../../operator/garden/services/dashboard-cost-windows.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { LLMClient } from '../../primitives/llm/client.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { createGenerateImageTool } from '../../primitives/images/tools.js';
@@ -155,6 +160,169 @@ afterAll(async () => {
 }, INTEGRATION_TIMEOUT_MS);
 
 describe('PostgresModelUsageStore reconciliation', () => {
+  it('reconciles the dashboard selected range with canonical usage across process and operator restarts', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const writerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-dashboard-writer',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const operatorPool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-dashboard-operator',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const nowMs = Date.UTC(2026, 6, 14, 12, 0, 0, 0);
+    const writer = new PostgresModelUsageStore(writerPool, { companionId: 'dashboard-companion' });
+    const operatorStore = new PostgresModelUsageStore(operatorPool, { companionId: 'dashboard-companion' });
+    const modelUsage = new AdminModelUsageDataService(operatorStore);
+    const makeDashboard = () => new AdminDashboardDataService({
+      memoryStore: {
+        getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
+      } as MemoryStorePort,
+      sessionStore: {
+        listChannels: () => [],
+      } as unknown as SessionStore,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {
+        getActiveCount: () => 0,
+        getActiveShards: () => [],
+      } as unknown as ShardExecutionPort,
+      eventBus: new EventBus(),
+      modelUsageService: modelUsage,
+      now: () => nowMs,
+    });
+
+    try {
+      await writer.recordUsageEvent({
+        logicalCallId: 'dashboard-provider-call',
+        recordedAtMs: nowMs - 2_000,
+        startedAtMs: nowMs - 2_100,
+        status: 'success',
+        settlement: 'complete',
+        callKind: 'chat',
+        attribution: {
+          companionId: 'dashboard-companion',
+          callType: 'chat',
+          purpose: 'dashboard-reconciliation',
+        },
+        provider: 'provider-a',
+        model: 'model-a',
+        inputTokens: 100,
+        outputTokens: 40,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 20,
+        totalTokens: 190,
+        providerCost: { input: 0.006, output: 0.008, cacheRead: 0.002, cacheWrite: 0.004, total: 0.02 },
+        estimatedCost: { total: 0.03 },
+        effectiveCost: { input: 0.006, output: 0.008, cacheRead: 0.002, cacheWrite: 0.004, total: 0.02 },
+        providerCostUsd: 0.02,
+        estimatedCostUsd: 0.03,
+        effectiveCostUsd: 0.02,
+        costSource: 'provider',
+        currency: 'USD',
+      });
+      await writer.recordUsageEvent({
+        logicalCallId: 'dashboard-estimated-call',
+        recordedAtMs: nowMs - 1_000,
+        startedAtMs: nowMs - 1_100,
+        status: 'failure',
+        settlement: 'partial',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'dashboard-companion',
+          callType: 'background',
+          purpose: 'dashboard-reconciliation',
+        },
+        provider: 'provider-b',
+        model: 'model-b',
+        inputTokens: 50,
+        outputTokens: 10,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 2,
+        totalTokens: 67,
+        estimatedCost: { total: 0.04 },
+        effectiveCost: { total: 0.04 },
+        estimatedCostUsd: 0.04,
+        effectiveCostUsd: 0.04,
+        costSource: 'estimate',
+        currency: 'USD',
+      });
+
+      const query = { sinceMs: startOfDashboardUtcDay(nowMs), untilMs: nowMs, limit: 1 };
+      const canonical = await modelUsage.getModelUsageData(query);
+      const firstDashboard = await makeDashboard().getDashboardData({ costWindow: 'today' });
+
+      expect(firstDashboard.stats.modelUsage.usage).toEqual({
+        calls: canonical.totals.calls,
+        successfulCalls: canonical.totals.successfulCalls,
+        failedCalls: canonical.totals.failedCalls,
+        inputTokens: canonical.totals.inputTokens,
+        outputTokens: canonical.totals.outputTokens,
+        cacheReadTokens: canonical.totals.cacheReadTokens,
+        cacheWriteTokens: canonical.totals.cacheWriteTokens,
+        totalTokens: canonical.totals.totalTokens,
+        providerCostUsd: canonical.totals.providerCostUsd,
+        estimatedCostUsd: canonical.totals.estimatedCostUsd,
+        effectiveCostUsd: canonical.totals.totalCostUsd,
+      });
+      expect(firstDashboard.stats.modelUsage.usage).toMatchObject({
+        calls: 2,
+        successfulCalls: 1,
+        failedCalls: 1,
+        inputTokens: 150,
+        outputTokens: 50,
+        cacheReadTokens: 35,
+        cacheWriteTokens: 22,
+        totalTokens: 257,
+        providerCostUsd: 0.02,
+        estimatedCostUsd: 0.07,
+        effectiveCostUsd: 0.06,
+      });
+      expect(firstDashboard.stats.modelUsage.freshness.latestEventAtMs).toBe(nowMs - 1_000);
+
+      await writer.recordUsageEvent({
+        logicalCallId: 'dashboard-cross-process-call',
+        recordedAtMs: nowMs - 500,
+        startedAtMs: nowMs - 600,
+        status: 'success',
+        settlement: 'complete',
+        callKind: 'embedding',
+        attribution: {
+          companionId: 'dashboard-companion',
+          callType: 'memory',
+          purpose: 'dashboard-cross-process-refresh',
+        },
+        provider: 'provider-c',
+        model: 'model-c',
+        inputTokens: 25,
+        totalTokens: 25,
+        estimatedCost: { total: 0.01 },
+        effectiveCost: { total: 0.01 },
+        estimatedCostUsd: 0.01,
+        effectiveCostUsd: 0.01,
+        costSource: 'estimate',
+        currency: 'USD',
+      });
+
+      const restartedOperator = await makeDashboard().getDashboardData({ costWindow: 'today' });
+      expect(restartedOperator.stats.modelUsage).toMatchObject({
+        selected: 'today',
+        usage: { calls: 3, totalTokens: 282, effectiveCostUsd: 0.07 },
+        freshness: {
+          state: 'fresh',
+          source: 'postgres_model_usage',
+          dataThroughMs: nowMs,
+          latestEventAtMs: nowMs - 500,
+        },
+      });
+      expect(restartedOperator.stats.transientSessionTelemetry.turnsSinceOperatorStart).toBe(0);
+    } finally {
+      await Promise.all([writerPool.end(), operatorPool.end()]);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('serializes eager migrations across independent stores on a pristine database', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();

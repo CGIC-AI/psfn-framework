@@ -34,7 +34,7 @@ describe('jsonl append helpers', () => {
   });
 
   it('appends shard session/memory sync audit records', () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-shard-sync-jsonl-'));
+    const root = mkdtempSync(join(tmpdir(), 'psfn-sync-jsonl-'));
     tempRoots.push(root);
     const path = join(root, 'audit', 'shard-session-memory-sync-audit.jsonl');
 

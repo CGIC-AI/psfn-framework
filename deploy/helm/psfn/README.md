@@ -123,7 +123,7 @@ HostPath example:
 repositoryCheckout:
   enabled: true
   hostPath:
-    path: /home/psfn/psfn-framework-source
+    path: /srv/psfn/repository
 ```
 
 PVC example:
@@ -160,12 +160,12 @@ hostPorts:
     enabled: true
     port: 10053
     sourceCIDRs:
-      - 192.168.1.230/32
+      - 192.0.2.10/32
   garden:
     enabled: true
     port: 10054
     sourceCIDRs:
-      - 192.168.1.230/32
+      - 192.0.2.10/32
 ```
 
 This binds the Gateway API and Garden/admin UI directly on the node while
@@ -468,9 +468,11 @@ Hub configuration surface:
   for the full Pi runbook, the satellites.json entry pattern (including the
   companion relay scopes), and the mTLS flip procedure.
 
-A ready-to-use Pi overlay with pinned-tag placeholders lives at
+A public single-node example with pinned-tag placeholders lives at
 `overlays/pi-satellite-hub.values.yaml` (kept out of chart packaging via
-`.helmignore`).
+`.helmignore`). Copy it to `overlays/pi-satellite-hub.local.values.yaml`,
+which is gitignored, and put deployment-specific addresses, CIDRs, credential
+digests, and device registry entries only in that local file.
 
 The hub NetworkPolicy allows ingress only from the configured ingress
 controller selector (plus `hostPorts.satelliteHub.sourceCIDRs` when the

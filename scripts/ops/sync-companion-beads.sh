@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Two-way beads sync between the shared workstation DB (source of truth for
-# merge) and the companion's live copy on the psfn-shard workspace PVC.
+# merge) and a companion's selected workspace PVC.
 #
 #   scripts/ops/sync-companion-beads.sh            # full round-trip
 #   scripts/ops/sync-companion-beads.sh --pull     # only companion -> shared
@@ -16,7 +16,12 @@
 # from a cron. Bead: psfn-framework-hpx6 follow-on (companion beads write).
 set -euo pipefail
 
-HOST_ALIAS="${PSFN_HOST_ALIAS:-psfn-pi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ops/load-private-ops-config.sh
+source "$SCRIPT_DIR/load-private-ops-config.sh"
+load_private_ops_config "$SCRIPT_DIR"
+
+HOST_ALIAS="${PSFN_HOST_ALIAS:-}"
 NAMESPACE="${PSFN_NAMESPACE:-psfn}"
 BEADS_POD_DEPLOY="deploy/psfn-gateway"
 MODE="both"
@@ -28,6 +33,8 @@ case "${1:-}" in
   -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "unknown argument: $1" >&2; exit 1 ;;
 esac
+
+require_private_ops_value HOST_ALIAS "private config" PSFN_HOST_ALIAS
 
 rexec() {
   ssh "$HOST_ALIAS" "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n $NAMESPACE exec ${2:-} $BEADS_POD_DEPLOY -- sh -c 'cd /app/workspace && $1'"

@@ -43,6 +43,56 @@ describe('public-sanitize check', () => {
     expect(result.violations[0].rule).toBe('token-openai-like');
   });
 
+  it('detects a deployment-specific host alias in tracked text', () => {
+    const privateHostAlias = ['psfn', 'shard'].join('-');
+    const result = scanPublicSanitizeTrackedFiles(
+      ['docs/operations.md'],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: () => `Live host: ${privateHostAlias}\n`,
+      },
+    );
+
+    expect(result.violations.map((violation) => violation.rule)).toEqual(['live-host-alias']);
+  });
+
+  it('detects private network, hardware, and live-path fingerprints', () => {
+    const privateValues = [
+      ['100', '96', '206', '29'].join('.'),
+      ['crawler', 'local', 'internal'].join('.'),
+      ['', 'home', 'psfn', 'repository'].join('/'),
+      ['', 'mnt', 'psfn-nvme', 'runtime'].join('/'),
+      ['miniforum', '01'].join(''),
+      `uuid: ${['d1f3c5fc', 'c352', '418f', '8fbd', 'bf72d84935a2'].join('-')}`,
+    ];
+    const result = scanPublicSanitizeTrackedFiles(
+      ['docs/operations.md'],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: () => privateValues.join('\n'),
+      },
+    );
+
+    expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
+      'internal-local-hostname',
+      'live-hardware-uuid',
+      'live-service-home-path',
+      'live-storage-mount-path',
+      'private-node-name',
+      'tailnet-address',
+    ]);
+  });
+
   it('does not scan excluded beads history log content', () => {
     const tokenValue = buildOpenAiLikeToken();
     const reads: string[] = [];

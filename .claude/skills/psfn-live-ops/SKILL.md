@@ -1,13 +1,14 @@
 ---
 name: psfn-live-ops
-description: Investigate, repair, and redeploy the live PSFN companion on psfn-shard (k3s). Use when diagnosing live behavior bugs (repetition, missing replies, tool failures), shipping a fix to the Pi, cleaning polluted runtime data, or validating a rollout. Covers evidence gathering, the build/deploy contract, the validation gate, and the data-surgery rules.
+description: Investigate, repair, and redeploy a live PSFN companion on operator-selected k3s. Use when diagnosing live behavior bugs, shipping a fix, cleaning polluted runtime data, or validating a rollout. Covers evidence gathering, the build/deploy contract, the validation gate, and the data-surgery rules.
 ---
 
 # PSFN Live Ops — investigate, repair, redeploy
 
-Runbook for working on the **live** Purrsephone deployment (k3s on `psfn-shard`,
-namespace `psfn`, SSH alias `psfn-pi`). Grown out of the 2026-07-06 repetition
-incident and the x5rt self-management epic. Companion-data is sacrosanct:
+Runbook for working on an operator-selected **live** deployment. Load the
+ignored `scripts/ops/private-ops.env` contract first; never encode the SSH
+destination, namespace, private addresses, or live paths in this tracked skill.
+Companion-data is sacrosanct:
 backup before any mutation, never `rm -rf` near backups, and treat her state
 (memories, concerns, follow-ups) as hers — cleanup of companion state is an
 operator decision, not yours.
@@ -81,17 +82,17 @@ npm run ship:kube -- --components all      # full stack (required when the contr
 npm run ship:kube -- --components all --values-overlay <file>  # config enablement rides the same upgrade
 ```
 
-Every ship also refreshes the companion's source checkout (git bundle →
-`/mnt/psfn-nvme/psfn-source`) and round-trips beads
+Every ship can also refresh the companion's configured source checkout and
+round-trips beads
 (`scripts/ops/sync-companion-beads.sh`, bd export/import upsert both ways) —
 her self-view is exactly as fresh as her runtime. Target selection:
 `--host <ssh-dest>` / `PSFN_HOST_ALIAS` + `--namespace` / `PSFN_NAMESPACE` for
-non-default deployments (e.g. Carlini, `o_0@100.96.206.29`, amd64). The script
+non-default deployments (for example, a second amd64 node). The script
 probes the target's CPU arch and builds the matching platform, stages under
 the remote user's home (`PSFN_REMOTE_DIR` to override), and forwards the
 target to the beads sync; the companion source-checkout refresh path is
-`PSFN_SOURCE_CHECKOUT` (default the Pi's `/mnt/psfn-nvme/psfn-source`;
-missing dir = refresh skipped). The skew guard is live-proven: a boundary/contract
+`PSFN_SOURCE_CHECKOUT` (empty or missing dir means refresh skipped). The skew
+guard is live-proven: a boundary/contract
 change on a selective ship fails closed naming the component that would skew.
 
 Selective rollouts are contract-hash guarded: the image bakes a hash of
@@ -126,8 +127,8 @@ Manual procedure, if the script cannot be used
 git archive HEAD | tar -x -C <builddir>
 docker buildx build --platform linux/arm64 -f docker/Dockerfile.agent \
   -t psfn-framework:0.1.0-kube-<shortsha> --load <builddir>
-docker save ... | gzip → scp → psfn-pi:~/psfn-kube-runtime/
-ssh psfn-pi "gunzip ... && sudo k3s ctr images import <tar>"
+docker save ... | gzip → scp → "$PSFN_HOST_ALIAS":<remote-staging-dir>/
+ssh "$PSFN_HOST_ALIAS" "gunzip ... && sudo k3s ctr images import <tar>"
 # ctr imports as docker.io/library/<name> — MUST re-tag:
 sudo k3s ctr images tag docker.io/library/psfn-framework:<tag> localhost/psfn-framework:<tag>
 ```
@@ -152,10 +153,9 @@ in this build" line — always set them. Gateway/garden use strategy Recreate
 (brief downtime instead of the old hostPort deadlock). The agent restarts 2×
 per swap by design (RPC loss) — not a failure signal.
 
-## 3b. Shipping to a NEW target (Carlini or any second deployment)
+## 3b. Shipping to a new target
 
-One-time migrations the first ship to a target must handle — all hit live on
-psfn-shard 2026-07-06:
+One-time migrations the first ship to a target must handle:
 
 1. **Strategy SSA conflict**: live deployments created under RollingUpdate
    reject the chart's `Recreate` ("spec.strategy.rollingUpdate: Forbidden").

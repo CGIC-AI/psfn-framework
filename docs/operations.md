@@ -132,44 +132,32 @@ What it does:
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
-## Live Raspberry Pi Storage Layout
+## Host-Specific Storage Validation
 
-The live Raspberry Pi host is `psfn-shard`. Its write-heavy PSFN paths are bind-mounted from the Crucial NVMe drive mounted at `/mnt/psfn-nvme`; the root filesystem still boots from the SD card. Treat the path existing as insufficient evidence: verify the backing device with `findmnt` before debugging storage or startup problems.
+Live hostnames, private addresses, device identifiers, mount points, and home
+paths belong in the ignored repo-local operator note described by
+[`working_docs/private-live-ops.example.md`](../working_docs/private-live-ops.example.md).
+Do not commit populated values.
 
-Current NVMe identity:
-
-```text
-device: /dev/nvme0n1
-model: CT500P3SSD8
-label: PSFN_NVME
-uuid: d1f3c5fc-c352-418f-8fbd-bf72d84935a2
-mount: /mnt/psfn-nvme
-```
-
-Bind-mounted live paths:
-
-```text
-/home/psfn/psfn-framework-source
-/home/psfn/psfn-satellite-hub
-/home/psfn/.cache
-/home/psfn/.npm
-/var/lib/psfn/runtime
-/var/lib/postgresql/17/main
-/var/log/postgresql
-```
-
-Validation:
+Load the deployment's ignored config before using the generic checks below:
 
 ```bash
-findmnt -T /home/psfn/psfn-framework-source
-findmnt -T /var/lib/psfn/runtime
-findmnt -T /var/lib/postgresql/17/main
-systemctl is-active postgresql@17-main.service postgresql.service litellm.service psfn.service psfn-satellite-hub.service psfn-companion-ui.service
-pg_isready -h 127.0.0.1 -p 5432
-ss -ltnp | grep -E ':(5432|4000|10053|10054|5173|8787|8790)'
+set -a
+. scripts/ops/private-ops.env
+set +a
+
+findmnt -T "$PSFN_REPOSITORY_CHECKOUT"
+findmnt -T "$PSFN_RUNTIME_DATA_PATH"
+findmnt -T "$PSFN_POSTGRES_DATA_PATH"
+systemctl is-active "$PSFN_APP_SERVICE" "$PSFN_HUB_SERVICE" "$PSFN_UI_SERVICE"
+pg_isready -h "${PSFN_POSTGRES_HOST:-127.0.0.1}" -p "${PSFN_POSTGRES_PORT:-5432}"
 ```
 
-`psfn-satellite-hub.service` and `psfn-companion-ui.service` must be loadable by systemd before `/home/psfn/psfn-framework-source` is bind-mounted. Their stable registrations are regular files in `/etc/systemd/system`, copied from repo-owned files under `deployment/systemd/`. Treat the repo files as the source; when they change, update the systemd registrations intentionally and record why. If services fail after reboot, check `systemctl --failed --no-pager`, `systemctl cat psfn-satellite-hub.service psfn-companion-ui.service`, and the `multi-user.target.wants` links before changing app code.
+The path existing is not enough evidence for bind-mounted storage: compare the
+`findmnt` source with the expected device recorded in the private note. Keep
+repo-owned unit templates under `deployment/systemd/` authoritative; any
+supervisor registration outside the repo must remain a thin pointer or an
+intentional copy required during early boot.
 
 ## Out-of-Process Watchdog Paging
 

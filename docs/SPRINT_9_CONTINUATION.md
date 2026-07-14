@@ -4,7 +4,7 @@
 
 - Last session: 2026-06-11 morning (overnight verification + fixes; previous audits: `docs/SPRINT_9_FABLE_REVIEW.md`)
 - Branch: `sprint_9_memory` @ `c94b3ef0`, **4,120/4,120 tests green**, lint clean (a service-staging tmpdir test is occasionally flaky under full-suite parallelism; passes on re-run)
-- Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; the Pi now pushes/pulls GitHub directly (`git pull --ff-only` works there — no more bundle dance). Deploy = pull, `npm run build` (+ `npm run garden:build` if admin-ui changed), `sudo systemctl restart psfn.service`.
+- Live deployment: the operator-selected host runs the Postgres-only build. Host aliases and checkout paths belong in the ignored private ops config, never in this tracked continuation note.
 - Git identity: commits author as `axAilotl <axAilotl@pm.me>` everywhere (repo, global, Pi). `o_0 <mdf@foxenigne.ai>` is a **contributor**, not the operator — never commit operator work under it. Pre-rewrite branch tip preserved at local `backup/sprint_9_memory-pre-author-fix` (deletable once comfortable).
 
 ## Overnight verification results (2026-06-11 morning — DONE)

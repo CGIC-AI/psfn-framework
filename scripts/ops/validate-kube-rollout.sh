@@ -3,8 +3,13 @@
 set -euo pipefail
 exec 3>&2
 
-NAMESPACE="${NAMESPACE:-psfn}"
-HOST_ALIAS="${PSFN_KUBE_HOST:-psfn-pi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ops/load-private-ops-config.sh
+source "$SCRIPT_DIR/load-private-ops-config.sh"
+load_private_ops_config "$SCRIPT_DIR"
+
+NAMESPACE="${PSFN_NAMESPACE:-${NAMESPACE:-psfn}}"
+HOST_ALIAS="${PSFN_HOST_ALIAS:-}"
 REMOTE_KUBECTL_COMMAND="${REMOTE_KUBECTL_COMMAND:-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl}"
 SECRET_NAME="${PSFN_APP_SECRET:-psfn-app}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-300s}"
@@ -37,7 +42,7 @@ Post-rollout validation gate for the live PSFN k3s deployment.
 
 Options:
   -n, --namespace NAME       Kubernetes namespace (default: psfn)
-      --host ALIAS           SSH host alias for remote node commands (default: psfn-pi)
+      --host ALIAS           SSH destination for remote node commands (required remotely)
       --remote               Force kubectl and node-local checks through SSH
       --local                Force local kubectl and node-local checks
       --expect-tag TAG       Require app pod image tags to match TAG
@@ -208,6 +213,9 @@ select_kube_mode() {
   if [[ "$KUBE_MODE" == "remote" ]] && ! command -v ssh >/dev/null 2>&1; then
     die "remote kubectl was selected but ssh is not on PATH"
   fi
+  if [[ "$KUBE_MODE" == "remote" ]]; then
+    require_private_ops_value HOST_ALIAS "--host" PSFN_HOST_ALIAS || exit 2
+  fi
   if ! command -v node >/dev/null 2>&1; then
     die "node is required for JSON validation"
   fi
@@ -240,8 +248,8 @@ run_host_shell() {
   bash -lc "$command"
 }
 
-# Deployments expose their ports either on the node (hostPort, the Pi
-# topology) or only in-cluster behind an Ingress (the Carlini topology).
+# Deployments expose their ports either on the node (hostPort topology) or
+# only in-cluster behind an Ingress.
 # Host-level curls/node fetches are authoritative when a hostPort is bound —
 # they verify node exposure — otherwise the same check runs inside the pod.
 declare -A HOST_PORT_CACHE=()

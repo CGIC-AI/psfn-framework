@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12 and §0.4 refreshed 2026-07-14** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12 and §0.4 refreshed 2026-07-14 through W8 closeout** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -164,11 +164,28 @@ plus settings-contract, lint, ESM+DTS build, and diff checks. Remaining review
 observations retain report-only disposition under the agreed severity standard;
 they did not affect acceptance and created no follow-up beads.
 
+W8 strict owner configuration, Garden controls, and explainable observability
+(`s10mc.6.8`) is complete at integrated head `79e8e80c`. The implementation
+line adds strict scheduler and charge-policy ownership, effective/on-disk and
+restart-required reporting, bounded redacted projections, audited local
+cancel/DND/emergency controls, safe permit invalidation, and the Garden
+Autonomy page. Its one independent review found an IMPORTANT tenant/privacy
+issue; `79e8e80c` remediates it by binding every projection to the local
+companion and excluding unrelated peer-to-peer candidates, lifecycle rows,
+costs, provenance, reasons, failures, and derived quiet/failure counts. The
+integrated closeout passed 9 focused files / 86 tests, the 2 Garden autonomy
+view tests, settings-contract, mandatory lint, root ESM+DTS build, Garden
+production build, and diff checks. The inherited repository-hygiene fixture
+finding (`psfn-framework-ecr5`) and Garden type-check diagnostics
+(`psfn-framework-qz9e`) remain separately tracked; the optional canonical-policy
+fallback observation remains report-only. No second review was performed.
+
 This remains an implementation-wave checkpoint, not completion of the ICP epic
-or release validation. W8 (`s10mc.6.8`) is newly unblocked and ready; W9
-(`s10mc.6.9`) has cleared its W7 dependency but remains blocked on W8. The
-parent `s10mc.6` remains open, and the feature branch has not been merged into
-the release branch or exercised against live infrastructure.
+or release validation. W9 (`s10mc.6.9`) is now unblocked and ready for its
+two-real-agent certification work. The parent `s10mc.6` remains open, and the
+feature branch has not been merged into the release branch or exercised
+against live infrastructure.
+
 ### 0.5 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
 
 `psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,

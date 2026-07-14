@@ -153,6 +153,39 @@ describe('TurnSupportRuntime role-envelope projections', () => {
 
     expect(record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_runtime_projection_1']);
   });
+
+  it('keeps a reset logical conversation separate from its physical channel', () => {
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager,
+      hashPromptText: (text) => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const sourceChannelId = 'discord:guild:reset-room';
+    const reset = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'start a clean logical conversation',
+      mode: 'fresh_split',
+    });
+    const correlation = runtime.buildTurnCorrelation({
+      id: 'root-initiation-message',
+      channelId: sourceChannelId,
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'new conversation',
+      timestamp: new Date('2026-07-14T00:00:00.000Z'),
+    }, 'chat', createTurnId(), 'root-initiation-message');
+
+    expect(correlation).toMatchObject({
+      sessionId: reset.newLogicalSessionId,
+      conversationId: reset.newLogicalSessionId,
+      rootInitiationId: 'root-initiation-message',
+      channelId: sourceChannelId,
+    });
+    expect(correlation.sessionId).not.toBe(correlation.channelId);
+  });
 });
 
 describe('TurnSupportRuntime post-turn drain gate', () => {

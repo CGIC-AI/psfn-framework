@@ -3,9 +3,10 @@
 // Core always uses an injected transport port so provider credentials remain outside
 // the core runtime boundary.
 
+import { randomUUID } from 'node:crypto';
 import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
-import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
+import type { LLMContext, LLMResponse, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
@@ -26,14 +27,11 @@ import {
 import {
   findRegistryEntryByModelId,
   findRegistryEntryByProviderModel,
-  ModelBudgetController,
-  ModelBudgetExceededError,
   normalizeModelIdForProvider,
 } from '../../primitives/llm/model-budget.js';
 import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
-import { countMessageTokens } from '../../primitives/llm/tokens.js';
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -56,7 +54,6 @@ export interface SubstrateStreamTransport {
 }
 
 export interface SubstrateStreamRuntimeOptions {
-  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
   transport: SubstrateStreamTransport;
 }
@@ -77,7 +74,6 @@ export function createSubstrateStreamFn(
     );
   }
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  const budgetController = new ModelBudgetController(config);
   const fallbackRunner = new FallbackRunner();
 
   const wrappedStreamFn: StreamFn = async (model, context, options) => {
@@ -86,7 +82,6 @@ export function createSubstrateStreamFn(
     const purpose = resolveStreamBudgetPurpose(requestContext);
     const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
-    const estimatedInputTokens = resolveEstimatedBudgetInputTokens(budgetController, context);
     const callerMaxTokens = resolveCallerMaxTokens(options?.maxTokens);
     const candidates = resolveStreamCandidates(
       config,
@@ -95,6 +90,8 @@ export function createSubstrateStreamFn(
       callerMaxTokens,
       litellmBaseUrl,
     );
+    const logicalCallId = `llm:${randomUUID()}:chat:${purpose}`;
+    let physicalAttempt = 0;
 
     let lastAttemptCandidate: RoutingCandidate | undefined;
     let lastAttempt = 0;
@@ -117,11 +114,13 @@ export function createSubstrateStreamFn(
           purpose,
           service,
           processName,
-          estimatedInputTokens,
           requestContext,
-          budgetController,
-          onBudgetBlocked: runtimeOptions.onBudgetBlocked,
           correlationFields,
+          logicalCallId,
+          nextPhysicalAttempt: () => {
+            physicalAttempt += 1;
+            return physicalAttempt;
+          },
         });
       },
       requestContext,
@@ -172,28 +171,14 @@ interface ExecuteStreamCandidateParams {
   purpose: RoutingPurpose;
   service: string;
   processName: string;
-  estimatedInputTokens?: number;
   requestContext: Partial<CorrelationMetadata> | undefined;
-  budgetController: ModelBudgetController;
-  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   correlationFields: ReturnType<typeof toCorrelationLogFields>;
+  logicalCallId: string;
+  nextPhysicalAttempt: () => number;
 }
 
 function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGenerator<AssistantMessageEvent, void, unknown> {
   const { candidate } = params;
-  const preflight = params.budgetController.evaluatePreflight({
-    candidate,
-    purpose: params.purpose,
-    service: params.service,
-    process: params.processName,
-    estimatedInputTokens: params.estimatedInputTokens ?? 0,
-    correlation: params.requestContext,
-  });
-  if (!preflight.allowed && preflight.blockedEvent) {
-    params.onBudgetBlocked?.(preflight.blockedEvent);
-    throw new ModelBudgetExceededError(preflight.blockedEvent);
-  }
-
   const requestOptions = buildStreamRequestOptions(
     candidate,
     params.options,
@@ -221,6 +206,11 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           requestContext: params.requestContext,
           requestOptions,
           transport: params.transport,
+          accounting: {
+            logicalCallId: params.logicalCallId,
+            attempt: params.nextPhysicalAttempt(),
+            retryOwner: 'caller',
+          },
         });
 
         for await (const rawEvent of stream) {
@@ -242,16 +232,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
                 yield bufferedEvent;
               }
             }
-
-            params.budgetController.recordUsage({
-              candidate,
-              purpose: params.purpose,
-              service: params.service,
-              process: params.processName,
-              inputTokens: toUsageCount(event.message.usage.input),
-              outputTokens: toUsageCount(event.message.usage.output),
-              correlation: params.requestContext,
-            });
 
             yield event;
             return;
@@ -315,6 +295,7 @@ interface TransportEventStreamParams {
   requestContext: Partial<CorrelationMetadata> | undefined;
   requestOptions: Record<string, unknown>;
   transport: SubstrateStreamTransport;
+  accounting: NonNullable<LLMContext['accounting']>;
 }
 
 function createTransportEventStream(
@@ -339,7 +320,13 @@ function createTransportEventStream(
     const runTransport = (async () => {
       try {
         const response = await params.transport.stream(
-          buildTransportContext(params.candidate, params.context, params.requestContext, params.requestOptions),
+          buildTransportContext(
+            params.candidate,
+            params.context,
+            params.requestContext,
+            params.requestOptions,
+            params.accounting,
+          ),
           {
             onText: (delta) => {
               enqueueTextDelta(queue, state, delta);
@@ -383,6 +370,7 @@ function buildTransportContext(
   context: unknown,
   requestContext: Partial<CorrelationMetadata> | undefined,
   requestOptions: Record<string, unknown>,
+  accounting: NonNullable<LLMContext['accounting']>,
 ): LLMContext {
   const llmContext = context as LLMContext;
   const tools = normalizeTransportTools((context as { tools?: unknown }).tools);
@@ -394,6 +382,7 @@ function buildTransportContext(
       ? { promptCacheBoundaries: llmContext.promptCacheBoundaries }
       : {}),
     modelHint: buildTransportModelHint(candidate, requestOptions),
+    accounting,
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
   };
 }
@@ -449,6 +438,7 @@ function buildTransportModelHint(
   return {
     model: candidate.model,
     provider: candidate.provider,
+    pin: true,
     maxTokens: candidate.maxTokens,
     ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
     ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
@@ -790,41 +780,6 @@ function resolveStreamBudgetPurpose(context: Partial<CorrelationMetadata> | unde
   return 'chat';
 }
 
-function resolveEstimatedBudgetInputTokens(
-  budgetController: ModelBudgetController,
-  context: unknown,
-): number | undefined {
-  if (!budgetController.requiresPreflightEstimate()) {
-    return undefined;
-  }
-  return estimateContextInputTokens(context);
-}
-
-function estimateContextInputTokens(context: unknown): number {
-  const llmContext = context as Partial<LLMContext>;
-  const budgetMessages: Array<{ role: string; content: string }> = [];
-
-  if (typeof llmContext.systemPrompt === 'string' && llmContext.systemPrompt) {
-    budgetMessages.push({
-      role: 'system',
-      content: llmContext.systemPrompt,
-    });
-  }
-
-  if (Array.isArray(llmContext.messages)) {
-    for (const message of llmContext.messages) {
-      budgetMessages.push({
-        role: message.role,
-        content: typeof message.content === 'string'
-          ? message.content
-          : JSON.stringify(message.content),
-      });
-    }
-  }
-
-  return Math.max(1, countMessageTokens(budgetMessages));
-}
-
 function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
   if (candidate.thinkingEnabled === false) return undefined;
   if (candidate.thinkingEffort) return candidate.thinkingEffort;
@@ -899,6 +854,7 @@ function resolveStreamCandidates(
 ): RoutingCandidate[] {
   const currentCandidate = buildCurrentCandidate(
     config,
+    purpose,
     model,
     callerMaxTokens,
     litellmBaseUrl,
@@ -927,7 +883,15 @@ function resolveStreamCandidates(
     return adjustedRoutingCandidates;
   }
 
-  const matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
+  let matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
+  if (matchedIndex < 0 && currentCandidate.slotKey === undefined) {
+    matchedIndex = findUniquePurposeMatchIndex(
+      config,
+      purpose,
+      currentCandidate,
+      adjustedRoutingCandidates,
+    );
+  }
   if (matchedIndex < 0) {
     return [currentCandidate];
   }
@@ -941,6 +905,7 @@ function resolveStreamCandidates(
 
 function buildCurrentCandidate(
   config: CoreSubstrateConfig,
+  purpose: RoutingPurpose,
   model: Model<any>,
   callerMaxTokens: number | undefined,
   litellmBaseUrl: string | null,
@@ -954,8 +919,13 @@ function buildCurrentCandidate(
     ? normalizeModelIdForProvider(effectiveProvider, rawModelId)
     : normalizeModelIdForProvider(effectiveProvider, rawModelId);
   const resolvedMaxTokens = callerMaxTokens ?? resolveStreamMaxTokens(model, undefined, config.primaryMaxTokens);
-  const registryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
+  const matchedRegistryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
     ?? findRegistryEntryByModelId(config, normalizedModelId);
+  const registryEntry = matchedRegistryEntry
+    && matchedRegistryEntry.enabled !== false
+    && matchedRegistryEntry.purposes.some(tag => tag.purpose === purpose)
+    ? matchedRegistryEntry
+    : undefined;
 
   return {
     provider: registryEntry?.identity.provider ?? effectiveProvider,
@@ -974,6 +944,40 @@ function candidatesEquivalent(left: RoutingCandidate, right: RoutingCandidate): 
   return left.provider === right.provider
     && left.model === right.model
     && (left.slotKey ?? '') === (right.slotKey ?? '');
+}
+
+function candidatesShareIdentity(left: RoutingCandidate, right: RoutingCandidate): boolean {
+  const leftProvider = left.provider.trim().toLowerCase();
+  const rightProvider = right.provider.trim().toLowerCase();
+  return leftProvider === rightProvider
+    && normalizeModelIdForProvider(leftProvider, left.model)
+      === normalizeModelIdForProvider(rightProvider, right.model);
+}
+
+function findUniquePurposeMatchIndex(
+  config: CoreSubstrateConfig,
+  purpose: RoutingPurpose,
+  currentCandidate: RoutingCandidate,
+  routingCandidates: RoutingCandidate[],
+): number {
+  const matchingEntries = config.modelRegistry?.models.filter((entry) => {
+    if (entry.enabled === false) return false;
+    if (!entry.purposes.some((tag) => tag.purpose === purpose)) return false;
+    return candidatesShareIdentity(
+      {
+        provider: entry.identity.provider,
+        model: entry.identity.model,
+        maxTokens: currentCandidate.maxTokens,
+      },
+      currentCandidate,
+    );
+  }) ?? [];
+  if (matchingEntries.length !== 1) return -1;
+
+  const slotKey = matchingEntries[0]!.id;
+  return routingCandidates.findIndex(
+    candidate => candidate.slotKey === slotKey && candidatesShareIdentity(candidate, currentCandidate),
+  );
 }
 
 function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {

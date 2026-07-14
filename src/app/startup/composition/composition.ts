@@ -20,11 +20,6 @@ import {
 } from '../../../core/session/cross-channel-continuity-port.js';
 import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
 import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
-import {
-  createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
-  createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
-  type EmbeddingRuntimeProvider,
-} from '../../../faculties/memory/embedding.js';
 import { MemoryJournal } from '../../../faculties/memory/journal.js';
 import { createPostgresMemoryStore } from '../../../faculties/memory/postgres-store.js';
 import {
@@ -190,14 +185,6 @@ export async function composeMemoryStoreAsync(
     scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
     journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
   });
-}
-
-export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
-  return createEmbeddingProviderFromMemoryEnv(process.env);
-}
-
-export function createEmbeddingProviderFromConfig(config: SubstrateConfig): EmbeddingRuntimeProvider {
-  return createEmbeddingProviderFromMemoryConfig(config, process.env);
 }
 
 export interface IdentityComposition {

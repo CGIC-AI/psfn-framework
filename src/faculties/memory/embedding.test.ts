@@ -5,6 +5,7 @@ import {
   DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
   STARTUP_EMBEDDING_WARMUP_TEXT,
   OllamaEmbeddingProvider,
+  ApiEmbeddingProvider,
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromConfig,
   createEmbeddingProviderFromEnv,
@@ -40,10 +41,11 @@ function restoreEnv(): void {
   }
 }
 
-function okJson(payload: unknown) {
+function okJson(payload: unknown, headers: Record<string, string> = {}) {
   return {
     ok: true,
     status: 200,
+    headers: new Headers(headers),
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   };
@@ -315,6 +317,132 @@ describe('embedding providers', () => {
     expect(JSON.parse(String(init.body))).toEqual({
       model: 'text-embedding-3-small',
       input: ['first', 'second'],
+    });
+  });
+
+  it('preserves provider token and cost usage alongside API embedding vectors', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+        cost: {
+          input: 0.0000011,
+          total: 0.0000011,
+          currency: 'usd',
+        },
+      },
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.embeddings).toEqual([new Float32Array([1, 2, 3])]);
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 11,
+      cost: {
+        input: 0.0000011,
+        total: 0.0000011,
+        currency: 'USD',
+      },
+    });
+  });
+
+  it('captures LiteLLM embedding cost headers as bounded provider evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+      },
+    }, {
+      'x-litellm-response-cost': '0.0000011',
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      totalTokens: 11,
+      cost: { total: 0.0000011, currency: 'USD' },
+      raw: {
+        providerCostEvidence: {
+          'header.x-litellm-response-cost': { total: 0.0000011, currency: 'USD' },
+        },
+      },
+    });
+  });
+
+  it('quarantines contradictory embedding body and header cost evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+        cost: { total: 0.0000011, currency: 'USD' },
+      },
+    }, {
+      'x-litellm-response-cost': '0.0000022',
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails?.cost).toBeUndefined();
+    expect(result.usageDetails?.raw).toMatchObject({
+      providerCostEvidence: {
+        bodyUsage: { total: 0.0000011, currency: 'USD' },
+        'header.x-litellm-response-cost': { total: 0.0000022, currency: 'USD' },
+      },
+      providerCostEvidenceConflict: {
+        fields: ['total'],
+      },
+    });
+  });
+
+  it('captures top-level embedding provider cost as bounded provider evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+      },
+      cost: 0.0000011,
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      totalTokens: 11,
+      cost: { total: 0.0000011, currency: 'USD' },
+      raw: {
+        providerCostEvidence: {
+          'body.cost': { total: 0.0000011, currency: 'USD' },
+        },
+      },
     });
   });
 

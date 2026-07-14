@@ -1,74 +1,63 @@
 import { describe, expect, it } from 'vitest';
+import type { ModelUsageTotals } from '../../../shared/telemetry/model-usage.js';
 import {
-  aggregateDashboardCostWindows,
   isDashboardCostWindow,
+  mapModelUsageTotalsToDashboardUsage,
   resolveDashboardCostWindow,
+  resolveDashboardCostWindowRange,
   startOfDashboardUtcDay,
   startOfDashboardUtcMonth,
   startOfDashboardUtcWeek,
 } from './dashboard-cost-windows.js';
 
-describe('dashboard cost window aggregation', () => {
-  it('aggregates period-bounded totals for today/week/month windows', () => {
-    const nowMs = Date.UTC(2026, 2, 18, 12, 0, 0, 0);
-    const monthStartMs = startOfDashboardUtcMonth(nowMs);
-    const weekStartMs = startOfDashboardUtcWeek(nowMs);
-    const dayStartMs = startOfDashboardUtcDay(nowMs);
+describe('dashboard durable model-usage windows', () => {
+  it('resolves UTC today/week/month ranges with a half-open boundary after data-through', () => {
+    const nowMs = Date.UTC(2026, 2, 18, 12, 34, 56, 789);
 
-    const samples = [
-      { timestampMs: nowMs - (1 * 60 * 60 * 1000), llmCalls: 2, toolCalls: 1, estimatedCostUsd: 0.2 },
-      { timestampMs: nowMs - (2 * 24 * 60 * 60 * 1000), llmCalls: 1, toolCalls: 0, estimatedCostUsd: 0.3 },
-      { timestampMs: nowMs - (10 * 24 * 60 * 60 * 1000), llmCalls: 4, toolCalls: 2, estimatedCostUsd: 0.4 },
-      { timestampMs: nowMs - (40 * 24 * 60 * 60 * 1000), llmCalls: 9, toolCalls: 9, estimatedCostUsd: 0.9 },
-    ];
-
-    const expected = {
-      today: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-      week: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-      month: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-    };
-
-    for (const sample of samples) {
-      if (sample.timestampMs < monthStartMs) continue;
-      expected.month.turns += 1;
-      expected.month.llmCalls += sample.llmCalls;
-      expected.month.toolCalls += sample.toolCalls;
-      expected.month.estimatedCostUsd += sample.estimatedCostUsd;
-
-      if (sample.timestampMs >= weekStartMs) {
-        expected.week.turns += 1;
-        expected.week.llmCalls += sample.llmCalls;
-        expected.week.toolCalls += sample.toolCalls;
-        expected.week.estimatedCostUsd += sample.estimatedCostUsd;
-      }
-
-      if (sample.timestampMs >= dayStartMs) {
-        expected.today.turns += 1;
-        expected.today.llmCalls += sample.llmCalls;
-        expected.today.toolCalls += sample.toolCalls;
-        expected.today.estimatedCostUsd += sample.estimatedCostUsd;
-      }
-    }
-
-    const totals = aggregateDashboardCostWindows(samples, nowMs);
-    expect(totals).toEqual(expected);
+    expect(resolveDashboardCostWindowRange('today', nowMs)).toEqual({
+      sinceMs: startOfDashboardUtcDay(nowMs),
+      untilMs: nowMs + 1,
+    });
+    expect(resolveDashboardCostWindowRange('week', nowMs)).toEqual({
+      sinceMs: startOfDashboardUtcWeek(nowMs),
+      untilMs: nowMs + 1,
+    });
+    expect(resolveDashboardCostWindowRange('month', nowMs)).toEqual({
+      sinceMs: startOfDashboardUtcMonth(nowMs),
+      untilMs: nowMs + 1,
+    });
   });
 
-  it('fails closed when telemetry fields are invalid or missing', () => {
-    const nowMs = Date.UTC(2026, 2, 18, 12, 0, 0, 0);
-    const totals = aggregateDashboardCostWindows([
-      { timestampMs: Number.NaN, llmCalls: 99, toolCalls: 99, estimatedCostUsd: 99 },
-      { timestampMs: nowMs - 1000, llmCalls: -5, toolCalls: Number.NaN, estimatedCostUsd: -1 },
-    ], nowMs);
+  it('maps the canonical query totals without dropping cache or cost evidence', () => {
+    const totals: ModelUsageTotals = {
+      calls: 4,
+      successfulCalls: 3,
+      failedCalls: 1,
+      inputTokens: 100,
+      outputTokens: 40,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 20,
+      totalTokens: 190,
+      providerCostUsd: 0.11,
+      estimatedCostUsd: 0.13,
+      totalCostUsd: 0.12,
+      averageDurationMs: 250,
+      averageTtftMs: 75,
+    };
 
-    expect(totals.today).toEqual({
-      turns: 1,
-      llmCalls: 0,
-      toolCalls: 0,
-      estimatedCostUsd: 0,
+    expect(mapModelUsageTotalsToDashboardUsage(totals)).toEqual({
+      calls: 4,
+      successfulCalls: 3,
+      failedCalls: 1,
+      inputTokens: 100,
+      outputTokens: 40,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 20,
+      totalTokens: 190,
+      providerCostUsd: 0.11,
+      estimatedCostUsd: 0.13,
+      effectiveCostUsd: 0.12,
     });
-    expect(totals.week).toEqual(totals.today);
-    expect(totals.month).toEqual(totals.today);
   });
 
   it('validates and resolves supported dashboard cost windows', () => {

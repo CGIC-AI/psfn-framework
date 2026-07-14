@@ -1,4 +1,8 @@
 import type {
+  ChargeCostReconciliationData,
+  ChargeCostReconciliationQuery,
+} from '../../../../shared/telemetry/charge-cost-reconciliation.js';
+import type {
   RunChargeLedgerData,
   RunChargeLedgerQuery,
 } from '../../../../shared/telemetry/charge-ledger.js';
@@ -12,6 +16,10 @@ import type {
 } from '../../../../shared/telemetry/model-usage.js';
 import type { FatigueTuningReport } from '../../../../core/agent/fatigue/adaptive-tuning.js';
 import type { FatiguePolicyConfig } from '../../../../shared/contracts/charge-policy.js';
+import type {
+  ModelUsageExportFormat,
+  SerializedModelUsageExport,
+} from '../model-usage-export.js';
 
 export interface AdminChargeLedgerService {
   getChargeLedgerData(query?: RunChargeLedgerQuery & FatigueLedgerQuery): Promise<RunChargeLedgerData & {
@@ -23,4 +31,14 @@ export interface AdminChargeLedgerService {
 
 export interface AdminModelUsageService {
   getModelUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
+  exportModelUsageData?(
+    query: ModelUsageQuery,
+    format: ModelUsageExportFormat,
+  ): Promise<SerializedModelUsageExport>;
+}
+
+export interface AdminChargeCostReconciliationService {
+  getChargeCostReconciliation(
+    query?: ChargeCostReconciliationQuery,
+  ): Promise<ChargeCostReconciliationData>;
 }

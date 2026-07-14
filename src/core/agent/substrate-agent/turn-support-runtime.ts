@@ -50,6 +50,7 @@ import {
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
+import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('SubstrateAgent');
 export const DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS = 5_000;
@@ -516,7 +517,16 @@ export class TurnSupportRuntime {
     turnId: TurnID,
     requestId: string,
   ): CorrelationMetadata {
-    return buildTurnCorrelationForTurn(message, callType, turnId, requestId);
+    const resolvedSessionId = this.resolveSessionChannelId(message.channelId);
+    const wyomingSessionId = message.routing?.wyoming?.sessionId?.trim();
+    const sessionId = resolvedSessionId !== message.channelId
+      ? resolvedSessionId
+      : (wyomingSessionId || resolvedSessionId);
+    const rootInitiationId = getRunChargeSnapshot()?.lineage.rootRunId.trim() || requestId;
+    return buildTurnCorrelationForTurn(message, callType, turnId, requestId, {
+      sessionId,
+      rootInitiationId,
+    });
   }
 
   withCorrelationPurpose(

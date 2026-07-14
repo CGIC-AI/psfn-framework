@@ -317,6 +317,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
         persistenceBackend: config.persistenceBackend,
         postgresDatabaseUrl,
+        companionId: config.companionId,
       });
     }
     return cachedModelUsageStore;

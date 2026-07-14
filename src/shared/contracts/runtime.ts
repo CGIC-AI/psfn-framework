@@ -152,6 +152,15 @@ export interface LLMModelHint extends ModelControlKnobs {
   pin?: boolean;
 }
 
+export interface LLMCallAccountingContext {
+  /** Stable identity shared by every physical attempt of one caller operation. */
+  logicalCallId: string;
+  /** One-based physical attempt number within the logical call. */
+  attempt: number;
+  /** The upstream caller owns retry/fallback sequencing for this operation. */
+  retryOwner?: 'caller';
+}
+
 export interface MessageModelOverride extends ModelControlKnobs {
   provider: string;
   model: string;
@@ -195,13 +204,31 @@ export type ObservabilityCallType =
   | 'scheduled';
 
 export interface LLMRequestMetadata {
+  companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   toolName?: string;
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  /** Exact immutable charge event that bought this provider work, when one is active. */
+  chargeEventId?: string;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
 }
 
 /**
@@ -794,6 +821,7 @@ export interface LLMContext {
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;
+  accounting?: LLMCallAccountingContext;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];
@@ -821,6 +849,7 @@ export interface LLMUsageDetails {
   cacheWrite: number;
   totalTokens: number;
   cost?: LLMUsageCostDetails;
+  costEvidenceConflict?: { fields: string[] };
   raw?: Record<string, unknown>;
 }
 
@@ -1044,6 +1073,8 @@ export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
 export interface ModelRegistryCostMetadata {
   inputPer1MUsd?: number;
   outputPer1MUsd?: number;
+  cacheReadPer1MUsd?: number;
+  cacheWritePer1MUsd?: number;
   currency?: string;
   [key: string]: unknown;
 }
@@ -1124,22 +1155,6 @@ export interface CanonicalModelRegistry {
   promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
-export interface ModelUsageLedgerRecord {
-  id: string;
-  timestampMs: number;
-  dayKey: string;
-  monthKey: string;
-  provider: string;
-  model: string;
-  slotKey?: string;
-  purpose: string;
-  service: string;
-  process: string;
-  inputTokens: number;
-  outputTokens: number;
-  estimatedCostUsd: number;
-}
-
 export interface ModelBudgetWindowSnapshot {
   dayKey: string;
   monthKey: string;
@@ -1147,12 +1162,16 @@ export interface ModelBudgetWindowSnapshot {
   dailyLimitUsd: number;
   monthlySpentUsd: number;
   monthlyLimitUsd: number;
+  dailyUnknownCostAttempts: number;
+  monthlyUnknownCostAttempts: number;
 }
 
 export type ModelBudgetBlockReason =
   | 'daily_budget_exceeded'
   | 'monthly_budget_exceeded'
-  | 'missing_cost_metadata';
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable'
+  | 'unknown_historical_cost';
 
 export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   timestampMs: number;

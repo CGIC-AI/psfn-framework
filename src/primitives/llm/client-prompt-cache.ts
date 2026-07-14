@@ -23,10 +23,10 @@ export interface PromptCacheCorrelation {
   channelId?: string;
 }
 
-export interface PromptCacheRequestOptions {
+export interface PromptCacheRequestOptions<PayloadModel = unknown> {
   cacheRetention?: PromptCacheRetention;
   sessionId?: string;
-  onPayload?: (payload: unknown, payloadModel: unknown) => unknown | Promise<unknown>;
+  onPayload?: (payload: unknown, payloadModel: PayloadModel) => unknown | Promise<unknown>;
 }
 
 export interface PromptCacheBoundaryWarningPayload {
@@ -126,7 +126,7 @@ export function buildPromptCacheObservability(
  * returns the promptCaching observability reflecting what was applied.
  * Returns null when the flag is off — zero wire change.
  */
-export function applyModelAgnosticPromptCache(input: PromptCacheCandidateConfig & {
+export function applyModelAgnosticPromptCache<PayloadModel>(input: PromptCacheCandidateConfig & {
   promptCacheEnabled?: boolean;
   provider: string;
   modelId: string;
@@ -135,7 +135,7 @@ export function applyModelAgnosticPromptCache(input: PromptCacheCandidateConfig 
   systemPrompt: string;
   boundaries: LLMSystemPromptCacheBoundaries | undefined;
   correlation: PromptCacheCorrelation | undefined;
-  requestOptions: PromptCacheRequestOptions;
+  requestOptions: PromptCacheRequestOptions<PayloadModel>;
   onBoundaryMismatch: (payload: PromptCacheBoundaryWarningPayload) => void;
 }): LLMPromptCacheObservability | null {
   if (input.promptCacheEnabled !== true) return null;

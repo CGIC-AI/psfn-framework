@@ -129,6 +129,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       imagesService: deps.services.images,
       auditHistoryService: deps.services.auditHistory,
       chargeLedgerService: deps.services.charges,
+      chargeCostReconciliationService: deps.services.chargeCosts,
       modelUsageService: deps.services.modelUsage,
       observerEvalSidecarService: deps.services.observerEvalSidecar,
       actionPipeService: deps.services.actionPipe,

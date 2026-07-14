@@ -80,6 +80,7 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminChargeCostReconciliationDataService } from './services/charge-cost-reconciliation-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
@@ -196,6 +197,9 @@ export function createInProcessGardenAdminContract(
     ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const modelUsage = modelUsageStore
+    ? new AdminModelUsageDataService(modelUsageStore)
+    : null;
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
@@ -312,6 +316,7 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      modelUsageService: modelUsage,
       adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
     }),
@@ -325,7 +330,14 @@ export function createInProcessGardenAdminContract(
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
-    modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
+    chargeCosts: modelUsageStore && options.config.companionId
+      ? new AdminChargeCostReconciliationDataService(
+          chargeLedger,
+          modelUsageStore,
+          options.config.companionId,
+        )
+      : null,
+    modelUsage,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,
       runtime: options.observerEvalSidecar ?? null,

@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12 and §0.4 refreshed 2026-07-14** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -32,8 +32,15 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
-- **Deliberately deferred**: `cam` cost-accounting review (accepted tail risk —
-  it blocks only ICP `6.7` breaker + `6.9` cert), `lpro` kube lane (operator
+- **Completed feature branch**: `cam.1`–`cam.6` accounting capture,
+  attribution, durable dashboard accounting, canonical analytics,
+  charge-to-cost reconciliation, migration/certification, and `574y` operator
+  accounting UX are complete and validated at implementation fixed point
+  `271b6609` on the pushed `feat/cost-accounting` branch; the `cam` epic and all
+  seven accepted-scope children are closed. The branch is not on `main` yet; its
+  tracker dependency no longer blocks ICP `6.7` breaker or `6.9`
+  certification. Other
+  deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
   (hardware being assembled; ICP epic lands first). `w05a` experiment window
   closes 2026-07-20 and resurfaces its own decision beads.
@@ -54,7 +61,7 @@ was dependency-wired end to end, and the release path got tracker structure.
 
 **ICP chain (wired):** `6.1` → `6.2` broker ∥ `6.6` fatigue/social-charge →
 `6.3` target-channel turns (← `s10rm`) → `6.4` tools → `6.5` source adapters →
-`6.7` USD breaker (← `cam`, deferred) → `6.8` owner config/Garden → `6.9`
+`6.7` USD breaker (← closed `cam`; now ready) → `6.8` owner config/Garden → `6.9`
 two-real-agent certification.
 
 **MC substrate (parallel once charter items land):** `s10mc.1` (← `z7qe.4`),
@@ -152,6 +159,142 @@ This is an implementation-wave checkpoint, not completion of the ICP epic or
 release validation. W7-W9 (`s10mc.6.7` through `.6.9`) remain open, the parent
 `s10mc.6` remains open, and the feature branch has not been
 merged into the release branch or exercised against live infrastructure.
+### 0.5 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
+
+`psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,
+and `psfn-framework-cam.2` is delivered through implementation head
+`9a3f57a1` (`61097e33..9a3f57a1`). `psfn-framework-cam.3` is delivered by
+`43c76a32` and `825eef8c`. `psfn-framework-cam.4` is integrated and pushed at
+`459e73dd` (`362b6c72..459e73dd`). `psfn-framework-cam.5` is implemented by
+`8e12a69a`, `31c6594c`, and `073c21e7`, then integrated and pushed at
+`38eb7933`. The `psfn-framework-574y` operator UX was implemented by
+`74042506`, `702f4fdf`, `f179c6c0`, and `61113c49`; its one review finding was
+remediated by `2d8ff2f0`. CAM.6 certification was implemented by `cbadbfbc` and
+`42c8df52`; its single review findings were remediated by `271b6609`, which is
+integrated and pushed as the final `feat/cost-accounting` head.
+CAM.1 records immutable physical provider attempts with reconciled token and
+cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
+strict filters and groups, indexed Postgres persistence, and fail-closed Garden
+tenancy with explicit fleet aggregation. CAM.3 replaces the main dashboard's
+in-memory cost samples with canonical Today/Week/Month Postgres queries,
+complete call/token/cache/provider/estimated/effective totals, a 15-second
+bounded poll, race-safe range switching, and explicit fresh/stale/unavailable
+states while keeping live context-pressure and TTFT telemetry transient.
+CAM.4 adds one tenant-scoped Postgres analytics grammar for named and strict
+custom ranges, operator timezones and DST-aware gap-filled buckets, reconciled
+totals/series/component economics, bounded one- or two-dimensional grouping,
+stable sorting and cursor pagination, exact top-N plus Other, recent/expensive
+events, and content-free CSV/JSON exports from the same filtered raw ledger.
+Garden routes and the typed client are wired to that contract, and indexed raw
+queries meet the documented year-scale target without rollups.
+CAM.5 joins that immutable model-usage ledger to the original charge ledger
+through typed exact charge-event and lineage correlation. Its operator-only
+projection reports charge units alongside provider, estimated, and effective
+cost; deterministic allocation and confidence; token/call mix; coverage; and
+explicit attributable, charged-without-usage, usage-without-charge,
+ambiguous/many-to-many, and non-model buckets. Retry attempts and nested
+shard/subagent policy scopes conserve both source ledgers without double
+counting, while the companion-facing charge-budget projection remains unit-only
+and monetary-free.
+The `574y` UX keeps the dashboard a concise durable summary and makes Charge /
+Budget the analytical cockpit over the same CAM.4/CAM.5 APIs: named/custom
+ranges, timezone-aware buckets, explicit token/cost components, accessible
+graph tables, declared-dimension filtering/grouping/sorting/drill-down,
+content-free authenticated export, charge-cost coverage/conservation, and
+truthful loading/stale/error states. Accounting URL state survives Token Usage
+↔ Charge Policy navigation, and dashboard analysis links carry the committed
+Today/Week/Month range without introducing parallel accounting math or storage.
+CAM.6 adds transactional real-Postgres migration certification with
+backup-required apply, rollback fingerprints, idempotent reruns, explicit
+known/inferred/unknown evidence, and non-USD quarantine. Its immutable
+provider/call-path corpus reconciles raw attempts through totals, time series,
+groups, dashboard, content-free export, and charge allocation across restart,
+process, channel, companion, malformed-cost, and tenant-isolation boundaries.
+Legacy provider or estimate claims with all monetary fields `NULL` remain
+unknown; genuine priced controls remain known or inferred.
+
+CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
+Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
+dashboard tests passed 11/11; the split Garden operator socket/mTLS/API and
+model-usage reachability suite passed 17/17; and Docker-backed real local
+PostgreSQL reconciliation passed 12/12, including separate writer/operator
+processes, cross-process refresh, operator restart, and actual database
+outage/recovery/stale-cache transitions. `npm run lint`, `npm run build`,
+`npm --prefix admin-ui run build`, `npm run verify:model-usage-capture`, and
+`git diff --check` passed. The proportional full suite passed 704 files / 7,742
+tests, with only the same two inherited scheduler fixtures that omit
+`minPartnerIdleMinutes` while the loader supplies the default `60`; both files
+are outside the CAM.3 diff. `npm --prefix admin-ui run check` still reports the
+seven pre-CAM.3 flat `ModelUsageEvent` reads in the unchanged Charge/Budget
+renderer; that repair is tracked separately by open bead
+`psfn-framework-at95`, not attributed to CAM.3.
+
+CAM.4 final-check validation at integrated/pushed head `459e73dd`: focused
+range/query/export/service/operator coverage passed 5 files / 50 tests;
+Docker-backed real PostgreSQL analytics and benchmark coverage passed 2 files /
+14 tests, including tenant isolation, DST buckets, totals/group reconciliation,
+cursors, immutable component economics, export, and restart durability. The
+3,650-event year benchmark completed the canonical analytics query in 126.56 ms
+against the documented `<2000 ms` target. `npm run lint`, `npm run build`,
+`npm run garden:build`, and `git diff --check` passed. Independent review passed
+with no blocking findings under the accounting security/data-integrity/core-path
+failure standard.
+
+Report-only reviewer observations for CAM.4 (intentionally no follow-up beads):
+the shared export-row type has minor routed-model-field/duplicate-declaration
+hygiene; relative named-range cursors do not pin resolved boundaries across a
+calendar rollover; the benchmark is intentionally low-density and its explicit
+plan assertion is narrower than the full analytics fan-out; and exports ignore
+display cursor/limit state while preserving the complete filtered ledger slice.
+None affects tenant isolation, immutable accounting data, the shipped query
+path, or mandatory lint/build gates.
+
+CAM.5 final integrated regression at pushed head `38eb7933`: focused CAM.4
+range/query/export plus CAM.5 reconciliation/API/operator coverage passed 13
+files / 134 tests; Docker-backed real local PostgreSQL model-usage integration
+passed 14/14, including restart durability, tenant isolation, analytics, charge
+reconciliation, and explicit unknown attribution fallback. `npm run lint`,
+`npm run build` (ESM+DTS), `npm run garden:build`, and `git diff --check` passed.
+The single independent review returned PASS with no IMPORTANT findings. CAM.5
+had no material report-only observations and intentionally created no follow-up
+beads.
+
+`574y` final integration/regression at pushed head `2d8ff2f0`: the single
+independent review found one IMPORTANT URL-state defect, then the same reviewer
+verified the regression-only remediation as PASS. Garden accounting/navigation
+passed 12/12, dashboard navigation/state passed 12/12, canonical
+query/reconciliation passed 27/27, authenticated operator query/export and
+admin auth checks passed, and the privacy regression passed 17/17.
+`svelte-check` reported 0 errors and 0 warnings; `npm run lint`, the core
+ESM+DTS build, `npm run garden:build`, and `git diff --check` passed. The Garden
+build continues to emit the unchanged Rollup `Unknown output options:
+codeSplitting` warning; this is report-only, outside the accounting UX diff,
+and intentionally has no follow-up bead from this closeout.
+
+CAM.6 final integration/regression at pushed head `271b6609`: the single
+independent review found one IMPORTANT accounting-evidence defect and one
+mandatory lint-gate failure comprising two errors. The same reviewer verified
+the bounded remediation as PASS without starting another review. The targeted
+real-Postgres migration test passed 1/1; the full accounting certification
+passed 4 files / 9 tests;
+`npm run lint` exited 0; and `npm run build` passed ESM+DTS. The earlier
+exact-image, provider-disabled local Artemis smoke passed durable API,
+dashboard, export, charge/usage conservation, and tenant-denial checks without
+external provider spend; it was not rerun during final integrated closeout.
+
+This is whole-accounting completion on a pushed feature branch, not a `main`
+merge claim. `psfn-framework-cam.1`–`.6`, `psfn-framework-574y`, and the parent
+`psfn-framework-cam` epic are closed. The remaining failing gates observed
+during certification are inherited, report-only for accounting, and remain on
+their existing beads:
+
+- `psfn-framework-r7tv` — scheduler owner-file round-trip drift for
+  `minPartnerIdleMinutes`.
+- `psfn-framework-l1qz` — identity-literal repository-hygiene findings.
+- `psfn-framework-fgm4` — duplicated local record guards; `fgm4` is the actual
+  tracker ID.
+- `psfn-framework-dsd5` — stale local Artemis Helm bootstrap state for strict
+  owner/auth contracts.
 
 ## 1. Where things stand
 

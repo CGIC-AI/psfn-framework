@@ -1,20 +1,12 @@
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../core/agent/tool-wiring-validator.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
-import { ImageReferenceStore } from './reference-store.js';
 import type { ImageOperations } from './ops.js';
-import { ImageService } from './service.js';
 import {
   createGenerateImageTool,
   createSelfieTool,
   type ImageReferenceResolver,
 } from './tools.js';
-import {
-  DefaultImageVisionReviewer,
-  type ImageVisionReviewerOptions,
-} from './vision-reviewer.js';
 import type { ImageVisionReviewer } from './types.js';
 
 export interface ImagesRuntimeTarget {
@@ -73,21 +65,4 @@ export function registerImageTools(
     }
     target.registerTool(tool, 'core');
   }
-}
-
-export interface WireImageRuntimeOptions {
-  reviewer?: ImageVisionReviewer;
-  reviewerOptions?: ImageVisionReviewerOptions;
-}
-
-export function wireImageRuntime(
-  target: ImagesRuntimeTarget,
-  config: SubstrateConfig,
-  options?: WireImageRuntimeOptions,
-): ImageService {
-  const service = new ImageService(config);
-  const reviewer = options?.reviewer ?? new DefaultImageVisionReviewer(config, options?.reviewerOptions);
-  const referenceStore = new ImageReferenceStore(resolveConfiguredCompanionDataDir(config));
-  registerImageTools(target, service, { reviewer, referenceResolver: referenceStore });
-  return service;
 }

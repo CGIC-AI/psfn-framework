@@ -2,9 +2,15 @@
   import { onMount } from 'svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import {
+    beginDashboardCostWindowSelection,
+    commitDashboardCostWindowSelection,
+    createDashboardCostWindowSelection,
     DASHBOARD_COST_WINDOW_OPTIONS,
+    DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS,
+    buildDashboardAccountingPath,
+    rejectDashboardCostWindowSelection,
     resolveDashboardCostWindow,
-    resolveSelectedDashboardCostWindowUsage,
+    shouldPublishDashboardResponse,
   } from '$lib/dashboard/cost-window';
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
@@ -14,8 +20,9 @@
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
   let loading = $state(true);
-  let selectedCostWindow = $state<DashboardCostWindow>('today');
+  let costWindowSelection = $state(createDashboardCostWindowSelection('today'));
   let costWindowLoading = $state(false);
+  let backgroundRefreshLoading = $state(false);
   let costWindowRefreshError = $state('');
   let latestDashboardRequestId = 0;
 
@@ -28,48 +35,64 @@
     return hints[window];
   }
 
-  async function loadDashboard(costWindow: DashboardCostWindow, mode: 'initial' | 'refresh'): Promise<void> {
+  async function loadDashboard(costWindow: DashboardCostWindow, mode: 'initial' | 'refresh' | 'poll'): Promise<void> {
     const requestId = ++latestDashboardRequestId;
     if (mode === 'initial') {
       error = '';
-    } else {
+    } else if (mode === 'refresh') {
       costWindowLoading = true;
       costWindowRefreshError = '';
+    } else {
+      backgroundRefreshLoading = true;
     }
 
     try {
       const payload = await getDashboard(costWindow);
-      if (requestId !== latestDashboardRequestId) return;
+      if (!shouldPublishDashboardResponse(requestId, latestDashboardRequestId)) return;
       data = payload;
-      selectedCostWindow = resolveDashboardCostWindow(
-        payload.stats?.sessionUsage?.costWindows?.selected ?? costWindow,
+      costWindowSelection = commitDashboardCostWindowSelection(
+        costWindowSelection,
+        resolveDashboardCostWindow(payload.stats?.modelUsage?.selected ?? costWindow),
       );
+      costWindowRefreshError = '';
     } catch (e) {
-      if (requestId !== latestDashboardRequestId) return;
+      if (!shouldPublishDashboardResponse(requestId, latestDashboardRequestId)) return;
       const message = e instanceof Error ? e.message : 'Failed to load dashboard';
       if (mode === 'initial') {
         error = message;
       } else {
         costWindowRefreshError = message;
+        if (mode === 'refresh') {
+          costWindowSelection = rejectDashboardCostWindowSelection(costWindowSelection);
+        }
       }
     } finally {
-      if (requestId !== latestDashboardRequestId) return;
+      if (mode === 'poll') {
+        backgroundRefreshLoading = false;
+      }
+      if (!shouldPublishDashboardResponse(requestId, latestDashboardRequestId)) return;
       if (mode === 'initial') {
         loading = false;
-      } else {
+      } else if (mode === 'refresh') {
         costWindowLoading = false;
       }
     }
   }
 
   function selectCostWindow(window: DashboardCostWindow): void {
-    if (window === selectedCostWindow || costWindowLoading) return;
-    selectedCostWindow = window;
+    if (window === costWindowSelection.committed || costWindowLoading) return;
+    costWindowSelection = beginDashboardCostWindowSelection(costWindowSelection, window);
     void loadDashboard(window, 'refresh');
   }
 
   onMount(() => {
-    void loadDashboard(selectedCostWindow, 'initial');
+    void loadDashboard(costWindowSelection.committed, 'initial');
+    const refreshTimer = window.setInterval(() => {
+      if (!loading && !costWindowLoading && !backgroundRefreshLoading) {
+        void loadDashboard(costWindowSelection.committed, 'poll');
+      }
+    }, DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(refreshTimer);
   });
 
   function formatTokens(n: number): string {
@@ -92,6 +115,12 @@
     return typeof ms === 'number' && Number.isFinite(ms)
       ? formatDuration(Math.round(ms))
       : '—';
+  }
+
+  function formatFreshnessTimestamp(timestampMs: number | null): string {
+    return typeof timestampMs === 'number' && Number.isFinite(timestampMs)
+      ? new Date(timestampMs).toLocaleTimeString()
+      : 'never';
   }
 
   function toolStatusColor(status: string): string {
@@ -138,17 +167,23 @@
       {/each}
     </div>
   {:else if error}
-    <div class="card-garden p-6 border-wilt-400">
+    <div class="card-garden p-6 border-wilt-400" role="alert">
       <p class="text-wilt-600 font-medium">Failed to load dashboard</p>
       <p class="text-shadow-600 text-sm mt-1">{error}</p>
     </div>
   {:else if data}
     {@const stats = data.stats}
-    {@const selectedCostWindowUsage = resolveSelectedDashboardCostWindowUsage(
-      stats.sessionUsage?.costWindows?.byWindow,
-      selectedCostWindow,
-    )}
-    {@const sessionContextPressure = resolveSessionContextPressureView(stats.sessionUsage?.activeSessionContextPressure)}
+    {@const committedCostWindow = costWindowSelection.committed}
+    {@const selectedCostWindowUsage = stats.modelUsage.usage}
+    {@const modelUsageFreshness = stats.modelUsage.freshness}
+    {@const transientSessionTelemetry = stats.transientSessionTelemetry}
+    {@const sessionContextPressure = resolveSessionContextPressureView(transientSessionTelemetry.activeSessionContextPressure)}
+    <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      Durable model usage is {modelUsageFreshness.state}.
+      {#if modelUsageFreshness.state !== 'fresh' && modelUsageFreshness.message}
+        {modelUsageFreshness.message}
+      {/if}
+    </p>
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
@@ -160,43 +195,61 @@
       <a href="/sessions" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Sessions</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.sessionCount}</p>
-        <p class="text-sm text-shadow-600 mt-1">{stats.sessionUsage.turns} turns total</p>
-      </a>
-
-      <a href="/charge-budget" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
-        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">(current session)</span></p>
-        <p class="text-2xl font-serif text-shadow-900 mt-1">
-          {formatTokens(stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens)}
-        </p>
         <p class="text-sm text-shadow-600 mt-1">
-          {formatTokens(stats.sessionUsage.inputTokens)} in / {formatTokens(stats.sessionUsage.outputTokens)} out
+          {transientSessionTelemetry.turnsSinceOperatorStart} live turn events since operator start
         </p>
       </a>
 
-      <div class="card-garden p-5">
-        <div class="flex items-start justify-between gap-2">
-          <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
-            Estimated Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(selectedCostWindow)})</span>
+      <a href={buildDashboardAccountingPath(committedCostWindow)} class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block" aria-busy={costWindowLoading || backgroundRefreshLoading}>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span></p>
+        {#if selectedCostWindowUsage}
+          <p class="text-2xl font-serif text-shadow-900 mt-1">
+            {formatTokens(selectedCostWindowUsage.totalTokens)}
           </p>
-          <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Budget</a>
-        </div>
-        <p class="text-2xl font-serif text-shadow-900 mt-1">
-          {formatCost(selectedCostWindowUsage.estimatedCostUsd)}
-        </p>
-        {#if selectedCostWindowUsage.turns > 0}
           <p class="text-sm text-shadow-600 mt-1">
-            {selectedCostWindowUsage.llmCalls} LLM calls, {selectedCostWindowUsage.toolCalls} tool calls over {selectedCostWindowUsage.turns} turns
+            {formatTokens(selectedCostWindowUsage.inputTokens)} in / {formatTokens(selectedCostWindowUsage.outputTokens)} out
           </p>
         {:else}
-          <p class="text-sm text-shadow-600 mt-1">No telemetry in this window yet.</p>
+          <p class="text-2xl font-serif text-wilt-600 mt-1">Unavailable</p>
+          <p class="text-sm text-wilt-600 mt-1">Durable usage storage could not be read.</p>
+        {/if}
+      </a>
+
+      <div class="card-garden p-5" aria-busy={costWindowLoading || backgroundRefreshLoading}>
+        <div class="flex items-start justify-between gap-2">
+          <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
+            Model Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(committedCostWindow)})</span>
+          </p>
+          <a href={buildDashboardAccountingPath(committedCostWindow)} class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Analyze</a>
+        </div>
+        {#if selectedCostWindowUsage}
+          <p class="text-2xl font-serif text-shadow-900 mt-1">
+            {formatCost(selectedCostWindowUsage.effectiveCostUsd)}
+          </p>
+        {:else}
+          <p class="text-2xl font-serif text-wilt-600 mt-1">Unavailable</p>
+        {/if}
+        {#if selectedCostWindowUsage && selectedCostWindowUsage.calls > 0}
+          <p class="text-sm text-shadow-600 mt-1">
+            {selectedCostWindowUsage.calls} model calls · provider {formatCost(selectedCostWindowUsage.providerCostUsd)} · estimated {formatCost(selectedCostWindowUsage.estimatedCostUsd)}
+          </p>
+        {:else if selectedCostWindowUsage}
+          <p class="text-sm text-shadow-600 mt-1">No durable model usage in this window yet.</p>
+        {/if}
+        <p aria-hidden="true" class="text-xs mt-2 {modelUsageFreshness.state === 'fresh' ? 'text-shadow-600' : 'text-wilt-600'}">
+          {modelUsageFreshness.state === 'fresh' ? 'Durable canonical usage' : modelUsageFreshness.state}
+          · refreshed {formatFreshnessTimestamp(modelUsageFreshness.refreshedAtMs)}
+        </p>
+        {#if modelUsageFreshness.message}
+          <p aria-hidden="true" class="text-xs text-wilt-600 mt-1">{modelUsageFreshness.message}</p>
         {/if}
         <div class="mt-3">
           <div class="inline-flex rounded-lg border border-bark-300 bg-bark-100 p-1 gap-1">
             {#each DASHBOARD_COST_WINDOW_OPTIONS as option (option.value)}
               <button
                 type="button"
-                class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed {option.value === selectedCostWindow ? 'bg-gold-300 text-shadow-900' : 'text-shadow-700 hover:bg-bark-200'}"
-                aria-pressed={option.value === selectedCostWindow}
+                class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed {option.value === committedCostWindow ? 'bg-gold-300 text-shadow-900' : 'text-shadow-700 hover:bg-bark-200'}"
+                aria-pressed={option.value === committedCostWindow}
                 disabled={costWindowLoading}
                 onclick={() => selectCostWindow(option.value)}
               >
@@ -205,7 +258,7 @@
             {/each}
           </div>
           {#if costWindowRefreshError}
-            <p class="text-xs text-wilt-600 mt-2">{costWindowRefreshError}</p>
+            <p class="text-xs text-wilt-600 mt-2" role="alert">{costWindowRefreshError}</p>
           {/if}
         </div>
       </div>
@@ -260,50 +313,58 @@
         </div>
       </div>
 
-      <!-- Token usage breakdown (current session) -->
-      <div class="card-garden p-5">
+      <!-- Durable token usage breakdown -->
+      <div class="card-garden p-5" aria-busy={costWindowLoading || backgroundRefreshLoading}>
         <div class="flex items-center justify-between gap-3 mb-3">
           <h2 class="font-serif text-lg text-shadow-900">Token Usage</h2>
           <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Charge / Budget</a>
         </div>
-        {#if stats.sessionUsage.turns > 0}
+        {#if selectedCostWindowUsage && selectedCostWindowUsage.calls > 0}
           <div class="space-y-4">
             <div class="grid grid-cols-2 gap-3">
               <div class="bg-bark-100 rounded-lg p-3">
                 <span class="text-sm text-shadow-600 block">Input Tokens</span>
-                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.inputTokens)}</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(selectedCostWindowUsage.inputTokens)}</span>
               </div>
               <div class="bg-bark-100 rounded-lg p-3">
                 <span class="text-sm text-shadow-600 block">Output Tokens</span>
-                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.outputTokens)}</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(selectedCostWindowUsage.outputTokens)}</span>
               </div>
               <div class="bg-bark-100 rounded-lg p-3">
                 <span class="text-sm text-shadow-600 block">Cache Read Tokens</span>
-                <span class="text-lg font-serif text-shadow-900">{formatTokens(stats.sessionUsage.cacheReadTokens)}</span>
+                <span class="text-lg font-serif text-shadow-900">{formatTokens(selectedCostWindowUsage.cacheReadTokens)}</span>
               </div>
               <div class="bg-bark-100 rounded-lg p-3">
-                <span class="text-sm text-shadow-600 block">Avg per Turn</span>
+                <span class="text-sm text-shadow-600 block">Cache Write Tokens</span>
                 <span class="text-lg font-serif text-shadow-900">
-                  {formatTokens(Math.round((stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens) / stats.sessionUsage.turns))}
+                  {formatTokens(selectedCostWindowUsage.cacheWriteTokens)}
                 </span>
               </div>
               <div class="bg-bark-100 rounded-lg p-3">
-                <span class="text-sm text-shadow-600 block">Last TTFT</span>
-                <span class="text-lg font-serif text-shadow-900">{formatOptionalDuration(stats.sessionUsage.lastTtftMs)}</span>
+                <span class="text-sm text-shadow-600 block">Avg per Model Call</span>
+                <span class="text-lg font-serif text-shadow-900">
+                  {formatTokens(Math.round(selectedCostWindowUsage.totalTokens / selectedCostWindowUsage.calls))}
+                </span>
               </div>
               <div class="bg-bark-100 rounded-lg p-3">
-                <span class="text-sm text-shadow-600 block">Avg TTFT</span>
-                <span class="text-lg font-serif text-shadow-900">{formatOptionalDuration(stats.sessionUsage.averageTtftMs)}</span>
+                <span class="text-sm text-shadow-600 block">Failed Calls</span>
+                <span class="text-lg font-serif text-shadow-900">{selectedCostWindowUsage.failedCalls}</span>
               </div>
             </div>
             <p class="text-sm text-shadow-600">
-              Current-session telemetry is shown here. Persisted per-model usage is available on
+              Canonical PostgreSQL usage for {costWindowHint(committedCostWindow)}. Live-only latency is separate:
+              last TTFT {formatOptionalDuration(transientSessionTelemetry.lastTtftMs)},
+              average TTFT {formatOptionalDuration(transientSessionTelemetry.averageTtftMs)}.
               <a href="/charge-budget" class="font-medium text-gold-700 hover:text-gold-800">Charge / Budget</a>.
             </p>
           </div>
+        {:else if selectedCostWindowUsage}
+          <div class="text-center py-6">
+            <p class="text-sm text-shadow-600">No durable model usage is recorded in this window.</p>
+          </div>
         {:else}
           <div class="text-center py-6">
-            <p class="text-sm text-shadow-600">No turns recorded yet. Token usage will appear here after the first conversation turn.</p>
+            <p class="text-sm text-wilt-600">Token accounting is unavailable because durable model-usage storage could not be read.</p>
           </div>
         {/if}
       </div>

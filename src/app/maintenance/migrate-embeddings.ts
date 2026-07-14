@@ -6,13 +6,13 @@
 // Usage: npm run migrate:embeddings [-- --batch-size 64 --parallelism 4]
 
 import '../../shared/utils/load-dotenv.js';
-import { createEmbeddingProviderFromConfig } from '../../faculties/memory/embedding.js';
 import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 
 interface CliOptions {
   batchSize?: number;
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
 
   console.log(`Persistence backend: ${config.persistenceBackend}`);
 
-  const embeddingProvider = createEmbeddingProviderFromConfig(config);
+  const { embeddingProvider } = createProviderRuntimeServices({ config });
   console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
   console.log('');
 

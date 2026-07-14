@@ -40,6 +40,18 @@ export function normalizeUsageCountFromRecord(record: Record<string, unknown>, .
   return 0;
 }
 
+function optionalUsageCountFromRecord(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    if (Object.hasOwn(record, key)) {
+      return normalizeUsageCount(record[key]);
+    }
+  }
+  return undefined;
+}
+
 export function optionalRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
@@ -79,37 +91,160 @@ export function normalizeLLMUsageCostDetails(value: unknown): LLMUsageCostDetail
   };
 }
 
+function findMalformedUsageCostFields(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (typeof value === 'number') {
+    return normalizeUsageCost(value) === undefined ? ['responseUsage.cost'] : [];
+  }
+  if (!isRecord(value)) return ['responseUsage.cost'];
+
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
+  const malformed: string[] = [];
+  let validMoneyFields = 0;
+  for (const field of fields) {
+    if (!Object.hasOwn(value, field)) continue;
+    if (normalizeUsageCost(value[field]) === undefined) {
+      malformed.push(`responseUsage.cost.${field}`);
+    } else {
+      validMoneyFields += 1;
+    }
+  }
+  if (Object.hasOwn(value, 'currency')) {
+    if (typeof value.currency !== 'string' || value.currency.trim().length === 0) {
+      malformed.push('responseUsage.cost.currency');
+    }
+  }
+  if (validMoneyFields === 0 && malformed.length === 0) {
+    malformed.push('responseUsage.cost');
+  }
+  return malformed;
+}
+
 export function normalizeLLMUsageDetails(
   value: unknown,
   fallbackInputTokens: number,
   fallbackOutputTokens: number,
 ): LLMUsageDetails {
+  if (value !== undefined && !isRecord(value)) {
+    throw new Error('Provider usage must be an object when present');
+  }
   const record = isRecord(value) ? value : {};
+  const recognizedKeys = [
+    'input',
+    'output',
+    'cacheRead',
+    'cacheWrite',
+    'totalTokens',
+    'prompt_tokens',
+    'completion_tokens',
+    'total_tokens',
+    'input_tokens',
+    'output_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+    'prompt_cache_hit_tokens',
+    'promptTokenCount',
+    'candidatesTokenCount',
+    'cachedContentTokenCount',
+    'totalTokenCount',
+    'prompt_tokens_details',
+    'input_tokens_details',
+    'cost',
+  ] as const;
+  if (value !== undefined && !recognizedKeys.some(key => Object.hasOwn(record, key))) {
+    throw new Error('Unsupported provider usage shape');
+  }
+  const countKeys = recognizedKeys.filter(key => ![
+    'prompt_tokens_details',
+    'input_tokens_details',
+    'cost',
+  ].includes(key));
+  for (const key of countKeys) {
+    if (!Object.hasOwn(record, key)) continue;
+    const count = record[key];
+    if (typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+      throw new Error(`usage.${key} must be a non-negative integer`);
+    }
+  }
   const promptTokenDetails = optionalRecord(record.prompt_tokens_details);
-  const promptTokens = normalizeUsageCount(record.prompt_tokens);
-  const cacheWriteFromRaw = normalizeUsageCount(promptTokenDetails.cache_write_tokens);
-  const reportedCachedTokens = normalizeUsageCount(promptTokenDetails.cached_tokens)
-    || normalizeUsageCount(record.prompt_cache_hit_tokens);
-  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
-    || cacheWriteFromRaw;
+  const inputTokenDetails = optionalRecord(record.input_tokens_details);
+  for (const [detailsName, details] of [
+    ['prompt_tokens_details', promptTokenDetails],
+    ['input_tokens_details', inputTokenDetails],
+  ] as const) {
+    for (const key of ['cached_tokens', 'cache_write_tokens'] as const) {
+      if (!Object.hasOwn(details, key)) continue;
+      const count = details[key];
+      if (typeof count !== 'number' || !Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+        throw new Error(`usage.${detailsName}.${key} must be a non-negative integer`);
+      }
+    }
+  }
+  const reportedPromptTokens = optionalUsageCountFromRecord(record, 'prompt_tokens', 'promptTokenCount');
+  const responseInputTokens = optionalUsageCountFromRecord(record, 'input_tokens');
+  const cacheWriteFromRaw = optionalUsageCountFromRecord(
+    promptTokenDetails,
+    'cache_write_tokens',
+  ) ?? optionalUsageCountFromRecord(record, 'cache_creation_input_tokens') ?? 0;
+  const reportedCachedTokens = optionalUsageCountFromRecord(
+    promptTokenDetails,
+    'cached_tokens',
+  ) ?? optionalUsageCountFromRecord(
+    inputTokenDetails,
+    'cached_tokens',
+  ) ?? optionalUsageCountFromRecord(
+    record,
+    'prompt_cache_hit_tokens',
+    'cachedContentTokenCount',
+    'cache_read_input_tokens',
+  ) ?? 0;
+  const cacheWrite = optionalUsageCountFromRecord(record, 'cacheWrite') ?? cacheWriteFromRaw;
   const cacheReadFromRaw = cacheWriteFromRaw > 0
     ? Math.max(0, reportedCachedTokens - cacheWriteFromRaw)
     : reportedCachedTokens;
-  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
-    || cacheReadFromRaw;
-  const inputFromRaw = promptTokens > 0
-    ? Math.max(0, promptTokens - cacheReadFromRaw - cacheWriteFromRaw)
-    : 0;
-  const input = normalizeUsageCountFromRecord(record, 'input')
-    || inputFromRaw
-    || normalizeUsageCount(fallbackInputTokens);
+  const cacheRead = optionalUsageCountFromRecord(record, 'cacheRead') ?? cacheReadFromRaw;
+  const inputFromRaw = reportedPromptTokens !== undefined
+    ? Math.max(0, reportedPromptTokens - cacheReadFromRaw - cacheWriteFromRaw)
+    : responseInputTokens !== undefined
+      ? (Object.hasOwn(record, 'cache_read_input_tokens') || Object.hasOwn(record, 'cache_creation_input_tokens')
+          ? responseInputTokens
+          : Math.max(0, responseInputTokens - cacheReadFromRaw - cacheWriteFromRaw))
+      : undefined;
+  const input = optionalUsageCountFromRecord(record, 'input')
+    ?? inputFromRaw
+    ?? normalizeUsageCount(fallbackInputTokens);
   // pi-ai 0.73.1 follows OpenAI semantics: completion_tokens already includes
   // completion_tokens_details.reasoning_tokens, so do not add reasoning again.
-  const output = normalizeUsageCountFromRecord(record, 'output', 'completion_tokens')
-    || normalizeUsageCount(fallbackOutputTokens);
-  const totalTokens = normalizeUsageCountFromRecord(record, 'totalTokens', 'total_tokens')
-    || input + output + cacheRead + cacheWrite;
+  const output = optionalUsageCountFromRecord(
+    record,
+    'output',
+    'completion_tokens',
+    'output_tokens',
+    'candidatesTokenCount',
+  )
+    ?? normalizeUsageCount(fallbackOutputTokens);
+  const reconciledTotalTokens = input + output + cacheRead + cacheWrite;
+  const reportedTotalTokens = optionalUsageCountFromRecord(
+    record,
+    'totalTokens',
+    'total_tokens',
+    'totalTokenCount',
+  );
+  if (reportedTotalTokens !== undefined && reportedTotalTokens !== reconciledTotalTokens) {
+    const totalKey = Object.hasOwn(record, 'totalTokens')
+      ? 'totalTokens'
+      : Object.hasOwn(record, 'total_tokens')
+        ? 'total_tokens'
+        : 'totalTokenCount';
+    throw new Error(
+      `usage.${totalKey} must equal input + output + cacheRead + cacheWrite (${reconciledTotalTokens})`,
+    );
+  }
+  const totalTokens = reportedTotalTokens ?? reconciledTotalTokens;
   const cost = normalizeLLMUsageCostDetails(record.cost);
+  const malformedCostFields = Object.hasOwn(record, 'cost')
+    ? findMalformedUsageCostFields(record.cost)
+    : [];
   return {
     input,
     output,
@@ -117,6 +252,9 @@ export function normalizeLLMUsageDetails(
     cacheWrite,
     totalTokens,
     ...(cost ? { cost } : {}),
+    ...(malformedCostFields.length > 0
+      ? { costEvidenceConflict: { fields: malformedCostFields } }
+      : {}),
     ...(isRecord(value) ? { raw: { ...value } } : {}),
   };
 }

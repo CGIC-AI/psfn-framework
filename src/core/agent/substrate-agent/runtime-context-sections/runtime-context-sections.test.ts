@@ -525,6 +525,21 @@ describe('charge producer', () => {
 
     expect(variables.runtime_charge_remaining).toBe('1');
   });
+
+  it('keeps the companion charge-budget projection monetary-free', () => {
+    const variables = buildChargePromptVariables({
+      chargePolicy: TEST_CHARGE_POLICY,
+      chargeSnapshot: {
+        lane: 'interactive',
+        chargeEventId: 'charge-event-operator-only',
+        quotaSpentByLane: { interactive: 5 },
+      } as RunChargeSnapshot,
+      analysisWorkbenchAvailable: true,
+    });
+    const companionProjection = Object.values(variables).join('\n');
+    expect(companionProjection).not.toMatch(/(?:\busd\b|\bdollars?\b|\$)/iu);
+    expect(companionProjection).not.toContain('charge-event-operator-only');
+  });
 });
 
 describe('continuity-gap producer', () => {

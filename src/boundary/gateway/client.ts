@@ -5,7 +5,7 @@
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import {
   createSocketClient,
@@ -144,6 +144,7 @@ import type {
   IcpPermitRevokeParams,
   IcpPermitRevokeResult,
   IcpPermitInvalidateSelfParams,
+  GatewayCorrelationParams,
 } from './protocol.js';
 import type {
   IcpInitiationGateDecision,
@@ -165,6 +166,9 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -189,6 +193,72 @@ export interface GatewayClientOptions {
   companionAuthToken?: string;
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
   sessionIntegrityAuthToken?: string;
+  onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+}
+
+function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEvent | undefined {
+  if (!(error instanceof JSONRPCErrorException) || error.code !== GatewayErrors.MODEL_BUDGET_BLOCKED) {
+    return undefined;
+  }
+  try {
+    return parseModelBudgetBlockedEvent(error.data);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildOutboundUsageCorrelation(
+  companionId: string | undefined,
+  correlation: Partial<CorrelationMetadata> | undefined,
+): GatewayCorrelationParams {
+  const declaredCompanionId = correlation?.companionId?.trim();
+  if (companionId && declaredCompanionId && declaredCompanionId !== companionId) {
+    throw new Error(
+      `Gateway usage correlation companionId ${JSON.stringify(declaredCompanionId)} does not match `
+      + `the authenticated client companion ${JSON.stringify(companionId)}`,
+    );
+  }
+  const charge = getRunChargeSnapshot();
+  return {
+    ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
+    ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
+    ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+    ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+    ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
+    ...(correlation?.callType ? { callType: correlation.callType } : {}),
+    ...(correlation?.originType ? { originType: correlation.originType } : {}),
+    ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+    ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+    ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+    ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
+    ...(correlation?.service ? { service: correlation.service } : {}),
+    ...(correlation?.process ? { process: correlation.process } : {}),
+    ...(charge?.lane ? { chargeLane: charge.lane } : (correlation?.chargeLane
+      ? { chargeLane: correlation.chargeLane }
+      : {})),
+    ...(charge?.surface
+      ? { chargeSurface: charge.surface }
+      : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),
+    ...(charge?.chargeEventId
+      ? { chargeEventId: charge.chargeEventId }
+      : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
+    ...(charge?.lineage.runId
+      ? { chargeRunId: charge.lineage.runId }
+      : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
+    ...(charge?.lineage.rootRunId
+      ? { chargeRootRunId: charge.lineage.rootRunId }
+      : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
+    ...(charge?.lineage.parentRunId
+      ? { chargeParentRunId: charge.lineage.parentRunId }
+      : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
+    ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
+    ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
+    ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
+    ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
+    ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
+    ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+  };
 }
 
 interface VoiceStreamState {
@@ -240,6 +310,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly companionId?: string;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
+  private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -273,6 +344,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         : null);
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
+    this.onModelBudgetBlocked = options.onModelBudgetBlocked;
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -376,6 +448,12 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const purpose = context.correlation?.purpose
       ?? context.correlation?.originStage
       ?? 'chat';
+    const usageCorrelation = buildOutboundUsageCorrelation(this.companionId, {
+      ...(context.correlation ?? {}),
+      requestId,
+      callType,
+      purpose,
+    });
     const modelHint = normalizeGatewayModelHint(context.modelHint);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
@@ -392,7 +470,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       const result = await this.rpcInstance.request('llm.chat', {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
-        ...(this.companionId ? { companionId: this.companionId } : {}),
+        ...usageCorrelation,
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
@@ -407,16 +485,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
-        requestId,
-        ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
-        ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
-        ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
-        ...(context.correlation?.toolCallId ? { toolCallId: context.correlation.toolCallId } : {}),
-        callType,
-        ...(context.correlation?.originType ? { originType: context.correlation.originType } : {}),
-        ...(context.correlation?.originStage ? { originStage: context.correlation.originStage } : {}),
-        purpose,
         ...(context.tools?.length ? { tools: context.tools } : {}),
+        ...(context.accounting ? { accounting: context.accounting } : {}),
       }) as LLMChatResult;
 
       const response: LLMResponse = {
@@ -434,6 +504,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const budgetBlock = modelBudgetBlockedEventFromError(error);
+      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       const err = error instanceof Error ? error : new Error(String(error));
       callbacks?.onError?.(err);
       throw err;
@@ -455,6 +527,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(context.correlation ?? {}),
       ...(options.correlation ?? {}),
     };
+    const usageCorrelation = buildOutboundUsageCorrelation(this.companionId, correlation);
     const modelHint = mergeGatewayModelHints(context.modelHint, options.modelHint);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
@@ -462,12 +535,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
-    const result = await this.requestWithAbortSignal<LLMCompleteResult>(
-      'llm.complete',
-      {
+    let result: LLMCompleteResult;
+    try {
+      result = await this.requestWithAbortSignal<LLMCompleteResult>(
+        'llm.complete',
+        {
         model,
         provider,
-        ...(this.companionId ? { companionId: this.companionId } : {}),
+        ...usageCorrelation,
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
@@ -482,17 +557,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
-        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
-        ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
-        ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
-        ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
-        ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
-        ...(correlation.callType ? { callType: correlation.callType } : {}),
-        ...(correlation.originType ? { originType: correlation.originType } : {}),
-        ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
       },
-      options.signal,
-    );
+        options.signal,
+      );
+    } catch (error) {
+      const budgetBlock = modelBudgetBlockedEventFromError(error);
+      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
+      throw error;
+    }
 
     return {
       content: result.content,
@@ -526,6 +598,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       'llm.embed',
       {
         texts,
+        ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
       },
       options.signal,
     );
@@ -999,11 +1072,17 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   }
 
   async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {
-    return await this.rpcInstance.request('image.create', params) as ImageGenerationRpcResult;
+    return await this.rpcInstance.request('image.create', {
+      ...params,
+      ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
+    }) as ImageGenerationRpcResult;
   }
 
   async imageEdit(params: ImageEditParams): Promise<ImageGenerationRpcResult> {
-    return await this.rpcInstance.request('image.edit', params) as ImageGenerationRpcResult;
+    return await this.rpcInstance.request('image.edit', {
+      ...params,
+      ...buildOutboundUsageCorrelation(this.companionId, getRequestContext()),
+    }) as ImageGenerationRpcResult;
   }
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {

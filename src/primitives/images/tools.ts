@@ -13,6 +13,7 @@ import { textResultWithError } from '../../core/tools/results.js';
 import {
   assertChargeSurfaceAvailable,
   chargeSurface,
+  runWithChargedSurface,
 } from '../../shared/telemetry/run-charge.js';
 import { notePendingPaidDeliverable } from '../../shared/paid-deliverable-tracking.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -347,18 +348,17 @@ async function reviewGeneratedImages(
   }
 
   try {
-    chargeVisionConsult('image_review', {
-      mode: input.mode,
-      imageCount: input.imageUrls.length,
-      ...(input.prompt ? { prompt: input.prompt } : {}),
-    });
     return {
-      visionReview: await reviewer.analyze({
-        imageUrls: input.imageUrls,
-        ...(input.imageLocalPaths ? { imageLocalPaths: input.imageLocalPaths } : {}),
-        prompt: input.prompt,
+      visionReview: await runVisionConsult('image_review', {
         mode: input.mode,
-      }),
+        imageCount: input.imageUrls.length,
+        ...(input.prompt ? { prompt: input.prompt } : {}),
+      }, async () => await reviewer.analyze({
+          imageUrls: input.imageUrls,
+          ...(input.imageLocalPaths ? { imageLocalPaths: input.imageLocalPaths } : {}),
+          prompt: input.prompt,
+          mode: input.mode,
+        })),
     };
   } catch (error) {
     return {
@@ -441,13 +441,17 @@ function chargePaidImageGeneration(
   });
 }
 
-function chargeVisionConsult(source: string, details: Record<string, unknown>): void {
-  chargeSurface('externalModelConsult', {
+function runVisionConsult<T>(
+  source: string,
+  details: Record<string, unknown>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return runWithChargedSurface('externalModelConsult', {
     details: {
       source,
       ...details,
     },
-  });
+  }, fn);
 }
 
 function normalizePrompt(prompt: string | undefined): string | null {
@@ -729,14 +733,13 @@ async function executeMediaAnalyze(
       };
     }
 
-    chargeVisionConsult('media_analyze', {
+    const visionReview = await runVisionConsult('media_analyze', {
       imageCount: inputUrls.length,
       ...(params.question ? { question: params.question } : {}),
-    });
-    const visionReview = await reviewer.analyze({
-      imageUrls: inputUrls,
-      question: params.question,
-    });
+    }, async () => await reviewer.analyze({
+        imageUrls: inputUrls,
+        question: params.question,
+      }));
     return {
       content: [{ type: 'text', text: formatVisionReview(visionReview) }] satisfies TextContent[],
       details: { visionReview },

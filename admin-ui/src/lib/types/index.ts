@@ -36,10 +36,13 @@ export type {
 } from '../../../../src/boundary/custody/credential-vault.js';
 export type {
   DashboardCostWindow,
-  DashboardCostWindowTotals,
   DashboardCostWindowUsage,
+  DashboardModelUsageFreshness,
+  DashboardModelUsageProjection,
+  DashboardModelUsageState,
   DashboardSessionContextPressure,
   DashboardStats,
+  DashboardTransientSessionTelemetry,
   AnalysisWorkbenchTraceStepView,
   AnalysisWorkbenchTraceView,
 } from '../../../../src/operator/garden/types.js';

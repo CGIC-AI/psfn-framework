@@ -41,12 +41,16 @@ import {
   type FleetRestoreFaultStage,
   type StagedRestoreTree,
 } from './fleet-restore-transaction.js';
-import { sanitizePostgresConnection } from './postgres-connection.js';
+import {
+  redactPostgresCredential,
+  sanitizePostgresConnection,
+} from './postgres-connection.js';
 import {
   commitFleetRestoreDatabaseMarker,
   inspectFleetRestoreDatabaseMarker,
   prepareFleetRestoreDatabaseMarker,
   removeFleetRestoreDatabaseMarker,
+  rollbackFleetRestoreDatabaseSchemas,
 } from './fleet-restore-database-marker.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
@@ -252,10 +256,11 @@ async function restorePostgresDump(
       connectionArg,
       dumpPath,
     ], {
-      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = redactPostgresCredential(rawMessage, password);
     throw new Error(`Fleet pg_restore failed for ${dumpPath}: ${message}`);
   }
 }
@@ -369,11 +374,12 @@ async function readTargetSchemaState(
       '--command',
       query,
     ], {
-      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
       maxBuffer: POSTGRES_COMMAND_MAX_BUFFER_BYTES,
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = redactPostgresCredential(rawMessage, password);
     throw new Error(`Fleet restore could not inspect target Postgres database: ${message}`);
   }
   return stdout.split(/\r?\n/u).filter(Boolean).map((line) => {
@@ -416,30 +422,6 @@ async function expectedSchemaPresence(
   if (count === 0) return 'none';
   if (count === expectedSchemas.length) return 'all';
   return 'partial';
-}
-
-async function dropRestoreSchemas(
-  expectedSchemas: readonly string[],
-  postgres: FleetRestorePostgresOptions,
-): Promise<void> {
-  const binary = postgres.psqlBinary?.trim() || 'psql';
-  const { connectionArg, password } = sanitizePostgresConnection(postgres.databaseUrl, 'Fleet restore');
-  const query = expectedSchemas
-    .map(schema => `DROP SCHEMA IF EXISTS "${assertValidPostgresSchemaName(schema)}" CASCADE`)
-    .join('; ');
-  try {
-    await execFileAsync(binary, [
-      '--no-password',
-      '--no-psqlrc',
-      '--dbname',
-      connectionArg,
-      '--command',
-      `${query};`,
-    ], { env: password ? { ...process.env, PGPASSWORD: password } : process.env });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Fleet restore could not roll back target Postgres schemas: ${message}`);
-  }
 }
 
 async function commitRestore(options: {
@@ -491,7 +473,11 @@ async function commitRestore(options: {
       operation,
     ),
     restoreDatabase: async () => await restorePostgresDump(options.dumpPath, options.postgres),
-    rollbackDatabase: async () => await dropRestoreSchemas(expectedSchemas, options.postgres),
+    rollbackDatabase: async operation => await rollbackFleetRestoreDatabaseSchemas(
+      options.postgres,
+      operation,
+      expectedSchemas,
+    ),
   });
   return {
     kind: options.kind,

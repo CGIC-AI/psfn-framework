@@ -1,6 +1,10 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { sanitizePostgresConnection } from './postgres-connection.js';
+import { assertValidPostgresSchemaName } from '../postgres.js';
+import {
+  redactPostgresCredential,
+  sanitizePostgresConnection,
+} from './postgres-connection.js';
 
 const execFileAsync = promisify(execFile);
 const RESTORE_CONTROL_SCHEMA = 'restore_control';
@@ -42,10 +46,11 @@ async function executeMarkerSql(
       connectionArg,
       '--command',
       sql,
-    ], { env: password ? { ...process.env, PGPASSWORD: password } : process.env });
+    ], { env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env });
     return stdout.trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = redactPostgresCredential(rawMessage, password);
     throw new Error(`Fleet restore database marker operation failed: ${message}`);
   }
 }
@@ -157,5 +162,40 @@ export async function removeFleetRestoreDatabaseMarker(
       EXECUTE 'DROP SCHEMA ${RESTORE_CONTROL_SCHEMA}';
     END
     $remove_marker$;
+  `);
+}
+
+/**
+ * Authenticates database ownership and drops only the restore's validated
+ * schemas in the same Postgres transaction, closing the inspect/mutate race.
+ * The durable marker remains until filesystem rollback also succeeds.
+ */
+export async function rollbackFleetRestoreDatabaseSchemas(
+  postgres: FleetRestoreMarkerPostgresOptions,
+  operation: FleetRestoreDatabaseOperation,
+  expectedSchemas: readonly string[],
+): Promise<void> {
+  validateOperation(operation);
+  const schemas = expectedSchemas.map(assertValidPostgresSchemaName);
+  const preparedMarker = `prepared:${operation.operationId}:${operation.operationIdentity}`;
+  const committedMarker = `committed:${operation.operationId}:${operation.operationIdentity}`;
+  const drops = schemas.map(schema => `DROP SCHEMA IF EXISTS "${schema}" CASCADE;`).join('\n');
+  await executeMarkerSql(postgres, `
+    /* restore_marker_rollback */
+    DO $rollback_marker$
+    DECLARE
+      existing_marker text;
+    BEGIN
+      existing_marker := obj_description(
+        to_regnamespace('${RESTORE_CONTROL_SCHEMA}'),
+        'pg_namespace'
+      );
+      IF existing_marker IS DISTINCT FROM '${preparedMarker}'
+        AND existing_marker IS DISTINCT FROM '${committedMarker}' THEN
+        RAISE EXCEPTION 'restore database marker is missing or foreign';
+      END IF;
+      ${drops}
+    END
+    $rollback_marker$;
   `);
 }

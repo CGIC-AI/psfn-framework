@@ -72,7 +72,7 @@ export interface FleetRestoreTransactionOptions extends FleetRestoreFaultInjecti
   commitDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
   removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
   restoreDatabase: () => Promise<void>;
-  rollbackDatabase: () => Promise<void>;
+  rollbackDatabase: (operation: FleetRestoreDatabaseOperation) => Promise<void>;
 }
 
 export interface FleetRestoreDatabaseOperation {
@@ -246,10 +246,10 @@ async function finishRestoreRollback(
   journalPath: string,
   journal: FleetRestoreJournal,
   operation: FleetRestoreDatabaseOperation,
-  rollbackDatabase: () => Promise<void>,
+  rollbackDatabase: (operation: FleetRestoreDatabaseOperation) => Promise<void>,
   removeDatabaseOperation: (operation: FleetRestoreDatabaseOperation) => Promise<void>,
 ): Promise<void> {
-  await rollbackDatabase();
+  await rollbackDatabase(operation);
   await removeDatabaseOperation(operation);
   cleanupPublishedTrees(journal.trees);
   cleanupStagedTrees(journal.trees);
@@ -283,13 +283,31 @@ export async function executeFleetRestoreTransaction(
   if (existsSync(journalPath)) {
     const interrupted = parseRestoreJournal(journalPath, expectedJournal);
     if (interrupted.phase === 'rolling_back') {
-      await finishRestoreRollback(
-        journalPath,
-        interrupted,
-        operation,
-        options.rollbackDatabase,
-        options.removeDatabaseOperation,
-      );
+      const markerState = await options.inspectDatabaseOperation(operation);
+      if (markerState === 'prepared' || markerState === 'committed') {
+        await finishRestoreRollback(
+          journalPath,
+          interrupted,
+          operation,
+          options.rollbackDatabase,
+          options.removeDatabaseOperation,
+        );
+        return await executeFleetRestoreTransaction(options);
+      }
+      if (markerState === 'foreign') {
+        throw new Error(
+          'Fleet restore journal and database operation marker are inconsistent; refusing destructive recovery',
+        );
+      }
+      const databaseState = await options.inspectDatabaseState();
+      if (databaseState !== 'none') {
+        throw new Error('Fleet restore database state has no matching durable operation marker');
+      }
+      // The schema rollback committed before marker cleanup (or the marker was
+      // already removed). Only filesystem/journal finalization remains.
+      cleanupPublishedTrees(interrupted.trees);
+      cleanupStagedTrees(interrupted.trees);
+      removeRestoreJournal(journalPath);
       return await executeFleetRestoreTransaction(options);
     }
   }

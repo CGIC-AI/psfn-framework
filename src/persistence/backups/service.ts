@@ -60,7 +60,10 @@ import type { BackupRuntimeConfig } from './config.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { sanitizePostgresConnection } from './postgres-connection.js';
+import {
+  redactPostgresCredential,
+  sanitizePostgresConnection,
+} from './postgres-connection.js';
 
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
@@ -331,10 +334,10 @@ async function dumpPostgresDatabase(
       `--file=${dumpPath}`,
       connectionArg,
     ], {
-      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
     });
   } catch (error) {
-    throw new Error(`pg_dump failed: ${describeExecError(error)}`);
+    throw new Error(`pg_dump failed: ${redactPostgresCredential(describeExecError(error), password)}`);
   }
   if (!existsSync(dumpPath) || statSync(dumpPath).size === 0) {
     throw new Error(`pg_dump produced no archive at ${dumpPath}`);

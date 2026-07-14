@@ -23,6 +23,12 @@ import {
   restoreFleetCompanionSlice,
   restoreFleetGroupArtifact,
 } from './fleet-restore.js';
+import {
+  inspectFleetRestoreDatabaseMarker,
+  prepareFleetRestoreDatabaseMarker,
+  removeFleetRestoreDatabaseMarker,
+  rollbackFleetRestoreDatabaseSchemas,
+} from './fleet-restore-database-marker.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
@@ -101,6 +107,78 @@ async function expectProbe(databaseUrl: string, schema: string, expected: string
 }
 
 describe('fleet restore against real Postgres', () => {
+  it('authenticates the exact durable marker inside schema rollback', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const pool = createPostgresPool(databaseUrl, { max: 1 });
+    const operation = {
+      operationId: '0123456789abcdef0123456789abcdef',
+      operationIdentity: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    };
+    const foreignOperation = {
+      operationId: 'abcdef0123456789abcdef0123456789',
+      operationIdentity: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+    };
+    try {
+      await prepareFleetRestoreDatabaseMarker({ databaseUrl }, operation);
+      await pool.query('CREATE SCHEMA companion_alpha');
+      await expect(rollbackFleetRestoreDatabaseSchemas(
+        { databaseUrl },
+        foreignOperation,
+        ['companion_alpha'],
+      )).rejects.toThrow(/marker is missing or foreign/);
+      expect(await pool.query<{ exists: boolean }>(
+        "SELECT to_regnamespace('companion_alpha') IS NOT NULL AS exists",
+      )).toMatchObject({ rows: [{ exists: true }] });
+
+      await rollbackFleetRestoreDatabaseSchemas({ databaseUrl }, operation, ['companion_alpha']);
+      expect(await pool.query<{ exists: boolean }>(
+        "SELECT to_regnamespace('companion_alpha') IS NOT NULL AS exists",
+      )).toMatchObject({ rows: [{ exists: false }] });
+      await expect(inspectFleetRestoreDatabaseMarker({ databaseUrl }, operation))
+        .resolves.toBe('prepared');
+      await removeFleetRestoreDatabaseMarker({ databaseUrl }, operation);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('authenticates query passwords with RFC3986 literal and percent decoding', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const adminPool = createPostgresPool(databaseUrl, { max: 1 });
+    const roles: string[] = [];
+    const cases = [
+      ['literal+plus', 'literal+plus'],
+      ['encoded+plus', 'encoded%2Bplus'],
+      ['encoded space', 'encoded%20space'],
+      ['encoded%percent', 'encoded%25percent'],
+      [":/?#[]@!$&'()*+,;=", encodeURIComponent(":/?#[]@!$&'()*+,;=")],
+    ] as const;
+    const operation = {
+      operationId: '0123456789abcdef0123456789abcdef',
+      operationIdentity: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    };
+    try {
+      for (const [index, [password, encodedPassword]] of cases.entries()) {
+        const role = `restore_uri_${Date.now()}_${index}`;
+        roles.push(role);
+        await adminPool.query(
+          `CREATE ROLE "${role}" LOGIN PASSWORD '${password.replaceAll("'", "''")}'`,
+        );
+        const target = new URL(databaseUrl);
+        target.username = role;
+        target.password = '';
+        target.search = `?password=${encodedPassword}`;
+        await expect(inspectFleetRestoreDatabaseMarker(
+          { databaseUrl: target.toString() },
+          operation,
+        )).resolves.toBe('absent');
+      }
+    } finally {
+      for (const role of roles) await adminPool.query(`DROP ROLE IF EXISTS "${role}"`);
+      await adminPool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('restores exact companion/shared/group scopes and rolls back collisions and partial failures', async () => {
     const root = join(tmpdir(), `psfn-fleet-restore-pg-${Date.now()}`);
     roots.push(root);

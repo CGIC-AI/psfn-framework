@@ -167,7 +167,7 @@ function writeControlledStubPgRestore(
   return { stubPath, logPath };
 }
 
-function writeCredentialRecordingStubPgRestore(root: string): {
+function writeCredentialRecordingStubPgRestore(root: string, restoreExitCode = 0): {
   stubPath: string;
   argvPath: string;
   passwordPath: string;
@@ -184,7 +184,8 @@ function writeCredentialRecordingStubPgRestore(root: string): {
     'fi',
     `printf '%s\\n' "$*" > '${argvPath}'`,
     `printf '%s' "\${PGPASSWORD:-}" > '${passwordPath}'`,
-    'exit 0',
+    ...(restoreExitCode === 0 ? [] : ['printf \'%s\' "${PGPASSWORD:-}" >&2']),
+    `exit ${restoreExitCode}`,
     '',
   ].join('\n'), { mode: 0o755 });
   return { stubPath, argvPath, passwordPath };
@@ -940,6 +941,58 @@ describe('runFleetBackupCycle', () => {
     expect(readFileSync(passwordPath, 'utf8')).toBe('query-secret');
     expect(journalSnapshot).not.toContain('query-secret');
     expect(journalSnapshot).not.toContain('password=');
+  });
+
+  it('keeps passwords out of failed child errors, journals, argv, and stable operation ids', async () => {
+    const root = join(tmpdir(), `psfn-fleet-restore-redacted-error-${Date.now()}`);
+    roots.push(root);
+    const result = await createPerCompanionTestBackup(root);
+    const { stubPath: pgRestoreBinary, argvPath, passwordPath } = writeCredentialRecordingStubPgRestore(root, 17);
+    const destinations = {
+      companionDataDir: join(root, 'restore', 'companion'),
+      personalWorkspacePath: join(root, 'restore', 'workspace'),
+    };
+    const operationJournalNames: string[] = [];
+
+    for (const secret of ['first+secret', 'second+secret']) {
+      let journalSnapshot = '';
+      let error: unknown;
+      try {
+        await restoreFleetCompanionSlice({
+          fleetManifestPath: result.fleetManifestPath,
+          companionId: COMPANION_A,
+          destinations,
+          postgres: {
+            databaseUrl: `postgresql://restore@127.0.0.1:5432/restore?password=${secret}`,
+            pgRestoreBinary,
+            psqlBinary: writeTargetStateStubPsql(root),
+          },
+          faultInjection: (stage) => {
+            if (stage !== 'after_journal') return;
+            const journalName = readdirSync(join(root, 'restore'))
+              .find(name => name.startsWith('.restore-operation-'));
+            if (!journalName) throw new Error('Expected restore journal at fault seam');
+            operationJournalNames.push(journalName);
+            journalSnapshot = readFileSync(join(root, 'restore', journalName), 'utf8');
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('[redacted]');
+      expect((error as Error).message).not.toContain(secret);
+      expect(readFileSync(argvPath, 'utf8')).not.toContain(secret);
+      expect(readFileSync(argvPath, 'utf8')).not.toContain('password=');
+      expect(readFileSync(passwordPath, 'utf8')).toBe(secret);
+      expect(journalSnapshot).not.toContain(secret);
+      expect(journalSnapshot).not.toContain('password=');
+      expect(operationJournalNames.at(-1)).not.toContain(secret);
+    }
+
+    expect(operationJournalNames).toHaveLength(2);
+    expect(operationJournalNames[0]).toBe(operationJournalNames[1]);
   });
 
   it.each([

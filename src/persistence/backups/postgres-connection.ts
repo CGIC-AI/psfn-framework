@@ -3,6 +3,36 @@ export interface SanitizedPostgresConnection {
   password?: string;
 }
 
+const UNSUPPORTED_CREDENTIAL_QUERY_PARAMETERS = new Set([
+  'oauth_client_secret',
+  'passfile',
+  'sslkey',
+  'sslpassword',
+]);
+
+function decodeUriComponent(value: string, context: string): string {
+  try {
+    // PostgreSQL connection URIs use RFC3986 query semantics. A literal plus
+    // is data, not the application/x-www-form-urlencoded spelling of a space.
+    return decodeURIComponent(value);
+  } catch {
+    throw new Error(`${context} database URL contains malformed percent encoding`);
+  }
+}
+
+export function redactPostgresCredential(message: string, password: string | undefined): string {
+  if (!password) return message;
+  const spellings = new Set([
+    password,
+    encodeURIComponent(password),
+  ]);
+  let redacted = message;
+  for (const spelling of [...spellings].sort((left, right) => right.length - left.length)) {
+    if (spelling) redacted = redacted.replaceAll(spelling, '[redacted]');
+  }
+  return redacted;
+}
+
 /**
  * Produces a credential-free Postgres URI for child argv and extracts the one
  * supported password source for PGPASSWORD. Ambiguous password sources fail
@@ -24,16 +54,34 @@ export function sanitizePostgresConnection(
     throw new Error(`${context} database URL must use postgres:// or postgresql://`);
   }
 
-  const userInfoPassword = url.password ? decodeURIComponent(url.password) : undefined;
-  const queryPasswords = url.searchParams.getAll('password');
+  const userInfoPassword = url.password
+    ? decodeUriComponent(url.password, context)
+    : undefined;
+  const rawQuery = url.search.startsWith('?') ? url.search.slice(1) : url.search;
+  const retainedQuerySegments: string[] = [];
+  const queryPasswords: string[] = [];
+  for (const segment of rawQuery ? rawQuery.split('&') : []) {
+    const equalsIndex = segment.indexOf('=');
+    const rawName = equalsIndex >= 0 ? segment.slice(0, equalsIndex) : segment;
+    const rawValue = equalsIndex >= 0 ? segment.slice(equalsIndex + 1) : '';
+    const name = decodeUriComponent(rawName, context);
+    if (UNSUPPORTED_CREDENTIAL_QUERY_PARAMETERS.has(name)) {
+      throw new Error(`${context} database URL has an unsupported credential-bearing parameter`);
+    }
+    if (name === 'password') {
+      queryPasswords.push(decodeUriComponent(rawValue, context));
+    } else {
+      retainedQuerySegments.push(segment);
+    }
+  }
   if (queryPasswords.length > 1 || (userInfoPassword !== undefined && queryPasswords.length > 0)) {
     throw new Error(`${context} database URL has conflicting password sources`);
   }
   const password = userInfoPassword ?? queryPasswords.at(0);
   url.password = '';
-  url.searchParams.delete('password');
+  url.search = retainedQuerySegments.length > 0 ? `?${retainedQuerySegments.join('&')}` : '';
   const connectionArg = url.toString();
-  if (url.password || url.searchParams.has('password')) {
+  if (url.password) {
     throw new Error(`${context} could not produce a credential-free database URL`);
   }
   return { connectionArg, ...(password !== undefined ? { password } : {}) };

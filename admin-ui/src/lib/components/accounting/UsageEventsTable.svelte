@@ -50,7 +50,7 @@
             <td class="px-3 py-3 text-right text-shadow-600">{formatInteger(event.cacheReadTokens)}</td>
             <td class="px-3 py-3 text-right text-shadow-600">{formatInteger(event.cacheWriteTokens)}</td>
             <td class="px-3 py-3 text-right text-shadow-600">{formatInteger(event.outputTokens)}</td>
-            <td class="px-5 py-3 text-right font-semibold text-shadow-900">{formatUsd(event.effectiveCost.total)}</td>
+            <td class="px-5 py-3 text-right font-semibold text-shadow-900">{event.effectiveCost.total === undefined ? 'Unknown' : formatUsd(event.effectiveCost.total)}</td>
           </tr>
         {:else}
           <tr><td colspan="7" class="px-5 py-8 text-center text-shadow-600">No call rows match this view.</td></tr>

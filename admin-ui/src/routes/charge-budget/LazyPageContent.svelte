@@ -368,19 +368,21 @@
       <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Runtime & Tools</p>
       <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Charge / Budget</h1>
       <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Canonical charge-policy controls, a merged run/event ledger, the rolling 24h lane quota, and one 30-day historical view.
+        Canonical charge-policy controls, a merged run/event ledger, rolling quotas, and persisted model-cost analysis.
       </p>
     </div>
-    <button
-      onclick={refreshData}
-      disabled={refreshing || saving}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
+    {#if activeTab === 'charges'}
+      <button
+        onclick={refreshData}
+        disabled={refreshing || saving}
+        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {refreshing ? 'Refreshing...' : 'Refresh'}
+      </button>
+    {/if}
   </div>
 
-  {#if errorMessage}
+  {#if errorMessage && activeTab === 'charges'}
     <div class="card-garden border-l-4 border-l-wilt-400 p-4">
       <p class="text-sm font-medium text-wilt-600">{errorMessage}</p>
     </div>

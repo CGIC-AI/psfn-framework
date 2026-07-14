@@ -15,6 +15,7 @@
   interface Props {
     queryState: AccountingQueryState;
     busy?: boolean;
+    hasChanges?: boolean;
     exporting?: boolean;
     onChange: (queryState: AccountingQueryState) => void;
     onApply: () => void;
@@ -25,6 +26,7 @@
   let {
     queryState,
     busy = false,
+    hasChanges = false,
     exporting = false,
     onChange,
     onApply,
@@ -253,7 +255,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3 border-t border-bark-200 pt-4">
       <div class="flex flex-wrap gap-2">
         <button type="submit" disabled={busy} class="rounded-lg bg-gold-600 px-4 py-2 text-sm font-semibold text-white hover:bg-gold-700 disabled:cursor-not-allowed disabled:opacity-50">
-          {busy ? 'Loading…' : 'Apply view'}
+          {busy ? 'Loading…' : hasChanges ? 'Apply view' : 'Refresh view'}
         </button>
         <button type="button" onclick={onReset} disabled={busy} class="rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50">Reset</button>
       </div>

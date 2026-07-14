@@ -62,6 +62,7 @@
 
   async function load(nextState: AccountingQueryState, mode: 'initial' | 'apply' | 'poll'): Promise<void> {
     const requestedState = cloneState(nextState);
+    const requestId = ++latestRequestId;
     let modelQuery;
     try {
       modelQuery = buildModelUsageQuery(requestedState);
@@ -72,7 +73,6 @@
       return;
     }
 
-    const requestId = ++latestRequestId;
     if (mode === 'initial') loading = true;
     else refreshing = true;
     if (mode !== 'poll') errorMessage = '';
@@ -191,6 +191,7 @@
   <AccountingControls
     queryState={draftState}
     busy={loading || refreshing}
+    hasChanges={dirty}
     {exporting}
     onChange={(next) => draftState = next}
     onApply={applyCurrent}
@@ -204,7 +205,7 @@
 
   {#if errorMessage}
     <div class="rounded-xl border border-wilt-300 bg-wilt-50 px-4 py-3" role="alert">
-      <p class="font-medium text-wilt-700">{stale ? 'Refresh failed; showing last successful data.' : 'Accounting data unavailable.'}</p>
+      <p class="font-medium text-wilt-700">{stale ? 'Refresh failed; showing last successful data.' : usage ? 'View could not be applied; showing the last applied data.' : 'Accounting data unavailable.'}</p>
       <p class="mt-1 text-sm text-wilt-600">{errorMessage}</p>
     </div>
   {/if}

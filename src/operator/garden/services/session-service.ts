@@ -5,6 +5,7 @@ import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
 import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import { mergeAuthenticatedJournalWithSessionTail } from '../../../core/session/manager/session-tail-read-store.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CompactionSummary } from '../../../core/session/types.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
@@ -707,9 +708,11 @@ export class AdminSessionDataService implements AdminSessionService {
   }
 
   /**
-   * Garden's newest-page read path. Prefer the shared bounded tail, guarded by
-   * the canonical latest-entry checkpoint so a pending local write-through is
-   * a cache miss rather than a stale response or a Redis-induced wait.
+   * Garden's newest-page read path. Authenticate the current bounded journal
+   * window first, then let the shared tail fill only ids newer than that
+   * window. The latest authenticated message id is also the cross-process
+   * freshness checkpoint: a behind tail is rejected and repopulated even when
+   * this SessionStore's process-local index predates another writer's append.
    * Redis-disabled/degraded/missing/behind tails return `null` from the store
    * and fall through to the canonical journal reader. Cursor pages stay
    * canonical because a bounded hot tail cannot prove it covers older ranges.
@@ -723,11 +726,16 @@ export class AdminSessionDataService implements AdminSessionService {
       return this.getSessionMessages(sessionId, options);
     }
 
-    const expectedMinEntryId = this.deps.sessionStore.getLatestJournalEntryId(sessionId);
+    const pageLimit = normalizePageLimit(options.limit);
+    const authenticatedJournalMessages = this.deps.sessionStore.getRecent(sessionId, pageLimit);
+    const expectedMinEntryId = authenticatedJournalMessages.at(-1)?.id ?? null;
     const tailMessages = await this.deps.sessionStore.fetchSessionTailWindow(sessionId, {
       ...(expectedMinEntryId !== null ? { expectedMinEntryId } : {}),
     });
-    return this.buildSessionMessages(sessionId, options, tailMessages ?? undefined);
+    const authenticatedMessages = tailMessages
+      ? mergeAuthenticatedJournalWithSessionTail(authenticatedJournalMessages, tailMessages).slice(-pageLimit)
+      : authenticatedJournalMessages;
+    return this.buildSessionMessages(sessionId, options, authenticatedMessages);
   }
 
   getSessionMessages(

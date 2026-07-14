@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { buildSessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
+import { createFilesystemSessionArchivePort } from '../../../persistence/journals/journal/port.js';
 import {
   sessionTailRowId,
   type SessionTailCachePort,
@@ -65,6 +67,28 @@ class FakeSessionTailCache implements SessionTailCachePort {
       this.blockedAppend = null;
       this.releaseBlockedAppend = null;
     };
+  }
+
+  corruptMessageRow(
+    channelKey: string,
+    id: number,
+    overrides: Partial<SessionEntry>,
+  ): void {
+    const rows = this.rows.get(channelKey) ?? [];
+    const target = rows.find(
+      (row): row is Extract<SessionTailRow, { kind: 'message' }> => (
+        row.kind === 'message' && row.entry.id === id
+      ),
+    );
+    if (!target) {
+      throw new Error(`Missing message row ${id} for ${channelKey}`);
+    }
+    const corrupted = rows.map((row): SessionTailRow => (
+      row === target
+        ? { kind: 'message', entry: { ...target.entry, ...overrides } }
+        : row
+    ));
+    this.rows.set(channelKey, corrupted);
   }
 
   async getTail(channelKey: string): Promise<SessionTailRow[]> {
@@ -139,21 +163,27 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('serves repeated unchanged first pages from the shared tail without a canonical recent-entry read', async () => {
+  it('authenticates repeated unchanged first pages without a second canonical journal scan', async () => {
     const channelId = 'api:hot-transcript';
-    appendMessage(store, channelId, 'first', 1_000);
-    appendMessage(store, channelId, 'second', 2_000);
+    for (let index = 1; index <= 101; index += 1) {
+      appendMessage(store, channelId, `message ${index}`, 1_000 + index);
+    }
     await store.flushSessionTailWrites();
-    const canonicalRead = vi.spyOn(store, 'getRecent');
-    const service = makeService(store, dir);
+    const archivePort = createFilesystemSessionArchivePort();
+    const canonicalTailScan = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const readerStore = new SessionStore(dir, { tailCache: tail, sessionArchivePort: archivePort });
+    canonicalTailScan.mockClear();
+    const service = makeService(readerStore, dir);
 
     const first = await service.getSessionMessagesForAdminRead(channelId, { messagesOnly: true });
     const second = await service.getSessionMessagesForAdminRead(channelId, { messagesOnly: true });
 
-    expect(first.messages.map(entry => entry.content)).toEqual(['first', 'second']);
+    expect(first.messages).toHaveLength(100);
+    expect(first.messages[0]?.content).toBe('message 2');
+    expect(first.messages.at(-1)?.content).toBe('message 101');
     expect(second).toEqual(first);
     expect(tail.calls.getTail).toBe(2);
-    expect(canonicalRead).not.toHaveBeenCalled();
+    expect(canonicalTailScan).toHaveBeenCalledOnce();
   });
 
   it('keeps Redis-disabled behavior on the canonical journal path', async () => {
@@ -172,6 +202,36 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
       await plainStore.flushSessionTailWrites();
       rmSync(plainDir, { recursive: true, force: true });
     }
+  });
+
+  it('returns authenticated journal truth when Redis corrupts an overlapping message row', async () => {
+    const channelId = 'api:authenticated-journal';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:garden-integrity-regression-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const writerStore = new SessionStore(dir, { tailCache: tail, integrityKeyring: keyring });
+    appendMessage(writerStore, channelId, 'authenticated partner transcript', 1_000);
+    await writerStore.flushSessionTailWrites();
+    tail.corruptMessageRow(channelId, 1, {
+      channelId: 'api:attacker-controlled-channel',
+      content: 'corrupted Redis transcript',
+    });
+    // Separate reader forces the canonical row through journal HMAC
+    // verification instead of relying on the writer's trusted in-memory row.
+    store = new SessionStore(dir, { tailCache: tail, integrityKeyring: keyring });
+
+    const result = await makeService(store, dir)
+      .getSessionMessagesForAdminRead(channelId, { messagesOnly: true });
+
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        id: 1,
+        channelId,
+        content: 'authenticated partner transcript',
+      }),
+    ]);
   });
 
   it('stays fresh without blocking on a pending cache write-through', async () => {
@@ -196,6 +256,38 @@ describe('AdminSessionDataService server-side hot transcript reads', () => {
     const fresh = await pendingRead;
     expect(settledBeforeCacheWrite).toBe(true);
     expect(fresh.messages.map(entry => entry.content)).toEqual(['before', 'after']);
+  });
+
+  it('rejects and repopulates a tail behind a durable append from another store', async () => {
+    const channelId = 'api:cross-process-freshness';
+    appendMessage(store, channelId, 'reader B prewarm', 1_000);
+    await store.flushSessionTailWrites();
+
+    const readerStore = new SessionStore(dir, { tailCache: tail });
+    const readerService = makeService(readerStore, dir);
+    expect((await readerService.getSessionMessagesForAdminRead(channelId, { messagesOnly: true })).messages)
+      .toEqual([expect.objectContaining({ id: 1, content: 'reader B prewarm' })]);
+
+    const releaseWriterAppend = tail.blockNextAppend();
+    try {
+      appendMessage(store, channelId, 'writer A durable append', 2_000);
+
+      const fresh = await readerService.getSessionMessagesForAdminRead(channelId, { messagesOnly: true });
+      await readerStore.flushSessionTailWrites();
+      const repopulatedRows = await tail.getTail(channelId);
+
+      expect(fresh.messages.map(entry => entry.content)).toEqual([
+        'reader B prewarm',
+        'writer A durable append',
+      ]);
+      expect(repopulatedRows).toContainEqual({
+        kind: 'message',
+        entry: expect.objectContaining({ id: 2, content: 'writer A durable append' }),
+      });
+    } finally {
+      releaseWriterAppend();
+      await store.flushSessionTailWrites();
+    }
   });
 
   it('falls back to the canonical journal when the runtime tail read fails', async () => {

@@ -155,10 +155,20 @@ observations under the corrected severity standard, with no follow-up beads:
 so a slow transition can shorten the effective cooldown; and expiry is not
 rechecked after slow deferred-to-pending or pending-to-permitted transitions.
 
-This is an implementation-wave checkpoint, not completion of the ICP epic or
-release validation. W7-W9 (`s10mc.6.7` through `.6.9`) remain open, the parent
-`s10mc.6` remains open, and the feature branch has not been
-merged into the release branch or exercised against live infrastructure.
+W7 conversation-scoped USD warning and runaway enforcement (`s10mc.6.7`) is
+complete at integrated head `8e219b7c`. The implementation fixed point
+`e65cec03` was independently reviewed; `3d05e68c` remediated descendant cost
+correlation and `8e219b7c` added conservative prompt-cache preflight. Final
+closeout passed 20 focused files / 466 tests, including 19 real-Postgres tests,
+plus settings-contract, lint, ESM+DTS build, and diff checks. Remaining review
+observations retain report-only disposition under the agreed severity standard;
+they did not affect acceptance and created no follow-up beads.
+
+This remains an implementation-wave checkpoint, not completion of the ICP epic
+or release validation. W8 (`s10mc.6.8`) is newly unblocked and ready; W9
+(`s10mc.6.9`) has cleared its W7 dependency but remains blocked on W8. The
+parent `s10mc.6` remains open, and the feature branch has not been merged into
+the release branch or exercised against live infrastructure.
 ### 0.5 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
 
 `psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,

@@ -77,17 +77,43 @@ function decodeUriComponent(value: string, context: string): string {
   }
 }
 
+function escapeRegExpCharacter(character: string): string {
+  return /[.*+?^${}()|[\]\\]/u.test(character) ? `\\${character}` : character;
+}
+
+function encodedCredentialPattern(encoded: string): RegExp {
+  let pattern = '';
+  for (let index = 0; index < encoded.length; index += 1) {
+    const character = encoded[index];
+    if (character === '%' && /^[0-9A-F]{2}$/u.test(encoded.slice(index + 1, index + 3))) {
+      const hex = encoded.slice(index + 1, index + 3);
+      pattern += `%${[...hex].map(digit => (
+        /[A-F]/u.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit
+      )).join('')}`;
+      index += 2;
+    } else {
+      pattern += escapeRegExpCharacter(character);
+    }
+  }
+  return new RegExp(pattern, 'gu');
+}
+
+function formEncodeCredential(password: string): string {
+  const prefix = 'password=';
+  return new URLSearchParams({ password }).toString().slice(prefix.length);
+}
+
 export function redactPostgresCredential(message: string, password: string | undefined): string {
   if (!password) return message;
-  const spellings = new Set([
-    password,
+  const encodedSpellings = new Set([
     encodeURIComponent(password),
-    encodeURIComponent(password).toLowerCase(),
-    new URLSearchParams({ password }).get('password') ?? '',
+    formEncodeCredential(password),
   ]);
-  let redacted = message;
-  for (const spelling of [...spellings].sort((left, right) => right.length - left.length)) {
-    if (spelling) redacted = redacted.replaceAll(spelling, '[redacted]');
+  let redacted = message.replaceAll(password, '[redacted]');
+  for (const spelling of [...encodedSpellings].sort((left, right) => right.length - left.length)) {
+    if (spelling !== password) {
+      redacted = redacted.replace(encodedCredentialPattern(spelling), '[redacted]');
+    }
   }
   return redacted;
 }

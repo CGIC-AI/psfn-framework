@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSanitizedPostgresChildEnv,
+  redactPostgresCredential,
   sanitizePostgresConnection,
 } from './postgres-connection.js';
 
@@ -60,6 +61,19 @@ const UNSUPPORTED_LIBPQ_CREDENTIAL_PARAMETERS = [
   'sslkeylogfile',
   'sslpassword',
 ] as const;
+
+describe('redactPostgresCredential', () => {
+  it('redacts percent-escape case variants without changing literal password case', () => {
+    const redacted = redactPostgresCredential(
+      'raw=Ab/Cd upper=Ab%2FCd lower=Ab%2fCd form=Ab%2fCd decoy=ab%2fcd',
+      'Ab/Cd',
+    );
+
+    expect(redacted).toBe(
+      'raw=[redacted] upper=[redacted] lower=[redacted] form=[redacted] decoy=ab%2fcd',
+    );
+  });
+});
 
 describe('sanitizePostgresConnection', () => {
   it('extracts a query-string password and preserves non-secret connection parameters', () => {

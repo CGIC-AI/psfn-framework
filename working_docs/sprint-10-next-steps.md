@@ -33,10 +33,11 @@ was dependency-wired end to end, and the release path got tracker structure.
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
 - **Partially advanced**: `cam.1` accounting capture, `cam.2` typed
-  attribution, `cam.3` durable dashboard accounting, and `cam.4` canonical
-  analytics are code-complete and validated on the pushed `feat/cost-accounting`
-  branch; the parent `cam` epic and `cam.5`–`.6` remain open, and none of this
-  branch is on `main` yet. It still blocks ICP
+  attribution, `cam.3` durable dashboard accounting, `cam.4` canonical
+  analytics, and `cam.5` operator charge-to-cost reconciliation are
+  code-complete and validated on the pushed `feat/cost-accounting` branch at
+  integration head `38eb7933`; the parent `cam` epic and `cam.6` remain open,
+  and none of this branch is on `main` yet. It still blocks ICP
   `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -93,14 +94,15 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
-### 0.4 2026-07-14 accounting capture, attribution, dashboard, and analytics status
+### 0.4 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
 
 `psfn-framework-cam.1` is delivered on `feat/cost-accounting` at `56997ede`,
 and `psfn-framework-cam.2` is delivered through implementation head
 `9a3f57a1` (`61097e33..9a3f57a1`). `psfn-framework-cam.3` is delivered by
 `43c76a32` and `825eef8c`. `psfn-framework-cam.4` is integrated and pushed at
-`459e73dd` (`362b6c72..459e73dd`), making `459e73dd` the current implementation
-head.
+`459e73dd` (`362b6c72..459e73dd`). `psfn-framework-cam.5` is implemented by
+`8e12a69a`, `31c6594c`, and `073c21e7`, then integrated and pushed at
+`38eb7933`, making `38eb7933` the current implementation head.
 CAM.1 records immutable physical provider attempts with reconciled token and
 cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
 strict filters and groups, indexed Postgres persistence, and fail-closed Garden
@@ -116,6 +118,15 @@ stable sorting and cursor pagination, exact top-N plus Other, recent/expensive
 events, and content-free CSV/JSON exports from the same filtered raw ledger.
 Garden routes and the typed client are wired to that contract, and indexed raw
 queries meet the documented year-scale target without rollups.
+CAM.5 joins that immutable model-usage ledger to the original charge ledger
+through typed exact charge-event and lineage correlation. Its operator-only
+projection reports charge units alongside provider, estimated, and effective
+cost; deterministic allocation and confidence; token/call mix; coverage; and
+explicit attributable, charged-without-usage, usage-without-charge,
+ambiguous/many-to-many, and non-model buckets. Retry attempts and nested
+shard/subagent policy scopes conserve both source ledgers without double
+counting, while the companion-facing charge-budget projection remains unit-only
+and monetary-free.
 
 CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
 Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
@@ -153,14 +164,23 @@ display cursor/limit state while preserving the complete filtered ledger slice.
 None affects tenant isolation, immutable accounting data, the shipped query
 path, or mandatory lint/build gates.
 
+CAM.5 final integrated regression at pushed head `38eb7933`: focused CAM.4
+range/query/export plus CAM.5 reconciliation/API/operator coverage passed 13
+files / 134 tests; Docker-backed real local PostgreSQL model-usage integration
+passed 14/14, including restart durability, tenant isolation, analytics, charge
+reconciliation, and explicit unknown attribution fallback. `npm run lint`,
+`npm run build` (ESM+DTS), `npm run garden:build`, and `git diff --check` passed.
+The single independent review returned PASS with no IMPORTANT findings. CAM.5
+had no material report-only observations and intentionally created no follow-up
+beads.
+
 This is a feature-branch completion boundary, not a `main` or whole-accounting
 completion claim. The `psfn-framework-cam` parent remains open, with these
 children still pending:
 
 | Bead | Remaining scope | Status |
 |---|---|---|
-| `psfn-framework-cam.5` | Operator charge-unit to dollar reconciliation by lane, surface, and run | open |
-| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by CAM.5 and `574y` | blocked |
+| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification; blocked by `574y` | blocked |
 
 ## 1. Where things stand
 

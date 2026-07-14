@@ -77,6 +77,7 @@ export function resolveCorrelationMetadata(
   const process = normalizeCorrelationValue(merged.process);
   const chargeLane = normalizeCorrelationValue(merged.chargeLane) as typeof merged.chargeLane;
   const chargeSurface = normalizeCorrelationValue(merged.chargeSurface) as typeof merged.chargeSurface;
+  const chargeEventId = normalizeCorrelationValue(merged.chargeEventId);
   const chargeRunId = normalizeCorrelationValue(merged.chargeRunId);
   const chargeRootRunId = normalizeCorrelationValue(merged.chargeRootRunId);
   const chargeParentRunId = normalizeCorrelationValue(merged.chargeParentRunId);
@@ -117,6 +118,7 @@ export function resolveCorrelationMetadata(
     ...(process ? { process } : {}),
     ...(chargeLane ? { chargeLane } : {}),
     ...(chargeSurface ? { chargeSurface } : {}),
+    ...(chargeEventId ? { chargeEventId } : {}),
     ...(chargeRunId ? { chargeRunId } : {}),
     ...(chargeRootRunId ? { chargeRootRunId } : {}),
     ...(chargeParentRunId ? { chargeParentRunId } : {}),

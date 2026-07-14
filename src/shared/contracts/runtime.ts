@@ -210,6 +210,8 @@ export interface LLMRequestMetadata {
   process?: string;
   chargeLane?: ChargePolicyRuntimeLane;
   chargeSurface?: ChargePolicySurface;
+  /** Exact immutable charge event that bought this provider work, when one is active. */
+  chargeEventId?: string;
   chargeRunId?: string;
   chargeRootRunId?: string;
   chargeParentRunId?: string;

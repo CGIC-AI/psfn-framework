@@ -24,6 +24,8 @@ import type {
   ModelUsageEventInput,
   ModelUsageQuery,
   ModelUsageQueryPort,
+  ModelUsageReconciliationQuery,
+  ModelUsageReconciliationQueryPort,
   ModelUsageRecorder,
   ModelUsageStatus,
   ModelUsageSettlement,
@@ -87,6 +89,7 @@ interface ModelUsageEventRow {
   tool_call_id: string | null;
   charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
   charge_surface: ModelUsageEvent['attribution']['chargeSurface'] | null;
+  charge_event_id: string | null;
   charge_run_id: string | null;
   charge_root_run_id: string | null;
   charge_parent_run_id: string | null;
@@ -232,6 +235,7 @@ const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
   toolName: 'tool_name',
   chargeLane: 'charge_lane',
   chargeSurface: 'charge_surface',
+  chargeEventId: 'charge_event_id',
   chargeRunId: 'charge_run_id',
   chargeRootRunId: 'charge_root_run_id',
   chargeParentRunId: 'charge_parent_run_id',
@@ -500,6 +504,7 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
       chargeSurface: row.charge_surface === null || row.charge_surface === MODEL_USAGE_UNKNOWN_DIMENSION
         ? undefined
         : row.charge_surface,
+      chargeEventId: row.charge_event_id ?? undefined,
       chargeRunId: row.charge_run_id ?? undefined,
       chargeRootRunId: row.charge_root_run_id ?? undefined,
       chargeParentRunId: row.charge_parent_run_id ?? undefined,
@@ -626,7 +631,7 @@ function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort {
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, ModelUsageReconciliationQueryPort {
   private readonly ready: Promise<void>;
   private readonly companionId?: string;
 
@@ -659,7 +664,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         duration_ms, ttft_ms, day_key, month_key, status, settlement, call_kind, call_type,
         purpose, origin_type, origin_stage, service, process, companion_id, session_id,
         turn_id, request_id, channel_id, channel_type, tool_name, tool_call_id,
-        charge_lane, charge_surface, charge_run_id, charge_root_run_id, charge_parent_run_id,
+        charge_lane, charge_surface, charge_event_id, charge_run_id, charge_root_run_id, charge_parent_run_id,
         shard_id, subagent_id, conversation_id, root_initiation_id, workload_type, workload_id,
         provider, model,
         slot_key, requested_provider, requested_model, input_tokens, output_tokens,
@@ -678,16 +683,16 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         $7, $8, $9, $10, $11, $12, $13, $14,
         $15, $16, $17, $18, $19, $20, $21,
         $22, $23, $24, $25, $26, $27,
-        $28, $29, $30, $31, $32,
-        $33, $34, $35, $36, $37, $38,
-        $39, $40,
-        $41, $42, $43, $44, $45,
-        $46, $47, $48,
-        $49, $50, $51, $52, $53,
-        $54, $55, $56, $57, $58,
-        $59, $60, $61, $62, $63,
-        $64, $65, $66, $67, $68, $69::jsonb,
-        $70
+        $28, $29, $30, $31, $32, $33,
+        $34, $35, $36, $37, $38, $39,
+        $40, $41,
+        $42, $43, $44, $45, $46,
+        $47, $48, $49,
+        $50, $51, $52, $53, $54,
+        $55, $56, $57, $58, $59,
+        $60, $61, $62, $63, $64,
+        $65, $66, $67, $68, $69, $70::jsonb,
+        $71
       )
       ON CONFLICT (logical_call_id, attempt) DO UPDATE
         SET id = model_usage_events.id
@@ -723,6 +728,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.attribution.toolCallId,
       event.attribution.chargeLane,
       event.attribution.chargeSurface,
+      event.attribution.chargeEventId,
       event.attribution.chargeRunId,
       event.attribution.chargeRootRunId,
       event.attribution.chargeParentRunId,
@@ -813,6 +819,14 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       recentEvents,
       expensiveEvents,
     };
+  }
+
+  async getUsageEventsForReconciliation(
+    query: ModelUsageReconciliationQuery = {},
+  ): Promise<ModelUsageEvent[]> {
+    await this.ready;
+    const normalizedQuery = normalizeQuery(query, this.companionId);
+    return await this.queryAllEvents(buildWhere(normalizedQuery));
   }
 
   async getUsageCostHydrationData(
@@ -997,6 +1011,16 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     `, where.values);
     return rows.map(mapEventRow);
   }
+
+  private async queryAllEvents(where: SqlWhere): Promise<ModelUsageEvent[]> {
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${where.clause}
+      ORDER BY recorded_at_ms ASC, logical_call_id ASC, attempt ASC, id ASC
+    `, where.values);
+    return rows.map(mapEventRow);
+  }
 }
 
 const QUERY_TEXT_FIELDS = [
@@ -1013,6 +1037,7 @@ const QUERY_TEXT_FIELDS = [
   'turnId',
   'requestId',
   'toolCallId',
+  'chargeEventId',
   'chargeRunId',
   'chargeRootRunId',
   'chargeParentRunId',
@@ -1155,6 +1180,7 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
     ['toolName', query.toolName],
     ['chargeLane', query.chargeLane],
     ['chargeSurface', query.chargeSurface],
+    ['chargeEventId', query.chargeEventId],
     ['chargeRunId', query.chargeRunId],
     ['chargeRootRunId', query.chargeRootRunId],
     ['chargeParentRunId', query.chargeParentRunId],

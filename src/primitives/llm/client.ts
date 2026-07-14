@@ -802,6 +802,9 @@ export class LLMClient {
         ...(chargeSnapshot?.surface
           ? { chargeSurface: chargeSnapshot.surface }
           : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),
+        ...(chargeSnapshot?.chargeEventId
+          ? { chargeEventId: chargeSnapshot.chargeEventId }
+          : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
         ...(chargeSnapshot?.lineage.runId
           ? { chargeRunId: chargeSnapshot.lineage.runId }
           : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),

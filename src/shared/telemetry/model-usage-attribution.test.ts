@@ -23,6 +23,7 @@ describe('normalizeModelUsageAttribution', () => {
       toolCallId: 'tool-call-1',
       chargeLane: 'interactive',
       chargeSurface: 'externalModelConsult',
+      chargeEventId: 'charge-event-1',
       chargeRunId: 'run-1',
       chargeRootRunId: 'root-run-1',
       chargeParentRunId: 'parent-run-1',
@@ -51,6 +52,7 @@ describe('normalizeModelUsageAttribution', () => {
       toolCallId: 'tool-call-1',
       chargeLane: 'interactive',
       chargeSurface: 'externalModelConsult',
+      chargeEventId: 'charge-event-1',
       chargeRunId: 'run-1',
       chargeRootRunId: 'root-run-1',
       chargeParentRunId: 'parent-run-1',
@@ -78,6 +80,7 @@ describe('normalizeModelUsageAttribution', () => {
     expect(attribution.originType).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.toolName).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+    expect(attribution.chargeEventId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.conversationId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
   });
 

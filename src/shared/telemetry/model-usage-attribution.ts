@@ -57,6 +57,7 @@ export const MODEL_USAGE_GROUP_DIMENSIONS = [
   'toolName',
   'chargeLane',
   'chargeSurface',
+  'chargeEventId',
   'chargeRunId',
   'chargeRootRunId',
   'chargeParentRunId',
@@ -92,6 +93,7 @@ export interface ModelUsageAttributionInput {
   toolCallId?: string;
   chargeLane?: ChargePolicyRuntimeLane;
   chargeSurface?: ChargePolicySurface;
+  chargeEventId?: string;
   chargeRunId?: string;
   chargeRootRunId?: string;
   chargeParentRunId?: string;
@@ -120,6 +122,7 @@ export interface ModelUsageAttribution {
   toolCallId: string;
   chargeLane: ModelUsageChargeLane;
   chargeSurface: ModelUsageChargeSurface;
+  chargeEventId: string;
   chargeRunId: string;
   chargeRootRunId: string;
   chargeParentRunId: string;
@@ -229,6 +232,7 @@ export function normalizeModelUsageAttribution(
       'attribution.chargeSurface',
       CHARGE_SURFACE_SET,
     ),
+    chargeEventId: normalizeDimension(input.chargeEventId, 'attribution.chargeEventId'),
     chargeRunId: normalizeDimension(input.chargeRunId, 'attribution.chargeRunId'),
     chargeRootRunId: normalizeDimension(input.chargeRootRunId, 'attribution.chargeRootRunId'),
     chargeParentRunId: normalizeDimension(input.chargeParentRunId, 'attribution.chargeParentRunId'),

@@ -603,8 +603,10 @@ describe('PostgresModelUsageStore reconciliation', () => {
       }, 'chat', createTurnId(), 'vision-root-initiation');
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       const providerSurfaces: Array<string | undefined> = [];
+      const providerChargeEventIds: Array<string | undefined> = [];
       piMocks.completeSimple.mockImplementation(async () => {
         providerSurfaces.push(getRunChargeSnapshot()?.surface);
+        providerChargeEventIds.push(getRunChargeSnapshot()?.chargeEventId);
         return {
           content: [{ type: 'text', text: 'The image is clear and consistent.' }],
           model: 'vision-model',
@@ -660,6 +662,11 @@ describe('PostgresModelUsageStore reconciliation', () => {
         'externalModelConsult',
         'externalModelConsult',
       ]);
+      expect(providerChargeEventIds).toEqual([
+        expect.any(String),
+        expect.any(String),
+      ]);
+      expect(new Set(providerChargeEventIds).size).toBe(2);
       const usage = await store.getUsageData({ limit: 10 });
       expect(usage.totals.calls).toBe(2);
       expect(usage.recentEvents).toHaveLength(2);
@@ -670,7 +677,12 @@ describe('PostgresModelUsageStore reconciliation', () => {
         && event.attribution.conversationId === reset.newLogicalSessionId
         && event.attribution.rootInitiationId === 'vision-root-initiation'
         && event.attribution.chargeSurface === 'externalModelConsult'
+        && providerChargeEventIds.includes(event.attribution.chargeEventId)
       ))).toBe(true);
+      const exactChargeUsage = await store.getUsageEventsForReconciliation({
+        chargeEventId: providerChargeEventIds[0],
+      });
+      expect(exactChargeUsage).toHaveLength(1);
     } finally {
       await pool.end();
       rmSync(dataDir, { recursive: true, force: true });

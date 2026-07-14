@@ -92,6 +92,9 @@ export function withEmbeddingUsageAccounting(
         ...(chargeSnapshot?.surface
           ? { chargeSurface: chargeSnapshot.surface }
           : { chargeSurface: provider.kind === 'api' ? 'externalEmbedding' : 'localEmbedding' }),
+        ...(chargeSnapshot?.chargeEventId
+          ? { chargeEventId: chargeSnapshot.chargeEventId }
+          : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
         ...(chargeSnapshot?.lineage.runId
           ? { chargeRunId: chargeSnapshot.lineage.runId }
           : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),

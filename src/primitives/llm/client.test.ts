@@ -2636,6 +2636,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       attribution: expect.objectContaining({
         chargeLane: 'interactive',
         chargeSurface: 'externalModelConsult',
+        chargeEventId: expect.any(String),
         chargeRunId: 'charged-root',
         chargeRootRunId: 'charged-root',
       }),

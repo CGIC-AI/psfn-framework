@@ -1,16 +1,15 @@
 import type {
   ModelUsageBreakdown,
+  ModelUsageCostHydrationBreakdown,
+  ModelUsageCostHydrationData,
+  ModelUsageCostHydrationQueryPort,
   ModelUsageData,
   ModelUsageEvent,
   ModelUsageGroupDimension,
   ModelUsageQuery,
-  ModelUsageQueryPort,
   ModelUsageTotals,
 } from '../../../shared/telemetry/model-usage.js';
-import {
-  MODEL_USAGE_GROUP_DIMENSIONS,
-  MODEL_USAGE_UNKNOWN_DIMENSION,
-} from '../../../shared/telemetry/model-usage-attribution.js';
+import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../../shared/telemetry/model-usage-attribution.js';
 import type { DiscoveredModel, ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { AdminModelUsageService } from './types.js';
@@ -27,7 +26,7 @@ const log = createComponentLogger('AdminModelUsageDataService');
 
 export class AdminModelUsageDataService implements AdminModelUsageService {
   constructor(
-    private readonly store: ModelUsageQueryPort,
+    private readonly store: ModelUsageCostHydrationQueryPort,
     private readonly modelDiscovery?: ModelDiscoveryBackend | null,
   ) {}
 
@@ -35,9 +34,20 @@ export class AdminModelUsageDataService implements AdminModelUsageService {
     const data = await this.store.getUsageData(query);
     if (!this.modelDiscovery) return data;
     try {
-      const pricingLookup = buildPricingLookup(await this.modelDiscovery.getAvailableModels());
+      const hydrationDimensions = [...new Set<ModelUsageGroupDimension>([
+        'model',
+        'purpose',
+        'toolName',
+        'callKind',
+        ...(data.query.groupBy ?? []),
+      ])];
+      const [availableModels, costHydration] = await Promise.all([
+        this.modelDiscovery.getAvailableModels(),
+        this.store.getUsageCostHydrationData(data.query, hydrationDimensions),
+      ]);
+      const pricingLookup = buildPricingLookup(availableModels);
       if (pricingLookup.size === 0) return data;
-      return hydrateMissingModelUsageCosts(data, pricingLookup);
+      return hydrateMissingModelUsageCosts(data, pricingLookup, costHydration);
     } catch (error) {
       log.warn('Failed to hydrate model usage costs from discovery pricing', {
         error: error instanceof Error ? error.message : String(error),
@@ -226,20 +236,6 @@ function breakdownCostTotal(breakdown: readonly ModelUsageBreakdown[]): number {
   return breakdown.reduce((sum, entry) => sum + Math.max(0, entry.totalCostUsd), 0);
 }
 
-function eventCostDelta(
-  beforeEvents: readonly ModelUsageEvent[],
-  afterEvents: readonly ModelUsageEvent[],
-): number {
-  let delta = 0;
-  for (let index = 0; index < afterEvents.length; index += 1) {
-    const before = beforeEvents[index];
-    const after = afterEvents[index];
-    if (before === after) continue;
-    delta += eventCost(after) - eventCost(before);
-  }
-  return delta;
-}
-
 function hydrateModelBreakdown(
   breakdown: readonly ModelUsageBreakdown[],
   lookup: ReadonlyMap<string, ModelPricingRates>,
@@ -264,26 +260,68 @@ function hydrateModelBreakdown(
     ));
 }
 
-function hydrateBreakdownFromEvents(
+function hydratedAggregateCost(
+  aggregate: ModelUsageCostHydrationBreakdown,
+  lookup: ReadonlyMap<string, ModelPricingRates>,
+): number {
+  if (aggregate.totalCostUsd > 0 || aggregate.inputTokens + aggregate.outputTokens <= 0) {
+    return aggregate.totalCostUsd;
+  }
+  const rates = findPricingRatesForModelId(modelIdFromBreakdownKey(aggregate.modelKey), lookup);
+  if (!rates) return aggregate.totalCostUsd;
+  const estimatedCostUsd = estimateTokenCostUsd(
+    aggregate.inputTokens,
+    aggregate.outputTokens,
+    rates,
+  );
+  return Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0
+    ? estimatedCostUsd
+    : aggregate.totalCostUsd;
+}
+
+function hydrateBreakdownFromCostAggregates(
   breakdown: readonly ModelUsageBreakdown[],
-  beforeEvents: readonly ModelUsageEvent[],
-  afterEvents: readonly ModelUsageEvent[],
-  keyForEvent: (event: ModelUsageEvent) => string,
+  aggregates: readonly ModelUsageCostHydrationBreakdown[],
+  lookup: ReadonlyMap<string, ModelPricingRates>,
+  options: {
+    keyForAggregate?: (aggregate: ModelUsageCostHydrationBreakdown) => string;
+    reclassifyEstimatedNone?: boolean;
+  } = {},
 ): ModelUsageBreakdown[] {
-  const byKey = new Map(breakdown.map(entry => [entry.key, { ...entry }]));
-  for (let index = 0; index < afterEvents.length; index += 1) {
-    const before = beforeEvents[index];
-    const after = afterEvents[index];
-    if (before === after) continue;
-    const beforeKey = keyForEvent(before);
-    const afterKey = keyForEvent(after);
-    if (beforeKey === afterKey) {
-      const existing = byKey.get(afterKey);
-      if (existing) existing.totalCostUsd += eventCost(after) - eventCost(before);
-      continue;
-    }
-    applyEventToBreakdown(byKey, beforeKey, before, -1);
-    applyEventToBreakdown(byKey, afterKey, after, 1);
+  const allowedKeys = new Set(breakdown.map(entry => entry.key));
+  const seenKeys = new Set<string>();
+  const byKey = new Map<string, ModelUsageBreakdown>();
+  for (const aggregate of aggregates) {
+    const sourceKey = options.keyForAggregate?.(aggregate) ?? aggregate.key;
+    if (!allowedKeys.has(sourceKey)) continue;
+    seenKeys.add(sourceKey);
+    const cost = hydratedAggregateCost(aggregate, lookup);
+    const outputKey = options.reclassifyEstimatedNone
+      && aggregate.costSource === 'none'
+      && cost > 0
+      ? 'estimate'
+      : sourceKey;
+    const existing = byKey.get(outputKey) ?? {
+      key: outputKey,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      totalCostUsd: 0,
+    };
+    existing.calls += aggregate.calls;
+    existing.inputTokens += aggregate.inputTokens;
+    existing.outputTokens += aggregate.outputTokens;
+    existing.cacheReadTokens += aggregate.cacheReadTokens;
+    existing.cacheWriteTokens += aggregate.cacheWriteTokens;
+    existing.totalTokens += aggregate.totalTokens;
+    existing.totalCostUsd += cost;
+    byKey.set(outputKey, existing);
+  }
+  for (const entry of breakdown) {
+    if (!seenKeys.has(entry.key)) byKey.set(entry.key, { ...entry });
   }
   return [...byKey.values()]
     .filter(entry => entry.calls > 0)
@@ -295,102 +333,63 @@ function hydrateBreakdownFromEvents(
   ));
 }
 
-function applyEventToBreakdown(
-  byKey: Map<string, ModelUsageBreakdown>,
-  key: string,
-  event: ModelUsageEvent,
-  direction: -1 | 1,
-): void {
-  const existing = byKey.get(key) ?? {
-    key,
-    calls: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    totalTokens: 0,
-    totalCostUsd: 0,
-  };
-  existing.calls += direction;
-  existing.inputTokens += direction * event.inputTokens;
-  existing.outputTokens += direction * event.outputTokens;
-  existing.cacheReadTokens += direction * event.cacheReadTokens;
-  existing.cacheWriteTokens += direction * event.cacheWriteTokens;
-  existing.totalTokens += direction * event.totalTokens;
-  existing.totalCostUsd += direction * eventCost(event);
-  byKey.set(key, existing);
-}
-
-function modelUsageGroupKey(
-  event: ModelUsageEvent,
-  dimension: ModelUsageGroupDimension,
-): string {
-  switch (dimension) {
-    case 'callKind': return event.callKind;
-    case 'provider': return event.provider;
-    case 'model': return event.model;
-    case 'slotKey': return event.slotKey ?? MODEL_USAGE_UNKNOWN_DIMENSION;
-    case 'status': return event.status;
-    case 'costSource': return event.costSource;
-    default: {
-      const value = event.attribution[dimension as keyof ModelUsageEvent['attribution']];
-      return typeof value === 'string' && value.trim()
-        ? value
-        : MODEL_USAGE_UNKNOWN_DIMENSION;
-    }
-  }
+function completeAggregateCostDelta(
+  aggregates: readonly ModelUsageCostHydrationBreakdown[],
+  lookup: ReadonlyMap<string, ModelPricingRates>,
+): number {
+  return aggregates.reduce((delta, aggregate) => (
+    delta + hydratedAggregateCost(aggregate, lookup) - aggregate.totalCostUsd
+  ), 0);
 }
 
 function hydrateMissingModelUsageCosts(
   data: ModelUsageData,
   lookup: ReadonlyMap<string, ModelPricingRates>,
+  costHydration: ModelUsageCostHydrationData,
 ): ModelUsageData {
   const recentEvents = data.recentEvents.map(event => hydrateEvent(event, lookup));
   const expensiveEvents = data.expensiveEvents
     .map(event => hydrateEvent(event, lookup))
     .sort((left, right) => eventCost(right) - eventCost(left) || right.recordedAtMs - left.recordedAtMs);
-  const hasRequestedGroups = Object.keys(data.groupedBy).length > 0;
-  const byModel = hasRequestedGroups
-    ? hydrateBreakdownFromEvents(
-        data.byModel,
-        data.recentEvents,
-        recentEvents,
-        event => `${event.provider}:${event.model}`,
-      )
+  const modelAggregates = costHydration.byDimension.model ?? [];
+  const byModel = modelAggregates.length > 0
+    ? hydrateBreakdownFromCostAggregates(data.byModel, modelAggregates, lookup, {
+        keyForAggregate: aggregate => aggregate.modelKey,
+      })
     : hydrateModelBreakdown(data.byModel, lookup);
-  const modelAggregateDelta = breakdownCostTotal(byModel) - breakdownCostTotal(data.byModel);
-  const recentEventDelta = eventCostDelta(data.recentEvents, recentEvents);
-  const totalsCostDeltaUsd = hasRequestedGroups
-    ? Math.max(0, recentEventDelta)
-    : Math.max(0, modelAggregateDelta, recentEventDelta);
+  const totalsCostDeltaUsd = modelAggregates.length > 0
+    ? Math.max(0, completeAggregateCostDelta(modelAggregates, lookup))
+    : Math.max(0, breakdownCostTotal(byModel) - breakdownCostTotal(data.byModel));
   const groupedBy: ModelUsageData['groupedBy'] = {};
   for (const dimension of MODEL_USAGE_GROUP_DIMENSIONS) {
     const breakdown = data.groupedBy[dimension];
     if (!breakdown) continue;
-    groupedBy[dimension] = hydrateBreakdownFromEvents(
+    groupedBy[dimension] = hydrateBreakdownFromCostAggregates(
       breakdown,
-      data.recentEvents,
-      recentEvents,
-      event => modelUsageGroupKey(event, dimension),
+      costHydration.byDimension[dimension] ?? [],
+      lookup,
+      { reclassifyEstimatedNone: dimension === 'costSource' },
     );
   }
   return {
     ...data,
     totals: hydrateTotals(data.totals, totalsCostDeltaUsd),
     byModel,
-    byPurpose: hydrateBreakdownFromEvents(
+    byPurpose: hydrateBreakdownFromCostAggregates(
       data.byPurpose,
-      data.recentEvents,
-      recentEvents,
-      event => event.attribution.purpose,
+      costHydration.byDimension.purpose ?? [],
+      lookup,
     ),
-    byTool: hydrateBreakdownFromEvents(
+    byTool: hydrateBreakdownFromCostAggregates(
       data.byTool,
-      data.recentEvents,
-      recentEvents,
-      event => event.attribution.toolName,
+      costHydration.byDimension.toolName ?? [],
+      lookup,
     ),
-    byCallKind: hydrateBreakdownFromEvents(data.byCallKind, data.recentEvents, recentEvents, event => event.callKind),
+    byCallKind: hydrateBreakdownFromCostAggregates(
+      data.byCallKind,
+      costHydration.byDimension.callKind ?? [],
+      lookup,
+    ),
     groupedBy,
     recentEvents,
     expensiveEvents,

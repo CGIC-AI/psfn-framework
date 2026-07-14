@@ -14,6 +14,9 @@ import type {
   ModelUsageBudgetQueryPort,
   ModelUsageBudgetSpendSnapshot,
   ModelUsageCallKind,
+  ModelUsageCostHydrationBreakdown,
+  ModelUsageCostHydrationData,
+  ModelUsageCostHydrationQueryPort,
   ModelUsageCostSource,
   ModelUsageCostBreakdown,
   ModelUsageData,
@@ -152,6 +155,11 @@ interface BreakdownRow {
   cache_write_tokens: number | string | null;
   total_tokens: number | string | null;
   total_cost_usd: number | string | null;
+}
+
+interface CostHydrationBreakdownRow extends BreakdownRow {
+  model_key: string;
+  cost_source: ModelUsageCostSource;
 }
 
 type CoverageRow = Record<string, number | string | null | undefined> & {
@@ -618,7 +626,7 @@ function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageBudgetQueryPort {
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort {
   private readonly ready: Promise<void>;
   private readonly companionId?: string;
 
@@ -807,6 +815,26 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     };
   }
 
+  async getUsageCostHydrationData(
+    query: ModelUsageQuery = {},
+    dimensions: readonly ModelUsageGroupDimension[],
+  ): Promise<ModelUsageCostHydrationData> {
+    await this.ready;
+    const normalizedQuery = normalizeQuery(query, this.companionId);
+    const where = buildWhere(normalizedQuery);
+    const uniqueDimensions = [...new Set(dimensions.map((dimension) => {
+      if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
+        throw new Error(`Cost hydration has unsupported dimension ${JSON.stringify(dimension)}`);
+      }
+      return dimension;
+    }))];
+    const entries = await Promise.all(uniqueDimensions.map(async dimension => [
+      dimension,
+      await this.queryCostHydrationBreakdown(where, dimension),
+    ] as const));
+    return { byDimension: Object.fromEntries(entries) };
+  }
+
   async getModelBudgetSpend(
     nowMs = Date.now(),
     scope?: { companionId: string },
@@ -897,6 +925,35 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       LIMIT ${DEFAULT_BREAKDOWN_LIMIT}
     `, where.values);
     return rows.map(mapBreakdown);
+  }
+
+  private async queryCostHydrationBreakdown(
+    where: SqlWhere,
+    dimension: ModelUsageGroupDimension,
+  ): Promise<ModelUsageCostHydrationBreakdown[]> {
+    const expression = MODEL_USAGE_DIMENSION_SQL[dimension];
+    const rows = await queryRows<CostHydrationBreakdownRow>(this.pool, `
+      SELECT
+        ${expression} AS key,
+        provider || ':' || model AS model_key,
+        cost_source,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY key, model_key, cost_source
+      ORDER BY key ASC, model_key ASC, cost_source ASC
+    `, where.values);
+    return rows.map(row => ({
+      ...mapBreakdown(row),
+      modelKey: row.model_key,
+      costSource: row.cost_source,
+    }));
   }
 
   private async queryAttributionCoverage(where: SqlWhere): Promise<ModelUsageAttributionCoverage> {

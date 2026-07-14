@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,10 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { PostgresModelUsageStore } from './model-usage-store.js';
-import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
+import type {
+  ModelUsageEventInput,
+  ModelUsageGroupDimension,
+} from '../../shared/telemetry/model-usage.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { SessionStore } from '../sessions/store.js';
@@ -17,6 +20,25 @@ import { createTurnId } from '../../core/turns/id.js';
 import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-accounting.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { AdminModelUsageDataService } from '../../operator/garden/services/model-usage-service.js';
+import { LLMClient } from '../../primitives/llm/client.js';
+import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
+import { createGenerateImageTool } from '../../primitives/images/tools.js';
+import {
+  getRunChargeSnapshot,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+
+const piMocks = vi.hoisted(() => ({
+  completeSimple: vi.fn(),
+}));
+
+vi.mock('@mariozechner/pi-ai', async (importOriginal) => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  completeSimple: piMocks.completeSimple,
+}));
 
 const TEST_IMAGE = 'postgres:16.8-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
@@ -50,6 +72,77 @@ function makeSessionConfig(dataDir: string): SubstrateConfig {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 1_000 },
     },
+  };
+}
+
+function makeVisionConfig(dataDir: string): SubstrateConfig {
+  return {
+    ...makeSessionConfig(dataDir),
+    companionId: 'companion-a',
+    primaryModel: 'vision-model',
+    primaryProvider: 'openrouter',
+    modelRegistry: {
+      schemaVersion: 1,
+      models: [{
+        id: 'vision',
+        rank: 10,
+        identity: {
+          provider: 'openrouter',
+          model: 'vision-model',
+          source: { type: 'openrouter' },
+        },
+        purposes: [{ purpose: 'vision', primary: true }],
+        capabilities: {
+          maxOutputTokens: 1024,
+          contextWindow: 16_384,
+          supportsVision: true,
+        },
+        tuning: { maxOutputTokens: 1024 },
+      }],
+    },
+  };
+}
+
+function makeVisionChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 10,
+      background: 10,
+      maintenance: 10,
+      subagent: 10,
+      shard: 10,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 1,
+      localImageGeneration: 0,
+      paidImageGeneration: 1,
+      analysisWorkbenchExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 1,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 1,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 1,
+    },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 
@@ -171,6 +264,179 @@ describe('PostgresModelUsageStore reconciliation', () => {
     } finally {
       await pool.end();
       rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('persists charged vision provider work with complete logical-conversation attribution', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-vision-attribution',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-vision-'));
+    try {
+      const config = makeVisionConfig(dataDir);
+      const sessionManager = new SessionManager(new SessionStore(dataDir), config);
+      const runtime = new TurnSupportRuntime({
+        eventBus: new EventBus(),
+        sessionManager,
+        hashPromptText: text => `hash:${text.length}`,
+        resolveContextWindow: () => 16_384,
+      });
+      const sourceChannelId = 'discord:guild:vision-room';
+      const reset = sessionManager.resetSourceChannelSession({
+        sourceChannelId,
+        actor: 'operator',
+        reason: 'fresh vision conversation',
+        mode: 'fresh_split',
+      });
+      const correlation = runtime.buildTurnCorrelation({
+        id: 'vision-root-initiation',
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        authorId: 'user-vision',
+        authorName: 'Vision User',
+        content: 'review these images',
+        timestamp: new Date('2026-07-14T00:00:00.000Z'),
+      }, 'chat', createTurnId(), 'vision-root-initiation');
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const providerSurfaces: Array<string | undefined> = [];
+      piMocks.completeSimple.mockImplementation(async () => {
+        providerSurfaces.push(getRunChargeSnapshot()?.surface);
+        return {
+          content: [{ type: 'text', text: 'The image is clear and consistent.' }],
+          model: 'vision-model',
+          usage: { input: 10, output: 5, totalTokens: 15 },
+          stopReason: 'stop',
+        };
+      });
+      const llmClient = new LLMClient(config, {
+        litellmBaseUrl: 'http://litellm.test/v1',
+        usageRecorder: store,
+      });
+      const reviewer = new DefaultImageVisionReviewer(config, {
+        llmProvider: llmClient,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+      });
+      const tool = createGenerateImageTool({
+        create: vi.fn(async () => ({
+          provider: 'comfyui' as const,
+          mode: 'create' as const,
+          model: 'local-vision-image',
+          fallbackUsed: false,
+          images: [{ url: 'https://images.example.test/generated.png' }],
+        })),
+        edit: vi.fn(),
+      }, reviewer);
+      const executeInTurn = async (
+        runId: string,
+        params: Record<string, unknown>,
+      ) => await runWithChargeContext({
+        chargePolicy: makeVisionChargePolicy(),
+        lane: 'interactive',
+        runId,
+      }, async () => await runWithRequestContext(correlation, async () => {
+          await tool.execute(runId, params, undefined as never);
+        }));
+
+      await executeInTurn('vision-generated-review', {
+        action: 'generate',
+        provider: 'comfyui',
+        prompt: 'a quiet reading room',
+      });
+      await executeInTurn('vision-direct-analyze', {
+        action: 'analyze',
+        input_urls: ['https://images.example.test/direct.png'],
+        question: 'What is visible?',
+      });
+
+      expect(providerSurfaces).toEqual([
+        'externalModelConsult',
+        'externalModelConsult',
+      ]);
+      const usage = await store.getUsageData({ limit: 10 });
+      expect(usage.totals.calls).toBe(2);
+      expect(usage.recentEvents).toHaveLength(2);
+      expect(usage.recentEvents.every(event => (
+        event.attribution.sessionId === reset.newLogicalSessionId
+        && event.attribution.channelId === sourceChannelId
+        && event.attribution.channelType === 'discord'
+        && event.attribution.conversationId === reset.newLogicalSessionId
+        && event.attribution.rootInitiationId === 'vision-root-initiation'
+        && event.attribution.chargeSurface === 'externalModelConsult'
+      ))).toBe(true);
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('hydrates Garden grouped costs from complete aggregates instead of the event display window', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-garden-cost-hydration',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      for (const index of [1, 2]) {
+        await store.recordUsageEvent({
+          logicalCallId: `garden-unpriced-${index}`,
+          recordedAtMs: 1_752_600_000_000 + index,
+          startedAtMs: 1_752_599_999_900 + index,
+          status: 'success',
+          settlement: 'complete',
+          callKind: 'completion',
+          attribution: {
+            companionId: 'companion-a',
+            sessionId: 'garden-session',
+            channelId: 'channel-1',
+            channelType: 'api',
+            callType: 'background',
+            purpose: 'garden-hydration',
+          },
+          provider: 'litellm',
+          model: 'deepseek/deepseek-v4-pro',
+          inputTokens: 1000,
+          outputTokens: 500,
+          totalTokens: 1500,
+          costSource: 'none',
+        });
+      }
+      const discovery = {
+        getAvailableModels: vi.fn(async () => [{
+          id: 'openrouter/deepseek/deepseek-v4-pro',
+          pricing: { prompt: '0.000002', completion: '0.000004' },
+        }]),
+        invalidateCache: vi.fn(),
+      };
+      const service = new AdminModelUsageDataService(store, discovery);
+      const groupBy: ModelUsageGroupDimension[] = ['channelId', 'costSource'];
+
+      const atLimitOne = await service.getModelUsageData({ groupBy, limit: 1 });
+      const atLimitTwo = await service.getModelUsageData({ groupBy, limit: 2 });
+
+      expect(atLimitOne.recentEvents).toHaveLength(1);
+      expect(atLimitTwo.recentEvents).toHaveLength(2);
+      expect(atLimitOne.totals.totalCostUsd).toBeCloseTo(0.008, 8);
+      expect(atLimitTwo.totals.totalCostUsd).toBeCloseTo(0.008, 8);
+      expect(atLimitOne.groupedBy).toEqual(atLimitTwo.groupedBy);
+      expect(atLimitOne.groupedBy.channelId).toEqual([
+        expect.objectContaining({ key: 'channel-1', calls: 2, totalCostUsd: 0.008 }),
+      ]);
+      expect(atLimitOne.groupedBy.costSource).toEqual([
+        expect.objectContaining({ key: 'estimate', calls: 2, totalCostUsd: 0.008 }),
+      ]);
+    } finally {
+      await pool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
 

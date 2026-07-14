@@ -193,6 +193,16 @@ export interface ModelUsageBreakdown {
   totalCostUsd: number;
 }
 
+/** Complete aggregate slice used to hydrate missing costs without reading display-limited events. */
+export interface ModelUsageCostHydrationBreakdown extends ModelUsageBreakdown {
+  modelKey: string;
+  costSource: ModelUsageCostSource;
+}
+
+export interface ModelUsageCostHydrationData {
+  byDimension: Partial<Record<ModelUsageGroupDimension, ModelUsageCostHydrationBreakdown[]>>;
+}
+
 export interface ModelUsageDimensionCoverage {
   knownCalls: number;
   unknownCalls: number;
@@ -223,6 +233,13 @@ export interface ModelUsageRecorder {
 
 export interface ModelUsageQueryPort {
   getUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
+}
+
+export interface ModelUsageCostHydrationQueryPort extends ModelUsageQueryPort {
+  getUsageCostHydrationData(
+    query: ModelUsageQuery | undefined,
+    dimensions: readonly ModelUsageGroupDimension[],
+  ): Promise<ModelUsageCostHydrationData>;
 }
 
 export interface ModelUsageBudgetSpendSnapshot {

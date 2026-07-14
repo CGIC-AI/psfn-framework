@@ -9,6 +9,7 @@ import { createGenerateImageTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
 import {
   chargeSurface,
+  getRunChargeSnapshot,
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
@@ -227,6 +228,7 @@ describe('image tools', () => {
   });
 
   it('returns generated media results plus an in-turn vision review from the unified media tool', async () => {
+    const providerSurfaces: Array<string | undefined> = [];
     const ops = {
       create: vi.fn(async () => ({
         provider: 'fal',
@@ -244,12 +246,15 @@ describe('image tools', () => {
       edit: vi.fn(),
     };
     const reviewer: ImageVisionReviewer = {
-      analyze: vi.fn(async () => ({
-        question: 'Describe the generated image.',
-        summary: 'The portrait reads as consistent and well lit.',
-        model: 'vision-model',
-        imageCount: 1,
-      })),
+      analyze: vi.fn(async () => {
+        providerSurfaces.push(getRunChargeSnapshot()?.surface);
+        return {
+          question: 'Describe the generated image.',
+          summary: 'The portrait reads as consistent and well lit.',
+          model: 'vision-model',
+          imageCount: 1,
+        };
+      }),
     };
     const emitted: Array<[string, Record<string, unknown>]> = [];
     const eventBus = {
@@ -291,6 +296,7 @@ describe('image tools', () => {
       ['agent.charge', 'paidImageGeneration'],
       ['agent.charge', 'externalModelConsult'],
     ]);
+    expect(providerSurfaces).toEqual(['externalModelConsult']);
     expect(result.details.mediaResult?.requestId).toBe('req-media-1');
     expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/media-selfie.png');
     expect(result.details.visionReview?.summary).toContain('consistent');
@@ -301,29 +307,38 @@ describe('image tools', () => {
   });
 
   it('analyzes images through the unified media tool', async () => {
+    const providerSurfaces: Array<string | undefined> = [];
     const reviewer: ImageVisionReviewer = {
-      analyze: vi.fn(async () => ({
-        question: 'What is in this image?',
-        summary: 'A cozy desk setup.',
-        model: 'vision-model',
-        imageCount: 1,
-      })),
+      analyze: vi.fn(async () => {
+        providerSurfaces.push(getRunChargeSnapshot()?.surface);
+        return {
+          question: 'What is in this image?',
+          summary: 'A cozy desk setup.',
+          model: 'vision-model',
+          imageCount: 1,
+        };
+      }),
     };
 
     const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
-    const result = await tool.execute('tool-call-media-analyze', {
-      action: 'analyze',
-      input_urls: ['https://images.example.test/review.png'],
-      question: 'What is in this image?',
-    }) as AgentToolResult<MediaToolResultDetails>;
+    const result = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'media-analyze-1',
+    }, async () => tool.execute('tool-call-media-analyze', {
+        action: 'analyze',
+        input_urls: ['https://images.example.test/review.png'],
+        question: 'What is in this image?',
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>);
 
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/review.png'],
       question: 'What is in this image?',
     });
+    expect(providerSurfaces).toEqual(['externalModelConsult']);
     expect(result.details.visionReview?.summary).toContain('cozy desk setup');
   });
 

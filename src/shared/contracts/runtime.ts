@@ -196,13 +196,29 @@ export type ObservabilityCallType =
   | 'scheduled';
 
 export interface LLMRequestMetadata {
+  companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   toolName?: string;
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
 }
 
 /**

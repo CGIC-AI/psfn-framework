@@ -1010,25 +1010,34 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     call_kind TEXT NOT NULL,
     call_type TEXT NOT NULL,
     purpose TEXT NOT NULL,
-    origin_type TEXT,
-    origin_stage TEXT,
-    service TEXT,
-    process TEXT,
-    turn_id TEXT,
-    request_id TEXT,
-    channel_id TEXT,
-    tool_name TEXT,
-    tool_call_id TEXT,
-    charge_lane TEXT,
-    charge_surface TEXT,
-    charge_run_id TEXT,
-    charge_root_run_id TEXT,
-    charge_parent_run_id TEXT,
+    origin_type TEXT NOT NULL DEFAULT 'unknown',
+    origin_stage TEXT NOT NULL DEFAULT 'unknown',
+    service TEXT NOT NULL DEFAULT 'unknown',
+    process TEXT NOT NULL DEFAULT 'unknown',
+    companion_id TEXT NOT NULL DEFAULT 'unknown',
+    session_id TEXT NOT NULL DEFAULT 'unknown',
+    turn_id TEXT NOT NULL DEFAULT 'unknown',
+    request_id TEXT NOT NULL DEFAULT 'unknown',
+    channel_id TEXT NOT NULL DEFAULT 'unknown',
+    channel_type TEXT NOT NULL DEFAULT 'unknown',
+    tool_name TEXT NOT NULL DEFAULT 'unknown',
+    tool_call_id TEXT NOT NULL DEFAULT 'unknown',
+    charge_lane TEXT NOT NULL DEFAULT 'unknown',
+    charge_surface TEXT NOT NULL DEFAULT 'unknown',
+    charge_run_id TEXT NOT NULL DEFAULT 'unknown',
+    charge_root_run_id TEXT NOT NULL DEFAULT 'unknown',
+    charge_parent_run_id TEXT NOT NULL DEFAULT 'unknown',
+    shard_id TEXT NOT NULL DEFAULT 'unknown',
+    subagent_id TEXT NOT NULL DEFAULT 'unknown',
+    conversation_id TEXT NOT NULL DEFAULT 'unknown',
+    root_initiation_id TEXT NOT NULL DEFAULT 'unknown',
+    workload_type TEXT NOT NULL DEFAULT 'unknown',
+    workload_id TEXT NOT NULL DEFAULT 'unknown',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
-    slot_key TEXT,
-    requested_provider TEXT,
-    requested_model TEXT,
+    slot_key TEXT NOT NULL DEFAULT 'unknown',
+    requested_provider TEXT NOT NULL DEFAULT 'unknown',
+    requested_model TEXT NOT NULL DEFAULT 'unknown',
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
@@ -1057,11 +1066,13 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     event_fingerprint TEXT NOT NULL,
     accounting_schema_version INTEGER NOT NULL DEFAULT 2,
+    attribution_schema_version INTEGER NOT NULL DEFAULT 1,
     CHECK (status IN ('success', 'failure')),
     CHECK (settlement IN ('complete', 'partial', 'unknown')),
     CHECK (call_kind IN ('chat', 'completion', 'embedding', 'image_create', 'image_edit')),
     CHECK (cost_source IN ('provider', 'estimate', 'none')),
     CHECK (accounting_schema_version = 2),
+    CHECK (attribution_schema_version = 1),
     CONSTRAINT model_usage_events_usd_currency_check CHECK (currency IS NULL OR currency = 'USD'),
     CONSTRAINT model_usage_events_token_accounting_check CHECK (
       attempt >= 0
@@ -1091,7 +1102,106 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS effective_cache_write_cost_usd DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS effective_cost_usd DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS event_fingerprint TEXT,
-    ADD COLUMN IF NOT EXISTS accounting_schema_version INTEGER;
+    ADD COLUMN IF NOT EXISTS accounting_schema_version INTEGER,
+    ADD COLUMN IF NOT EXISTS companion_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS channel_type TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS shard_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS subagent_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS root_initiation_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS workload_type TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS workload_id TEXT NOT NULL DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS attribution_schema_version INTEGER NOT NULL DEFAULT 1;
+  `,
+  `
+  UPDATE model_usage_events
+  SET
+    origin_type = COALESCE(NULLIF(BTRIM(origin_type), ''), 'unknown'),
+    origin_stage = COALESCE(NULLIF(BTRIM(origin_stage), ''), 'unknown'),
+    service = COALESCE(NULLIF(BTRIM(service), ''), 'unknown'),
+    process = COALESCE(NULLIF(BTRIM(process), ''), 'unknown'),
+    companion_id = COALESCE(NULLIF(BTRIM(companion_id), ''), 'unknown'),
+    session_id = COALESCE(NULLIF(BTRIM(session_id), ''), 'unknown'),
+    turn_id = COALESCE(NULLIF(BTRIM(turn_id), ''), 'unknown'),
+    request_id = COALESCE(NULLIF(BTRIM(request_id), ''), 'unknown'),
+    channel_id = COALESCE(NULLIF(BTRIM(channel_id), ''), 'unknown'),
+    channel_type = COALESCE(NULLIF(BTRIM(channel_type), ''), 'unknown'),
+    tool_name = COALESCE(NULLIF(BTRIM(tool_name), ''), 'unknown'),
+    tool_call_id = COALESCE(NULLIF(BTRIM(tool_call_id), ''), 'unknown'),
+    charge_lane = COALESCE(NULLIF(BTRIM(charge_lane), ''), 'unknown'),
+    charge_surface = COALESCE(NULLIF(BTRIM(charge_surface), ''), 'unknown'),
+    charge_run_id = COALESCE(NULLIF(BTRIM(charge_run_id), ''), 'unknown'),
+    charge_root_run_id = COALESCE(NULLIF(BTRIM(charge_root_run_id), ''), 'unknown'),
+    charge_parent_run_id = COALESCE(NULLIF(BTRIM(charge_parent_run_id), ''), 'unknown'),
+    shard_id = COALESCE(NULLIF(BTRIM(shard_id), ''), 'unknown'),
+    subagent_id = COALESCE(NULLIF(BTRIM(subagent_id), ''), 'unknown'),
+    conversation_id = COALESCE(NULLIF(BTRIM(conversation_id), ''), 'unknown'),
+    root_initiation_id = COALESCE(NULLIF(BTRIM(root_initiation_id), ''), 'unknown'),
+    workload_type = COALESCE(NULLIF(BTRIM(workload_type), ''), 'unknown'),
+    workload_id = COALESCE(NULLIF(BTRIM(workload_id), ''), 'unknown'),
+    slot_key = COALESCE(NULLIF(BTRIM(slot_key), ''), 'unknown'),
+    requested_provider = COALESCE(NULLIF(BTRIM(requested_provider), ''), 'unknown'),
+    requested_model = COALESCE(NULLIF(BTRIM(requested_model), ''), 'unknown'),
+    attribution_schema_version = 1
+  WHERE attribution_schema_version IS DISTINCT FROM 1
+    OR COALESCE(BTRIM(origin_type), '') = ''
+    OR COALESCE(BTRIM(origin_stage), '') = ''
+    OR COALESCE(BTRIM(service), '') = ''
+    OR COALESCE(BTRIM(process), '') = ''
+    OR COALESCE(BTRIM(companion_id), '') = ''
+    OR COALESCE(BTRIM(session_id), '') = ''
+    OR COALESCE(BTRIM(turn_id), '') = ''
+    OR COALESCE(BTRIM(request_id), '') = ''
+    OR COALESCE(BTRIM(channel_id), '') = ''
+    OR COALESCE(BTRIM(channel_type), '') = ''
+    OR COALESCE(BTRIM(tool_name), '') = ''
+    OR COALESCE(BTRIM(tool_call_id), '') = ''
+    OR COALESCE(BTRIM(charge_lane), '') = ''
+    OR COALESCE(BTRIM(charge_surface), '') = ''
+    OR COALESCE(BTRIM(charge_run_id), '') = ''
+    OR COALESCE(BTRIM(charge_root_run_id), '') = ''
+    OR COALESCE(BTRIM(charge_parent_run_id), '') = ''
+    OR COALESCE(BTRIM(shard_id), '') = ''
+    OR COALESCE(BTRIM(subagent_id), '') = ''
+    OR COALESCE(BTRIM(conversation_id), '') = ''
+    OR COALESCE(BTRIM(root_initiation_id), '') = ''
+    OR COALESCE(BTRIM(workload_type), '') = ''
+    OR COALESCE(BTRIM(workload_id), '') = ''
+    OR COALESCE(BTRIM(slot_key), '') = ''
+    OR COALESCE(BTRIM(requested_provider), '') = ''
+    OR COALESCE(BTRIM(requested_model), '') = '';
+  `,
+  `
+  ALTER TABLE model_usage_events
+    ALTER COLUMN origin_type SET DEFAULT 'unknown', ALTER COLUMN origin_type SET NOT NULL,
+    ALTER COLUMN origin_stage SET DEFAULT 'unknown', ALTER COLUMN origin_stage SET NOT NULL,
+    ALTER COLUMN service SET DEFAULT 'unknown', ALTER COLUMN service SET NOT NULL,
+    ALTER COLUMN process SET DEFAULT 'unknown', ALTER COLUMN process SET NOT NULL,
+    ALTER COLUMN companion_id SET DEFAULT 'unknown', ALTER COLUMN companion_id SET NOT NULL,
+    ALTER COLUMN session_id SET DEFAULT 'unknown', ALTER COLUMN session_id SET NOT NULL,
+    ALTER COLUMN turn_id SET DEFAULT 'unknown', ALTER COLUMN turn_id SET NOT NULL,
+    ALTER COLUMN request_id SET DEFAULT 'unknown', ALTER COLUMN request_id SET NOT NULL,
+    ALTER COLUMN channel_id SET DEFAULT 'unknown', ALTER COLUMN channel_id SET NOT NULL,
+    ALTER COLUMN channel_type SET DEFAULT 'unknown', ALTER COLUMN channel_type SET NOT NULL,
+    ALTER COLUMN tool_name SET DEFAULT 'unknown', ALTER COLUMN tool_name SET NOT NULL,
+    ALTER COLUMN tool_call_id SET DEFAULT 'unknown', ALTER COLUMN tool_call_id SET NOT NULL,
+    ALTER COLUMN charge_lane SET DEFAULT 'unknown', ALTER COLUMN charge_lane SET NOT NULL,
+    ALTER COLUMN charge_surface SET DEFAULT 'unknown', ALTER COLUMN charge_surface SET NOT NULL,
+    ALTER COLUMN charge_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_run_id SET NOT NULL,
+    ALTER COLUMN charge_root_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_root_run_id SET NOT NULL,
+    ALTER COLUMN charge_parent_run_id SET DEFAULT 'unknown', ALTER COLUMN charge_parent_run_id SET NOT NULL,
+    ALTER COLUMN shard_id SET DEFAULT 'unknown', ALTER COLUMN shard_id SET NOT NULL,
+    ALTER COLUMN subagent_id SET DEFAULT 'unknown', ALTER COLUMN subagent_id SET NOT NULL,
+    ALTER COLUMN conversation_id SET DEFAULT 'unknown', ALTER COLUMN conversation_id SET NOT NULL,
+    ALTER COLUMN root_initiation_id SET DEFAULT 'unknown', ALTER COLUMN root_initiation_id SET NOT NULL,
+    ALTER COLUMN workload_type SET DEFAULT 'unknown', ALTER COLUMN workload_type SET NOT NULL,
+    ALTER COLUMN workload_id SET DEFAULT 'unknown', ALTER COLUMN workload_id SET NOT NULL,
+    ALTER COLUMN slot_key SET DEFAULT 'unknown', ALTER COLUMN slot_key SET NOT NULL,
+    ALTER COLUMN requested_provider SET DEFAULT 'unknown', ALTER COLUMN requested_provider SET NOT NULL,
+    ALTER COLUMN requested_model SET DEFAULT 'unknown', ALTER COLUMN requested_model SET NOT NULL,
+    ALTER COLUMN attribution_schema_version SET DEFAULT 1,
+    ALTER COLUMN attribution_schema_version SET NOT NULL;
   `,
   `ALTER TABLE model_usage_events ALTER COLUMN estimated_cost_usd DROP DEFAULT;`,
   `ALTER TABLE model_usage_events ALTER COLUMN estimated_cost_usd DROP NOT NULL;`,
@@ -1221,6 +1331,21 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   END $$;
   `,
   `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_accounting_schema_version_check;`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_attribution_schema_version_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_attribution_schema_version_check
+        CHECK (attribution_schema_version = 1) NOT VALID;
+    END IF;
+  END $$;
+  `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_attribution_schema_version_check;`,
   `ALTER TABLE model_usage_events ALTER COLUMN event_fingerprint SET NOT NULL;`,
   `
   DO $$
@@ -1281,6 +1406,19 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_tool ON model_usage_events(tool_name, recorded_at_ms DESC) WHERE tool_name IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_request ON model_usage_events(request_id, turn_id, tool_call_id);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_charge ON model_usage_events(charge_root_run_id, charge_run_id, recorded_at_ms DESC) WHERE charge_root_run_id IS NOT NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_companion_time ON model_usage_events(companion_id, recorded_at_ms DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_session_time ON model_usage_events(companion_id, session_id, recorded_at_ms DESC) WHERE session_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_channel_time ON model_usage_events(companion_id, channel_type, channel_id, recorded_at_ms DESC) WHERE channel_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_origin_time ON model_usage_events(companion_id, origin_type, origin_stage, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_service_process_time ON model_usage_events(companion_id, service, process, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_charge_attribution_time ON model_usage_events(companion_id, charge_lane, charge_surface, charge_root_run_id, charge_run_id, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_shard_time ON model_usage_events(companion_id, shard_id, recorded_at_ms DESC) WHERE shard_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_subagent_time ON model_usage_events(companion_id, subagent_id, recorded_at_ms DESC) WHERE subagent_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_conversation_time ON model_usage_events(companion_id, conversation_id, recorded_at_ms DESC) WHERE conversation_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_root_initiation_time ON model_usage_events(companion_id, root_initiation_id, recorded_at_ms DESC) WHERE root_initiation_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_workload_time ON model_usage_events(companion_id, workload_type, workload_id, recorded_at_ms DESC) WHERE workload_id <> 'unknown';`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_status_cost_time ON model_usage_events(companion_id, status, cost_source, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_slot_time ON model_usage_events(companion_id, slot_key, requested_provider, requested_model, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
 ];
 

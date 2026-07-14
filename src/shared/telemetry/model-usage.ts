@@ -1,8 +1,27 @@
 import type { ObservabilityCallType } from '../contracts/runtime.js';
 import type {
-  ChargePolicyRuntimeLane,
-  ChargePolicySurface,
-} from '../contracts/charge-policy.js';
+  ModelUsageAttribution,
+  ModelUsageAttributionInput,
+  ModelUsageChannelType,
+  ModelUsageChargeLane,
+  ModelUsageChargeSurface,
+  ModelUsageGroupDimension,
+} from './model-usage-attribution.js';
+
+export {
+  MODEL_USAGE_CALL_TYPES,
+  MODEL_USAGE_CHANNEL_TYPES,
+  MODEL_USAGE_CHARGE_LANES,
+  MODEL_USAGE_CHARGE_SURFACES,
+  MODEL_USAGE_GROUP_DIMENSIONS,
+  MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+} from './model-usage-attribution.js';
+export type {
+  ModelUsageAttribution,
+  ModelUsageAttributionInput,
+  ModelUsageGroupDimension,
+} from './model-usage-attribution.js';
 
 export const MODEL_USAGE_CALL_KINDS = [
   'chat',
@@ -11,11 +30,13 @@ export const MODEL_USAGE_CALL_KINDS = [
   'image_create',
   'image_edit',
 ] as const;
+export const MODEL_USAGE_STATUSES = ['success', 'failure'] as const;
+export const MODEL_USAGE_COST_SOURCES = ['provider', 'estimate', 'none'] as const;
 
 export type ModelUsageCallKind = typeof MODEL_USAGE_CALL_KINDS[number];
-export type ModelUsageStatus = 'success' | 'failure';
+export type ModelUsageStatus = typeof MODEL_USAGE_STATUSES[number];
 export type ModelUsageSettlement = 'complete' | 'partial' | 'unknown';
-export type ModelUsageCostSource = 'provider' | 'estimate' | 'none';
+export type ModelUsageCostSource = typeof MODEL_USAGE_COST_SOURCES[number];
 
 export interface ModelUsageCostBreakdown {
   input?: number;
@@ -38,22 +59,7 @@ export interface ModelUsageEventInput {
   status: ModelUsageStatus;
   settlement?: ModelUsageSettlement;
   callKind: ModelUsageCallKind;
-  callType: ObservabilityCallType;
-  purpose: string;
-  originType?: ObservabilityCallType;
-  originStage?: string;
-  service?: string;
-  process?: string;
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
-  toolName?: string;
-  toolCallId?: string;
-  chargeLane?: ChargePolicyRuntimeLane;
-  chargeSurface?: ChargePolicySurface;
-  chargeRunId?: string;
-  chargeRootRunId?: string;
-  chargeParentRunId?: string;
+  attribution: ModelUsageAttributionInput;
   provider: string;
   model: string;
   slotKey?: string;
@@ -88,8 +94,6 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'status'
   | 'settlement'
   | 'callKind'
-  | 'callType'
-  | 'purpose'
   | 'provider'
   | 'model'
   | 'inputTokens'
@@ -102,25 +106,12 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'estimatedCost'
   | 'effectiveCost'
 >> {
+  attribution: ModelUsageAttribution;
   dayKey: string;
   monthKey: string;
   completedAtMs?: number;
   durationMs?: number;
   ttftMs?: number;
-  originType?: ObservabilityCallType;
-  originStage?: string;
-  service?: string;
-  process?: string;
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
-  toolName?: string;
-  toolCallId?: string;
-  chargeLane?: ChargePolicyRuntimeLane;
-  chargeSurface?: ChargePolicySurface;
-  chargeRunId?: string;
-  chargeRootRunId?: string;
-  chargeParentRunId?: string;
   slotKey?: string;
   requestedProvider?: string;
   requestedModel?: string;
@@ -142,7 +133,37 @@ export interface ModelUsageQuery {
   model?: string;
   toolName?: string;
   callKind?: ModelUsageCallKind;
+  callType?: ObservabilityCallType;
+  purpose?: string;
+  originType?: ObservabilityCallType | 'unknown';
+  originStage?: string;
+  service?: string;
+  process?: string;
+  companionId?: string;
+  sessionId?: string;
+  channelId?: string;
+  channelType?: ModelUsageChannelType;
+  turnId?: string;
+  requestId?: string;
+  toolCallId?: string;
+  chargeLane?: ModelUsageChargeLane;
+  chargeSurface?: ModelUsageChargeSurface;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
+  slotKey?: string;
+  requestedProvider?: string;
+  requestedModel?: string;
+  status?: ModelUsageStatus;
+  costSource?: ModelUsageCostSource;
   runId?: string;
+  groupBy?: ModelUsageGroupDimension[];
 }
 
 export interface ModelUsageTotals {
@@ -166,8 +187,21 @@ export interface ModelUsageBreakdown {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   totalCostUsd: number;
+}
+
+export interface ModelUsageDimensionCoverage {
+  knownCalls: number;
+  unknownCalls: number;
+  coveragePercent: number;
+}
+
+export interface ModelUsageAttributionCoverage {
+  totalCalls: number;
+  byDimension: Record<ModelUsageGroupDimension, ModelUsageDimensionCoverage>;
 }
 
 export interface ModelUsageData {
@@ -177,6 +211,8 @@ export interface ModelUsageData {
   byPurpose: ModelUsageBreakdown[];
   byTool: ModelUsageBreakdown[];
   byCallKind: ModelUsageBreakdown[];
+  groupedBy: Partial<Record<ModelUsageGroupDimension, ModelUsageBreakdown[]>>;
+  attributionCoverage: ModelUsageAttributionCoverage;
   recentEvents: ModelUsageEvent[];
   expensiveEvents: ModelUsageEvent[];
 }
@@ -200,5 +236,8 @@ export interface ModelUsageBudgetSpendSnapshot {
 
 /** Canonical budget projection over immutable PostgreSQL model attempts. */
 export interface ModelUsageBudgetQueryPort {
-  getModelBudgetSpend(nowMs?: number): Promise<ModelUsageBudgetSpendSnapshot>;
+  getModelBudgetSpend(
+    nowMs?: number,
+    scope?: { companionId: string },
+  ): Promise<ModelUsageBudgetSpendSnapshot>;
 }

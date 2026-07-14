@@ -123,7 +123,7 @@ const requiredWiring = [
     patterns: [
       /usageRecorder:\s*options\.llmOptions\?\.usageRecorder\s*\?\?\s*modelUsageStore/,
       /usageBudgetQuery:\s*options\.llmOptions\?\.usageBudgetQuery\s*\?\?\s*modelUsageStore/,
-      /withEmbeddingUsageAccounting\(embeddingProvider,\s*modelUsageStore,\s*\{\s*estimatedRates:\s*embeddingRates,?\s*\}\)/,
+      /withEmbeddingUsageAccounting\(embeddingProvider,\s*modelUsageStore,\s*\{[\s\S]{0,240}?estimatedRates:\s*embeddingRates,[\s\S]{0,240}?companionId:[\s\S]{0,120}?\}\s*\)/,
     ],
   },
   {

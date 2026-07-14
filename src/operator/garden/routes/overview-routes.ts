@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { MODEL_USAGE_CALL_KINDS, type ModelUsageCallKind } from '../../../shared/telemetry/model-usage.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import { buildAdminSatelliteRegistryView } from '../services/satellite-registry-service.js';
@@ -34,6 +33,7 @@ import type {
 import { parseAdminJsonBody } from '../request-body.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
+import { parseModelUsageQuery } from './model-usage-query.js';
 
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
@@ -127,20 +127,6 @@ function parseAuditSourceQuery(
   return {
     ok: false,
     error: `Invalid source query parameter. Expected all or one of: ${ADMIN_AUDIT_HISTORY_SOURCES.join(', ')}.`,
-  };
-}
-
-function parseModelUsageCallKindQuery(
-  value: string | null,
-): { ok: true; value?: ModelUsageCallKind } | { ok: false; error: string } {
-  if (value === null || value.trim() === '') return { ok: true };
-  const normalized = value.trim();
-  if (MODEL_USAGE_CALL_KINDS.includes(normalized as ModelUsageCallKind)) {
-    return { ok: true, value: normalized as ModelUsageCallKind };
-  }
-  return {
-    ok: false,
-    error: `Invalid callKind query parameter. Expected one of: ${MODEL_USAGE_CALL_KINDS.join(', ')}.`,
   };
 }
 
@@ -485,41 +471,21 @@ export function buildAdminOverviewRoutes(options: {
         }
 
         const url = parseRequestUrl(req, '/api/admin/model-usage');
-        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
-        if (!limit.ok) {
-          sendJson(res, 400, { error: limit.error });
+        const query = parseModelUsageQuery(url.searchParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
           return;
         }
-        const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
-        if (!sinceMs.ok) {
-          sendJson(res, 400, { error: sinceMs.error });
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Model usage query is outside this Garden tenant.' });
           return;
         }
-        const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
-        if (!untilMs.ok) {
-          sendJson(res, 400, { error: untilMs.error });
-          return;
-        }
-        const callKind = parseModelUsageCallKindQuery(url.searchParams.get('callKind'));
-        if (!callKind.ok) {
-          sendJson(res, 400, { error: callKind.error });
-          return;
-        }
-        const provider = url.searchParams.get('provider')?.trim() || undefined;
-        const model = url.searchParams.get('model')?.trim() || undefined;
-        const toolName = url.searchParams.get('toolName')?.trim() || undefined;
-        const runId = url.searchParams.get('runId')?.trim() || undefined;
 
-        modelUsageService.getModelUsageData({
-          ...(limit.value !== undefined ? { limit: limit.value } : {}),
-          ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
-          ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-          ...(toolName ? { toolName } : {}),
-          ...(callKind.value !== undefined ? { callKind: callKind.value } : {}),
-          ...(runId ? { runId } : {}),
-        }).then(
+        modelUsageService.getModelUsageData(query.value).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),

@@ -14,6 +14,8 @@ import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
 import { GardenOperatorSurface } from './operator-surface.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
+import type { ModelUsageAttributionCoverage } from '../../shared/telemetry/model-usage.js';
+import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../shared/telemetry/model-usage-attribution.js';
 import type {
   GardenAdminTransportClientEndpoint,
   GardenAdminTransportServerEndpoint,
@@ -597,6 +599,15 @@ function createTestServices(): GardenAdminDomainServices {
         byPurpose: [],
         byTool: [],
         byCallKind: [],
+        groupedBy: {},
+        attributionCoverage: {
+          totalCalls: 1,
+          byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map(dimension => [dimension, {
+            knownCalls: 0,
+            unknownCalls: 1,
+            coveragePercent: 0,
+          }])) as ModelUsageAttributionCoverage['byDimension'],
+        },
         recentEvents: [],
         expensiveEvents: [],
       })),
@@ -1044,11 +1055,46 @@ describe('Garden operator surface', () => {
   });
 
   it('proxies persisted model usage routes through the operator surface', async () => {
-    const res = await requestPort(harness.port, 'GET', '/api/admin/model-usage?limit=5&sinceMs=100');
+    const res = await requestPort(
+      harness.port,
+      'GET',
+      '/api/admin/model-usage?limit=5&sinceMs=100&channelType=discord&shardId=shard-1&groupBy=companionId,shardId',
+    );
     expect(res.status).toBe(200);
-    const payload = JSON.parse(res.body) as { totals: { totalTokens: number }; query: { limit?: number; sinceMs?: number } };
+    const payload = JSON.parse(res.body) as {
+      totals: { totalTokens: number };
+      query: {
+        limit?: number;
+        sinceMs?: number;
+        channelType?: string;
+        shardId?: string;
+        groupBy?: string[];
+      };
+    };
     expect(payload.totals.totalTokens).toBe(15);
-    expect(payload.query).toMatchObject({ limit: 5, sinceMs: 100 });
+    expect(payload.query).toMatchObject({
+      limit: 5,
+      sinceMs: 100,
+      channelType: 'discord',
+      shardId: 'shard-1',
+      groupBy: ['companionId', 'shardId'],
+    });
+
+    const invalid = await requestPort(
+      harness.port,
+      'GET',
+      '/api/admin/model-usage?channelType=email',
+    );
+    expect(invalid.status).toBe(400);
+    expect(JSON.parse(invalid.body)).toMatchObject({ error: expect.stringContaining('channelType') });
+
+    const crossTenant = await requestPort(
+      harness.port,
+      'GET',
+      '/api/admin/model-usage?companionId=another-companion',
+    );
+    expect(crossTenant.status).toBe(403);
+    expect(JSON.parse(crossTenant.body)).toMatchObject({ error: expect.stringContaining('tenant') });
   });
 
   it('proxies observer eval sidecar health through the operator surface', async () => {

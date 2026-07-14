@@ -779,25 +779,43 @@ export class LLMClient {
         ? 'partial'
         : options.settlement,
       callKind,
-      callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
-      purpose,
-      ...(correlation?.originType ? { originType: correlation.originType } : {}),
-      ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
-      service,
-      process,
-      ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-      ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
-      ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-      ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
-      ...(chargeSnapshot
-        ? {
-            chargeLane: chargeSnapshot.lane,
-            chargeRunId: chargeSnapshot.lineage.runId,
-            chargeRootRunId: chargeSnapshot.lineage.rootRunId,
-            ...(chargeSnapshot.lineage.parentRunId ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId } : {}),
-          }
-        : {}),
+      attribution: {
+        ...(correlation?.companionId
+          ? { companionId: correlation.companionId }
+          : (this.config.companionId ? { companionId: this.config.companionId } : {})),
+        ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
+        ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+        ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
+        callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
+        purpose,
+        ...(correlation?.originType ? { originType: correlation.originType } : {}),
+        ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+        service: correlation?.service ?? service,
+        process: correlation?.process ?? process,
+        ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+        ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(chargeSnapshot?.lane
+          ? { chargeLane: chargeSnapshot.lane }
+          : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
+        ...(correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {}),
+        ...(chargeSnapshot?.lineage.runId
+          ? { chargeRunId: chargeSnapshot.lineage.runId }
+          : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
+        ...(chargeSnapshot?.lineage.rootRunId
+          ? { chargeRootRunId: chargeSnapshot.lineage.rootRunId }
+          : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
+        ...(chargeSnapshot?.lineage.parentRunId
+          ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId }
+          : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
+        ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
+        ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
+        ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
+        ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
+        ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
+        ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+      },
       provider: candidate.provider,
       model: normalizeModelIdForProvider(candidate.provider, candidate.model),
       ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),

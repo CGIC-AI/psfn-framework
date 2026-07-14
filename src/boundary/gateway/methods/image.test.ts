@@ -126,7 +126,19 @@ describe('registerImageMethods model usage accounting', () => {
 
     const handler = methods.get('image.create');
     if (!handler) throw new Error('image.create was not registered');
-    await handler({ prompt: 'a lighthouse at dusk', sourceToolName: 'image_create' });
+    await handler({
+      prompt: 'a lighthouse at dusk',
+      sourceToolName: 'image_create',
+      companionId: 'companion-a',
+      sessionId: 'session-1',
+      channelId: 'channel-1',
+      channelType: 'discord',
+      chargeLane: 'interactive',
+      chargeSurface: 'paidImageGeneration',
+      chargeRunId: 'run-1',
+      conversationId: 'conversation-1',
+      rootInitiationId: 'root-1',
+    });
 
     expect(usageEvents).toHaveLength(3);
     expect(usageEvents.map(event => event.logicalCallId)).toEqual([
@@ -139,6 +151,18 @@ describe('registerImageMethods model usage accounting', () => {
         attempt: 1,
         status: 'failure',
         settlement: 'unknown',
+        attribution: {
+          companionId: 'companion-a',
+          sessionId: 'session-1',
+          channelId: 'channel-1',
+          channelType: 'discord',
+          toolName: 'image_create',
+          chargeLane: 'interactive',
+          chargeSurface: 'paidImageGeneration',
+          chargeRunId: 'run-1',
+          conversationId: 'conversation-1',
+          rootInitiationId: 'root-1',
+        },
         provider: 'fal',
         model: 'xai/grok-imagine-image',
         requestedProvider: 'auto',

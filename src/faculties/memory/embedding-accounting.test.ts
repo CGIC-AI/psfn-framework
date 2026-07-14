@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
 import { withEmbeddingUsageAccounting } from './embedding-accounting.js';
 import { ApiEmbeddingProvider } from './embedding.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -33,9 +34,17 @@ describe('withEmbeddingUsageAccounting', () => {
       async recordUsageEvent(event) {
         events.push(event);
       },
-    });
+    }, { companionId: 'companion-a' });
 
-    await expect(accounted.embedBatch(['hello'])).resolves.toEqual([
+    await expect(runWithRequestContext({
+      sessionId: 'session-1',
+      channelId: 'channel-1',
+      channelType: 'discord',
+      callType: 'chat',
+      originType: 'chat',
+      conversationId: 'conversation-1',
+      rootInitiationId: 'root-1',
+    }, async () => await accounted.embedBatch(['hello']))).resolves.toEqual([
       new Float32Array([1, 2]),
     ]);
 
@@ -43,6 +52,17 @@ describe('withEmbeddingUsageAccounting', () => {
       attempt: 1,
       status: 'success',
       settlement: 'complete',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        channelId: 'channel-1',
+        channelType: 'discord',
+        callType: 'memory',
+        purpose: 'embedding',
+        originType: 'chat',
+        conversationId: 'conversation-1',
+        rootInitiationId: 'root-1',
+      },
       provider: 'api',
       model: 'text-embedding-3-small',
       inputTokens: 8,

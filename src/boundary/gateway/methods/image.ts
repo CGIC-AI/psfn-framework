@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ImageGenerationRpcResult } from '../protocol.js';
+import type { GatewayCorrelationParams, ImageGenerationRpcResult } from '../protocol.js';
 import type {
   ImageCreateParams,
   ImageEditParams,
@@ -12,7 +12,7 @@ import {
 import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 
-type ImageUsageParams = ImageCreateParams | ImageEditParams;
+type ImageUsageParams = (ImageCreateParams | ImageEditParams) & GatewayCorrelationParams;
 
 async function recordImageProviderAttempt(
   runtime: GatewayMethodRuntime,
@@ -51,13 +51,35 @@ async function recordImageProviderAttempt(
     status: providerAttempt.status,
     settlement: 'unknown',
     callKind,
-    callType: 'tool',
-    purpose: sourceToolName ?? callKind,
-    originType: 'tool',
-    originStage: mode,
-    service: 'gateway',
-    process: sourceToolName ?? mode,
-    ...(sourceToolName ? { toolName: sourceToolName } : {}),
+    attribution: {
+      ...(params.companionId ? { companionId: params.companionId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.channelType ? { channelType: params.channelType } : {}),
+      callType: params.callType ?? 'tool',
+      purpose: params.purpose ?? sourceToolName ?? callKind,
+      originType: params.originType ?? 'tool',
+      originStage: params.originStage ?? mode,
+      service: params.service ?? 'gateway',
+      process: params.process ?? sourceToolName ?? mode,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.requestId ? { requestId: params.requestId } : {}),
+      ...(sourceToolName ? { toolName: sourceToolName } : (params.toolName
+        ? { toolName: params.toolName }
+        : {})),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
+      ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
+      ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
+      ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
+      ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),
+      ...(params.shardId ? { shardId: params.shardId } : {}),
+      ...(params.subagentId ? { subagentId: params.subagentId } : {}),
+      ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+      ...(params.rootInitiationId ? { rootInitiationId: params.rootInitiationId } : {}),
+      ...(params.workloadType ? { workloadType: params.workloadType } : {}),
+      ...(params.workloadId ? { workloadId: params.workloadId } : {}),
+    },
     provider: providerAttempt.provider,
     model: providerAttempt.model,
     requestedProvider: params.provider ?? 'auto',
@@ -93,7 +115,7 @@ async function runImageWithUsage(
         runtime,
         callKind,
         mode,
-        params,
+        params as ImageCreateParams & GatewayCorrelationParams,
         logicalCallId,
         providerAttempt,
       );
@@ -112,7 +134,7 @@ const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationR
         runtime,
         'image_create',
         'create',
-        params,
+        params as ImageEditParams & GatewayCorrelationParams,
       ),
     summary: (params: ImageCreateParams) => ({
       provider: params.provider ?? 'auto',

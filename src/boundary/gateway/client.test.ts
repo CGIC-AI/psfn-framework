@@ -4,6 +4,7 @@ import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
@@ -467,6 +468,54 @@ describe('GatewayClient streaming', () => {
     await expect(singlePromise).resolves.toSatisfy((value) => (
       Array.from(value).every((entry, index) => Math.abs(entry - [0.7, 0.8, 0.9][index]!) < 1e-5)
     ));
+  });
+
+  it('self-stamps tenant and request attribution on gateway embedding calls', async () => {
+    const attributedClient = new GatewayClient(conn.conn, 1024, { companionId: 'companion-a' });
+    const batchPromise = runWithRequestContext({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      callType: 'memory',
+      purpose: 'embedding',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    }, async () => await attributedClient.embedBatch(['alpha']));
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'llm.embed',
+      params: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        requestId: 'request-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+        texts: ['alpha'],
+      },
+    });
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      result: { embeddings: [[0.1, 0.2]] },
+    });
+    await expect(batchPromise).resolves.toHaveLength(1);
   });
 });
 

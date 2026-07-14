@@ -411,7 +411,20 @@ describe('registerLLMMethods', () => {
     };
     const harness = createHarness({ embeddingService, usageEvents });
 
-    await expect(harness.invoke('llm.embed', { texts: ['first'] })).resolves.toEqual({
+    await expect(harness.invoke('llm.embed', {
+      texts: ['first'],
+      companionId: 'companion-a',
+      sessionId: 'session-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    })).resolves.toEqual({
       embeddings: [[1, 2, 3]],
     });
 
@@ -422,6 +435,19 @@ describe('registerLLMMethods', () => {
       status: 'success',
       settlement: 'complete',
       callKind: 'embedding',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+      },
       provider: 'api',
       model: 'text-embedding-3-small',
       inputTokens: 7,

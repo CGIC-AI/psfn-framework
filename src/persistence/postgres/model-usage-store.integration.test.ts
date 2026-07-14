@@ -38,8 +38,31 @@ describe('PostgresModelUsageStore reconciliation', () => {
       status: 'success',
       settlement: 'complete',
       callKind: 'chat',
-      callType: 'chat',
-      purpose: 'chat',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        channelId: 'channel-1',
+        channelType: 'discord',
+        callType: 'chat',
+        purpose: 'chat',
+        originType: 'chat',
+        originStage: 'turn',
+        service: 'agent',
+        process: 'substrate-agent',
+        turnId: 'turn-1',
+        requestId: 'request-1',
+        toolName: 'respond',
+        toolCallId: 'tool-call-1',
+        chargeLane: 'interactive',
+        chargeSurface: 'externalModelConsult',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        chargeParentRunId: 'parent-run-1',
+        conversationId: 'conversation-1',
+        rootInitiationId: 'root-initiation-1',
+        workloadType: 'conversation',
+        workloadId: 'conversation-1',
+      },
       provider: 'openrouter',
       model: 'openai/gpt-4.1-mini',
       requestedProvider: 'litellm',
@@ -66,7 +89,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
     };
 
     try {
-      const firstStore = new PostgresModelUsageStore(firstPool);
+      const firstStore = new PostgresModelUsageStore(firstPool, { companionId: 'companion-a' });
       await expect(firstStore.recordUsageEvent({
         ...event,
         logicalCallId: 'invalid-negative-usage',
@@ -102,7 +125,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const restartedStore = new PostgresModelUsageStore(secondPool);
+      const restartedStore = new PostgresModelUsageStore(secondPool, { companionId: 'companion-a' });
       const usage = await restartedStore.getUsageData();
       expect(usage.totals.calls).toBe(1);
       expect(usage.totals.totalTokens).toBe(196);
@@ -112,6 +135,22 @@ describe('PostgresModelUsageStore reconciliation', () => {
         logicalCallId: 'logical-call-1',
         attempt: 1,
         settlement: 'complete',
+        attribution: {
+          companionId: 'companion-a',
+          sessionId: 'session-1',
+          channelId: 'channel-1',
+          channelType: 'discord',
+          callType: 'chat',
+          purpose: 'chat',
+          originType: 'chat',
+          originStage: 'turn',
+          service: 'agent',
+          process: 'substrate-agent',
+          conversationId: 'conversation-1',
+          rootInitiationId: 'root-initiation-1',
+          workloadType: 'conversation',
+          workloadId: 'conversation-1',
+        },
         providerCost: { total: 0.95, currency: 'USD' },
         estimatedCost: {
           input: 0.000352,
@@ -127,6 +166,136 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect(usage.recentEvents[0]?.providerCost.input).toBeUndefined();
     } finally {
       await secondPool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('isolates companion tenants while exposing explicit fleet grouping and attribution coverage', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-model-usage-attribution',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const companionA = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+    const event = (
+      logicalCallId: string,
+      companionId: string,
+      channelId: string,
+    ): ModelUsageEventInput => ({
+      logicalCallId,
+      recordedAtMs: 1_752_500_000_000,
+      startedAtMs: 1_752_499_999_900,
+      completedAtMs: 1_752_500_000_000,
+      status: 'success',
+      settlement: 'complete',
+      callKind: 'chat',
+      attribution: {
+        companionId,
+        sessionId: `${companionId}-session`,
+        channelId,
+        channelType: 'api',
+        callType: 'tool',
+        purpose: 'research',
+        originType: 'chat',
+        originStage: 'tool-loop',
+        service: 'agent',
+        process: 'substrate-agent',
+        toolName: 'web_search',
+        chargeLane: 'shard',
+        chargeSurface: 'shardLaunch',
+        conversationId: `${companionId}-conversation`,
+        rootInitiationId: `${companionId}-root`,
+      },
+      provider: 'openrouter',
+      model: 'openai/gpt-4.1-mini',
+      slotKey: 'tool-primary',
+      requestedProvider: 'litellm',
+      requestedModel: 'tool-primary',
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 4,
+      totalTokens: 19,
+      estimatedCostUsd: 0.01,
+      costSource: 'estimate',
+      currency: 'USD',
+    });
+
+    try {
+      await companionA.recordUsageEvent(event('companion-a-call', 'companion-a', 'shard:shard-7'));
+      const companionB = new PostgresModelUsageStore(pool, { companionId: 'companion-b' });
+      await companionB.recordUsageEvent(event('companion-b-call', 'companion-b', 'channel-b'));
+      const fleet = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await expect(fleet.recordUsageEvent({
+        ...event('missing-companion-call', 'companion-a', 'channel-missing'),
+        attribution: { callType: 'chat', purpose: 'chat' },
+      })).rejects.toThrow('require an explicit companionId');
+      await expect(companionA.recordUsageEvent(
+        event('cross-tenant-call', 'companion-b', 'channel-cross'),
+      )).rejects.toThrow('does not match the store tenant');
+      await expect(companionA.getUsageData({ companionId: 'companion-b' }))
+        .rejects.toThrow('outside the Garden tenant');
+      await expect(companionA.getUsageData({
+        groupBy: ['not-a-dimension'] as never,
+      })).rejects.toThrow('unsupported dimension');
+      await expect(companionA.getUsageData({
+        channelType: 'email' as never,
+      })).rejects.toThrow('unsupported value');
+      await expect(companionA.getUsageData({ unexpected: 'value' } as never))
+        .rejects.toThrow('unsupported field');
+
+      const usageA = await companionA.getUsageData({
+        channelType: 'api',
+        shardId: 'shard-7',
+        groupBy: ['companionId', 'channelType', 'shardId', 'subagentId'],
+      });
+      expect(usageA.totals).toMatchObject({ calls: 1, totalTokens: 19 });
+      expect(usageA.groupedBy.companionId).toEqual([
+        expect.objectContaining({ key: 'companion-a', calls: 1, cacheReadTokens: 3, cacheWriteTokens: 4 }),
+      ]);
+      expect(usageA.groupedBy.channelType?.[0]).toMatchObject({ key: 'api', calls: 1 });
+      expect(usageA.groupedBy.shardId?.[0]).toMatchObject({ key: 'shard-7', calls: 1 });
+      expect(usageA.groupedBy.subagentId?.[0]).toMatchObject({ key: 'unknown', calls: 1 });
+      expect(usageA.attributionCoverage.byDimension.shardId).toEqual({
+        knownCalls: 1,
+        unknownCalls: 0,
+        coveragePercent: 100,
+      });
+      expect(usageA.attributionCoverage.byDimension.subagentId).toEqual({
+        knownCalls: 0,
+        unknownCalls: 1,
+        coveragePercent: 0,
+      });
+      expect(usageA.recentEvents[0]?.attribution).toMatchObject({
+        companionId: 'companion-a',
+        shardId: 'shard-7',
+        workloadType: 'shard',
+        workloadId: 'shard-7',
+      });
+
+      expect((await companionB.getUsageData()).totals.calls).toBe(1);
+      const fleetUsage = await fleet.getUsageData({ groupBy: ['companionId'] });
+      expect(fleetUsage.totals.calls).toBe(2);
+      expect(fleetUsage.groupedBy.companionId).toEqual([
+        expect.objectContaining({ key: 'companion-a', calls: 1 }),
+        expect.objectContaining({ key: 'companion-b', calls: 1 }),
+      ]);
+      await expect(fleet.getModelBudgetSpend(1_752_500_000_100))
+        .rejects.toThrow('require an explicit companionId');
+      expect(await fleet.getModelBudgetSpend(
+        1_752_500_000_100,
+        { companionId: 'companion-a' },
+      )).toMatchObject({
+        dailyEstimatedCostUsd: 0.01,
+        monthlyEstimatedCostUsd: 0.01,
+      });
+      await expect(companionA.getModelBudgetSpend(
+        1_752_500_000_100,
+        { companionId: 'companion-b' },
+      )).rejects.toThrow('does not match the store tenant');
+    } finally {
+      await pool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -153,8 +322,10 @@ describe('PostgresModelUsageStore reconciliation', () => {
       status: logicalCallId.includes('unknown') ? 'failure' : 'success',
       settlement: estimatedCostUsd === undefined ? 'unknown' : 'complete',
       callKind,
-      callType: callKind === 'chat' ? 'chat' : 'background',
-      purpose: callKind,
+      attribution: {
+        callType: callKind === 'chat' ? 'chat' : 'background',
+        purpose: callKind,
+      },
       provider: 'test-provider',
       model: 'test-model',
       inputTokens: 1,
@@ -165,7 +336,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
     });
 
     try {
-      const store = new PostgresModelUsageStore(firstPool);
+      const store = new PostgresModelUsageStore(firstPool, { companionId: 'companion-a' });
       await store.recordUsageEvent(event(
         'today-chat', Date.parse('2026-03-06T08:00:00.000Z'), 'chat', 0.1,
       ));
@@ -202,7 +373,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const restartedStore = new PostgresModelUsageStore(restartedPool);
+      const restartedStore = new PostgresModelUsageStore(restartedPool, { companionId: 'companion-a' });
       expect(await restartedStore.getModelBudgetSpend(nowMs)).toEqual({
         dayKey: '2026-03-06',
         monthKey: '2026-03',
@@ -225,7 +396,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const firstStore = new PostgresModelUsageStore(firstPool);
+      const firstStore = new PostgresModelUsageStore(firstPool, { companionId: 'companion-a' });
       await firstStore.recordUsageEvent({
         logicalCallId: 'valid-partial-call',
         attempt: 1,
@@ -235,8 +406,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         status: 'success',
         settlement: 'partial',
         callKind: 'chat',
-        callType: 'chat',
-        purpose: 'chat',
+        attribution: { callType: 'chat', purpose: 'chat' },
         provider: 'openrouter',
         model: 'unknown-price-model',
         inputTokens: 10,
@@ -256,8 +426,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         status: 'failure',
         settlement: 'unknown',
         callKind: 'embedding',
-        callType: 'background',
-        purpose: 'memory',
+        attribution: { callType: 'background', purpose: 'memory' },
         provider: 'api',
         model: 'unknown-price-embedding',
         inputTokens: 3,
@@ -275,7 +444,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const restartedStore = new PostgresModelUsageStore(restartedPool);
+      const restartedStore = new PostgresModelUsageStore(restartedPool, { companionId: 'companion-a' });
       const usage = await restartedStore.getUsageData();
       const partial = usage.recentEvents.find(event => event.logicalCallId === 'valid-partial-call');
       const unknown = usage.recentEvents.find(event => event.logicalCallId === 'valid-unknown-call');
@@ -457,7 +626,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const migratedStore = new PostgresModelUsageStore(migratedPool);
+      const migratedStore = new PostgresModelUsageStore(migratedPool, { fleetAggregation: true });
       const usage = await migratedStore.getUsageData();
       expect(usage.totals).toMatchObject({
         calls: 3,
@@ -523,12 +692,23 @@ describe('PostgresModelUsageStore reconciliation', () => {
 
       const version = await migratedPool.query<{
         accounting_schema_version: number;
+        attribution_schema_version: number;
+        companion_id: string;
+        channel_type: string;
+        conversation_id: string;
       }>(`
-        SELECT accounting_schema_version
+        SELECT accounting_schema_version, attribution_schema_version,
+               companion_id, channel_type, conversation_id
         FROM model_usage_events
         WHERE id = 'legacy-accounting-event'
       `);
-      expect(version.rows).toEqual([{ accounting_schema_version: 2 }]);
+      expect(version.rows).toEqual([{
+        accounting_schema_version: 2,
+        attribution_schema_version: 1,
+        companion_id: 'unknown',
+        channel_type: 'unknown',
+        conversation_id: 'unknown',
+      }]);
 
       const constraints = await migratedPool.query<{
         conname: string;
@@ -539,6 +719,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
         WHERE conrelid = 'model_usage_events'::regclass
           AND conname IN (
             'model_usage_events_accounting_schema_version_check',
+            'model_usage_events_attribution_schema_version_check',
             'model_usage_events_token_accounting_check',
             'model_usage_events_usd_currency_check'
           )
@@ -546,8 +727,41 @@ describe('PostgresModelUsageStore reconciliation', () => {
       `);
       expect(constraints.rows).toEqual([
         { conname: 'model_usage_events_accounting_schema_version_check', convalidated: true },
+        { conname: 'model_usage_events_attribution_schema_version_check', convalidated: true },
         { conname: 'model_usage_events_token_accounting_check', convalidated: true },
         { conname: 'model_usage_events_usd_currency_check', convalidated: true },
+      ]);
+
+      const indexes = await migratedPool.query<{ indexname: string }>(`
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND tablename = 'model_usage_events'
+          AND indexname IN (
+            'idx_model_usage_events_companion_time',
+            'idx_model_usage_events_session_time',
+            'idx_model_usage_events_channel_time',
+            'idx_model_usage_events_charge_attribution_time',
+            'idx_model_usage_events_shard_time',
+            'idx_model_usage_events_subagent_time',
+            'idx_model_usage_events_conversation_time',
+            'idx_model_usage_events_root_initiation_time',
+            'idx_model_usage_events_workload_time',
+            'idx_model_usage_events_status_cost_time'
+          )
+        ORDER BY indexname
+      `);
+      expect(indexes.rows.map(row => row.indexname)).toEqual([
+        'idx_model_usage_events_channel_time',
+        'idx_model_usage_events_charge_attribution_time',
+        'idx_model_usage_events_companion_time',
+        'idx_model_usage_events_conversation_time',
+        'idx_model_usage_events_root_initiation_time',
+        'idx_model_usage_events_session_time',
+        'idx_model_usage_events_shard_time',
+        'idx_model_usage_events_status_cost_time',
+        'idx_model_usage_events_subagent_time',
+        'idx_model_usage_events_workload_time',
       ]);
 
       await expect(migratedPool.query(`
@@ -574,7 +788,7 @@ describe('PostgresModelUsageStore reconciliation', () => {
       max: 1,
     });
     try {
-      const restartedStore = new PostgresModelUsageStore(restartedPool);
+      const restartedStore = new PostgresModelUsageStore(restartedPool, { fleetAggregation: true });
       const usage = await restartedStore.getUsageData();
       expect(usage.totals.totalTokens).toBe(23);
       expect(usage.totals.totalCostUsd).toBe(0);

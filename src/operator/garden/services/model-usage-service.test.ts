@@ -1,8 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelUsageData, ModelUsageQueryPort } from '../../../shared/telemetry/model-usage.js';
+import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../../shared/telemetry/model-usage-attribution.js';
 import { AdminModelUsageDataService } from './model-usage-service.js';
 
 function makeUsageData(): ModelUsageData {
+  const attributionCoverage = {
+    totalCalls: 1,
+    byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map(dimension => [dimension, {
+      knownCalls: 0,
+      unknownCalls: 1,
+      coveragePercent: 0,
+    }])) as ModelUsageData['attributionCoverage']['byDimension'],
+  };
   return {
     query: { limit: 10 },
     totals: {
@@ -25,6 +34,8 @@ function makeUsageData(): ModelUsageData {
       calls: 1,
       inputTokens: 1000,
       outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 1500,
       totalCostUsd: 0,
     }],
@@ -33,14 +44,18 @@ function makeUsageData(): ModelUsageData {
       calls: 1,
       inputTokens: 1000,
       outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 1500,
       totalCostUsd: 0,
     }],
     byTool: [{
-      key: '(none)',
+      key: 'unknown',
       calls: 1,
       inputTokens: 1000,
       outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 1500,
       totalCostUsd: 0,
     }],
@@ -49,6 +64,8 @@ function makeUsageData(): ModelUsageData {
       calls: 1,
       inputTokens: 1000,
       outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 1500,
       totalCostUsd: 0,
     }],
@@ -61,9 +78,35 @@ function makeUsageData(): ModelUsageData {
       dayKey: '2026-06-14',
       monthKey: '2026-06',
       status: 'success',
+      settlement: 'complete',
       callKind: 'completion',
-      callType: 'background',
-      purpose: 'background',
+      attribution: {
+        companionId: 'unknown',
+        sessionId: 'unknown',
+        channelId: 'unknown',
+        channelType: 'unknown',
+        callType: 'background',
+        purpose: 'background',
+        originType: 'unknown',
+        originStage: 'unknown',
+        service: 'unknown',
+        process: 'unknown',
+        turnId: 'unknown',
+        requestId: 'unknown',
+        toolName: 'unknown',
+        toolCallId: 'unknown',
+        chargeLane: 'unknown',
+        chargeSurface: 'unknown',
+        chargeRunId: 'unknown',
+        chargeRootRunId: 'unknown',
+        chargeParentRunId: 'unknown',
+        shardId: 'unknown',
+        subagentId: 'unknown',
+        conversationId: 'unknown',
+        rootInitiationId: 'unknown',
+        workloadType: 'unknown',
+        workloadId: 'unknown',
+      },
       provider: 'litellm',
       model: 'deepseek/deepseek-v4-pro',
       requestedProvider: 'litellm',
@@ -74,10 +117,15 @@ function makeUsageData(): ModelUsageData {
       cacheWriteTokens: 0,
       totalTokens: 1500,
       estimatedCostUsd: 0,
+      providerCost: {},
+      estimatedCost: {},
+      effectiveCost: {},
       costSource: 'none',
       metadata: {},
     }],
     expensiveEvents: [],
+    groupedBy: {},
+    attributionCoverage,
   };
 }
 

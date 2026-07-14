@@ -2100,9 +2100,11 @@ describe('LLMClient correlation metadata', () => {
     expect(requestOptions.maxTokens).toBe(1536);
 
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
-      purpose: 'memory',
-      service: 'memory',
-      process: 'memory',
+      attribution: expect.objectContaining({
+        purpose: 'memory',
+        service: 'memory',
+        process: 'memory',
+      }),
       inputTokens: 8,
       outputTokens: 5,
     }));
@@ -2460,7 +2462,7 @@ describe('LLMClient model budget gates and usage metering', () => {
 
   it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
-    const client = new LLMClient(makeConfig(), {
+    const client = new LLMClient(makeConfig({ companionId: 'gateway-default' }), {
       litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
@@ -2489,10 +2491,15 @@ describe('LLMClient model budget gates and usage metering', () => {
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'Hello there' }],
       correlation: {
+        companionId: 'companion-a',
+        sessionId: 'session-openrouter-usage-1',
         turnId: 'turn-openrouter-usage-1',
         requestId: 'req-openrouter-usage-1',
         channelId: 'channel-openrouter-usage-1',
+        channelType: 'api',
         callType: 'chat',
+        conversationId: 'conversation-openrouter-usage-1',
+        rootInitiationId: 'root-openrouter-usage-1',
       },
     });
 
@@ -2518,6 +2525,15 @@ describe('LLMClient model budget gates and usage metering', () => {
       cacheReadTokens: 7,
       cacheWriteTokens: 11,
       totalTokens: 196,
+      attribution: expect.objectContaining({
+        companionId: 'companion-a',
+        sessionId: 'session-openrouter-usage-1',
+        channelId: 'channel-openrouter-usage-1',
+        channelType: 'api',
+        callType: 'chat',
+        conversationId: 'conversation-openrouter-usage-1',
+        rootInitiationId: 'root-openrouter-usage-1',
+      }),
       providerCostUsd: 0.95,
       costSource: 'provider',
       metadata: expect.objectContaining({
@@ -3604,8 +3620,10 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'openrouter',
       model: 'deepseek/deepseek-v3.2',
-      purpose: 'background',
-      service: 'background',
+      attribution: expect.objectContaining({
+        purpose: 'background',
+        service: 'background',
+      }),
       inputTokens: 13,
       outputTokens: 7,
     }));

@@ -139,6 +139,24 @@ describe('ModelBudgetController', () => {
     expect(preflight.blockedEvent?.budget.dailySpentUsd).toBeCloseTo(0.001, 8);
   });
 
+  it('scopes shared gateway budget projections to the correlated companion', async () => {
+    const query = makeQuery();
+    const controller = new ModelBudgetController(
+      makeConfig('/tmp/psfn-model-budget-companion-scope'),
+      query,
+    );
+
+    await controller.evaluatePreflight({
+      ...preflightInput,
+      correlation: { companionId: 'companion-a' },
+    });
+
+    expect(query.getModelBudgetSpend).toHaveBeenCalledWith(
+      nowMs,
+      { companionId: 'companion-a' },
+    );
+  });
+
   it('fails closed when a canonical historical attempt has unknown estimated cost', async () => {
     const query = makeQuery({
       ...zeroSpend,

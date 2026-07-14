@@ -54,15 +54,24 @@ describe('correlation helpers', () => {
   describe('resolveCorrelationMetadata', () => {
     it('normalizes merged metadata and applies option precedence', () => {
       const context: CorrelationMetadata = {
+        companionId: 'companion-a',
+        sessionId: 'session-context',
         turnId: 'context-turn',
         requestId: 'context-request',
         channelId: 'discord:general',
+        channelType: 'discord',
         callType: 'chat',
         toolName: 'context-tool',
         toolCallId: 'context-call',
         purpose: 'context.stage',
         originType: 'chat',
         originStage: 'context.stage',
+        chargeLane: 'interactive',
+        chargeSurface: 'externalModelConsult',
+        chargeRunId: 'run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
       };
 
       const options: Partial<CorrelationMetadata> = {
@@ -78,14 +87,23 @@ describe('correlation helpers', () => {
       };
 
       expect(resolveCorrelationMetadata(context, options, 'background')).toEqual({
+        companionId: 'companion-a',
+        sessionId: 'session-context',
         turnId: 'option-turn',
         requestId: 'option-turn',
         channelId: 'internal:heartbeat',
+        channelType: 'discord',
         callType: 'tool',
         toolName: 'option-tool',
         purpose: 'option.stage',
         originType: 'summary',
         originStage: 'option.origin',
+        chargeLane: 'interactive',
+        chargeSurface: 'externalModelConsult',
+        chargeRunId: 'run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
       });
     });
 

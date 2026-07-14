@@ -317,7 +317,10 @@ export class ModelBudgetController {
 
     let spend: ModelUsageBudgetSpendSnapshot;
     try {
-      spend = await this.usageQuery.getModelBudgetSpend(nowMs);
+      const companionId = params.correlation?.companionId?.trim();
+      spend = companionId
+        ? await this.usageQuery.getModelBudgetSpend(nowMs, { companionId })
+        : await this.usageQuery.getModelBudgetSpend(nowMs);
     } catch (error) {
       const accountingError = error instanceof Error ? error : new Error(String(error));
       const snapshot = toWindowSnapshot(

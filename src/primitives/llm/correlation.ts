@@ -66,10 +66,26 @@ export function resolveCorrelationMetadata(
   };
 
   const turnId = normalizeCorrelationValue(merged.turnId);
+  const companionId = normalizeCorrelationValue(merged.companionId);
+  const sessionId = normalizeCorrelationValue(merged.sessionId);
   const channelId = normalizeCorrelationValue(merged.channelId);
+  const channelType = normalizeCorrelationValue(merged.channelType) as typeof merged.channelType;
   const requestId = normalizeCorrelationValue(merged.requestId) ?? turnId ?? 'unknown';
   const toolName = normalizeCorrelationValue(merged.toolName);
   const toolCallId = normalizeCorrelationValue(merged.toolCallId);
+  const service = normalizeCorrelationValue(merged.service);
+  const process = normalizeCorrelationValue(merged.process);
+  const chargeLane = normalizeCorrelationValue(merged.chargeLane) as typeof merged.chargeLane;
+  const chargeSurface = normalizeCorrelationValue(merged.chargeSurface) as typeof merged.chargeSurface;
+  const chargeRunId = normalizeCorrelationValue(merged.chargeRunId);
+  const chargeRootRunId = normalizeCorrelationValue(merged.chargeRootRunId);
+  const chargeParentRunId = normalizeCorrelationValue(merged.chargeParentRunId);
+  const shardId = normalizeCorrelationValue(merged.shardId);
+  const subagentId = normalizeCorrelationValue(merged.subagentId);
+  const conversationId = normalizeCorrelationValue(merged.conversationId);
+  const rootInitiationId = normalizeCorrelationValue(merged.rootInitiationId);
+  const workloadType = normalizeCorrelationValue(merged.workloadType);
+  const workloadId = normalizeCorrelationValue(merged.workloadId);
 
   const inferredCallType = inferCallType(purpose, channelId);
   const originType = isObservabilityCallType(merged.originType)
@@ -85,15 +101,31 @@ export function resolveCorrelationMetadata(
   const resolvedPurpose = normalizeCorrelationValue(merged.purpose) ?? originStage;
 
   return {
+    ...(companionId ? { companionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(turnId ? { turnId } : {}),
     requestId,
     ...(channelId ? { channelId } : {}),
+    ...(channelType ? { channelType } : {}),
     callType,
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     purpose: resolvedPurpose,
     originType,
     originStage,
+    ...(service ? { service } : {}),
+    ...(process ? { process } : {}),
+    ...(chargeLane ? { chargeLane } : {}),
+    ...(chargeSurface ? { chargeSurface } : {}),
+    ...(chargeRunId ? { chargeRunId } : {}),
+    ...(chargeRootRunId ? { chargeRootRunId } : {}),
+    ...(chargeParentRunId ? { chargeParentRunId } : {}),
+    ...(shardId ? { shardId } : {}),
+    ...(subagentId ? { subagentId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(rootInitiationId ? { rootInitiationId } : {}),
+    ...(workloadType ? { workloadType } : {}),
+    ...(workloadId ? { workloadId } : {}),
   };
 }
 

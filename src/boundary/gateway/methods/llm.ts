@@ -10,6 +10,7 @@ import type {
   LLMInvalidateModelDiscoveryParams,
   LLMInvalidateModelDiscoveryResult,
   LLMChunkNotification,
+  GatewayCorrelationParams,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import type {
@@ -32,6 +33,7 @@ import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accou
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
   try {
@@ -59,6 +61,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       const modelHint = extractModelHintFromParams(params);
       const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
+        ...params,
         turnId: params.turnId,
         requestId,
         channelId: params.channelId,
@@ -110,6 +113,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       model: p.model,
       stream: p.stream,
       ...toSummaryCorrelation(buildCorrelation({
+        ...p,
         turnId: p.turnId,
         requestId: p.requestId,
         channelId: p.channelId,
@@ -129,6 +133,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       const inferredCallType = inferCallType(params.purpose, params.channelId);
       const modelHint = extractModelHintFromParams(params);
       const correlation = buildCorrelation({
+        ...params,
         turnId: params.turnId,
         requestId: params.requestId ?? params.turnId,
         channelId: params.channelId,
@@ -173,6 +178,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       ...(p.companionId?.trim() ? { companionId: p.companionId.trim() } : {}),
       purpose: p.purpose,
       ...toSummaryCorrelation(buildCorrelation({
+        ...p,
         turnId: p.turnId,
         requestId: p.requestId ?? p.turnId,
         channelId: p.channelId,
@@ -196,9 +202,19 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       const startedAtMs = Date.now();
       const logicalCallId = `embedding:${randomUUID()}`;
       const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
+      const correlation = buildCorrelation({
+        ...params,
+        callType: params.callType ?? 'memory',
+        purpose: params.purpose ?? 'embedding',
+        originType: params.originType ?? 'memory',
+        originStage: params.originStage ?? 'embedding',
+      });
       let result: EmbeddingBatchProviderUsageResult;
       try {
-        result = await embedBatchWithProviderUsage(runtime, params.texts);
+        result = await runWithRequestContext(
+          correlation,
+          async () => await embedBatchWithProviderUsage(runtime, params.texts),
+        );
       } catch (error) {
         if (!recordsUsageInternally) {
           await recordEmbeddingUsage(
@@ -262,27 +278,14 @@ function requireModelDiscovery(
   return runtime.modelDiscovery;
 }
 
-function buildCorrelation(params: {
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
+function buildCorrelation(params: GatewayCorrelationParams & {
   callType: ObservabilityCallType;
-  originType?: ObservabilityCallType;
-  originStage?: string;
-  toolName?: string;
-  toolCallId?: string;
   purpose: string;
 }): CorrelationMetadata {
   return resolveCorrelationMetadata(
     {
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      ...(params.requestId ? { requestId: params.requestId } : {}),
-      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...params,
       callType: params.callType,
-      ...(params.originType ? { originType: params.originType } : {}),
-      ...(params.originStage ? { originStage: params.originStage } : {}),
-      ...(params.toolName ? { toolName: params.toolName } : {}),
-      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       purpose: params.purpose,
     },
     undefined,
@@ -351,12 +354,33 @@ async function recordEmbeddingUsage(
       ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
       : 'unknown',
     callKind: 'embedding',
-    callType: 'memory',
-    purpose: 'embedding',
-    originType: 'memory',
-    originStage: 'embedding',
-    service: 'memory',
-    process: 'embedding',
+    attribution: {
+      ...(params.companionId ? { companionId: params.companionId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.channelType ? { channelType: params.channelType } : {}),
+      callType: params.callType ?? 'memory',
+      purpose: params.purpose ?? 'embedding',
+      originType: params.originType ?? 'memory',
+      originStage: params.originStage ?? 'embedding',
+      service: params.service ?? 'memory',
+      process: params.process ?? 'embedding',
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.requestId ? { requestId: params.requestId } : {}),
+      ...(params.toolName ? { toolName: params.toolName } : {}),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
+      ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
+      ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
+      ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
+      ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),
+      ...(params.shardId ? { shardId: params.shardId } : {}),
+      ...(params.subagentId ? { subagentId: params.subagentId } : {}),
+      ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+      ...(params.rootInitiationId ? { rootInitiationId: params.rootInitiationId } : {}),
+      ...(params.workloadType ? { workloadType: params.workloadType } : {}),
+      ...(params.workloadId ? { workloadId: params.workloadId } : {}),
+    },
     provider,
     model,
     requestedProvider: provider,

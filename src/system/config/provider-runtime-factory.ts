@@ -8,6 +8,7 @@ import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-a
 import { resolveModelUsageCostRatesForIdentity } from '../../primitives/llm/model-budget.js';
 import {
   createPostgresModelUsageStoreFromConfig,
+  type ModelUsageStoreScope,
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
 
@@ -21,13 +22,22 @@ export interface ProviderRuntimeFactoryOptions {
   config: SubstrateConfig;
   providerEnv?: NodeJS.ProcessEnv;
   llmOptions?: LLMClientRuntimeOptions;
+  modelUsageScope?: ModelUsageStoreScope;
 }
 
 export function createProviderRuntimeServices(
   options: ProviderRuntimeFactoryOptions,
 ): ProviderRuntimeServices {
   const providerEnv = options.providerEnv ?? process.env;
-  const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(
+    options.config,
+    options.modelUsageScope,
+  );
+  const usageCompanionId = options.modelUsageScope
+    ? ('companionId' in options.modelUsageScope
+      ? options.modelUsageScope.companionId
+      : undefined)
+    : options.config.companionId;
   const embeddingProvider = createEmbeddingProviderFromConfig(options.config, providerEnv);
   const embeddingRates = resolveModelUsageCostRatesForIdentity(options.config, {
     provider: embeddingProvider.kind,
@@ -45,6 +55,7 @@ export function createProviderRuntimeServices(
     embeddingProvider: modelUsageStore
       ? withEmbeddingUsageAccounting(embeddingProvider, modelUsageStore, {
           estimatedRates: embeddingRates,
+          ...(usageCompanionId ? { companionId: usageCompanionId } : {}),
         })
       : embeddingProvider,
     ...(modelUsageStore ? { modelUsageStore } : {}),

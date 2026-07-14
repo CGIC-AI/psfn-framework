@@ -54,6 +54,7 @@ export function createGatewayPrivilegedServiceRegistry(
   const providerRuntime = createProviderRuntimeServices({
     config: input.config,
     providerEnv: input.providerEnv,
+    modelUsageScope: { fleetAggregation: true },
     llmOptions: {
       ...(input.llmOptions ?? {}),
       providerCostResolver: input.llmOptions?.providerCostResolver

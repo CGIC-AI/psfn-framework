@@ -10,6 +10,7 @@ import { POSTGRES_MODEL_USAGE_MIGRATIONS } from './migrations.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ModelUsageBreakdown,
+  ModelUsageAttributionCoverage,
   ModelUsageBudgetQueryPort,
   ModelUsageBudgetSpendSnapshot,
   ModelUsageCallKind,
@@ -24,7 +25,23 @@ import type {
   ModelUsageStatus,
   ModelUsageSettlement,
   ModelUsageTotals,
+  ModelUsageGroupDimension,
 } from '../../shared/telemetry/model-usage.js';
+import {
+  MODEL_USAGE_CALL_KINDS,
+  MODEL_USAGE_COST_SOURCES,
+  MODEL_USAGE_STATUSES,
+} from '../../shared/telemetry/model-usage.js';
+import {
+  MODEL_USAGE_CALL_TYPES,
+  MODEL_USAGE_CHANNEL_TYPES,
+  MODEL_USAGE_CHARGE_LANES,
+  MODEL_USAGE_CHARGE_SURFACES,
+  MODEL_USAGE_GROUP_DIMENSIONS,
+  MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+  normalizeModelUsageAttribution,
+} from '../../shared/telemetry/model-usage-attribution.js';
 import {
   reconcileModelUsageAccounting,
   roundModelUsageUsd,
@@ -49,22 +66,31 @@ interface ModelUsageEventRow {
   status: ModelUsageStatus;
   settlement: ModelUsageSettlement;
   call_kind: ModelUsageCallKind;
-  call_type: ModelUsageEvent['callType'];
+  call_type: ModelUsageEvent['attribution']['callType'];
   purpose: string;
-  origin_type: ModelUsageEvent['originType'] | null;
+  origin_type: ModelUsageEvent['attribution']['originType'] | null;
   origin_stage: string | null;
   service: string | null;
   process: string | null;
+  companion_id: string;
+  session_id: string;
   turn_id: string | null;
   request_id: string | null;
   channel_id: string | null;
+  channel_type: string;
   tool_name: string | null;
   tool_call_id: string | null;
-  charge_lane: ModelUsageEvent['chargeLane'] | null;
-  charge_surface: ModelUsageEvent['chargeSurface'] | null;
+  charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
+  charge_surface: ModelUsageEvent['attribution']['chargeSurface'] | null;
   charge_run_id: string | null;
   charge_root_run_id: string | null;
   charge_parent_run_id: string | null;
+  shard_id: string;
+  subagent_id: string;
+  conversation_id: string;
+  root_initiation_id: string;
+  workload_type: string;
+  workload_id: string;
   provider: string;
   model: string;
   slot_key: string | null;
@@ -120,9 +146,15 @@ interface BreakdownRow {
   calls: number | string;
   input_tokens: number | string | null;
   output_tokens: number | string | null;
+  cache_read_tokens: number | string | null;
+  cache_write_tokens: number | string | null;
   total_tokens: number | string | null;
   total_cost_usd: number | string | null;
 }
+
+type CoverageRow = Record<string, number | string | null | undefined> & {
+  total_calls: number | string;
+};
 
 interface BudgetSpendRow {
   daily_estimated_cost_usd: number | string | null;
@@ -135,6 +167,43 @@ interface SqlWhere {
   clause: string;
   values: unknown[];
 }
+
+export type ModelUsageStoreScope =
+  | { companionId: string; fleetAggregation?: never }
+  | { companionId?: never; fleetAggregation: true };
+
+const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
+  companionId: 'companion_id',
+  sessionId: 'session_id',
+  channelId: 'channel_id',
+  channelType: 'channel_type',
+  callKind: 'call_kind',
+  callType: 'call_type',
+  purpose: 'purpose',
+  originType: 'origin_type',
+  originStage: 'origin_stage',
+  service: 'service',
+  process: 'process',
+  provider: 'provider',
+  model: 'model',
+  slotKey: 'slot_key',
+  requestedProvider: 'requested_provider',
+  requestedModel: 'requested_model',
+  toolName: 'tool_name',
+  chargeLane: 'charge_lane',
+  chargeSurface: 'charge_surface',
+  chargeRunId: 'charge_run_id',
+  chargeRootRunId: 'charge_root_run_id',
+  chargeParentRunId: 'charge_parent_run_id',
+  shardId: 'shard_id',
+  subagentId: 'subagent_id',
+  conversationId: 'conversation_id',
+  rootInitiationId: 'root_initiation_id',
+  workloadType: 'workload_type',
+  workloadId: 'workload_id',
+  status: 'status',
+  costSource: 'cost_source',
+};
 
 function normalizeText(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
@@ -253,7 +322,10 @@ function parseMetadata(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
+function normalizeEvent(
+  input: ModelUsageEventInput,
+  expectedCompanionId?: string,
+): ModelUsageEvent {
   const declaredCurrency = optionalText(input.currency)?.toUpperCase();
   if (declaredCurrency && declaredCurrency !== 'USD') {
     throw new Error('currency must be USD until explicit currency conversion is implemented');
@@ -291,6 +363,20 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
   const effectiveCostUsd = accounting.effectiveCost.total;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
   const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
+  const declaredCompanionId = optionalText(input.attribution.companionId);
+  if (!expectedCompanionId && !declaredCompanionId) {
+    throw new Error('Fleet model usage events require an explicit companionId attribution');
+  }
+  if (expectedCompanionId && declaredCompanionId && declaredCompanionId !== expectedCompanionId) {
+    throw new Error(
+      `Model usage companion attribution ${JSON.stringify(declaredCompanionId)} does not match `
+      + `the store tenant ${JSON.stringify(expectedCompanionId)}`,
+    );
+  }
+  const attribution = normalizeModelUsageAttribution({
+    ...input.attribution,
+    ...(expectedCompanionId ? { companionId: expectedCompanionId } : {}),
+  });
 
   return {
     id: normalizeText(input.id, `${logicalCallId}:${attempt}`),
@@ -306,22 +392,7 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     status: input.status,
     settlement: input.settlement ?? (input.status === 'success' ? 'complete' : 'unknown'),
     callKind: input.callKind,
-    callType: input.callType,
-    purpose: normalizeText(input.purpose, 'unknown'),
-    ...(input.originType ? { originType: input.originType } : {}),
-    ...(optionalText(input.originStage) ? { originStage: optionalText(input.originStage) } : {}),
-    ...(optionalText(input.service) ? { service: optionalText(input.service) } : {}),
-    ...(optionalText(input.process) ? { process: optionalText(input.process) } : {}),
-    ...(optionalText(input.turnId) ? { turnId: optionalText(input.turnId) } : {}),
-    ...(optionalText(input.requestId) ? { requestId: optionalText(input.requestId) } : {}),
-    ...(optionalText(input.channelId) ? { channelId: optionalText(input.channelId) } : {}),
-    ...(optionalText(input.toolName) ? { toolName: optionalText(input.toolName) } : {}),
-    ...(optionalText(input.toolCallId) ? { toolCallId: optionalText(input.toolCallId) } : {}),
-    ...(input.chargeLane ? { chargeLane: input.chargeLane } : {}),
-    ...(input.chargeSurface ? { chargeSurface: input.chargeSurface } : {}),
-    ...(optionalText(input.chargeRunId) ? { chargeRunId: optionalText(input.chargeRunId) } : {}),
-    ...(optionalText(input.chargeRootRunId) ? { chargeRootRunId: optionalText(input.chargeRootRunId) } : {}),
-    ...(optionalText(input.chargeParentRunId) ? { chargeParentRunId: optionalText(input.chargeParentRunId) } : {}),
+    attribution,
     provider: normalizeText(input.provider, 'unknown'),
     model: normalizeText(input.model, 'unknown'),
     ...(optionalText(input.slotKey) ? { slotKey: optionalText(input.slotKey) } : {}),
@@ -361,8 +432,44 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     status: row.status,
     settlement: row.settlement,
     callKind: row.call_kind,
-    callType: row.call_type,
-    purpose: row.purpose,
+    attribution: normalizeModelUsageAttribution({
+      companionId: row.companion_id,
+      sessionId: row.session_id,
+      channelId: row.channel_id ?? undefined,
+      channelType: row.channel_type === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.channel_type as Exclude<
+            ModelUsageEvent['attribution']['channelType'],
+            typeof MODEL_USAGE_UNKNOWN_DIMENSION
+          >,
+      callType: row.call_type,
+      purpose: row.purpose,
+      originType: row.origin_type === null || row.origin_type === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.origin_type,
+      originStage: row.origin_stage ?? undefined,
+      service: row.service ?? undefined,
+      process: row.process ?? undefined,
+      turnId: row.turn_id ?? undefined,
+      requestId: row.request_id ?? undefined,
+      toolName: row.tool_name ?? undefined,
+      toolCallId: row.tool_call_id ?? undefined,
+      chargeLane: row.charge_lane === null || row.charge_lane === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.charge_lane,
+      chargeSurface: row.charge_surface === null || row.charge_surface === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.charge_surface,
+      chargeRunId: row.charge_run_id ?? undefined,
+      chargeRootRunId: row.charge_root_run_id ?? undefined,
+      chargeParentRunId: row.charge_parent_run_id ?? undefined,
+      shardId: row.shard_id,
+      subagentId: row.subagent_id,
+      conversationId: row.conversation_id,
+      rootInitiationId: row.root_initiation_id,
+      workloadType: row.workload_type,
+      workloadId: row.workload_id,
+    }),
     provider: row.provider,
     model: row.model,
     inputTokens: nonNegativeInteger(row.input_tokens),
@@ -379,23 +486,13 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
   if (row.completed_at_ms !== null) event.completedAtMs = nonNegativeInteger(row.completed_at_ms);
   if (row.duration_ms !== null) event.durationMs = nonNegativeInteger(row.duration_ms);
   if (row.ttft_ms !== null) event.ttftMs = nonNegativeInteger(row.ttft_ms);
-  if (row.origin_type) event.originType = row.origin_type;
-  if (row.origin_stage) event.originStage = row.origin_stage;
-  if (row.service) event.service = row.service;
-  if (row.process) event.process = row.process;
-  if (row.turn_id) event.turnId = row.turn_id;
-  if (row.request_id) event.requestId = row.request_id;
-  if (row.channel_id) event.channelId = row.channel_id;
-  if (row.tool_name) event.toolName = row.tool_name;
-  if (row.tool_call_id) event.toolCallId = row.tool_call_id;
-  if (row.charge_lane) event.chargeLane = row.charge_lane;
-  if (row.charge_surface) event.chargeSurface = row.charge_surface;
-  if (row.charge_run_id) event.chargeRunId = row.charge_run_id;
-  if (row.charge_root_run_id) event.chargeRootRunId = row.charge_root_run_id;
-  if (row.charge_parent_run_id) event.chargeParentRunId = row.charge_parent_run_id;
-  if (row.slot_key) event.slotKey = row.slot_key;
-  if (row.requested_provider) event.requestedProvider = row.requested_provider;
-  if (row.requested_model) event.requestedModel = row.requested_model;
+  if (row.slot_key && row.slot_key !== MODEL_USAGE_UNKNOWN_DIMENSION) event.slotKey = row.slot_key;
+  if (row.requested_provider && row.requested_provider !== MODEL_USAGE_UNKNOWN_DIMENSION) {
+    event.requestedProvider = row.requested_provider;
+  }
+  if (row.requested_model && row.requested_model !== MODEL_USAGE_UNKNOWN_DIMENSION) {
+    event.requestedModel = row.requested_model;
+  }
   if (row.provider_cost_usd !== null) {
     const providerCostUsd = nonNegativeCost(row.provider_cost_usd);
     if (providerCostUsd !== undefined) {
@@ -482,6 +579,8 @@ function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
     calls: nonNegativeInteger(row.calls),
     inputTokens: nonNegativeInteger(row.input_tokens),
     outputTokens: nonNegativeInteger(row.output_tokens),
+    cacheReadTokens: nonNegativeInteger(row.cache_read_tokens),
+    cacheWriteTokens: nonNegativeInteger(row.cache_write_tokens),
     totalTokens: nonNegativeInteger(row.total_tokens),
     totalCostUsd: nonNegativeCost(row.total_cost_usd) ?? 0,
   };
@@ -489,29 +588,41 @@ function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
 
 export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageBudgetQueryPort {
   private readonly ready: Promise<void>;
+  private readonly companionId?: string;
 
-  constructor(private readonly pool: Pool) {
+  constructor(
+    private readonly pool: Pool,
+    options: ModelUsageStoreScope,
+  ) {
+    if ('companionId' in options) {
+      this.companionId = optionalText(options.companionId);
+      if (!this.companionId) {
+        throw new Error('PostgresModelUsageStore companionId must be non-empty');
+      }
+    }
     this.ready = ensurePostgresSchema(pool, POSTGRES_MODEL_USAGE_MIGRATIONS);
   }
 
-  static connect(databaseUrl: string): PostgresModelUsageStore {
+  static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-model-usage',
       allowExitOnIdle: true,
     });
-    return new PostgresModelUsageStore(pool);
+    return new PostgresModelUsageStore(pool, options);
   }
 
   async recordUsageEvent(input: ModelUsageEventInput): Promise<void> {
-    const event = normalizeEvent(input);
+    const event = normalizeEvent(input, this.companionId);
     await this.ready;
     const inserted = await queryOne<{ id: string }>(this.pool, `
       INSERT INTO model_usage_events (
         id, logical_call_id, attempt, recorded_at_ms, started_at_ms, completed_at_ms,
         duration_ms, ttft_ms, day_key, month_key, status, settlement, call_kind, call_type,
-        purpose, origin_type, origin_stage, service, process, turn_id, request_id,
-        channel_id, tool_name, tool_call_id, charge_lane, charge_surface,
-        charge_run_id, charge_root_run_id, charge_parent_run_id, provider, model,
+        purpose, origin_type, origin_stage, service, process, companion_id, session_id,
+        turn_id, request_id, channel_id, channel_type, tool_name, tool_call_id,
+        charge_lane, charge_surface, charge_run_id, charge_root_run_id, charge_parent_run_id,
+        shard_id, subagent_id, conversation_id, root_initiation_id, workload_type, workload_id,
+        provider, model,
         slot_key, requested_provider, requested_model, input_tokens, output_tokens,
         cache_read_tokens, cache_write_tokens, total_tokens,
         provider_input_cost_usd, provider_output_cost_usd,
@@ -527,15 +638,17 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12, $13, $14,
         $15, $16, $17, $18, $19, $20, $21,
-        $22, $23, $24, $25, $26,
-        $27, $28, $29, $30, $31,
-        $32, $33, $34, $35, $36,
-        $37, $38, $39,
-        $40, $41, $42, $43, $44,
-        $45, $46, $47, $48, $49,
-        $50, $51, $52, $53, $54,
-        $55, $56, $57, $58, $59, $60::jsonb,
-        $61
+        $22, $23, $24, $25, $26, $27,
+        $28, $29, $30, $31, $32,
+        $33, $34, $35, $36, $37, $38,
+        $39, $40,
+        $41, $42, $43, $44, $45,
+        $46, $47, $48,
+        $49, $50, $51, $52, $53,
+        $54, $55, $56, $57, $58,
+        $59, $60, $61, $62, $63,
+        $64, $65, $66, $67, $68, $69::jsonb,
+        $70
       )
       ON CONFLICT (logical_call_id, attempt) DO UPDATE
         SET id = model_usage_events.id
@@ -555,27 +668,36 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.status,
       event.settlement,
       event.callKind,
-      event.callType,
-      event.purpose,
-      event.originType ?? null,
-      event.originStage ?? null,
-      event.service ?? null,
-      event.process ?? null,
-      event.turnId ?? null,
-      event.requestId ?? null,
-      event.channelId ?? null,
-      event.toolName ?? null,
-      event.toolCallId ?? null,
-      event.chargeLane ?? null,
-      event.chargeSurface ?? null,
-      event.chargeRunId ?? null,
-      event.chargeRootRunId ?? null,
-      event.chargeParentRunId ?? null,
+      event.attribution.callType,
+      event.attribution.purpose,
+      event.attribution.originType,
+      event.attribution.originStage,
+      event.attribution.service,
+      event.attribution.process,
+      event.attribution.companionId,
+      event.attribution.sessionId,
+      event.attribution.turnId,
+      event.attribution.requestId,
+      event.attribution.channelId,
+      event.attribution.channelType,
+      event.attribution.toolName,
+      event.attribution.toolCallId,
+      event.attribution.chargeLane,
+      event.attribution.chargeSurface,
+      event.attribution.chargeRunId,
+      event.attribution.chargeRootRunId,
+      event.attribution.chargeParentRunId,
+      event.attribution.shardId,
+      event.attribution.subagentId,
+      event.attribution.conversationId,
+      event.attribution.rootInitiationId,
+      event.attribution.workloadType,
+      event.attribution.workloadId,
       event.provider,
       event.model,
-      event.slotKey ?? null,
-      event.requestedProvider ?? null,
-      event.requestedModel ?? null,
+      event.slotKey ?? MODEL_USAGE_UNKNOWN_DIMENSION,
+      event.requestedProvider ?? MODEL_USAGE_UNKNOWN_DIMENSION,
+      event.requestedModel ?? MODEL_USAGE_UNKNOWN_DIMENSION,
       event.inputTokens,
       event.outputTokens,
       event.cacheReadTokens,
@@ -613,16 +735,32 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
     await this.ready;
-    const normalizedQuery = normalizeQuery(query);
+    const normalizedQuery = normalizeQuery(query, this.companionId);
     const where = buildWhere(normalizedQuery);
-    const [totals, byModel, byPurpose, byTool, byCallKind, recentEvents, expensiveEvents] = await Promise.all([
+    const groupedByDimensions = normalizedQuery.groupBy ?? [];
+    const [
+      totals,
+      byModel,
+      byPurpose,
+      byTool,
+      byCallKind,
+      recentEvents,
+      expensiveEvents,
+      attributionCoverage,
+      groupedByEntries,
+    ] = await Promise.all([
       this.queryTotals(where),
       this.queryBreakdown(where, "provider || ':' || model"),
       this.queryBreakdown(where, 'purpose'),
-      this.queryBreakdown(where, "COALESCE(tool_name, '(none)')"),
+      this.queryBreakdown(where, 'tool_name'),
       this.queryBreakdown(where, 'call_kind'),
       this.queryEvents(where, normalizedQuery.limit, 'recorded_at_ms DESC, id DESC'),
       this.queryEvents(where, normalizedQuery.limit, 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC'),
+      this.queryAttributionCoverage(where),
+      Promise.all(groupedByDimensions.map(async dimension => [
+        dimension,
+        await this.queryBreakdown(where, MODEL_USAGE_DIMENSION_SQL[dimension]),
+      ] as const)),
     ]);
     return {
       query: normalizedQuery,
@@ -631,14 +769,30 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       byPurpose,
       byTool,
       byCallKind,
+      groupedBy: Object.fromEntries(groupedByEntries),
+      attributionCoverage,
       recentEvents,
       expensiveEvents,
     };
   }
 
-  async getModelBudgetSpend(nowMs = Date.now()): Promise<ModelUsageBudgetSpendSnapshot> {
+  async getModelBudgetSpend(
+    nowMs = Date.now(),
+    scope?: { companionId: string },
+  ): Promise<ModelUsageBudgetSpendSnapshot> {
     await this.ready;
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
+    const requestedCompanionId = normalizeQueryText(scope?.companionId, 'companionId');
+    if (this.companionId && requestedCompanionId && requestedCompanionId !== this.companionId) {
+      throw new Error(
+        `Model budget companionId ${JSON.stringify(requestedCompanionId)} does not match `
+        + `the store tenant ${JSON.stringify(this.companionId)}`,
+      );
+    }
+    const budgetCompanionId = this.companionId ?? requestedCompanionId;
+    if (!budgetCompanionId) {
+      throw new Error('Fleet model budget queries require an explicit companionId');
+    }
     const nowDate = new Date(now);
     const day = dayKey(now);
     const month = monthKey(now);
@@ -660,7 +814,8 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       WHERE recorded_at_ms >= $2
         AND recorded_at_ms <= $3
         AND call_kind IN ('chat', 'completion')
-    `, [dayStartMs, monthStartMs, now]);
+        AND companion_id = $4
+    `, [dayStartMs, monthStartMs, now, budgetCompanionId]);
     return {
       dayKey: day,
       monthKey: month,
@@ -700,6 +855,8 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         COUNT(*) AS calls,
         COALESCE(SUM(input_tokens), 0) AS input_tokens,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
         COALESCE(SUM(total_tokens), 0) AS total_tokens,
         COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd
       FROM model_usage_events
@@ -709,6 +866,36 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       LIMIT ${DEFAULT_BREAKDOWN_LIMIT}
     `, where.values);
     return rows.map(mapBreakdown);
+  }
+
+  private async queryAttributionCoverage(where: SqlWhere): Promise<ModelUsageAttributionCoverage> {
+    const coverageColumns = MODEL_USAGE_GROUP_DIMENSIONS.flatMap((dimension, index) => {
+      const expression = MODEL_USAGE_DIMENSION_SQL[dimension];
+      return [
+        `COUNT(*) FILTER (WHERE ${expression} <> '${MODEL_USAGE_UNKNOWN_DIMENSION}') AS known_${index}`,
+        `COUNT(*) FILTER (WHERE ${expression} = '${MODEL_USAGE_UNKNOWN_DIMENSION}') AS unknown_${index}`,
+      ];
+    });
+    const row = await queryOne<CoverageRow>(this.pool, `
+      SELECT
+        COUNT(*) AS total_calls,
+        ${coverageColumns.join(',\n        ')}
+      FROM model_usage_events
+      ${where.clause}
+    `, where.values);
+    const totalCalls = nonNegativeInteger(row?.total_calls);
+    return {
+      totalCalls,
+      byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map((dimension, index) => {
+        const knownCalls = nonNegativeInteger(row?.[`known_${index}`]);
+        const unknownCalls = nonNegativeInteger(row?.[`unknown_${index}`]);
+        return [dimension, {
+          knownCalls,
+          unknownCalls,
+          coveragePercent: totalCalls === 0 ? 0 : Math.round((knownCalls / totalCalls) * 10_000) / 100,
+        }];
+      })) as ModelUsageAttributionCoverage['byDimension'],
+    };
   }
 
   private async queryEvents(where: SqlWhere, limit: number | undefined, orderBy: string): Promise<ModelUsageEvent[]> {
@@ -724,17 +911,131 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   }
 }
 
-function normalizeQuery(query: ModelUsageQuery): ModelUsageQuery {
-  return {
-    ...(Number.isFinite(query.sinceMs) ? { sinceMs: Math.max(0, Math.floor(query.sinceMs!)) } : {}),
-    ...(Number.isFinite(query.untilMs) ? { untilMs: Math.max(0, Math.floor(query.untilMs!)) } : {}),
-    limit: normalizeLimit(query.limit),
-    ...(optionalText(query.provider) ? { provider: optionalText(query.provider) } : {}),
-    ...(optionalText(query.model) ? { model: optionalText(query.model) } : {}),
-    ...(optionalText(query.toolName) ? { toolName: optionalText(query.toolName) } : {}),
-    ...(query.callKind ? { callKind: query.callKind } : {}),
-    ...(optionalText(query.runId) ? { runId: optionalText(query.runId) } : {}),
+const QUERY_TEXT_FIELDS = [
+  'provider',
+  'model',
+  'toolName',
+  'purpose',
+  'originStage',
+  'service',
+  'process',
+  'companionId',
+  'sessionId',
+  'channelId',
+  'turnId',
+  'requestId',
+  'toolCallId',
+  'chargeRunId',
+  'chargeRootRunId',
+  'chargeParentRunId',
+  'shardId',
+  'subagentId',
+  'conversationId',
+  'rootInitiationId',
+  'workloadType',
+  'workloadId',
+  'slotKey',
+  'requestedProvider',
+  'requestedModel',
+  'runId',
+] as const satisfies ReadonlyArray<keyof ModelUsageQuery>;
+
+const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<string>>> = {
+  callKind: new Set(MODEL_USAGE_CALL_KINDS),
+  callType: new Set(MODEL_USAGE_CALL_TYPES),
+  originType: new Set(MODEL_USAGE_ORIGIN_TYPES),
+  channelType: new Set(MODEL_USAGE_CHANNEL_TYPES),
+  chargeLane: new Set(MODEL_USAGE_CHARGE_LANES),
+  chargeSurface: new Set(MODEL_USAGE_CHARGE_SURFACES),
+  status: new Set(MODEL_USAGE_STATUSES),
+  costSource: new Set(MODEL_USAGE_COST_SOURCES),
+};
+const GROUP_DIMENSION_SET: ReadonlySet<string> = new Set(MODEL_USAGE_GROUP_DIMENSIONS);
+const QUERY_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
+  'sinceMs',
+  'untilMs',
+  'limit',
+  'groupBy',
+  ...QUERY_TEXT_FIELDS,
+  ...Object.keys(QUERY_ENUM_VALUES),
+]);
+
+function normalizeQueryInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function normalizeQueryText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`${field} must be a string`);
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${field} must be non-empty`);
+  if (normalized.length > 512) throw new Error(`${field} must be at most 512 characters`);
+  if (/[\u0000-\u001F\u007F-\u009F]/u.test(normalized)) {
+    throw new Error(`${field} must not contain control characters`);
+  }
+  return normalized;
+}
+
+function normalizeQuery(
+  query: ModelUsageQuery,
+  tenantCompanionId?: string,
+): ModelUsageQuery {
+  for (const field of Object.keys(query)) {
+    if (!QUERY_ALLOWED_FIELDS.has(field)) {
+      throw new Error(`Model usage query has unsupported field ${JSON.stringify(field)}`);
+    }
+  }
+  const sinceMs = normalizeQueryInteger(query.sinceMs, 'sinceMs');
+  const untilMs = normalizeQueryInteger(query.untilMs, 'untilMs');
+  if (sinceMs !== undefined && untilMs !== undefined && sinceMs > untilMs) {
+    throw new Error('sinceMs must be less than or equal to untilMs');
+  }
+  const limit = query.limit === undefined
+    ? DEFAULT_EVENT_LIMIT
+    : normalizeQueryInteger(query.limit, 'limit');
+  if (limit === 0) throw new Error('limit must be at least 1');
+  const normalized: ModelUsageQuery = {
+    ...(sinceMs !== undefined ? { sinceMs } : {}),
+    ...(untilMs !== undefined ? { untilMs } : {}),
+    limit: Math.min(MAX_EVENT_LIMIT, limit ?? DEFAULT_EVENT_LIMIT),
   };
+  for (const field of QUERY_TEXT_FIELDS) {
+    const value = normalizeQueryText(query[field], String(field));
+    if (value !== undefined) (normalized as Record<string, unknown>)[field] = value;
+  }
+  for (const [field, allowed] of Object.entries(QUERY_ENUM_VALUES)) {
+    const value = query[field as keyof ModelUsageQuery];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !allowed.has(value)) {
+      throw new Error(`${field} has unsupported value ${JSON.stringify(value)}`);
+    }
+    (normalized as Record<string, unknown>)[field] = value;
+  }
+  if (query.groupBy !== undefined) {
+    if (!Array.isArray(query.groupBy)) throw new Error('groupBy must be an array');
+    const groupBy = [...new Set(query.groupBy.map((dimension) => {
+      if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
+        throw new Error(`groupBy has unsupported dimension ${JSON.stringify(dimension)}`);
+      }
+      return dimension as ModelUsageGroupDimension;
+    }))];
+    normalized.groupBy = groupBy;
+  }
+  if (tenantCompanionId) {
+    const requestedCompanionId = normalized.companionId;
+    if (requestedCompanionId && requestedCompanionId !== tenantCompanionId) {
+      throw new Error(
+        `Model usage query companionId ${JSON.stringify(requestedCompanionId)} is outside `
+        + `the Garden tenant ${JSON.stringify(tenantCompanionId)}`,
+      );
+    }
+    normalized.companionId = tenantCompanionId;
+  }
+  return normalized;
 }
 
 function buildWhere(query: ModelUsageQuery): SqlWhere {
@@ -748,8 +1049,42 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
   if (query.untilMs !== undefined) push('recorded_at_ms <=', query.untilMs);
   if (query.provider) push('provider =', query.provider);
   if (query.model) push('model =', query.model);
-  if (query.toolName) push('tool_name =', query.toolName);
-  if (query.callKind) push('call_kind =', query.callKind);
+  const dimensionFilters: ReadonlyArray<[ModelUsageGroupDimension, unknown]> = [
+    ['companionId', query.companionId],
+    ['sessionId', query.sessionId],
+    ['channelId', query.channelId],
+    ['channelType', query.channelType],
+    ['callKind', query.callKind],
+    ['callType', query.callType],
+    ['purpose', query.purpose],
+    ['originType', query.originType],
+    ['originStage', query.originStage],
+    ['service', query.service],
+    ['process', query.process],
+    ['slotKey', query.slotKey],
+    ['requestedProvider', query.requestedProvider],
+    ['requestedModel', query.requestedModel],
+    ['toolName', query.toolName],
+    ['chargeLane', query.chargeLane],
+    ['chargeSurface', query.chargeSurface],
+    ['chargeRunId', query.chargeRunId],
+    ['chargeRootRunId', query.chargeRootRunId],
+    ['chargeParentRunId', query.chargeParentRunId],
+    ['shardId', query.shardId],
+    ['subagentId', query.subagentId],
+    ['conversationId', query.conversationId],
+    ['rootInitiationId', query.rootInitiationId],
+    ['workloadType', query.workloadType],
+    ['workloadId', query.workloadId],
+    ['status', query.status],
+    ['costSource', query.costSource],
+  ];
+  for (const [dimension, value] of dimensionFilters) {
+    if (value !== undefined) push(`${MODEL_USAGE_DIMENSION_SQL[dimension]} =`, value);
+  }
+  if (query.turnId) push('turn_id =', query.turnId);
+  if (query.requestId) push('request_id =', query.requestId);
+  if (query.toolCallId) push('tool_call_id =', query.toolCallId);
   if (query.runId) {
     values.push(query.runId);
     const index = values.length;
@@ -762,11 +1097,18 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
 }
 
 export function createPostgresModelUsageStoreFromConfig(
-  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl'>,
+  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl' | 'companionId'>,
+  scope?: ModelUsageStoreScope,
 ): PostgresModelUsageStore | null {
   if (config.persistenceBackend !== 'postgres') {
     return null;
   }
   const databaseUrl = config.postgresDatabaseUrl?.trim();
-  return databaseUrl ? PostgresModelUsageStore.connect(databaseUrl) : null;
+  if (!databaseUrl) return null;
+  if (scope) return PostgresModelUsageStore.connect(databaseUrl, scope);
+  const companionId = optionalText(config.companionId);
+  if (!companionId) {
+    throw new Error('PostgreSQL model usage persistence requires a configured companionId');
+  }
+  return PostgresModelUsageStore.connect(databaseUrl, { companionId });
 }

@@ -35,14 +35,26 @@ export function buildTurnCorrelation(
   turnId: TurnID,
   requestId: string,
 ): CorrelationMetadata {
+  const shardId = message.channelId.startsWith('shard:')
+    ? message.channelId.slice('shard:'.length).trim() || undefined
+    : undefined;
+  const subagentId = message.channelId.startsWith('subagent:')
+    ? message.channelId.slice('subagent:'.length).trim() || undefined
+    : undefined;
   return {
+    sessionId: message.routing?.wyoming?.sessionId ?? message.channelId,
     turnId,
     requestId,
     channelId: message.channelId,
+    channelType: message.channelType,
     callType,
     purpose: 'agent.turn',
     originType: callType,
     originStage: 'agent.turn',
+    service: 'agent',
+    process: 'substrate-agent',
+    ...(shardId ? { shardId, workloadType: 'shard', workloadId: shardId } : {}),
+    ...(subagentId ? { subagentId, workloadType: 'subagent', workloadId: subagentId } : {}),
   };
 }
 

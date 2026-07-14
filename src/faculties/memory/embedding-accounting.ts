@@ -11,6 +11,8 @@ import type {
 } from './embedding.js';
 import { extractProviderAttemptUsageDetails } from '../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../shared/telemetry/provider-cost-evidence.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
 interface EmbeddingProviderWithUsage extends EmbeddingRuntimeProvider {
   embedBatchWithUsage?(texts: string[]): Promise<EmbeddingBatchWithUsageResult>;
@@ -23,6 +25,7 @@ export interface AccountedEmbeddingRuntimeProvider extends EmbeddingRuntimeProvi
 
 export interface EmbeddingUsageAccountingOptions {
   estimatedRates?: ModelUsageCostRates;
+  companionId?: string;
 }
 
 export function withEmbeddingUsageAccounting(
@@ -39,6 +42,8 @@ export function withEmbeddingUsageAccounting(
     error?: unknown,
   ): Promise<void> => {
     const completedAtMs = Date.now();
+    const correlation = getRequestContext();
+    const chargeSnapshot = getRunChargeSnapshot();
     const accounting = usageDetails
       ? reconcileModelUsageAccounting({
           usage: {
@@ -64,12 +69,43 @@ export function withEmbeddingUsageAccounting(
         ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
         : 'unknown',
       callKind: 'embedding',
-      callType: 'memory',
-      purpose: 'embedding',
-      originType: 'memory',
-      originStage: 'embedding',
-      service: 'memory',
-      process: 'embedding',
+      attribution: {
+        ...(correlation?.companionId
+          ? { companionId: correlation.companionId }
+          : (options.companionId ? { companionId: options.companionId } : {})),
+        ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
+        ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+        ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
+        callType: 'memory',
+        purpose: 'embedding',
+        originType: correlation?.originType ?? correlation?.callType ?? 'memory',
+        originStage: correlation?.originStage ?? 'embedding',
+        service: 'memory',
+        process: 'embedding',
+        ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+        ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+        ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+        ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(chargeSnapshot?.lane
+          ? { chargeLane: chargeSnapshot.lane }
+          : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
+        ...(correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {}),
+        ...(chargeSnapshot?.lineage.runId
+          ? { chargeRunId: chargeSnapshot.lineage.runId }
+          : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
+        ...(chargeSnapshot?.lineage.rootRunId
+          ? { chargeRootRunId: chargeSnapshot.lineage.rootRunId }
+          : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
+        ...(chargeSnapshot?.lineage.parentRunId
+          ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId }
+          : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
+        ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
+        ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
+        ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
+        ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
+        ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
+        ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+      },
       provider: provider.kind,
       model: provider.model,
       requestedProvider: provider.kind,

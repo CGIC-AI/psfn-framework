@@ -32,14 +32,14 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
   `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
   charter-gap epic stays parked.
-- **Partially advanced**: `cam.1` accounting capture, `cam.2` typed
-  attribution, `cam.3` durable dashboard accounting, `cam.4` canonical
-  analytics, `cam.5` operator charge-to-cost reconciliation, and `574y`
-  operator accounting UX are code-complete and validated on the pushed
-  `feat/cost-accounting` branch at integration head `2d8ff2f0`; the parent
-  `cam` epic and ready `cam.6` certification bead remain open, and none of this
-  branch is on `main` yet. It still blocks ICP
-  `6.7` breaker + `6.9` cert until the required accounting scope lands. Other
+- **Completed feature branch**: `cam.1`–`cam.6` accounting capture,
+  attribution, durable dashboard accounting, canonical analytics,
+  charge-to-cost reconciliation, migration/certification, and `574y` operator
+  accounting UX are complete and validated on the pushed
+  `feat/cost-accounting` branch at `271b6609`; the `cam` epic and all seven
+  accepted-scope children are closed. The branch is not on `main` yet; its
+  tracker dependency no longer blocks ICP `6.7` breaker or `6.9`
+  certification. Other
   deliberately deferred work: `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
   (hardware being assembled; ICP epic lands first). `w05a` experiment window
@@ -61,7 +61,7 @@ was dependency-wired end to end, and the release path got tracker structure.
 
 **ICP chain (wired):** `6.1` → `6.2` broker ∥ `6.6` fatigue/social-charge →
 `6.3` target-channel turns (← `s10rm`) → `6.4` tools → `6.5` source adapters →
-`6.7` USD breaker (← `cam`, deferred) → `6.8` owner config/Garden → `6.9`
+`6.7` USD breaker (← closed `cam`; now ready) → `6.8` owner config/Garden → `6.9`
 two-real-agent certification.
 
 **MC substrate (parallel once charter items land):** `s10mc.1` (← `z7qe.4`),
@@ -105,8 +105,9 @@ and `psfn-framework-cam.2` is delivered through implementation head
 `8e12a69a`, `31c6594c`, and `073c21e7`, then integrated and pushed at
 `38eb7933`. The `psfn-framework-574y` operator UX was implemented by
 `74042506`, `702f4fdf`, `f179c6c0`, and `61113c49`; its one review finding was
-remediated by `2d8ff2f0`, which is integrated and pushed as the current
-`feat/cost-accounting` implementation head.
+remediated by `2d8ff2f0`. CAM.6 certification was implemented by `cbadbfbc` and
+`42c8df52`; its single review findings were remediated by `271b6609`, which is
+integrated and pushed as the final `feat/cost-accounting` head.
 CAM.1 records immutable physical provider attempts with reconciled token and
 cost economics. CAM.2 adds typed attribution, explicit unknown coverage,
 strict filters and groups, indexed Postgres persistence, and fail-closed Garden
@@ -139,6 +140,14 @@ content-free authenticated export, charge-cost coverage/conservation, and
 truthful loading/stale/error states. Accounting URL state survives Token Usage
 ↔ Charge Policy navigation, and dashboard analysis links carry the committed
 Today/Week/Month range without introducing parallel accounting math or storage.
+CAM.6 adds transactional real-Postgres migration certification with
+backup-required apply, rollback fingerprints, idempotent reruns, explicit
+known/inferred/unknown evidence, and non-USD quarantine. Its immutable
+provider/call-path corpus reconciles raw attempts through totals, time series,
+groups, dashboard, content-free export, and charge allocation across restart,
+process, channel, companion, malformed-cost, and tenant-isolation boundaries.
+Legacy provider or estimate claims with all monetary fields `NULL` remain
+unknown; genuine priced controls remain known or inferred.
 
 CAM.3 validation at `825eef8c`: focused dashboard backend/routes and the
 Postgres-memory reachability smoke passed 4 files / 61 tests; the frontend
@@ -198,13 +207,30 @@ build continues to emit the unchanged Rollup `Unknown output options:
 codeSplitting` warning; this is report-only, outside the accounting UX diff,
 and intentionally has no follow-up bead from this closeout.
 
-This is a feature-branch completion boundary, not a `main` or whole-accounting
-completion claim. The `psfn-framework-cam` parent remains open, with these
-children still pending:
+CAM.6 final integration/regression at pushed head `271b6609`: the single
+independent review found one IMPORTANT accounting-evidence defect and one
+mandatory lint-gate failure comprising two errors. The same reviewer verified
+the bounded remediation as PASS without starting another review. The targeted
+real-Postgres migration test passed 1/1; the full accounting certification
+passed 4 files / 9 tests;
+`npm run lint` exited 0; and `npm run build` passed ESM+DTS. The earlier
+exact-image, provider-disabled local Artemis smoke passed durable API,
+dashboard, export, charge/usage conservation, and tenant-denial checks without
+external provider spend; it was not rerun during final integrated closeout.
 
-| Bead | Remaining scope | Status |
-|---|---|---|
-| `psfn-framework-cam.6` | Migration/backfill and end-to-end accounting certification | ready; do not claim until its certification wave starts |
+This is whole-accounting completion on a pushed feature branch, not a `main`
+merge claim. `psfn-framework-cam.1`–`.6`, `psfn-framework-574y`, and the parent
+`psfn-framework-cam` epic are closed. The remaining failing gates observed
+during certification are inherited, report-only for accounting, and remain on
+their existing beads:
+
+- `psfn-framework-r7tv` — scheduler owner-file round-trip drift for
+  `minPartnerIdleMinutes`.
+- `psfn-framework-l1qz` — identity-literal repository-hygiene findings.
+- `psfn-framework-fgm4` — duplicated local record guards; `fgm4` is the actual
+  tracker ID.
+- `psfn-framework-dsd5` — stale local Artemis Helm bootstrap state for strict
+  owner/auth contracts.
 
 ## 1. Where things stand
 

@@ -180,11 +180,19 @@ finding (`psfn-framework-ecr5`) and Garden type-check diagnostics
 (`psfn-framework-qz9e`) remain separately tracked; the optional canonical-policy
 fallback observation remains report-only. No second review was performed.
 
-This remains an implementation-wave checkpoint, not completion of the ICP epic
-or release validation. W9 (`s10mc.6.9`) is now unblocked and ready for its
-two-real-agent certification work. The parent `s10mc.6` remains open, and the
-feature branch has not been merged into the release branch or exercised
-against live infrastructure.
+W9 (`s10mc.6.9`) is in progress on the isolated certification branch at
+`b4ff8709`. Its fresh post-compaction, both-agent-restart exchange exposed P1
+`psfn-framework-1lxi`: the recipient reply was delivered but the completed
+correlated recipient turn record could be read before outer post-turn
+persistence finished. `b429b37d` makes `SubstrateAgent.waitForIdle()` join the
+complete outer `TurnRunReservation`; the single review's test-evidence finding
+was remediated by `b4ff8709`, which binds the recipient record to the exact
+sender conversation/root/request identities and counts the complete new record
+delta before validation. Final P1 closeout passed the exact real-process
+restart regression, 7 proportional files / 362 tests, mandatory lint, ESM+DTS
+build, and diff checks. W9 remains in progress pending its final certification
+matrix; the parent `s10mc.6` remains open, and the feature branch has not been
+merged into the release branch or exercised against live infrastructure.
 
 ### 0.5 2026-07-14 accounting capture, attribution, dashboard, analytics, and reconciliation status
 
@@ -393,9 +401,11 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W6 plus W5 initiation sources, integrated at `2599c2f5`; W7-W9 remain open; not merged to the release branch or live-tested |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W8; W9 certification is in progress at `b4ff8709`; not merged to the release branch or live-tested |
 | `psfn-framework-s10mc.6.5` | W5 initiation sources — **closed** 2026-07-14: integrated with W6 at `2599c2f5`; merged seam passed 32 focused files / 609 tests (including real Postgres integration), lint, and build |
 | `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — **closed** 2026-07-14: both fresh reviews passed at `72238bc8`, follow-up beads fixed, two clean full-suite exits on the merged tree |
+| `psfn-framework-s10mc.6.9` | W9 two-real-agent certification — **in progress** at `b4ff8709`; post-restart recipient turn-record P1 is fixed and closed, final certification matrix remains |
+| `psfn-framework-1lxi` | P1 post-restart recipient turn-record persistence — **closed** 2026-07-14 at `b4ff8709`; exact real-process regression, 362 proportional tests, lint, ESM+DTS build, and diff checks passed |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |
 | `psfn-framework-s10rm` | Room mechanics — entry-event note merged @ `98e964eb`; **open**: presence-windowed delivery, public-room semantics, memory-tag tweaks (§2e) |

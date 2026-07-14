@@ -213,7 +213,9 @@ function buildOutboundUsageCorrelation(
     ...(charge?.lane ? { chargeLane: charge.lane } : (correlation?.chargeLane
       ? { chargeLane: correlation.chargeLane }
       : {})),
-    ...(correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {}),
+    ...(charge?.surface
+      ? { chargeSurface: charge.surface }
+      : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),
     ...(charge?.lineage.runId
       ? { chargeRunId: charge.lineage.runId }
       : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),

@@ -2,10 +2,15 @@ import type {
   ModelUsageBreakdown,
   ModelUsageData,
   ModelUsageEvent,
+  ModelUsageGroupDimension,
   ModelUsageQuery,
   ModelUsageQueryPort,
   ModelUsageTotals,
 } from '../../../shared/telemetry/model-usage.js';
+import {
+  MODEL_USAGE_GROUP_DIMENSIONS,
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+} from '../../../shared/telemetry/model-usage-attribution.js';
 import type { DiscoveredModel, ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { AdminModelUsageService } from './types.js';
@@ -270,18 +275,70 @@ function hydrateBreakdownFromEvents(
     const before = beforeEvents[index];
     const after = afterEvents[index];
     if (before === after) continue;
-    const key = keyForEvent(after);
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.totalCostUsd += eventCost(after) - eventCost(before);
+    const beforeKey = keyForEvent(before);
+    const afterKey = keyForEvent(after);
+    if (beforeKey === afterKey) {
+      const existing = byKey.get(afterKey);
+      if (existing) existing.totalCostUsd += eventCost(after) - eventCost(before);
+      continue;
     }
+    applyEventToBreakdown(byKey, beforeKey, before, -1);
+    applyEventToBreakdown(byKey, afterKey, after, 1);
   }
-  return [...byKey.values()].sort((left, right) => (
+  return [...byKey.values()]
+    .filter(entry => entry.calls > 0)
+    .sort((left, right) => (
     right.totalCostUsd - left.totalCostUsd
     || right.totalTokens - left.totalTokens
     || right.calls - left.calls
     || left.key.localeCompare(right.key)
   ));
+}
+
+function applyEventToBreakdown(
+  byKey: Map<string, ModelUsageBreakdown>,
+  key: string,
+  event: ModelUsageEvent,
+  direction: -1 | 1,
+): void {
+  const existing = byKey.get(key) ?? {
+    key,
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+  };
+  existing.calls += direction;
+  existing.inputTokens += direction * event.inputTokens;
+  existing.outputTokens += direction * event.outputTokens;
+  existing.cacheReadTokens += direction * event.cacheReadTokens;
+  existing.cacheWriteTokens += direction * event.cacheWriteTokens;
+  existing.totalTokens += direction * event.totalTokens;
+  existing.totalCostUsd += direction * eventCost(event);
+  byKey.set(key, existing);
+}
+
+function modelUsageGroupKey(
+  event: ModelUsageEvent,
+  dimension: ModelUsageGroupDimension,
+): string {
+  switch (dimension) {
+    case 'callKind': return event.callKind;
+    case 'provider': return event.provider;
+    case 'model': return event.model;
+    case 'slotKey': return event.slotKey ?? MODEL_USAGE_UNKNOWN_DIMENSION;
+    case 'status': return event.status;
+    case 'costSource': return event.costSource;
+    default: {
+      const value = event.attribution[dimension as keyof ModelUsageEvent['attribution']];
+      return typeof value === 'string' && value.trim()
+        ? value
+        : MODEL_USAGE_UNKNOWN_DIMENSION;
+    }
+  }
 }
 
 function hydrateMissingModelUsageCosts(
@@ -292,10 +349,31 @@ function hydrateMissingModelUsageCosts(
   const expensiveEvents = data.expensiveEvents
     .map(event => hydrateEvent(event, lookup))
     .sort((left, right) => eventCost(right) - eventCost(left) || right.recordedAtMs - left.recordedAtMs);
-  const byModel = hydrateModelBreakdown(data.byModel, lookup);
+  const hasRequestedGroups = Object.keys(data.groupedBy).length > 0;
+  const byModel = hasRequestedGroups
+    ? hydrateBreakdownFromEvents(
+        data.byModel,
+        data.recentEvents,
+        recentEvents,
+        event => `${event.provider}:${event.model}`,
+      )
+    : hydrateModelBreakdown(data.byModel, lookup);
   const modelAggregateDelta = breakdownCostTotal(byModel) - breakdownCostTotal(data.byModel);
   const recentEventDelta = eventCostDelta(data.recentEvents, recentEvents);
-  const totalsCostDeltaUsd = Math.max(0, modelAggregateDelta, recentEventDelta);
+  const totalsCostDeltaUsd = hasRequestedGroups
+    ? Math.max(0, recentEventDelta)
+    : Math.max(0, modelAggregateDelta, recentEventDelta);
+  const groupedBy: ModelUsageData['groupedBy'] = {};
+  for (const dimension of MODEL_USAGE_GROUP_DIMENSIONS) {
+    const breakdown = data.groupedBy[dimension];
+    if (!breakdown) continue;
+    groupedBy[dimension] = hydrateBreakdownFromEvents(
+      breakdown,
+      data.recentEvents,
+      recentEvents,
+      event => modelUsageGroupKey(event, dimension),
+    );
+  }
   return {
     ...data,
     totals: hydrateTotals(data.totals, totalsCostDeltaUsd),
@@ -313,6 +391,7 @@ function hydrateMissingModelUsageCosts(
       event => event.attribution.toolName,
     ),
     byCallKind: hydrateBreakdownFromEvents(data.byCallKind, data.recentEvents, recentEvents, event => event.callKind),
+    groupedBy,
     recentEvents,
     expensiveEvents,
   };

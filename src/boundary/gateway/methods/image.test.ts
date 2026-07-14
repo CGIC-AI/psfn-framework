@@ -212,12 +212,14 @@ describe('registerImageMethods model usage accounting', () => {
       {
         attempt: 1,
         status: 'failure',
+        attribution: { chargeSurface: 'paidImageGeneration' },
         provider: 'fal',
         model: 'xai/grok-imagine-image',
       },
       {
         attempt: 2,
         status: 'success',
+        attribution: { chargeSurface: 'localImageGeneration' },
         provider: 'comfyui',
         model: 'configured:create',
         metadata: {

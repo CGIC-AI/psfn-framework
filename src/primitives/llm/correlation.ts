@@ -56,7 +56,7 @@ export function inferCallType(
 }
 
 export function resolveCorrelationMetadata(
-  contextCorrelation: CorrelationMetadata | undefined,
+  contextCorrelation: Partial<CorrelationMetadata> | undefined,
   optionCorrelation: Partial<CorrelationMetadata> | undefined,
   purpose: CompletionPurpose | 'chat',
 ): ResolvedCorrelationMetadata {

@@ -49,6 +49,56 @@ import { registerLLMMethods } from '../../boundary/gateway/methods/llm.js';
 import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
 import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
 import type { GatewayMethodRuntime } from '../../boundary/gateway/methods/types.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import {
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+  runWithChargedSurface,
+} from '../../shared/telemetry/run-charge.js';
+
+function makeModelChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 10,
+      background: 10,
+      maintenance: 10,
+      subagent: 10,
+      shard: 10,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 1,
+      localImageGeneration: 0,
+      paidImageGeneration: 1,
+      analysisWorkbenchExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 1,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 1,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 1,
+    },
+    fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -110,6 +160,7 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  resetRunChargeRollingWindowForTests();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) continue;
@@ -2545,6 +2596,48 @@ describe('LLMClient model budget gates and usage metering', () => {
           cost: 0.95,
           cost_details: { upstream_inference_cost: 19 },
         }),
+      }),
+    }));
+  });
+
+  it('persists the charged provider surface without caller-supplied correlation metadata', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'companion-a' }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 2, output: 1, totalTokens: 3 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await runWithChargeContext({
+      chargePolicy: makeModelChargePolicy(),
+      lane: 'interactive',
+      runId: 'charged-root',
+    }, async () => await runWithChargedSurface('externalModelConsult', {
+      details: { source: 'sandbox_llm_query' },
+    }, async () => {
+      await client.stream({
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Hello there' }],
+        correlation: { callType: 'tool', purpose: 'repl.sandbox.llm_query' },
+      });
+    }));
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attribution: expect.objectContaining({
+        chargeLane: 'interactive',
+        chargeSurface: 'externalModelConsult',
+        chargeRunId: 'charged-root',
+        chargeRootRunId: 'charged-root',
       }),
     }));
   });

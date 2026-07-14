@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createPostgresPool } from '../postgres.js';
 import {
   startPostgresTestHarness,
@@ -6,11 +9,49 @@ import {
 } from '../../test-support/postgres-test-harness.js';
 import { PostgresModelUsageStore } from './model-usage-store.js';
 import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { SessionManager } from '../../core/session/manager.js';
+import { SessionStore } from '../sessions/store.js';
+import { TurnSupportRuntime } from '../../core/agent/substrate-agent/turn-support-runtime.js';
+import { createTurnId } from '../../core/turns/id.js';
+import { withEmbeddingUsageAccounting } from '../../faculties/memory/embedding-accounting.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const TEST_IMAGE = 'postgres:16.8-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
 
 let harness: PostgresTestHarness | null = null;
+
+function makeSessionConfig(dataDir: string): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir,
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16_384,
+    extractionMaxTokens: 8_192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 1_000 },
+    },
+  };
+}
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness({ image: TEST_IMAGE });
@@ -21,6 +62,118 @@ afterAll(async () => {
 }, INTEGRATION_TIMEOUT_MS);
 
 describe('PostgresModelUsageStore reconciliation', () => {
+  it('serializes eager migrations across independent stores on a pristine database', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pools = Array.from({ length: 12 }, (_, index) => createPostgresPool(databaseUrl, {
+      applicationName: `model-usage-concurrent-${index}`,
+      allowExitOnIdle: true,
+      max: 1,
+    }));
+    const stores = pools.map(pool => new PostgresModelUsageStore(pool, {
+      companionId: 'companion-concurrent',
+    }));
+
+    try {
+      await Promise.all(stores.map(async (store, index) => {
+        await store.recordUsageEvent({
+          logicalCallId: `concurrent-call-${index}`,
+          recordedAtMs: 1_752_300_000_000 + index,
+          startedAtMs: 1_752_299_999_900 + index,
+          status: 'success',
+          callKind: 'completion',
+          attribution: { callType: 'background', purpose: 'concurrent-startup' },
+          provider: 'test-provider',
+          model: 'test-model',
+          inputTokens: 1,
+          totalTokens: 1,
+          costSource: 'none',
+        });
+      }));
+      const results = await Promise.all(stores.map(store => store.getUsageData({ limit: 1 })));
+      expect(results).toHaveLength(12);
+      expect(results.every(result => result.totals.calls === 12)).toBe(true);
+    } finally {
+      await Promise.all(pools.map(pool => pool.end()));
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('persists production logical-conversation attribution through embedding accounting', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-conversation-attribution',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-conversation-'));
+    try {
+      const sessionManager = new SessionManager(
+        new SessionStore(dataDir),
+        makeSessionConfig(dataDir),
+      );
+      const runtime = new TurnSupportRuntime({
+        eventBus: new EventBus(),
+        sessionManager,
+        hashPromptText: text => `hash:${text.length}`,
+        resolveContextWindow: () => 1_000,
+      });
+      const sourceChannelId = 'discord:guild:conversation-room';
+      const reset = sessionManager.resetSourceChannelSession({
+        sourceChannelId,
+        actor: 'operator',
+        reason: 'clean conversation boundary',
+        mode: 'fresh_split',
+      });
+      const correlation = runtime.buildTurnCorrelation({
+        id: 'root-initiation-1',
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'begin the new conversation',
+        timestamp: new Date('2026-07-14T00:00:00.000Z'),
+      }, 'chat', createTurnId(), 'root-initiation-1');
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const accountedEmbedding = withEmbeddingUsageAccounting({
+        kind: 'api' as const,
+        model: 'test-embedding-model',
+        dims: 2,
+        async embed() { return new Float32Array([1, 2]); },
+        async embedBatch() { return [new Float32Array([1, 2])]; },
+        async embedBatchWithUsage() {
+          return {
+            embeddings: [new Float32Array([1, 2])],
+            usageDetails: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+          };
+        },
+      }, store, { companionId: 'companion-a' });
+
+      await runWithRequestContext(correlation, async () => {
+        await accountedEmbedding.embedBatch(['hello']);
+      });
+
+      const usage = await store.getUsageData({
+        conversationId: reset.newLogicalSessionId,
+        rootInitiationId: 'root-initiation-1',
+        groupBy: ['sessionId', 'channelId', 'conversationId', 'rootInitiationId'],
+      });
+      expect(usage.totals.calls).toBe(1);
+      expect(usage.recentEvents[0]?.attribution).toMatchObject({
+        sessionId: reset.newLogicalSessionId,
+        channelId: sourceChannelId,
+        conversationId: reset.newLogicalSessionId,
+        rootInitiationId: 'root-initiation-1',
+        chargeSurface: 'externalEmbedding',
+      });
+      expect(usage.groupedBy.sessionId?.[0]?.key).toBe(reset.newLogicalSessionId);
+      expect(usage.groupedBy.channelId?.[0]?.key).toBe(sourceChannelId);
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('persists immutable component economics across restart and rejects conflicting dedupe', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
@@ -177,6 +330,18 @@ describe('PostgresModelUsageStore reconciliation', () => {
       allowExitOnIdle: true,
       max: 2,
     });
+    for (const invalidScope of [
+      undefined,
+      null,
+      {},
+      { fleetAggregation: false },
+      { companionId: 'companion-a', fleetAggregation: true },
+      { companionId: 'companion-a', unexpected: true },
+    ]) {
+      expect(() => new PostgresModelUsageStore(pool, invalidScope as never)).toThrow(
+        /PostgresModelUsageStore/,
+      );
+    }
     const companionA = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
     const event = (
       logicalCallId: string,

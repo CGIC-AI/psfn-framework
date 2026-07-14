@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { createHash } from 'node:crypto';
 import {
   createPostgresPool,
-  ensurePostgresSchema,
+  ensurePostgresSchemaWithAdvisoryLock,
   queryOne,
   queryRows,
 } from '../postgres.js';
@@ -47,10 +47,12 @@ import {
   roundModelUsageUsd,
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 2_000;
 const DEFAULT_BREAKDOWN_LIMIT = 20;
+const MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [1_297_431_347, 1_431_521_607] as const;
 
 interface ModelUsageEventRow {
   id: string;
@@ -171,6 +173,36 @@ interface SqlWhere {
 export type ModelUsageStoreScope =
   | { companionId: string; fleetAggregation?: never }
   | { companionId?: never; fleetAggregation: true };
+
+function resolveStoreCompanionId(scope: unknown): string | undefined {
+  if (!isRecord(scope)) {
+    throw new Error('PostgresModelUsageStore scope must be an object');
+  }
+  const keys = Object.keys(scope);
+  if (keys.some(key => key !== 'companionId' && key !== 'fleetAggregation')) {
+    throw new Error('PostgresModelUsageStore scope contains unsupported fields');
+  }
+  const hasCompanion = Object.prototype.hasOwnProperty.call(scope, 'companionId');
+  const hasFleet = Object.prototype.hasOwnProperty.call(scope, 'fleetAggregation');
+  if (hasCompanion === hasFleet) {
+    throw new Error(
+      'PostgresModelUsageStore scope requires exactly one of companionId or fleetAggregation',
+    );
+  }
+  if (hasCompanion) {
+    const companionId = optionalText(
+      typeof scope.companionId === 'string' ? scope.companionId : undefined,
+    );
+    if (!companionId) {
+      throw new Error('PostgresModelUsageStore companionId must be non-empty');
+    }
+    return companionId;
+  }
+  if (scope.fleetAggregation !== true) {
+    throw new Error('PostgresModelUsageStore fleetAggregation must be true');
+  }
+  return undefined;
+}
 
 const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
   companionId: 'companion_id',
@@ -594,13 +626,12 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     private readonly pool: Pool,
     options: ModelUsageStoreScope,
   ) {
-    if ('companionId' in options) {
-      this.companionId = optionalText(options.companionId);
-      if (!this.companionId) {
-        throw new Error('PostgresModelUsageStore companionId must be non-empty');
-      }
-    }
-    this.ready = ensurePostgresSchema(pool, POSTGRES_MODEL_USAGE_MIGRATIONS);
+    this.companionId = resolveStoreCompanionId(options);
+    this.ready = ensurePostgresSchemaWithAdvisoryLock(
+      pool,
+      POSTGRES_MODEL_USAGE_MIGRATIONS,
+      MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+    );
   }
 
   static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {

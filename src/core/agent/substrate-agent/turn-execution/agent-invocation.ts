@@ -470,6 +470,7 @@ export async function invokeAgentForTurn(input: {
         turnId,
         requestId,
         callType: turnCallType,
+        correlation: turnCorrelationBase,
         contextWindow: runtime.resolveContextWindow(),
         emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
       }),

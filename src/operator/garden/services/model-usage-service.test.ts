@@ -193,4 +193,48 @@ describe('AdminModelUsageDataService', () => {
     expect(data.totals.estimatedCostUsd).toBeCloseTo(0.004, 8);
     expect(data.totals.totalCostUsd).toBeCloseTo(0.004, 8);
   });
+
+  it('reconciles hydrated costs across requested channel and cost-source groups', async () => {
+    const usage = makeUsageData();
+    usage.query = { limit: 10, groupBy: ['channelId', 'costSource'] };
+    usage.recentEvents[0]!.attribution.channelId = 'channel-1';
+    const baseBreakdown = {
+      calls: 1,
+      inputTokens: 1000,
+      outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 1500,
+      totalCostUsd: 0,
+    };
+    usage.groupedBy = {
+      channelId: [{ key: 'channel-1', ...baseBreakdown }],
+      costSource: [{ key: 'none', ...baseBreakdown }],
+    };
+    const store: ModelUsageQueryPort = {
+      getUsageData: vi.fn(async () => usage),
+    };
+    const discovery = {
+      getAvailableModels: vi.fn(async () => [{
+        id: 'openrouter/deepseek/deepseek-v4-pro',
+        pricing: { prompt: '0.000002', completion: '0.000004' },
+      }]),
+      invalidateCache: vi.fn(),
+    };
+
+    const data = await new AdminModelUsageDataService(store, discovery)
+      .getModelUsageData(usage.query);
+
+    expect(data.groupedBy.channelId).toEqual([
+      expect.objectContaining({ key: 'channel-1', calls: 1, totalCostUsd: 0.004 }),
+    ]);
+    expect(data.groupedBy.costSource).toEqual([
+      expect.objectContaining({ key: 'estimate', calls: 1, totalCostUsd: 0.004 }),
+    ]);
+    expect(data.groupedBy.costSource?.some(entry => entry.key === 'none')).toBe(false);
+    expect(data.groupedBy.channelId?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
+      .toBeCloseTo(data.totals.totalCostUsd, 8);
+    expect(data.groupedBy.costSource?.reduce((sum, entry) => sum + entry.totalCostUsd, 0))
+      .toBeCloseTo(data.totals.totalCostUsd, 8);
+  });
 });

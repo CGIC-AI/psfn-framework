@@ -34,6 +34,7 @@ export interface RunChargeLineageProvenance {
 export interface RunChargeSnapshot {
   lineage: RunChargeLineage;
   lane: ChargePolicyRuntimeLane;
+  surface?: ChargePolicySurface;
   spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
@@ -99,6 +100,7 @@ export interface ChargeSurfaceInspection {
 }
 
 const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
+const activeChargeSurfaceStorage = new AsyncLocalStorage<ChargePolicySurface>();
 export const RUN_CHARGE_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 
 interface RollingChargeWindowEntry {
@@ -436,6 +438,9 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
   return {
     lineage: { ...context.lineage },
     lane: context.lane,
+    ...(activeChargeSurfaceStorage.getStore()
+      ? { surface: activeChargeSurfaceStorage.getStore() }
+      : {}),
     spentByLane: cloneSpentByLane(context.account.spentByLane),
     directSpentByLane: cloneSpentByLane(context.account.directSpentByLane),
     foldedSpentByLane: cloneSpentByLane(context.account.foldedSpentByLane),
@@ -443,6 +448,17 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
     orphanedChildren: context.account.orphanedChildren.map(cloneLineageProvenance),
     quotaSpentByLane: cloneSpentByLane(context.quotaAccount.spentByLane),
   };
+}
+
+/** Charge one surface and keep its attribution active for the provider work it buys. */
+export function runWithChargedSurface<T>(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const event = chargeSurface(surface, input);
+  if (!event) return fn();
+  return activeChargeSurfaceStorage.run(event.surface, fn);
 }
 
 export function runWithChargeContext<T>(

@@ -2,7 +2,7 @@ import type { LLMProviderPort, LLMRequestMetadata } from '../../../core/agent/co
 import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';
-import { chargeSurface } from '../../../shared/telemetry/run-charge.js';
+import { runWithChargedSurface } from '../../../shared/telemetry/run-charge.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('SandboxLLMCapabilities');
@@ -34,33 +34,32 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
       options.budgetRef.subQueries++;
     }
 
-    chargeSurface('externalModelConsult', {
+    const response = await runWithChargedSurface('externalModelConsult', {
       details: {
         source: 'llm_query',
         ...(attempt ? { attempt } : {}),
       },
-    });
-
-    const response = await options.llmProvider.complete(
-      {
-        systemPrompt: 'You are a helpful assistant. Answer concisely.',
-        messages: [{ role: 'user', content: prompt }],
-        correlation: {
-          ...(baseTurnId ? { turnId: baseTurnId } : {}),
-          requestId: baseRequestId
-            ? `${baseRequestId}:sandbox-subquery:${attempt ?? 1}`
-            : `repl-llm-query-${Date.now()}-${attempt ?? 1}`,
-          ...(baseChannelId ? { channelId: baseChannelId } : {}),
-          callType: 'tool',
-          toolName: 'llm_query',
-          ...(baseToolCallId ? { toolCallId: baseToolCallId } : {}),
-          purpose: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
-          originType: 'tool',
-          originStage: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
+    }, async () => await options.llmProvider.complete(
+        {
+          systemPrompt: 'You are a helpful assistant. Answer concisely.',
+          messages: [{ role: 'user', content: prompt }],
+          correlation: {
+            ...(options.requestMetadata ?? {}),
+            ...(baseTurnId ? { turnId: baseTurnId } : {}),
+            requestId: baseRequestId
+              ? `${baseRequestId}:sandbox-subquery:${attempt ?? 1}`
+              : `repl-llm-query-${Date.now()}-${attempt ?? 1}`,
+            ...(baseChannelId ? { channelId: baseChannelId } : {}),
+            callType: 'tool',
+            toolName: 'llm_query',
+            ...(baseToolCallId ? { toolCallId: baseToolCallId } : {}),
+            purpose: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
+            originType: 'tool',
+            originStage: attempt ? 'repl.sandbox.llm_query.retry' : 'repl.sandbox.llm_query',
+          },
         },
-      },
-      'reasoning',
-    );
+        'reasoning',
+      ));
 
     addEvidence(options.pushEvidence, {
       source: 'llm_query',

@@ -69,7 +69,9 @@ async function recordImageProviderAttempt(
         : {})),
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
-      ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
+      chargeSurface: providerAttempt.provider === 'fal'
+        ? 'paidImageGeneration'
+        : 'localImageGeneration',
       ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
       ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
       ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),

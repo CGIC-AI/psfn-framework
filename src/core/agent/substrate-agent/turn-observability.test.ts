@@ -21,6 +21,7 @@ describe('buildTurnCorrelation', () => {
       'tool',
       'turn-1' as TurnID,
       'request-1',
+      { sessionId: 'session-1', rootInitiationId: 'root-1' },
     );
 
     expect(correlation).toMatchObject({
@@ -32,6 +33,8 @@ describe('buildTurnCorrelation', () => {
       purpose: 'agent.turn',
       service: 'agent',
       process: 'substrate-agent',
+      conversationId: 'session-1',
+      rootInitiationId: 'root-1',
       shardId: 'shard-1',
       workloadType: 'shard',
       workloadId: 'shard-1',

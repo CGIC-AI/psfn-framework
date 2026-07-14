@@ -89,7 +89,9 @@ export function withEmbeddingUsageAccounting(
         ...(chargeSnapshot?.lane
           ? { chargeLane: chargeSnapshot.lane }
           : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
-        ...(correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {}),
+        ...(chargeSnapshot?.surface
+          ? { chargeSurface: chargeSnapshot.surface }
+          : { chargeSurface: provider.kind === 'api' ? 'externalEmbedding' : 'localEmbedding' }),
         ...(chargeSnapshot?.lineage.runId
           ? { chargeRunId: chargeSnapshot.lineage.runId }
           : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),

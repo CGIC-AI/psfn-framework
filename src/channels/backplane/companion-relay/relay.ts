@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { resolve as resolvePath, sep as pathSep } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type {
   CompanionArtifactCreatedPayload,
@@ -16,6 +16,7 @@ import {
 import { createComponentLogger } from '../../../shared/logger.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { materializeContainedFileSync } from '../../../shared/utils/contained-file.js';
 
 const log = createComponentLogger('CompanionEventRelay');
 
@@ -31,10 +32,11 @@ export interface CompanionEventSubscriber {
 
 export interface CompanionArtifactPreviewEntry {
   artifactId: string;
-  localPath: string;
   mediaType: string;
   sizeBytes: number;
   previewable: boolean;
+  /** Immutable gateway-owned snapshot; null when above the preview cap. */
+  bytes: Buffer | null;
 }
 
 export interface CompanionEventRelayOptions {
@@ -50,13 +52,6 @@ export interface CompanionEventRelayOptions {
   maxPreviewBytes?: number;
 }
 
-function isPathInsideRoot(candidate: string, root: string): boolean {
-  const resolvedRoot = resolvePath(root);
-  const resolvedCandidate = resolvePath(candidate);
-  return resolvedCandidate === resolvedRoot
-    || resolvedCandidate.startsWith(`${resolvedRoot}${pathSep}`);
-}
-
 /**
  * Gateway-side fan-out hub for redacted companion events (w9hj.1).
  *
@@ -69,7 +64,6 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
 export class CompanionEventRelay {
   private readonly subscribers = new Set<CompanionEventSubscriber>();
   private readonly previews = new Map<string, CompanionArtifactPreviewEntry>();
-  private readonly previewAllowedRoots = new Map<string, string>();
   private readonly previewRoots: readonly string[];
   private readonly previewRootByCompanionId: Readonly<Record<string, string>> | null;
   private readonly maxPreviewBytes: number;
@@ -121,7 +115,6 @@ export class CompanionEventRelay {
     }
     this.subscribers.clear();
     this.previews.clear();
-    this.previewAllowedRoots.clear();
   }
 
   subscribe(subscriber: CompanionEventSubscriber): () => void {
@@ -139,22 +132,7 @@ export class CompanionEventRelay {
   }
 
   getPreviewSource(artifactId: string): CompanionArtifactPreviewEntry | null {
-    const preview = this.previews.get(artifactId);
-    const allowedRoot = this.previewAllowedRoots.get(artifactId);
-    if (!preview || !allowedRoot) return null;
-    try {
-      const canonicalPath = realpathSync(preview.localPath);
-      if (!isPathInsideRoot(canonicalPath, allowedRoot)) {
-        this.previews.delete(artifactId);
-        this.previewAllowedRoots.delete(artifactId);
-        return null;
-      }
-      return { ...preview, localPath: canonicalPath };
-    } catch {
-      this.previews.delete(artifactId);
-      this.previewAllowedRoots.delete(artifactId);
-      return null;
-    }
+    return this.previews.get(artifactId) ?? null;
   }
 
   private publish(envelope: CompanionEventEnvelope): void {
@@ -201,20 +179,32 @@ export class CompanionEventRelay {
         ? [this.previewRootByCompanionId[companionId]]
         : [])
       : this.previewRoots;
-    let canonicalPreviewPath: string;
-    try {
-      canonicalPreviewPath = realpathSync(resolvePath(preview.localPath));
-    } catch {
-      log.warn('Rejected artifact preview registration: source path does not exist', {
-        artifactId: payload.id,
-      });
-      return;
+    let materialized: ReturnType<typeof materializeContainedFileSync> | null = null;
+    for (const root of allowedRoots) {
+      try {
+        materialized = materializeContainedFileSync({
+          path: preview.localPath,
+          root,
+          readMaxBytes: this.maxPreviewBytes,
+        });
+        break;
+      } catch {
+        // Try the next configured single-companion preview root. Multi-
+        // companion registration has exactly one identity-bound root.
+      }
     }
-    const allowedRoot = allowedRoots.find((root) => isPathInsideRoot(canonicalPreviewPath, root));
-    if (!allowedRoot) {
+    if (!materialized) {
       log.warn('Rejected artifact preview registration: path outside authenticated companion preview root', {
         artifactId: payload.id,
         ...(companionId ? { companionId } : {}),
+      });
+      return;
+    }
+    if (materialized.sizeBytes !== preview.sizeBytes) {
+      log.warn('Rejected artifact preview registration: declared size does not match opened file', {
+        artifactId: payload.id,
+        declaredSizeBytes: preview.sizeBytes,
+        actualSizeBytes: materialized.sizeBytes,
       });
       return;
     }
@@ -222,17 +212,15 @@ export class CompanionEventRelay {
       const oldest = this.previews.keys().next().value;
       if (oldest !== undefined) {
         this.previews.delete(oldest);
-        this.previewAllowedRoots.delete(oldest);
       }
     }
     this.previews.set(payload.id, {
       artifactId: payload.id,
-      localPath: canonicalPreviewPath,
       mediaType: preview.mediaType,
-      sizeBytes: preview.sizeBytes,
-      previewable: preview.sizeBytes <= this.maxPreviewBytes,
+      sizeBytes: materialized.sizeBytes,
+      previewable: materialized.bytes !== null,
+      bytes: materialized.bytes,
     });
-    this.previewAllowedRoots.set(payload.id, allowedRoot);
   }
 
   maxPreviewSizeBytes(): number {

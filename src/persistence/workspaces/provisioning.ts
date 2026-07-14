@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -13,7 +14,7 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { ensurePersonalFilesLayout } from '../layout.js';
 
-export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v1';
+export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v2';
 export const COMPANION_LIBRARY_MANIFEST_FILE = 'companion-library-manifest.json';
 export const SHARED_WORKSPACE_POLICY_VERSION = 1;
 
@@ -32,6 +33,7 @@ export const SHARED_WORKSPACE_POLICY = Object.freeze({
 const LIBRARY_SOURCE_FILES = [
   'welcome.md',
   'privacy-boundary-reference.md',
+  'live_verification_checklist.md',
 ] as const;
 
 interface CompanionLibrarySourceFile {
@@ -90,10 +92,15 @@ function loadSourceBundle(sourceDir: string): CompanionLibrarySourceBundle {
   });
   const expectedPaths = [...LIBRARY_SOURCE_FILES].sort();
   const actualPaths = files.map(file => file.path).sort();
+  const sourceFiles = readdirSync(sourceDir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name !== COMPANION_LIBRARY_MANIFEST_FILE)
+    .map(entry => entry.name)
+    .sort();
   if (new Set(actualPaths).size !== actualPaths.length
-    || actualPaths.join('\0') !== expectedPaths.join('\0')) {
+    || actualPaths.join('\0') !== expectedPaths.join('\0')
+    || sourceFiles.join('\0') !== expectedPaths.join('\0')) {
     throw new Error(
-      `Invalid Companion Library source manifest ${manifestPath}: files must describe the complete immutable bundle`,
+      `Invalid Companion Library source manifest ${manifestPath}: every bundle file must be declared exactly once`,
     );
   }
   for (const file of files) {

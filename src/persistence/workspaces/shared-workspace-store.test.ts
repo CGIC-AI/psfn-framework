@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { resolveCompanionFleetPaths, type CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import {
   COMPANION_LIBRARY_MANIFEST_FILE,
@@ -32,12 +35,14 @@ describe('SharedCompanionWorkspaceStore', () => {
     roots.push(root, source);
     writeFileSync(join(source, 'welcome.md'), 'welcome');
     writeFileSync(join(source, 'privacy-boundary-reference.md'), 'privacy');
+    writeFileSync(join(source, 'live_verification_checklist.md'), 'checklist');
     writeFileSync(join(source, COMPANION_LIBRARY_MANIFEST_FILE), JSON.stringify({
       schemaVersion: 1,
       bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('welcome').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update('privacy').digest('hex') },
+        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('checklist').digest('hex') },
       ],
     }));
     const fleet = resolveCompanionFleetPaths(FLEET, root);
@@ -172,6 +177,97 @@ describe('SharedCompanionWorkspaceStore', () => {
       `${proposal.reviewId}.approved.json`,
     ))).toBe(true);
     expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(false);
+  });
+
+  it('reclaims crashed publication leases and recovers a SIGKILL journal on restart', async () => {
+    const { store, sharedWorkspacePath } = createStore();
+    const proposal = store.propose({
+      artifactPath: 'recovery/killed.md',
+      content: 'survives process death\n',
+      mediaType: 'text/markdown',
+      actor: { id: 'operator-a', role: 'proposer' },
+      provenance: 'SIGKILL recovery test',
+    });
+    store.recordCogSecDecision({
+      reviewId: proposal.reviewId,
+      reviewer: { id: 'operator-c', role: 'cogsec' },
+      decision: 'approved',
+    });
+
+    const worker = fileURLToPath(new URL(
+      './test-fixtures/shared-workspace-kill-worker.ts',
+      import.meta.url,
+    ));
+    const child = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      worker,
+      sharedWorkspacePath,
+      proposal.reviewId,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
+      child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    });
+    expect(outcome).toEqual({ code: null, signal: 'SIGKILL' });
+    expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(true);
+    expect(existsSync(join(sharedWorkspacePath, '.locks', `review-${proposal.reviewId}.lock`))).toBe(true);
+
+    // The lease is deliberately bounded. After process death and expiry, the
+    // next store instance atomically reclaims it and replays the journal.
+    // Allow for the filesystem mtime precision probe, which may round the
+    // initial lease timestamp up to the next second.
+    await delay(3_100);
+    const recovered = new SharedCompanionWorkspaceStore(sharedWorkspacePath, { lockStaleMs: 2_000 });
+    expect(recovered.readArtifact('recovery/killed.md').content).toBe('survives process death\n');
+    expect(recovered.listReviews()[0].status).toBe('approved');
+    expect(existsSync(join(sharedWorkspacePath, 'transactions', `${proposal.reviewId}.json`))).toBe(false);
+  });
+
+  it('never reclaims a live publication owner after the lease age threshold', async () => {
+    const { store, sharedWorkspacePath } = createStore();
+    const proposal = store.propose({
+      artifactPath: 'recovery/live-owner.md',
+      content: 'one live publisher\n',
+      mediaType: 'text/markdown',
+      actor: { id: 'operator-a', role: 'proposer' },
+      provenance: 'live owner race test',
+    });
+    store.recordCogSecDecision({
+      reviewId: proposal.reviewId,
+      reviewer: { id: 'operator-c', role: 'cogsec' },
+      decision: 'approved',
+    });
+
+    const worker = fileURLToPath(new URL(
+      './test-fixtures/shared-workspace-kill-worker.ts',
+      import.meta.url,
+    ));
+    const child = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      worker,
+      sharedWorkspacePath,
+      proposal.reviewId,
+      'hold',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    await new Promise<void>((resolveReady, rejectReady) => {
+      child.once('error', rejectReady);
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (chunk.toString('utf8').includes('holding-live-lock')) resolveReady();
+      });
+    });
+
+    await delay(2_100);
+    expect(() => new SharedCompanionWorkspaceStore(sharedWorkspacePath, { lockStaleMs: 2_000 }))
+      .toThrow(/operation is busy/);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
+      child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    });
+    expect(outcome).toEqual({ code: 0, signal: null });
+
+    const recovered = new SharedCompanionWorkspaceStore(sharedWorkspacePath, { lockStaleMs: 2_000 });
+    expect(recovered.readArtifact('recovery/live-owner.md').content).toBe('one live publisher\n');
+    expect(recovered.listReviews()[0].status).toBe('approved');
   });
 
   it('serializes concurrent publication and re-reads the decision under lock', () => {

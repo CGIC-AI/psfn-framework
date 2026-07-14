@@ -787,6 +787,8 @@ export interface FleetBackupUnitOutcome {
   kind: FleetBackupUnitKind;
   companionId?: string;
   postgresSchema?: string;
+  /** Exact Postgres schemas contained in a whole-database group artifact. */
+  postgresSchemas?: string[];
   status: 'success' | 'failure';
   /** Artifact directory, relative to backupRootDir, when the unit succeeded. */
   artifactDir?: string;
@@ -911,7 +913,12 @@ export async function runFleetBackupCycle(
   const results: BackupRunResult[] = [];
 
   const runUnit = async (
-    descriptor: { kind: FleetBackupUnitKind; companionId?: string; postgresSchema?: string },
+    descriptor: {
+      kind: FleetBackupUnitKind;
+      companionId?: string;
+      postgresSchema?: string;
+      postgresSchemas?: string[];
+    },
     runOptions: BackupRunOptions,
   ): Promise<void> => {
     try {
@@ -921,6 +928,7 @@ export async function runFleetBackupCycle(
         kind: descriptor.kind,
         ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
         ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
         status: 'success',
         artifactDir: relative(options.backupRootDir, result.backupDir),
       });
@@ -936,6 +944,7 @@ export async function runFleetBackupCycle(
         kind: descriptor.kind,
         ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
         ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
         status: 'failure',
         error: message,
       });
@@ -958,7 +967,15 @@ export async function runFleetBackupCycle(
       throw new Error('Group backup mode requires groupWorkspacesRoot');
     }
     await runUnit(
-      { kind: 'group' },
+      {
+        kind: 'group',
+        postgresSchemas: [
+          ...new Set([
+            ...options.companions.map(companion => assertValidPostgresSchemaName(companion.postgresSchema)),
+            assertValidPostgresSchemaName(sharedSchema),
+          ]),
+        ].sort(),
+      },
       {
         postgres: basePostgres,
         companionDataDir: groupCompanionDataDir,

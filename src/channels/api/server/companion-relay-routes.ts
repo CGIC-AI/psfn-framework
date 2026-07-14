@@ -1,5 +1,3 @@
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
 import type {
@@ -367,38 +365,18 @@ export async function handleCompanionArtifactPreview(
     return;
   }
 
-  let sizeBytes: number;
-  try {
-    const stats = await stat(source.localPath);
-    if (!stats.isFile()) {
-      sendApiError(ctx.res, 404, 'artifact_not_found', 'Artifact preview source is unavailable');
-      return;
-    }
-    sizeBytes = stats.size;
-  } catch {
-    sendApiError(ctx.res, 404, 'artifact_not_found', 'Artifact preview source is unavailable');
-    return;
-  }
-  if (sizeBytes > ctx.deps.relay.maxPreviewSizeBytes()) {
+  if (!source.bytes || source.sizeBytes > ctx.deps.relay.maxPreviewSizeBytes()) {
     sendApiError(ctx.res, 403, 'artifact_preview_denied', 'Artifact exceeds the preview size cap');
     return;
   }
 
   ctx.res.writeHead(200, {
     'Content-Type': source.mediaType,
-    'Content-Length': String(sizeBytes),
+    'Content-Length': String(source.bytes.length),
     'Cache-Control': 'no-store',
     'Content-Disposition': 'inline',
   });
-  const stream = createReadStream(source.localPath);
-  stream.on('error', (error) => {
-    log.error('Companion artifact preview stream failed', {
-      artifactId,
-      error: toErrorMessage(error),
-    });
-    ctx.res.destroy();
-  });
-  stream.pipe(ctx.res);
+  ctx.res.end(source.bytes);
 }
 
 export type { CompanionRelayRequestContext };

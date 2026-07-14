@@ -34,12 +34,14 @@ describe('fleet workspace provisioning', () => {
     roots.push(root, source);
     writeFileSync(join(source, 'welcome.md'), 'seed welcome\n');
     writeFileSync(join(source, 'privacy-boundary-reference.md'), 'seed privacy\n');
+    writeFileSync(join(source, 'live_verification_checklist.md'), 'seed checklist\n');
     writeFileSync(join(source, COMPANION_LIBRARY_MANIFEST_FILE), `${JSON.stringify({
       schemaVersion: 1,
       bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update('seed privacy\n').digest('hex') },
+        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('seed checklist\n').digest('hex') },
       ],
     }, null, 2)}\n`);
     return { root, source, fleet: resolveCompanionFleetPaths(FLEET, root) };
@@ -52,6 +54,8 @@ describe('fleet workspace provisioning', () => {
 
     expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
       .toBe('seed welcome\n');
+    expect(readFileSync(join(personal, 'docs/companion-library/live_verification_checklist.md'), 'utf8'))
+      .toBe('seed checklist\n');
     expect(JSON.parse(readFileSync(
       join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
       'utf8',
@@ -92,6 +96,15 @@ describe('fleet workspace provisioning', () => {
     })).toThrow(/does not match its checked-in manifest digest/);
   });
 
+  it('fails closed when the source directory contains an unmanifested bundle file', () => {
+    const fixture = makeFixture();
+    writeFileSync(join(fixture.source, 'undeclared.md'), 'not in the manifest\n');
+
+    expect(() => provisionFleetWorkspaces(fixture.fleet, {
+      companionLibrarySourceDir: fixture.source,
+    })).toThrow(/every bundle file must be declared exactly once/);
+  });
+
   it('fails closed when a manifest changes without a bundle version bump', () => {
     const fixture = makeFixture();
     provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
@@ -103,6 +116,7 @@ describe('fleet workspace provisioning', () => {
       files: [
         { path: 'welcome.md', sha256: createHash('sha256').update('seed welcome\n').digest('hex') },
         { path: 'privacy-boundary-reference.md', sha256: createHash('sha256').update(privacy).digest('hex') },
+        { path: 'live_verification_checklist.md', sha256: createHash('sha256').update('seed checklist\n').digest('hex') },
       ],
     }, null, 2)}\n`);
 

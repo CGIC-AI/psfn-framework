@@ -15,7 +15,7 @@ describe('createSandboxBrokerExecutionPort', () => {
     expect(port).toBeNull();
   });
 
-  it('executes allowlisted commands through the broker boundary', async () => {
+  it('keeps the broker metadata but fails closed without OS filesystem confinement', async () => {
     const port = createSandboxBrokerExecutionPort({
       workspacePath: process.cwd(),
       brokerId: 'test-broker',
@@ -46,16 +46,8 @@ describe('createSandboxBrokerExecutionPort', () => {
     });
     expect(port?.codeExecutionBoundary.reason).toContain('child process');
 
-    const result = await port?.shellExec('printf', ['ok'], {});
-
-    expect(result).toMatchObject({
-      command: 'printf',
-      args: ['ok'],
-      exitCode: 0,
-      stdout: 'ok',
-      stderr: '',
-      timedOut: false,
-    });
+    await expect(port?.shellExec('printf', ['ok'], {}))
+      .rejects.toThrow('no OS-enforced filesystem confinement');
   });
 
   it('fails closed when the brokered command is not allowlisted', async () => {
@@ -68,7 +60,8 @@ describe('createSandboxBrokerExecutionPort', () => {
       },
     });
 
-    await expect(port?.shellExec('node', ['-v'], {})).rejects.toThrow('not allowlisted');
+    await expect(port?.shellExec('node', ['-v'], {}))
+      .rejects.toThrow('no OS-enforced filesystem confinement');
   });
 
   it('does not inherit agent process secrets into brokered child commands', async () => {
@@ -83,14 +76,8 @@ describe('createSandboxBrokerExecutionPort', () => {
     });
 
     try {
-      const result = await port?.shellExec(
-        'printenv',
-        ['SANDBOX_BROKER_SECRET'],
-        {},
-      );
-
-      expect(result?.exitCode).toBe(1);
-      expect(result?.stdout).toBe('');
+      await expect(port?.shellExec('printenv', ['SANDBOX_BROKER_SECRET'], {}))
+        .rejects.toThrow('no OS-enforced filesystem confinement');
     } finally {
       delete process.env.SANDBOX_BROKER_SECRET;
     }

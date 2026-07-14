@@ -560,7 +560,7 @@ describe('companion relay routes', () => {
       const unknown = await request(port, 'GET', `/v1/companion/artifacts/art-missing/preview?${HUB_QUERY}`, undefined, AUTH);
       expect(unknown.status).toBe(404);
 
-      await announceArtifact('art-big', 'big.png', 100, 5_000);
+      await announceArtifact('art-big', 'big.png', 5_000);
       const oversized = await request(port, 'GET', `/v1/companion/artifacts/art-big/preview?${HUB_QUERY}`, undefined, AUTH);
       expect(oversized.status).toBe(403);
       expect(oversized.body).toContain('artifact_preview_denied');

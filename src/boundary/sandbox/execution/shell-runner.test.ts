@@ -1,330 +1,97 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { executeShellCommandWithPolicy } from './shell-runner.js';
+import {
+  executeShellCommandWithPolicy,
+  SHELL_EXEC_CONFINEMENT_UNAVAILABLE,
+} from './shell-runner.js';
 
 describe('executeShellCommandWithPolicy', () => {
   const tempPaths: string[] = [];
 
   afterEach(() => {
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (!target) continue;
-      rmSync(target, { recursive: true, force: true });
-    }
+    for (const target of tempPaths.splice(0)) rmSync(target, { recursive: true, force: true });
   });
 
-  function makeTempDir(prefix: string): string {
-    const dir = mkdtempSync(join(tmpdir(), prefix));
-    tempPaths.push(dir);
-    return dir;
-  }
-
-  function makeWorkspaceFixture(): { workspace: string; outside: string } {
-    const root = makeTempDir('psfn-shell-runner-');
+  function workspaceFixture(): { workspace: string; outside: string } {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-shell-fail-closed-'));
+    tempPaths.push(root);
     const workspace = join(root, 'workspace');
     const outside = join(root, 'outside');
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(outside, { recursive: true });
-    writeFileSync(join(workspace, 'visible.txt'), 'workspace-data', 'utf8');
-    writeFileSync(join(outside, 'secret.txt'), 'outside-secret', 'utf8');
+    mkdirSync(workspace);
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'secret.txt'), 'peer-secret');
     return { workspace, outside };
   }
 
-  it('allows allowlisted cat to read a relative file inside the workspace', async () => {
-    const { workspace } = makeWorkspaceFixture();
-
-    const result = await executeShellCommandWithPolicy(
-      {
-        command: 'cat',
-        args: ['visible.txt'],
-        cwd: workspace,
-      },
+  async function expectConfinementDenial(
+    command: string,
+    args: string[],
+    workspace: string,
+  ): Promise<void> {
+    await expect(executeShellCommandWithPolicy(
+      { command, args, cwd: workspace },
       {
         workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['cat'],
-          allowedCwd: [workspace],
-        },
+        policy: { enabled: true, allowlist: [command], allowedCwd: [workspace] },
       },
+    )).rejects.toThrow(SHELL_EXEC_CONFINEMENT_UNAVAILABLE);
+  }
+
+  it('retains the explicit disabled-policy denial', async () => {
+    const { workspace } = workspaceFixture();
+    await expect(executeShellCommandWithPolicy(
+      { command: 'printf', args: ['never'], cwd: workspace },
+      { workspacePath: workspace, policy: { enabled: false, allowlist: ['printf'] } },
+    )).rejects.toThrow('shell.exec policy is disabled');
+  });
+
+  it('fails closed for Python program-text file access', async () => {
+    const { workspace, outside } = workspaceFixture();
+    await expectConfinementDenial(
+      'python3',
+      ['-c', `open(${JSON.stringify(join(outside, 'secret.txt'))}).read()`],
+      workspace,
     );
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('workspace-data');
   });
 
-  it('denies allowlisted cat reading outside the workspace via relative path arguments', async () => {
-    const { workspace } = makeWorkspaceFixture();
-
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: 'cat',
-        args: ['../outside/secret.txt'],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['cat'],
-          allowedCwd: [workspace],
-        },
-      },
-    )).rejects.toThrow('argument path not allowlisted');
+  it('fails closed for an interpreter reached through a symlink alias', async () => {
+    const { workspace } = workspaceFixture();
+    const alias = join(workspace, 'innocent-command');
+    symlinkSync(process.execPath, alias);
+    await expectConfinementDenial(alias, ['-e', 'process.exit(0)'], workspace);
   });
 
-  it('denies allowlisted cat reading outside through a workspace symlink argument', async () => {
-    const { workspace, outside } = makeWorkspaceFixture();
-    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'secret-link'));
-
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: 'cat',
-        args: ['secret-link'],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['cat'],
-          allowedCwd: [workspace],
-        },
-      },
-    )).rejects.toThrow('argument path not allowlisted');
+  it('fails closed for non-blacklisted evaluators such as awk', async () => {
+    const { workspace } = workspaceFixture();
+    await expectConfinementDenial('awk', ['BEGIN { getline line < "/etc/hostname"; print line }'], workspace);
   });
 
-  it('allows missing relative path arguments inside the workspace', async () => {
-    const { workspace } = makeWorkspaceFixture();
+  it('never executes an allowlisted binary that is swapped after policy configuration', async () => {
+    const { workspace, outside } = workspaceFixture();
+    const executable = join(workspace, 'approved-command');
+    writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    // Model the check/use replacement the old canonical-path policy could not
+    // bind to exec: the same allowlisted pathname now contains a file read.
+    writeFileSync(executable, `#!/bin/sh\ncat '${join(outside, 'secret.txt')}' > '${join(workspace, 'leak.txt')}'\n`);
+    chmodSync(executable, 0o755);
 
-    const result = await executeShellCommandWithPolicy(
-      {
-        command: 'test',
-        args: ['-e', 'missing.txt'],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['test'],
-          allowedCwd: [workspace],
-        },
-      },
-    );
-
-    expect(result.exitCode).toBe(1);
+    await expectConfinementDenial(executable, [], workspace);
+    expect(existsSync(join(workspace, 'leak.txt'))).toBe(false);
   });
 
-  it('denies missing argument paths when their parent symlink resolves outside', async () => {
-    const { workspace, outside } = makeWorkspaceFixture();
-    symlinkSync(outside, join(workspace, 'outside-link'));
+  it('never follows cwd or argument path swaps because no child is spawned', async () => {
+    const { workspace, outside } = workspaceFixture();
+    const cwdAlias = join(workspace, 'cwd');
+    const argumentAlias = join(workspace, 'argument.txt');
+    mkdirSync(cwdAlias);
+    writeFileSync(argumentAlias, 'safe');
+    rmSync(cwdAlias, { recursive: true });
+    rmSync(argumentAlias);
+    symlinkSync(outside, cwdAlias, 'dir');
+    symlinkSync(join(outside, 'secret.txt'), argumentAlias);
 
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: 'cat',
-        args: ['outside-link/missing.txt'],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['cat'],
-          allowedCwd: [workspace],
-        },
-      },
-    )).rejects.toThrow('argument path not allowlisted');
-  });
-
-  it('falls back to normalized argument paths on symlink loops', async () => {
-    const { workspace } = makeWorkspaceFixture();
-    const loopA = join(workspace, 'loop-a');
-    const loopB = join(workspace, 'loop-b');
-    symlinkSync(loopB, loopA);
-    symlinkSync(loopA, loopB);
-
-    const result = await executeShellCommandWithPolicy(
-      {
-        command: 'test',
-        args: ['-e', 'loop-a'],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['test'],
-          allowedCwd: [workspace],
-        },
-      },
-    );
-
-    expect(result.exitCode).not.toBe(0);
-  });
-
-  it('runs the child against a curated PATH that ignores a poisoned parent PATH', async () => {
-    const { workspace } = makeWorkspaceFixture();
-    const previousPath = process.env.PATH;
-    // ponytail: poison parent PATH with a hostile dir first on the list
-    process.env.PATH = `${join(workspace, 'hostile')}:${previousPath ?? ''}`;
-    try {
-      const result = await executeShellCommandWithPolicy(
-        { command: 'printenv', args: ['PATH'], cwd: workspace },
-        {
-          workspacePath: workspace,
-          policy: { enabled: true, allowlist: ['printenv'], allowedCwd: [workspace] },
-        },
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout.trim()).toBe(['/usr/local/bin', '/usr/bin', '/bin'].join(':'));
-      expect(result.stdout).not.toContain('hostile');
-    } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-    }
-  });
-
-  it('rejects PATH passthrough even when PATH is in the env allowlist', async () => {
-    const { workspace } = makeWorkspaceFixture();
-
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: 'printenv',
-        args: ['PATH'],
-        cwd: workspace,
-        envVars: ['PATH'],
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['printenv'],
-          allowedCwd: [workspace],
-          envAllowlist: ['PATH'],
-        },
-      },
-    )).rejects.toThrow('env var is reserved');
-  });
-
-  it('rejects loader-injection env vars regardless of allowlist', async () => {
-    const { workspace } = makeWorkspaceFixture();
-
-    for (const reserved of ['LD_PRELOAD', 'ld_library_path', 'NODE_OPTIONS', 'BASH_ENV']) {
-      await expect(executeShellCommandWithPolicy(
-        {
-          command: 'printenv',
-          args: [reserved],
-          cwd: workspace,
-          envVars: [reserved],
-        },
-        {
-          workspacePath: workspace,
-          policy: {
-            enabled: true,
-            allowlist: ['printenv'],
-            allowedCwd: [workspace],
-            envAllowlist: [reserved],
-          },
-        },
-      )).rejects.toThrow('env var is reserved');
-    }
-  });
-
-  it('keeps the curated PATH while passing through a non-reserved allowlisted env var', async () => {
-    const { workspace } = makeWorkspaceFixture();
-    const previousValue = process.env.PSFN_SHELL_RUNNER_TEST_VAR;
-    process.env.PSFN_SHELL_RUNNER_TEST_VAR = 'passthrough-ok';
-    try {
-      const result = await executeShellCommandWithPolicy(
-        {
-          command: 'printenv',
-          args: ['PSFN_SHELL_RUNNER_TEST_VAR'],
-          cwd: workspace,
-          envVars: ['PSFN_SHELL_RUNNER_TEST_VAR'],
-        },
-        {
-          workspacePath: workspace,
-          policy: {
-            enabled: true,
-            allowlist: ['printenv'],
-            allowedCwd: [workspace],
-            envAllowlist: ['PSFN_SHELL_RUNNER_TEST_VAR'],
-          },
-        },
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout.trim()).toBe('passthrough-ok');
-    } finally {
-      if (previousValue === undefined) delete process.env.PSFN_SHELL_RUNNER_TEST_VAR;
-      else process.env.PSFN_SHELL_RUNNER_TEST_VAR = previousValue;
-    }
-  });
-
-  it('honors an operator PATH override for the sandbox child', async () => {
-    const { workspace } = makeWorkspaceFixture();
-    const result = await executeShellCommandWithPolicy(
-      { command: 'printenv', args: ['PATH'], cwd: workspace },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: ['printenv'],
-          allowedCwd: [workspace],
-          pathOverride: '/usr/bin',
-        },
-      },
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe('/usr/bin');
-  });
-
-  it('prohibits an allowlisted interpreter from reading a peer workspace', async () => {
-    const { workspace, outside } = makeWorkspaceFixture();
-    const secretPath = join(outside, 'secret.txt');
-
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: process.execPath,
-        args: ['-e', `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(secretPath)}, 'utf8'))`],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: [process.execPath],
-          allowedCwd: [workspace],
-        },
-      },
-    )).rejects.toThrow(/interpreter command is prohibited.*OS-mediated filesystem confinement/);
-  });
-
-  it('prohibits an allowlisted interpreter from writing a peer workspace', async () => {
-    const { workspace, outside } = makeWorkspaceFixture();
-    const peerPath = join(outside, 'peer.txt');
-
-    await expect(executeShellCommandWithPolicy(
-      {
-        command: process.execPath,
-        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(peerPath)}, 'compromised')`],
-        cwd: workspace,
-      },
-      {
-        workspacePath: workspace,
-        policy: {
-          enabled: true,
-          allowlist: [process.execPath],
-          allowedCwd: [workspace],
-        },
-      },
-    )).rejects.toThrow(/interpreter command is prohibited.*OS-mediated filesystem confinement/);
-
-    expect(() => readFileSync(peerPath, 'utf8')).toThrow();
+    await expectConfinementDenial('cat', [argumentAlias], workspace);
   });
 });

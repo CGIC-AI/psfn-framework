@@ -1,12 +1,12 @@
 import {
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   realpathSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -100,8 +100,18 @@ interface SharedWorkspacePublicationTransaction {
   provenanceEvent: SharedWorkspaceProvenanceEvent;
 }
 
+interface SharedWorkspaceLockOwner {
+  schemaVersion: 1;
+  ownerId: string;
+  pid: number;
+  processStartToken: string | null;
+  acquiredAt: string;
+}
+
 export interface SharedWorkspaceStoreOptions {
   faultInjection?: (stage: 'after_artifact' | 'after_review') => void;
+  /** Crash-recovery lease. Keep identical for every process sharing a root. */
+  lockStaleMs?: number;
 }
 
 function hashContent(content: string): string {
@@ -222,11 +232,57 @@ function writeImmutableJson(path: string, value: unknown): void {
   writeFileSync(path, encoded, { encoding: 'utf8', flag: 'wx' });
 }
 
+function readProcessStartToken(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const commandEnd = stat.lastIndexOf(')');
+    if (commandEnd < 0) return null;
+    // Fields after the executable name begin at proc-stat field 3. The process
+    // start time is field 22, hence zero-based offset 19 in this suffix.
+    return stat.slice(commandEnd + 1).trim().split(/\s+/u)[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function parseLockOwner(path: string): SharedWorkspaceLockOwner | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isRecord(parsed)
+      || parsed.schemaVersion !== 1
+      || typeof parsed.ownerId !== 'string'
+      || !Number.isSafeInteger(parsed.pid)
+      || (parsed.processStartToken !== null && typeof parsed.processStartToken !== 'string')
+      || typeof parsed.acquiredAt !== 'string') {
+      return null;
+    }
+    return parsed as unknown as SharedWorkspaceLockOwner;
+  } catch {
+    return null;
+  }
+}
+
+function isLockOwnerAlive(owner: SharedWorkspaceLockOwner | null): boolean {
+  if (!owner) return false;
+  const currentStartToken = readProcessStartToken(owner.pid);
+  if (owner.processStartToken && currentStartToken) {
+    return owner.processStartToken === currentStartToken;
+  }
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 export class SharedCompanionWorkspaceStore {
   private readonly faultInjection?: SharedWorkspaceStoreOptions['faultInjection'];
+  private readonly lockStaleMs: number;
 
   constructor(private readonly root: string, options: SharedWorkspaceStoreOptions = {}) {
     this.faultInjection = options.faultInjection;
+    this.lockStaleMs = Math.max(2_000, options.lockStaleMs ?? 5_000);
     this.recoverTransactions();
   }
 
@@ -433,20 +489,66 @@ export class SharedCompanionWorkspaceStore {
 
   private withLock<T>(name: string, action: () => T): T {
     const lockPath = join(this.root, '.locks', `${name}.lock`);
-    let descriptor: number;
-    try {
-      descriptor = openSync(lockPath, 'wx', 0o600);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new Error(`Shared workspace operation is busy: ${name}`);
+    const ownerPath = join(lockPath, 'owner.json');
+    const owner: SharedWorkspaceLockOwner = {
+      schemaVersion: 1,
+      ownerId: randomUUID(),
+      pid: process.pid,
+      processStartToken: readProcessStartToken(process.pid),
+      acquiredAt: new Date().toISOString(),
+    };
+    for (;;) {
+      let createdLockDirectory = false;
+      try {
+        mkdirSync(lockPath, { mode: 0o700 });
+        createdLockDirectory = true;
+        writeFileSync(ownerPath, `${JSON.stringify(owner)}\n`, {
+          encoding: 'utf8',
+          flag: 'wx',
+          mode: 0o600,
+        });
+        break;
+      } catch (error) {
+        if (createdLockDirectory) {
+          rmSync(lockPath, { recursive: true, force: true });
+          throw error;
+        }
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const existingOwner = parseLockOwner(ownerPath);
+        let lockAgeMs: number;
+        try {
+          lockAgeMs = Date.now() - statSync(lockPath).mtimeMs;
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw statError;
+        }
+        if (isLockOwnerAlive(existingOwner) || lockAgeMs <= this.lockStaleMs) {
+          throw new Error(`Shared workspace operation is busy: ${name}`);
+        }
+        const reclaimPath = join(lockPath, '.reclaim');
+        try {
+          mkdirSync(reclaimPath);
+        } catch (reclaimError) {
+          if ((reclaimError as NodeJS.ErrnoException).code === 'EEXIST') {
+            throw new Error(`Shared workspace operation is busy: ${name}`);
+          }
+          if ((reclaimError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw reclaimError;
+        }
+        if (isLockOwnerAlive(parseLockOwner(ownerPath))) {
+          rmSync(reclaimPath, { recursive: true, force: true });
+          throw new Error(`Shared workspace operation is busy: ${name}`);
+        }
+        rmSync(lockPath, { recursive: true, force: true });
       }
-      throw error;
     }
-    closeSync(descriptor);
     try {
       return action();
     } finally {
-      unlinkSync(lockPath);
+      const currentOwner = parseLockOwner(ownerPath);
+      if (currentOwner?.ownerId === owner.ownerId) {
+        rmSync(lockPath, { recursive: true, force: true });
+      }
     }
   }
 

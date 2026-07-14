@@ -227,6 +227,7 @@ export async function requestAgentVoiceStream({
     return {
       content: streamResult.content,
       channelId: streamResult.channelId,
+      ...(streamResult.attachments ? { attachments: streamResult.attachments } : {}),
       model: streamResult.model,
       durationMs: streamResult.durationMs,
     };

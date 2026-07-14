@@ -26,6 +26,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
+  sinceMs: number;
   refreshedAtMs: number;
   dataThroughMs: number;
   latestEventAtMs: number | null;
@@ -240,6 +241,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
       });
       const snapshot: CachedDashboardModelUsage = {
         usage: mapModelUsageTotalsToDashboardUsage(data.totals),
+        sinceMs: range.sinceMs,
         refreshedAtMs: this.now(),
         dataThroughMs,
         latestEventAtMs: data.recentEvents[0]?.recordedAtMs ?? null,
@@ -265,7 +267,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
         error: error instanceof Error ? error.message : String(error),
       });
       const cached = this.lastSuccessfulModelUsageByWindow.get(selected);
-      return cached
+      return cached?.sinceMs === range.sinceMs
         ? this.staleModelUsage(selected, cached)
         : this.unavailableModelUsage(selected);
     }

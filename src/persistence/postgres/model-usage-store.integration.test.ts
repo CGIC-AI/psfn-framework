@@ -35,6 +35,7 @@ import {
 } from '../../shared/telemetry/run-charge.js';
 import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import type { AdminModelUsageService } from '../../operator/garden/services/types.js';
 
 const piMocks = vi.hoisted(() => ({
   completeSimple: vi.fn(),
@@ -320,6 +321,137 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect(restartedOperator.stats.transientSessionTelemetry.turnsSinceOperatorStart).toBe(0);
     } finally {
       await Promise.all([writerPool.end(), operatorPool.end()]);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('moves the same dashboard from unavailable to fresh to stale across real PostgreSQL outages', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseName, databaseUrl } = await harness.createDatabase();
+    if (!/^psfn_[0-9a-f]{32}$/.test(databaseName)) {
+      throw new Error(`Unexpected Postgres test database name: ${databaseName}`);
+    }
+    const adminPool = createPostgresPool(harness.adminDatabaseUrl, {
+      applicationName: 'model-usage-dashboard-outage-admin',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const writerPool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-dashboard-outage-writer',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const unavailablePool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-dashboard-outage-unavailable',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const recoveryPool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-dashboard-outage-recovery',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    // Terminated idle clients emit pool-level errors outside the awaited query path.
+    // Capture those expected outage signals so they cannot become unhandled events.
+    const expectedPoolErrors: Error[] = [];
+    for (const pool of [writerPool, unavailablePool, recoveryPool]) {
+      pool.on('error', error => expectedPoolErrors.push(error));
+    }
+    const setDatabaseAvailability = async (available: boolean): Promise<void> => {
+      await adminPool.query(
+        `ALTER DATABASE "${databaseName}" WITH ALLOW_CONNECTIONS ${available ? 'true' : 'false'}`,
+      );
+      if (!available) {
+        await adminPool.query(
+          'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()',
+          [databaseName],
+        );
+      }
+    };
+    const nowMs = Date.UTC(2026, 6, 14, 13, 0, 0, 0);
+    const companionId = 'dashboard-outage-companion';
+    const writer = new PostgresModelUsageStore(writerPool, { companionId });
+    const unavailableStore = new PostgresModelUsageStore(unavailablePool, { companionId });
+    const recoveryStore = new PostgresModelUsageStore(recoveryPool, { companionId });
+    let activeModelUsageService = new AdminModelUsageDataService(unavailableStore);
+    const switchableModelUsageService: AdminModelUsageService = {
+      getModelUsageData: query => activeModelUsageService.getModelUsageData(query),
+    };
+    const dashboard = new AdminDashboardDataService({
+      memoryStore: {
+        getStats: () => ({ total: 0, avgSalience: 0, byType: {} }),
+      } as MemoryStorePort,
+      sessionStore: {
+        listChannels: () => [],
+      } as unknown as SessionStore,
+      scheduler: { taskCount: 0 } as Scheduler,
+      shardManager: {
+        getActiveCount: () => 0,
+        getActiveShards: () => [],
+      } as unknown as ShardExecutionPort,
+      eventBus: new EventBus(),
+      modelUsageService: switchableModelUsageService,
+      now: () => nowMs,
+    });
+
+    try {
+      await writer.recordUsageEvent({
+        logicalCallId: 'dashboard-outage-call',
+        recordedAtMs: nowMs - 1_000,
+        startedAtMs: nowMs - 1_100,
+        status: 'success',
+        settlement: 'complete',
+        callKind: 'completion',
+        attribution: {
+          companionId,
+          callType: 'background',
+          purpose: 'dashboard-outage-recovery',
+        },
+        provider: 'provider-a',
+        model: 'model-a',
+        inputTokens: 12,
+        outputTokens: 3,
+        totalTokens: 15,
+        providerCost: { total: 0.02 },
+        effectiveCost: { total: 0.02 },
+        providerCostUsd: 0.02,
+        effectiveCostUsd: 0.02,
+        costSource: 'provider',
+        currency: 'USD',
+      });
+      await unavailableStore.getUsageData({ limit: 1 });
+      await setDatabaseAvailability(false);
+
+      const unavailable = await dashboard.getDashboardData({ costWindow: 'today' });
+      expect(unavailable.stats.modelUsage).toMatchObject({
+        usage: null,
+        freshness: { state: 'unavailable', source: 'postgres_model_usage' },
+      });
+
+      await setDatabaseAvailability(true);
+      activeModelUsageService = new AdminModelUsageDataService(recoveryStore);
+      const fresh = await dashboard.getDashboardData({ costWindow: 'today' });
+      expect(fresh.stats.modelUsage).toMatchObject({
+        usage: { calls: 1, totalTokens: 15, effectiveCostUsd: 0.02 },
+        freshness: {
+          state: 'fresh',
+          source: 'postgres_model_usage',
+          latestEventAtMs: nowMs - 1_000,
+        },
+      });
+
+      await setDatabaseAvailability(false);
+      const stale = await dashboard.getDashboardData({ costWindow: 'today' });
+      expect(stale.stats.modelUsage).toMatchObject({
+        usage: { calls: 1, totalTokens: 15, effectiveCostUsd: 0.02 },
+        freshness: { state: 'stale', source: 'postgres_model_usage' },
+      });
+      expect(expectedPoolErrors.every(error => (
+        /terminating connection|connection terminated/i.test(error.message)
+      ))).toBe(true);
+    } finally {
+      await setDatabaseAvailability(true);
+      await Promise.all([writerPool.end(), unavailablePool.end(), recoveryPool.end()]);
+      await adminPool.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
 

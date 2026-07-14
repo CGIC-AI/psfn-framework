@@ -9,6 +9,7 @@ import { MODEL_USAGE_GROUP_DIMENSIONS } from '../../../shared/telemetry/model-us
 import { AdminDashboardDataService } from './dashboard-service.js';
 import type { AdminAdaptiveToolsService, AdminModelUsageService } from './types.js';
 import { startOfDashboardUtcWeek } from './dashboard-cost-windows.js';
+import type { DashboardCostWindow } from '../types.js';
 
 const EMPTY_TOTALS: ModelUsageTotals = {
   calls: 0,
@@ -277,6 +278,59 @@ describe('AdminDashboardDataService', () => {
     });
     expect(differentRange.stats.modelUsage).toMatchObject({
       selected: 'month', usage: null, freshness: { state: 'unavailable' },
+    });
+  });
+
+  it.each<{
+    costWindow: DashboardCostWindow;
+    beforeBoundaryMs: number;
+    afterBoundaryMs: number;
+  }>([
+    {
+      costWindow: 'today',
+      beforeBoundaryMs: Date.UTC(2026, 6, 14, 23, 59, 59, 999),
+      afterBoundaryMs: Date.UTC(2026, 6, 15, 0, 0, 0, 0),
+    },
+    {
+      costWindow: 'week',
+      beforeBoundaryMs: Date.UTC(2026, 6, 19, 23, 59, 59, 999),
+      afterBoundaryMs: Date.UTC(2026, 6, 20, 0, 0, 0, 0),
+    },
+    {
+      costWindow: 'month',
+      beforeBoundaryMs: Date.UTC(2026, 6, 31, 23, 59, 59, 999),
+      afterBoundaryMs: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+    },
+  ])('does not reuse a stale $costWindow snapshot after its UTC boundary rolls over', async ({
+    costWindow,
+    beforeBoundaryMs,
+    afterBoundaryMs,
+  }) => {
+    let nowMs = beforeBoundaryMs;
+    const getModelUsageData = vi.fn<AdminModelUsageService['getModelUsageData']>()
+      .mockResolvedValueOnce(makeUsageData({}, { calls: 8, totalCostUsd: 0.08 }))
+      .mockRejectedValueOnce(new Error('postgres offline after rollover'));
+    const service = new AdminDashboardDataService({
+      ...makeBaseDeps(),
+      modelUsageService: { getModelUsageData },
+      now: () => nowMs,
+    });
+
+    const beforeBoundary = await service.getDashboardData({ costWindow });
+    nowMs = afterBoundaryMs;
+    const afterBoundary = await service.getDashboardData({ costWindow });
+
+    expect(beforeBoundary.stats.modelUsage).toMatchObject({
+      selected: costWindow,
+      usage: { calls: 8 },
+      freshness: { state: 'fresh' },
+    });
+    expect(getModelUsageData.mock.calls[0]?.[0]?.sinceMs)
+      .not.toBe(getModelUsageData.mock.calls[1]?.[0]?.sinceMs);
+    expect(afterBoundary.stats.modelUsage).toMatchObject({
+      selected: costWindow,
+      usage: null,
+      freshness: { state: 'unavailable' },
     });
   });
 

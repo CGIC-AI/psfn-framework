@@ -10,6 +10,11 @@ export interface DashboardCostWindowOption {
   label: string;
 }
 
+export interface DashboardCostWindowSelection {
+  committed: DashboardCostWindow;
+  pending: DashboardCostWindow | null;
+}
+
 const DASHBOARD_COST_WINDOW_SET = new Set<DashboardCostWindow>(DASHBOARD_COST_WINDOWS);
 
 export const DASHBOARD_COST_WINDOW_OPTIONS: readonly DashboardCostWindowOption[] = [
@@ -29,6 +34,34 @@ export function resolveDashboardCostWindow(value: string | null | undefined): Da
 
 export function buildDashboardCostWindowPath(costWindow: DashboardCostWindow): string {
   return `/api/admin/dashboard?costWindow=${encodeURIComponent(costWindow)}`;
+}
+
+export function createDashboardCostWindowSelection(
+  committed: DashboardCostWindow,
+): DashboardCostWindowSelection {
+  return { committed, pending: null };
+}
+
+export function beginDashboardCostWindowSelection(
+  selection: DashboardCostWindowSelection,
+  pending: DashboardCostWindow,
+): DashboardCostWindowSelection {
+  return pending === selection.committed
+    ? { committed: selection.committed, pending: null }
+    : { committed: selection.committed, pending };
+}
+
+export function commitDashboardCostWindowSelection(
+  _selection: DashboardCostWindowSelection,
+  committed: DashboardCostWindow,
+): DashboardCostWindowSelection {
+  return { committed, pending: null };
+}
+
+export function rejectDashboardCostWindowSelection(
+  selection: DashboardCostWindowSelection,
+): DashboardCostWindowSelection {
+  return { committed: selection.committed, pending: null };
 }
 
 export function shouldPublishDashboardResponse(requestId: number, latestRequestId: number): boolean {

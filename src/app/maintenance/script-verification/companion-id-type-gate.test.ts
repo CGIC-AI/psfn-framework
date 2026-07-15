@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { basename, dirname, posix } from 'node:path';
+import { posix } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { isRecord, normalizeStringArray } from '../../../shared/utils/types.js';
 
 describe('CompanionId type gate wiring', () => {
   it('runs the negative type fixture as part of every production build', () => {
@@ -20,12 +22,23 @@ describe('CompanionId type gate wiring', () => {
     'docker/Dockerfile.agent',
     'docker/Dockerfile.gateway',
   ])('%s copies every type-gate input before the production build', (dockerfilePath) => {
-    const typeGateConfig = JSON.parse(
+    const typeGateConfig: unknown = JSON.parse(
       readFileSync('tsconfig.companion-id-types.json', 'utf8'),
-    ) as { include?: string[] };
+    );
+    if (!isRecord(typeGateConfig)) {
+      throw new Error('tsconfig.companion-id-types.json must contain an object');
+    }
+    const includedInputs = normalizeStringArray(
+      typeGateConfig.include,
+      'include',
+      { errorPrefix: 'Invalid tsconfig.companion-id-types.json' },
+    );
+    if (includedInputs.length === 0) {
+      throw new Error('tsconfig.companion-id-types.json include must not be empty');
+    }
     const requiredInputs = [
       'tsconfig.companion-id-types.json',
-      ...(typeGateConfig.include ?? []),
+      ...includedInputs,
     ];
     const dockerfile = readFileSync(dockerfilePath, 'utf8');
     const buildIndex = dockerfile.indexOf('RUN npm run build');
@@ -46,9 +59,13 @@ describe('CompanionId type gate wiring', () => {
       const [, ...copyArguments] = matchingCopy!.trim().split(/\s+/);
       const destination = copyArguments.at(-1)!;
       const copiedPath = destination.endsWith('/')
-        ? posix.join(destination, basename(requiredInput))
+        ? posix.join(destination, posix.basename(requiredInput))
         : destination;
-      const expectedPath = posix.join('./', dirname(requiredInput), basename(requiredInput));
+      const expectedPath = posix.join(
+        './',
+        posix.dirname(requiredInput),
+        posix.basename(requiredInput),
+      );
 
       expect(copiedPath).toBe(expectedPath);
     }

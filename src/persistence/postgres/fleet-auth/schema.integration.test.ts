@@ -143,6 +143,134 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
+  it('rejects every dangerous PostgreSQL role attribute on runtime, migration, and backup authorities before schema/data work', async () => {
+    if (!harness) throw new Error('Postgres harness unavailable');
+    const db = await freshDatabase();
+    const probeRoles: FleetAuthDatabaseRoles = {
+      runtime: 'probe_fleet_runtime',
+      migration: 'probe_fleet_migration',
+      backupRestore: 'probe_fleet_backup',
+    };
+    const probePassword = 'probe-password';
+    const probeUrl = (role: keyof FleetAuthDatabaseRoles): string => {
+      const url = new URL(db.adminUrl);
+      url.username = probeRoles[role];
+      url.password = probePassword;
+      return url.toString();
+    };
+    const authorities: Array<{
+      role: keyof FleetAuthDatabaseRoles;
+      run: () => Promise<unknown>;
+    }> = [
+      {
+        role: 'migration',
+        run: () => migrateFleetAuthSchema({ databaseUrl: probeUrl('migration'), roles: probeRoles }),
+      },
+      {
+        role: 'runtime',
+        run: () => assertFleetAuthRuntimePrivileges(probeUrl('runtime'), probeRoles),
+      },
+      {
+        role: 'backupRestore',
+        run: () => assertFleetAuthBackupRestorePrivileges(probeUrl('backupRestore'), probeRoles),
+      },
+    ];
+    const forbiddenAttributes = [
+      'SUPERUSER',
+      'CREATEROLE',
+      'CREATEDB',
+      'REPLICATION',
+      'BYPASSRLS',
+    ] as const;
+    const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+    try {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(
+          `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${probePassword}'`,
+        );
+      }
+      // A least-privilege LOGIN role with none of the forbidden attributes must
+      // still reach the normal preflight (and fail only later on the missing
+      // fleet_auth schema/privileges), proving the attribute gate does not
+      // over-reject valid roles.
+      await expect(assertFleetAuthRuntimePrivileges(probeUrl('runtime'), probeRoles))
+        .rejects.toThrow(/least-privilege boundary|fleet_auth/i);
+
+      for (const attribute of forbiddenAttributes) {
+        for (const { role, run } of authorities) {
+          await admin.query(
+            `ALTER ROLE ${quoteIdentifier(probeRoles[role])} WITH ${attribute}`,
+          );
+          try {
+            await expect(run()).rejects.toThrow(
+              new RegExp(`must not hold cluster authority attributes: [A-Z, ]*${attribute}`),
+            );
+          } finally {
+            await admin.query(
+              `ALTER ROLE ${quoteIdentifier(probeRoles[role])} WITH NO${attribute}`,
+            );
+          }
+        }
+      }
+    } finally {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(role)}`).catch(() => undefined);
+      }
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies a REPLICATION runtime role that can otherwise create a physical replication slot', async () => {
+    if (!harness) throw new Error('Postgres harness unavailable');
+    const db = await freshDatabase();
+    const probeRoles: FleetAuthDatabaseRoles = {
+      runtime: 'probe_repl_runtime',
+      migration: 'probe_repl_migration',
+      backupRestore: 'probe_repl_backup',
+    };
+    const probePassword = 'probe-password';
+    const runtimeUrl = (() => {
+      const url = new URL(db.adminUrl);
+      url.username = probeRoles.runtime;
+      url.password = probePassword;
+      return url.toString();
+    })();
+    const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+    const slotName = `probe_slot_${randomUUID().replaceAll('-', '')}`;
+    try {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(
+          `CREATE ROLE ${quoteIdentifier(role)} LOGIN REPLICATION PASSWORD '${probePassword}'`,
+        );
+      }
+      // The preflight must reject the REPLICATION runtime credential before any
+      // schema/data work.
+      await expect(assertFleetAuthRuntimePrivileges(runtimeUrl, probeRoles))
+        .rejects.toThrow(/must not hold cluster authority attributes: [A-Z, ]*REPLICATION/);
+
+      // Prove the danger the gate blocks is real: the same REPLICATION login
+      // role can create a physical replication slot (WAL disclosure and
+      // storage-exhaustion vector) once it is allowed to connect and act.
+      const replica = createPostgresPool(runtimeUrl, { max: 1 });
+      try {
+        await replica.query('SELECT pg_create_physical_replication_slot($1)', [slotName]);
+        const slots = await replica.query<{ slot_name: string }>(
+          `SELECT slot_name FROM pg_replication_slots WHERE slot_name = $1`,
+          [slotName],
+        );
+        expect(slots.rows.map(row => row.slot_name)).toEqual([slotName]);
+      } finally {
+        await replica.query('SELECT pg_drop_replication_slot($1)', [slotName]).catch(() => undefined);
+        await replica.end();
+      }
+    } finally {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(role)}`).catch(() => undefined);
+      }
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
+
   it('rejects a pre-created fleet_auth schema owned outside migration authority', async () => {
     const db = await freshDatabase();
     const admin = createPostgresPool(db.adminUrl, { max: 1 });

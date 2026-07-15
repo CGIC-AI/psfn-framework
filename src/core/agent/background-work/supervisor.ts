@@ -30,6 +30,14 @@ export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
   payload: BackgroundWorkPayload;
   effects: BackgroundWorkEffectRunner;
+  /**
+   * Aborts when the claim can no longer make forward progress safely — graceful
+   * shutdown began or durable lease ownership was lost. Handlers may forward it
+   * to cancellable provider/compute calls so pre-boundary work unwinds promptly
+   * instead of waiting out the shutdown drain. Crossing the effect boundary is
+   * still gated by the effect runner, never by this signal alone.
+   */
+  signal: AbortSignal;
 }
 
 export interface BackgroundWorkEffectRunner {
@@ -86,6 +94,19 @@ class BackgroundWorkEffectOutcomeUnknownError extends Error {
   constructor() {
     super('A prior background effect outcome is unknown');
     this.name = 'BackgroundWorkEffectOutcomeUnknownError';
+  }
+}
+
+/**
+ * Thrown from a pre-boundary fence when graceful shutdown begins. It proves the
+ * claim never crossed its durable side-effect boundary, so the supervisor may
+ * leave the row running for the pre-boundary requeue sweep instead of failing
+ * it. It is never thrown once the boundary has been crossed.
+ */
+export class BackgroundWorkShutdownRequeueError extends Error {
+  constructor() {
+    super('Background work interrupted before its effect boundary by shutdown');
+    this.name = 'BackgroundWorkShutdownRequeueError';
   }
 }
 
@@ -167,6 +188,7 @@ export class BackgroundWorkSupervisor {
     job: ClaimedBackgroundWorkJob;
     promise: Promise<void>;
     fence: { lost: boolean };
+    controller: AbortController;
   }>();
   private sessionTransitionTail: Promise<void> = Promise.resolve();
   private tickPromise: Promise<void> | null = null;
@@ -330,6 +352,11 @@ export class BackgroundWorkSupervisor {
   async stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopping = true;
+    // Signal every in-flight claim so cancellable provider/compute unwinds and
+    // its next pre-boundary fence throws a requeue rather than crossing.
+    for (const entry of this.running.values()) {
+      if (!entry.controller.signal.aborted) entry.controller.abort();
+    }
     this.stopPromise = (async () => {
       await this.tickPromise;
       await this.waitForSessionTransitions();
@@ -340,10 +367,24 @@ export class BackgroundWorkSupervisor {
           new Promise<void>(resolve => setTimeout(resolve, this.shutdownTimeoutMs)),
         ]);
       }
-      // Never release a claim while its handler can still write. A live
-      // handler keeps its heartbeat; a crashed process loses the connection
-      // and is reclaimed only after the durable lease expires.
-      if (this.running.size === 0) this.stopHeartbeat();
+      // Durably requeue only pre-boundary work under its claim token before the
+      // store closes. A claim that may have crossed its effect boundary keeps a
+      // `started` receipt and is left running for fail-closed lease-expiry
+      // recovery; the revision bump on requeued rows fences any worker still
+      // in-flight from crossing after we release it.
+      try {
+        const requeued = await this.store.requeuePreBoundaryClaims({
+          leaseOwner: this.leaseOwner,
+          nowMs: this.now(),
+          reasonCode: 'shutdown',
+        });
+        for (const job of requeued) this.emitJobTelemetry(job);
+      } catch (error) {
+        log.error('Background pre-boundary requeue failed during shutdown', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+      }
+      this.stopHeartbeat();
     })();
     return this.stopPromise;
   }
@@ -373,8 +414,9 @@ export class BackgroundWorkSupervisor {
       });
       if (!job) break;
       const fence = { lost: false };
+      const controller = new AbortController();
       this.ensureHeartbeat();
-      const promise = Promise.resolve().then(() => this.executeClaim(job, fence))
+      const promise = Promise.resolve().then(() => this.executeClaim(job, fence, controller))
         .catch((error) => {
           // A lease/CAS fence may have moved while the handler was running.
           // Leave the durable row for expiry recovery; never leak an unhandled
@@ -389,11 +431,15 @@ export class BackgroundWorkSupervisor {
           this.running.delete(job.jobId);
           if (this.running.size === 0 && this.foregroundLeases.size === 0) this.stopHeartbeat();
         });
-      this.running.set(job.jobId, { job, promise, fence });
+      this.running.set(job.jobId, { job, promise, fence, controller });
     }
   }
 
-  private async executeClaim(job: ClaimedBackgroundWorkJob, fence: { lost: boolean }): Promise<void> {
+  private async executeClaim(
+    job: ClaimedBackgroundWorkJob,
+    fence: { lost: boolean },
+    controller: AbortController,
+  ): Promise<void> {
     if (this.foregroundCounts.has(job.logicalSessionId)) {
       await this.transitionClaimToDeferred(job, 'foreground_active', this.retryBaseDelayMs);
       return;
@@ -427,8 +473,24 @@ export class BackgroundWorkSupervisor {
 
     this.emitJobTelemetry(job);
     try {
-      await this.executor({ job, payload, effects: this.createEffectRunner(job, fence) });
+      await this.executor({
+        job,
+        payload,
+        effects: this.createEffectRunner(job, fence),
+        signal: controller.signal,
+      });
     } catch (error) {
+      if (error instanceof BackgroundWorkShutdownRequeueError) {
+        // Pre-boundary interruption: the claim never crossed its effect
+        // boundary. Leave the row running for the shutdown requeue sweep, which
+        // returns it to pending under a bumped revision. Never fail or retry it
+        // here — that would count a shutdown as an attempt.
+        log.debug('Background claim interrupted before effect boundary by shutdown', {
+          jobId: job.jobId,
+          kind: job.kind,
+        });
+        return;
+      }
       if (error instanceof BackgroundWorkDeferredError) {
         await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
         return;
@@ -549,10 +611,23 @@ export class BackgroundWorkSupervisor {
         throw new BackgroundWorkLeaseLostError();
       }
     };
+    // Pre-boundary shutdown is a requeue, not a failure: it must abort the
+    // handler before it can cross its effect boundary. Once the boundary has
+    // been crossed this must not fire, or an in-progress write would be torn.
+    const throwIfShuttingDown = (): void => {
+      if (this.stopping) throw new BackgroundWorkShutdownRequeueError();
+    };
     return {
-      assertOwned: assertEffectAllowed,
-      run: async (effectKey, operation) => {
+      assertOwned: async () => {
+        throwIfShuttingDown();
         await assertEffectAllowed();
+      },
+      run: async (effectKey, operation) => {
+        throwIfShuttingDown();
+        await assertEffectAllowed();
+        // Open the effect as `pending`: the run has entered but no external
+        // write has been attempted, so the job stays safely requeue-able until
+        // the handler crosses its write boundary below.
         const disposition = await this.store.beginEffect({
           jobId: job.jobId,
           effectKey,
@@ -571,9 +646,41 @@ export class BackgroundWorkSupervisor {
         if (disposition === 'outcome_unknown') {
           throw new BackgroundWorkEffectOutcomeUnknownError();
         }
+        let crossed = false;
+        // The durable side-effect boundary. Handlers call this immediately
+        // before their sink write; the first call promotes the receipt from
+        // `pending` to `started` (outcome-ambiguous on interruption). Before the
+        // crossing, shutdown unwinds to a requeue; after it, shutdown must not
+        // interrupt the write, so only lease ownership is re-fenced.
+        const crossBoundary = async (): Promise<void> => {
+          if (fence.lost) throw new BackgroundWorkLeaseLostError();
+          if (crossed) {
+            await assertLeaseOwned();
+            return;
+          }
+          throwIfShuttingDown();
+          const commit = await this.store.commitEffectBoundary({
+            jobId: job.jobId,
+            effectKey,
+            leaseOwner: this.leaseOwner,
+            expectedRevision: job.revision,
+            nowMs: this.now(),
+          });
+          if (commit === 'foreground_active') {
+            throw new BackgroundWorkDeferredError('foreground_active', this.retryBaseDelayMs);
+          }
+          if (commit === 'lease_lost') {
+            fence.lost = true;
+            throw new BackgroundWorkLeaseLostError();
+          }
+          // 'crossed' (or the unreachable 'applied' — beginEffect already
+          // returns early for an applied receipt, so this owner/revision cannot
+          // observe one here). The boundary is now durably marked.
+          crossed = true;
+        };
         let operationCompleted = false;
         try {
-          await operation(assertEffectAllowed);
+          await operation(crossBoundary);
           operationCompleted = true;
           // Once the operation reports success, a later foreground arrival
           // cannot make that durable outcome un-happen. Fence only queue lease
@@ -617,12 +724,12 @@ export class BackgroundWorkSupervisor {
             leaseDurationMs: this.leaseDurationMs,
           });
         } catch (error) {
-          for (const entry of running) entry.fence.lost = true;
+          for (const entry of running) this.markClaimFenceLost(entry);
           throw error;
         }
         const renewedIds = new Set(renewed);
         for (const entry of running) {
-          if (!renewedIds.has(entry.job.jobId)) entry.fence.lost = true;
+          if (!renewedIds.has(entry.job.jobId)) this.markClaimFenceLost(entry);
         }
       }
       const foregroundLeaseIds = [...this.readyForegroundLeaseIds];
@@ -670,6 +777,14 @@ export class BackgroundWorkSupervisor {
     if (!this.heartbeatTimer) return;
     clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+  }
+
+  private markClaimFenceLost(entry: {
+    fence: { lost: boolean };
+    controller: AbortController;
+  }): void {
+    entry.fence.lost = true;
+    if (!entry.controller.signal.aborted) entry.controller.abort();
   }
 
   private markForegroundLeaseLost(leaseId: string): void {

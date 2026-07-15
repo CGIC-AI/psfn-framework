@@ -922,10 +922,13 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       ]);
       const fence = claim.rows[0]?.disposition ?? 'lease_lost';
       if (fence !== 'owned') return fence;
+      // Open the effect at its durable phase boundary as `pending`: the run has
+      // entered but no external write has been attempted, so the job is still
+      // safely requeue-able. commitEffectBoundary promotes it to `started`.
       const inserted = await client.query<{ state: string }>(`
         INSERT INTO agent_background_work_effect_receipts (
           job_id, effect_key, state, lease_owner, lease_revision, started_at_ms, applied_at_ms
-        ) VALUES ($1, $2, 'started', $3, $4, $5, NULL)
+        ) VALUES ($1, $2, 'pending', $3, $4, $5, NULL)
         ON CONFLICT (job_id, effect_key) DO NOTHING
         RETURNING state
       `, [
@@ -948,11 +951,102 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       `, [input.jobId, input.effectKey]);
       if (incumbent.rowCount === 0) return 'outcome_unknown';
       const receipt = incumbent.rows[0]!;
+      const ownedReceipt = receipt.lease_owner === input.leaseOwner
+        && Number(receipt.lease_revision) === input.expectedRevision;
       if (receipt.state === 'applied') return 'applied';
-      if (receipt.state === 'started'
-        && receipt.lease_owner === input.leaseOwner
-        && Number(receipt.lease_revision) === input.expectedRevision) return 'execute';
-      return 'outcome_unknown';
+      if (receipt.state === 'started') {
+        // A prior boundary crossing whose write outcome is unknown. Only this
+        // exact owner/revision may resume it; any other reader stays fail-closed.
+        return ownedReceipt ? 'execute' : 'outcome_unknown';
+      }
+      // `pending`: no write was attempted. A same owner/revision replay resumes;
+      // a stale pending receipt from an expired lease is re-taken (still safe,
+      // still pre-boundary) rather than quarantined.
+      if (ownedReceipt) return 'execute';
+      await client.query(`
+        UPDATE agent_background_work_effect_receipts
+        SET lease_owner = $3, lease_revision = $4, started_at_ms = $5, applied_at_ms = NULL
+        WHERE job_id = $1 AND effect_key = $2 AND state = 'pending'
+      `, [
+        input.jobId,
+        input.effectKey,
+        input.leaseOwner,
+        input.expectedRevision,
+        input.nowMs,
+      ]);
+      return 'execute';
+    });
+  }
+
+  async commitEffectBoundary(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<'crossed' | 'applied' | 'foreground_active' | 'lease_lost'> {
+    return withPostgresClient(this.pool, async (client) => {
+      const session = await client.query<{ logical_session_id: string }>(`
+        SELECT logical_session_id
+        FROM agent_background_work_jobs
+        WHERE job_id = $1
+      `, [requireText(input.jobId, 'jobId')]);
+      if (!session.rows[0]) return 'lease_lost';
+      // SAFETY: boundary promotion and foreground acquisition share this lock,
+      // making "effect boundary crossed" versus "foreground active" one total
+      // order — identical to beginEffect's linearization point.
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`background-work:${session.rows[0].logical_session_id}`],
+      );
+      const claim = await client.query<{ disposition: BackgroundWorkClaimFence }>(`
+        SELECT CASE
+          WHEN job.state <> 'running'
+            OR job.lease_owner <> $2
+            OR job.revision <> $3
+            OR job.lease_expires_at_ms <= $4
+            THEN 'lease_lost'
+          WHEN EXISTS (
+            SELECT 1 FROM agent_background_work_foreground_leases foreground
+            WHERE foreground.logical_session_id = job.logical_session_id
+              AND foreground.expires_at_ms > $4
+          ) THEN 'foreground_active'
+          ELSE 'owned'
+        END AS disposition
+        FROM agent_background_work_jobs job
+        WHERE job.job_id = $1
+      `, [
+        input.jobId,
+        requireText(input.leaseOwner, 'leaseOwner'),
+        positiveInteger(input.expectedRevision, 'expectedRevision'),
+        safeInteger(input.nowMs, 'nowMs'),
+      ]);
+      const disposition = claim.rows[0]?.disposition ?? 'lease_lost';
+      if (disposition !== 'owned') return disposition;
+      const promoted = await client.query<{ state: string }>(`
+        UPDATE agent_background_work_effect_receipts
+        SET state = 'started', started_at_ms = $5
+        WHERE job_id = $1 AND effect_key = $2 AND state = 'pending'
+          AND lease_owner = $3 AND lease_revision = $4
+        RETURNING state
+      `, [
+        input.jobId,
+        requireText(input.effectKey, 'effectKey'),
+        input.leaseOwner,
+        input.expectedRevision,
+        input.nowMs,
+      ]);
+      if (promoted.rows[0]) return 'crossed';
+      const incumbent = await client.query<{ state: string }>(`
+        SELECT state
+        FROM agent_background_work_effect_receipts
+        WHERE job_id = $1 AND effect_key = $2
+          AND lease_owner = $3 AND lease_revision = $4
+      `, [input.jobId, input.effectKey, input.leaseOwner, input.expectedRevision]);
+      const state = incumbent.rows[0]?.state;
+      if (state === 'started') return 'crossed';
+      if (state === 'applied') return 'applied';
+      return 'lease_lost';
     });
   }
 
@@ -963,11 +1057,14 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
   }): Promise<void> {
+    // A handler may complete without ever crossing its write boundary (a
+    // no-op effect leaves the receipt `pending`); completion applies from
+    // either pre-terminal phase so the effect key is durably recorded once.
     const result = await this.pool.query(`
       UPDATE agent_background_work_effect_receipts receipt
       SET state = 'applied', applied_at_ms = $5
       WHERE receipt.job_id = $1 AND receipt.effect_key = $2
-        AND receipt.state = 'started' AND receipt.lease_owner = $3
+        AND receipt.state IN ('pending', 'started') AND receipt.lease_owner = $3
         AND receipt.lease_revision = $4
         AND EXISTS (
           SELECT 1 FROM agent_background_work_jobs job
@@ -996,7 +1093,8 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
   }): Promise<void> {
     await this.pool.query(`
       DELETE FROM agent_background_work_effect_receipts receipt
-      WHERE receipt.job_id = $1 AND receipt.effect_key = $2 AND receipt.state = 'started'
+      WHERE receipt.job_id = $1 AND receipt.effect_key = $2
+        AND receipt.state IN ('pending', 'started')
         AND receipt.lease_owner = $3 AND receipt.lease_revision = $4
         AND EXISTS (
           SELECT 1 FROM agent_background_work_jobs job
@@ -1136,33 +1234,84 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     return this.markClaimTerminal(input, 'stale_discarded');
   }
 
-  async releaseClaims(input: {
+  async requeuePreBoundaryClaims(input: {
     leaseOwner: string;
     nowMs: number;
     reasonCode: 'shutdown';
-  }): Promise<number> {
-    const result = await this.pool.query(`
-      UPDATE agent_background_work_jobs
-      SET state = 'deferred',
-          deferred_from_state = 'queued',
-          deferred_from_available_at_ms = available_at_ms,
-          reason_code = $3,
-          available_at_ms = $2::bigint,
-          updated_at_ms = $2,
-          lease_owner = NULL,
-          lease_expires_at_ms = NULL,
-          revision = revision + 1
-      WHERE state = 'running' AND lease_owner = $1
-    `, [
-      requireText(input.leaseOwner, 'leaseOwner'),
-      safeInteger(input.nowMs, 'nowMs'),
-      input.reasonCode,
-    ]);
-    return result.rowCount ?? 0;
+  }): Promise<StoredBackgroundWorkJob[]> {
+    const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
+    const nowMs = safeInteger(input.nowMs, 'nowMs');
+    const reasonCode = input.reasonCode;
+    return withPostgresClient(this.pool, async (client) => {
+      // Candidate = this owner's running claims with no boundary-crossed
+      // receipt. Ordered by session so concurrent requeue sweeps acquire the
+      // per-session locks in one canonical order and cannot deadlock.
+      const candidates = await client.query<BackgroundWorkClaimCandidateRow>(`
+        SELECT job.job_id, job.logical_session_id
+        FROM agent_background_work_jobs job
+        WHERE job.state = 'running' AND job.lease_owner = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_background_work_effect_receipts receipt
+            WHERE receipt.job_id = job.job_id
+              AND receipt.state IN ('started', 'applied')
+          )
+        ORDER BY job.logical_session_id ASC, job.job_id ASC
+      `, [leaseOwner]);
+
+      const requeued: StoredBackgroundWorkJob[] = [];
+      for (const candidate of candidates.rows) {
+        // Serialize against a concurrent boundary crossing for this session: if
+        // the worker promotes its receipt first, the re-check below skips it; if
+        // this requeue wins, the revision bump makes the worker's next
+        // commitEffectBoundary fail ownership before it can write.
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`background-work:${candidate.logical_session_id}`],
+        );
+        const updated = await client.query<BackgroundWorkRow>(`
+          UPDATE agent_background_work_jobs job
+          SET state = 'queued',
+              reason_code = $3,
+              available_at_ms = $2::bigint,
+              updated_at_ms = $2,
+              lease_owner = NULL,
+              lease_expires_at_ms = NULL,
+              deferred_from_state = NULL,
+              deferred_from_available_at_ms = NULL,
+              revision = revision + 1
+          WHERE job.job_id = $1 AND job.state = 'running' AND job.lease_owner = $4
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_background_work_effect_receipts receipt
+              WHERE receipt.job_id = job.job_id
+                AND receipt.state IN ('started', 'applied')
+            )
+          RETURNING ${qualifiedJobColumns('job')}
+        `, [candidate.job_id, nowMs, reasonCode, leaseOwner]);
+        if (!updated.rows[0]) continue;
+        await client.query(`
+          DELETE FROM agent_background_work_effect_receipts
+          WHERE job_id = $1 AND state = 'pending'
+        `, [candidate.job_id]);
+        requeued.push(mapRow(updated.rows[0]));
+      }
+      return requeued;
+    });
   }
 
   async recoverExpired(input: { nowMs: number }): Promise<number> {
     const nowMs = safeInteger(input.nowMs, 'nowMs');
+    // A `pending` receipt marks a run that entered but never crossed its write
+    // boundary. On lease expiry that work is safely re-runnable, so drop the
+    // receipt before classifying: recovery decides from the durable phase, and
+    // only a boundary-crossed (`started`) receipt forces outcome-unknown.
+    await this.pool.query(`
+      DELETE FROM agent_background_work_effect_receipts receipt
+      USING agent_background_work_jobs job
+      WHERE receipt.job_id = job.job_id
+        AND receipt.state = 'pending'
+        AND job.state = 'running'
+        AND job.lease_expires_at_ms <= $1
+    `, [nowMs]);
     const result = await this.pool.query(`
       UPDATE agent_background_work_jobs
       SET attempt_count = attempt_count + 1,

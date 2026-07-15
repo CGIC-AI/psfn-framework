@@ -737,6 +737,169 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('durably requeues a blocked pre-effect job on graceful shutdown and completes it exactly once', async () => {
+    const database = await harness.createDatabase();
+    const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const secondStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const now = 1_000;
+    let firstSinkWrites = 0;
+    let secondSinkWrites = 0;
+    const providerEntered = deferred();
+    const first = new BackgroundWorkSupervisor({
+      store: firstStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'first-replica',
+      leaseDurationMs: 60_000,
+      shutdownTimeoutMs: 1_000,
+      now: () => now,
+      executor: async ({ effects, signal }) => {
+        providerEntered.resolve();
+        // Blocked provider/compute step with zero sink writes. It never reaches
+        // its effect boundary; graceful shutdown aborts the claim signal.
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          firstSinkWrites += 1;
+        });
+      },
+    });
+    const second = new BackgroundWorkSupervisor({
+      store: secondStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'second-replica',
+      leaseDurationMs: 60_000,
+      now: () => now,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          secondSinkWrites += 1;
+        });
+      },
+    });
+    const jobId = makeInput('session-a', 'turn-a').jobId;
+    try {
+      await first.enqueue([makeInput('session-a', 'turn-a')]);
+      await first.tick();
+      await providerEntered.promise;
+      expect(await firstStore.get(jobId)).toMatchObject({ state: 'running' });
+
+      const stopStart = Date.now();
+      await first.stop();
+      await first.waitForIdle();
+      // Bounded: the drain must not wait out anything close to a real lease.
+      expect(Date.now() - stopStart).toBeLessThan(10_000);
+
+      // Pre-effect work is durably requeued under its claim token, not lost as
+      // effect_outcome_unknown, and the old worker performed no sink write.
+      expect(await secondStore.get(jobId)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'shutdown',
+      });
+      expect(firstSinkWrites).toBe(0);
+
+      await second.tick();
+      await second.waitForIdle();
+      expect(await secondStore.get(jobId)).toMatchObject({ state: 'succeeded' });
+      expect(secondSinkWrites).toBe(1);
+      expect(firstSinkWrites).toBe(0);
+    } finally {
+      await Promise.allSettled([first.stop(), second.stop()]);
+      await Promise.all([firstStore.close(), secondStore.close()]);
+    }
+  }, 30_000);
+
+  it('requeues only pre-boundary claims and leaves boundary-crossed claims fail-closed', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const preInput = makeInput('session-pre', 'turn-pre');
+      await store.enqueue(preInput);
+      const preClaim = await store.claimNext({
+        leaseOwner: 'worker',
+        nowMs: 100,
+        leaseDurationMs: 10_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(preClaim?.jobId).toBe(preInput.jobId);
+      // Pre-boundary: opened but never crossed (a `pending` receipt only).
+      expect(await store.beginEffect({
+        jobId: preClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: preClaim!.leaseOwner,
+        expectedRevision: preClaim!.revision,
+        nowMs: 100,
+      })).toBe('execute');
+
+      const crossedInput = makeInput('session-crossed', 'turn-crossed');
+      await store.enqueue(crossedInput);
+      const crossedClaim = await store.claimNext({
+        leaseOwner: 'worker',
+        nowMs: 100,
+        leaseDurationMs: 10_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(crossedClaim?.jobId).toBe(crossedInput.jobId);
+      await store.beginEffect({
+        jobId: crossedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crossedClaim!.leaseOwner,
+        expectedRevision: crossedClaim!.revision,
+        nowMs: 100,
+      });
+      expect(await store.commitEffectBoundary({
+        jobId: crossedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crossedClaim!.leaseOwner,
+        expectedRevision: crossedClaim!.revision,
+        nowMs: 100,
+      })).toBe('crossed');
+
+      const requeued = await store.requeuePreBoundaryClaims({
+        leaseOwner: 'worker',
+        nowMs: 200,
+        reasonCode: 'shutdown',
+      });
+      expect(requeued.map(job => job.jobId)).toEqual([preInput.jobId]);
+      expect(await store.get(preInput.jobId)).toMatchObject({ state: 'queued', reasonCode: 'shutdown' });
+      // The boundary-crossed claim is never released by the shutdown sweep.
+      expect(await store.get(crossedInput.jobId)).toMatchObject({ state: 'running' });
+
+      // It stays fail-closed on lease expiry: outcome remains unknown.
+      expect(await store.recoverExpired({ nowMs: 10_200 })).toBe(1);
+      expect(await store.get(crossedInput.jobId)).toMatchObject({
+        state: 'failed',
+        reasonCode: 'effect_outcome_unknown',
+      });
+
+      // The requeued pre-boundary job dropped its pending receipt and re-runs
+      // cleanly for a fresh owner.
+      expect(await store.claimNext({
+        leaseOwner: 'fresh-worker',
+        nowMs: 200,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      })).toMatchObject({ jobId: preInput.jobId });
+      expect(await store.beginEffect({
+        jobId: preInput.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: 'fresh-worker',
+        expectedRevision: (await store.get(preInput.jobId))!.revision,
+        nowMs: 200,
+      })).toBe('execute');
+    } finally {
+      await store.close();
+    }
+  }, 30_000);
+
   it('fences an effect while worker A is held after the sink and makes a crash outcome terminal', async () => {
     const database = await harness.createDatabase();
     const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
@@ -762,6 +925,13 @@ describe('PostgresBackgroundWorkStore', () => {
         expectedRevision: claim!.revision,
         nowMs: 100,
       })).toBe('execute');
+      expect(await first.commitEffectBoundary({
+        jobId: claim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 100,
+      })).toBe('crossed');
       sinkWrites += 1;
       expect(await first.renewClaims({
         leaseOwner: claim!.leaseOwner,
@@ -806,6 +976,15 @@ describe('PostgresBackgroundWorkStore', () => {
         expectedRevision: crashedClaim!.revision,
         nowMs: 200,
       })).toBe('execute');
+      // Cross the durable boundary before the sink write: a crash from here is
+      // genuinely outcome-ambiguous and must stay terminal.
+      expect(await first.commitEffectBoundary({
+        jobId: crashedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crashedClaim!.leaseOwner,
+        expectedRevision: crashedClaim!.revision,
+        nowMs: 200,
+      })).toBe('crossed');
       sinkWrites += 1;
       expect(await second.recoverExpired({ nowMs: 211 })).toBe(1);
       expect(await second.get(crashedInput.jobId)).toMatchObject({

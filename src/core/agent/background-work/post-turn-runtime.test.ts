@@ -76,6 +76,7 @@ function makeExecution(record: TurnRecord): {
       operation: (assertOwned: () => Promise<void>) => Promise<void>,
     ) => Promise<void>;
   };
+  signal: AbortSignal;
 } {
   const payload: MemoryExtractionBackgroundPayload = {
     schemaVersion: 1,
@@ -101,6 +102,7 @@ function makeExecution(record: TurnRecord): {
       assertOwned,
       run: vi.fn(async (_effectKey, operation) => operation(assertOwned)),
     },
+    signal: new AbortController().signal,
     job: {
       jobId: 'background-job-1',
       idempotencyKey: 'background-idempotency-1',
@@ -159,6 +161,7 @@ function makeEmotionExecution(record: TurnRecord) {
   return {
     payload,
     effects: base.effects,
+    signal: base.signal,
     job: {
       ...base.job,
       kind: payload.kind,
@@ -188,6 +191,7 @@ function makeAutoCompactionExecution(record: TurnRecord) {
   return {
     payload,
     effects: base.effects,
+    signal: base.signal,
     job: {
       ...base.job,
       kind: payload.kind,
@@ -717,6 +721,7 @@ describe('executePostTurnBackgroundWork', () => {
     await expect(executePostTurnBackgroundWork({
       payload: mismatchedPayload,
       effects: execution.effects,
+      signal: execution.signal,
       job: {
         ...execution.job,
         payload: mismatchedPayload,
@@ -825,6 +830,7 @@ describe('executePostTurnBackgroundWork', () => {
     const execution = {
       payload,
       effects: base.effects,
+      signal: base.signal,
       job: {
         ...base.job,
         kind: payload.kind,
@@ -1045,6 +1051,7 @@ describe('executePostTurnBackgroundWork', () => {
       await executePostTurnBackgroundWork({
         payload: memoryPayload,
         effects,
+        signal: base.signal,
         job: makeJob(memoryPayload),
       }, dependencies);
       const memoryEntries = maybeExtract.mock.calls[0]?.at(-1) as SessionEntry[];
@@ -1080,6 +1087,7 @@ describe('executePostTurnBackgroundWork', () => {
       await executePostTurnBackgroundWork({
         payload: emotionPayload,
         effects,
+        signal: base.signal,
         job: makeJob(emotionPayload),
       }, dependencies);
       const emotionEntries = triggerEmotionAppraisal.mock.calls[0]?.[0].recentEntries;
@@ -1102,6 +1110,7 @@ describe('executePostTurnBackgroundWork', () => {
       await executePostTurnBackgroundWork({
         payload: compactionPayload,
         effects,
+        signal: base.signal,
         job: makeJob(compactionPayload),
       }, dependencies);
 

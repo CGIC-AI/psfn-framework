@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import {
+  createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
   wireIntentionRuntimeStores,
   type IntentionRuntimeProviders,
   type IntentionRuntimeTarget,
@@ -9,6 +11,13 @@ import {
 import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
+import type { ActiveConcern } from './concerns.js';
+import type { PendingFollowUp } from './pending-follow-ups.js';
+
+type IntentionPostTurnHook = Parameters<
+  NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>
+>[0];
+type IntentionPostTurnContext = Parameters<IntentionPostTurnHook>[0];
 
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
@@ -16,7 +25,7 @@ class FakeTarget implements IntentionRuntimeTarget {
   behavioralPatternProvider: IntentionRuntimeTarget['behavioralPatternProvider'] = null;
   tools: AgentTool<any>[] = [];
   registrations: Array<{ name: string; category: 'core' | 'extended' }> = [];
-  intentionHooks: Array<Parameters<NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>>[0]> = [];
+  intentionHooks: IntentionPostTurnHook[] = [];
 
   registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
     this.tools.push(tool);
@@ -24,11 +33,91 @@ class FakeTarget implements IntentionRuntimeTarget {
   }
 
   registerIntentionPostTurnHook(
-    hook: Parameters<NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>>[0],
+    hook: IntentionPostTurnHook,
   ): () => void {
     this.intentionHooks.push(hook);
     return () => {};
   }
+}
+
+function makeConcern(overrides: Partial<ActiveConcern> = {}): ActiveConcern {
+  return {
+    id: 'concern-1',
+    text: 'Check hydration reminder',
+    priority: 'medium',
+    source: 'appraisal',
+    status: 'active',
+    createdAt: '2026-03-06T11:00:00.000Z',
+    expiresAt: '2026-03-07T11:00:00.000Z',
+    salience: 0.5,
+    sensitivity: 'personal',
+    owner: 'companion',
+    evidenceRefs: [],
+    resolutionEvidenceRefs: [],
+    ...overrides,
+  };
+}
+
+function makeConcernStore(overrides: Partial<ConcernStorePort> = {}): ConcernStorePort {
+  return {
+    create: vi.fn(async input => makeConcern({
+      ...input,
+      id: 'created-concern',
+      createdAt: input.createdAt ?? '2026-03-06T12:00:00.000Z',
+      expiresAt: input.expiresAt ?? '2026-03-07T12:00:00.000Z',
+      priority: input.priority ?? 'medium',
+      source: input.source ?? 'appraisal',
+      status: input.status ?? 'active',
+    })),
+    getById: vi.fn(async () => null),
+    getActiveConcerns: vi.fn(async () => []),
+    list: vi.fn(async () => []),
+    listRecentlyResolvedConcerns: vi.fn(async () => []),
+    findRecentlyResolvedSimilarConcern: vi.fn(async () => null),
+    resolveConcern: vi.fn(async () => null),
+    transitionConcernStatus: vi.fn(async () => null),
+    resolveStaleConcerns: vi.fn(async () => []),
+    ...overrides,
+  };
+}
+
+function makeFollowUp(overrides: Partial<PendingFollowUp> = {}): PendingFollowUp {
+  return {
+    id: 'follow-up-1',
+    content: 'Check in tomorrow about medication.',
+    priority: 'medium',
+    timing: 'scheduled',
+    createdAt: '2026-03-06T11:00:00.000Z',
+    channelId: 'api:test',
+    channelType: 'api',
+    authorId: 'system:intention',
+    authorName: 'Whisper',
+    ...overrides,
+  };
+}
+
+function makePendingFollowUpStore(
+  overrides: Partial<PendingFollowUpStorePort> = {},
+): PendingFollowUpStorePort {
+  return {
+    enqueue: vi.fn(async input => makeFollowUp({
+      ...input,
+      id: 'created-follow-up',
+      createdAt: input.createdAt ?? '2026-03-06T12:00:00.000Z',
+      wakeConditions: input.wakeConditions ? [...input.wakeConditions] : undefined,
+    })),
+    peek: vi.fn(async () => null),
+    dequeue: vi.fn(async id => makeFollowUp({ id })),
+    quarantine: vi.fn(async input => ({
+      id: 'quarantine-1',
+      reason: input.reason,
+      raw: input.raw,
+      quarantinedAt: input.quarantinedAt ?? '2026-03-06T12:00:00.000Z',
+    })),
+    list: vi.fn(async () => []),
+    listQuarantined: vi.fn(async () => []),
+    ...overrides,
+  };
 }
 
 function createRuntime(): {
@@ -134,9 +223,7 @@ describe('wireIntentionRuntimeStores', () => {
       turnId: 'turn-1',
       completedAt: Date.parse('2026-03-06T12:00:00.000Z'),
       canonicalContactKey: 'contact-a',
-    } as Parameters<NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>>[0] extends (
-      context: infer TContext
-    ) => unknown ? TContext : never);
+    } as IntentionPostTurnContext);
 
     expect(behavioralPatternTracker.recordResponseStrategy).toHaveBeenCalledWith({
       contactId: 'contact-a',
@@ -144,5 +231,186 @@ describe('wireIntentionRuntimeStores', () => {
       responseContent: 'That makes sense, and your reaction is valid.',
       createdAt: '2026-03-06T12:00:00.000Z',
     });
+  });
+});
+
+describe('intention runtime port hooks', () => {
+  it('maps concern snapshots and persists concern decisions through the active port', async () => {
+    const active = makeConcern();
+    const resolved = makeConcern({
+      id: 'concern-resolved',
+      status: 'resolved',
+      resolvedAt: '2026-03-06T11:30:00.000Z',
+      resolutionOutcome: 'Handled already',
+    });
+    const concernStore = makeConcernStore({
+      getActiveConcerns: vi.fn(async () => [active]),
+      listRecentlyResolvedConcerns: vi.fn(async () => [resolved]),
+    });
+    const hooks = createIntentionAppraisalHooks(concernStore);
+
+    await expect(hooks.getActiveConcerns({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+    })).resolves.toEqual([expect.objectContaining({
+      id: active.id,
+      title: active.text,
+      status: 'active',
+    })]);
+    await expect(hooks.getRecentResolvedConcerns({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+    })).resolves.toEqual([expect.objectContaining({
+      id: resolved.id,
+      status: 'resolved',
+      summary: 'Handled already',
+    })]);
+
+    await hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'high',
+        reason: 'User asked for a follow-up reminder.',
+        timing: 'soon',
+        concern: {
+          title: 'Follow up on medication',
+          summary: 'Ping tomorrow morning',
+          priority: 'high',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-1',
+    });
+
+    expect(concernStore.create).toHaveBeenCalledWith({
+      text: 'Follow up on medication: Ping tomorrow morning',
+      priority: 'high',
+      source: 'appraisal',
+      status: 'active',
+      contactId: 'contact-a',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-1' }],
+    });
+    await expect(hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'invalid',
+        timing: 'soon',
+        concern: {},
+      },
+      channelId: 'api:test',
+      sourceMessageId: 'msg-invalid',
+    })).rejects.toThrow('Concern decision must include title or summary');
+  });
+
+  it('maps follow-up decisions and activation through the active port', async () => {
+    const pendingFollowUpStore = makePendingFollowUpStore();
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore);
+
+    const followUpId = await hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Keep this reminder out of live context until it is due.',
+        timing: 'scheduled',
+        followUp: {
+          content: 'Check in tomorrow about medication.',
+          channelType: 'api',
+          contextSummary: 'Medication follow-up context.',
+          wakeConditions: ['next_user_turn'],
+        },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-follow-up',
+    });
+
+    expect(followUpId).toBe('created-follow-up');
+    expect(pendingFollowUpStore.enqueue).toHaveBeenCalledWith({
+      content: 'Check in tomorrow about medication.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-follow-up',
+      contextSummary: 'Medication follow-up context.',
+      wakeConditions: ['next_user_turn'],
+    });
+    await expect(hooks.onIntentionFollowUpActivated({
+      pendingFollowUpId: followUpId!,
+      activationReason: 'post_turn_action',
+    })).resolves.toBe(true);
+    expect(pendingFollowUpStore.dequeue).toHaveBeenCalledWith('created-follow-up', {
+      activationReason: 'post_turn_action',
+    });
+  });
+
+  it('resurfaces only eligible follow-ups for the active channel', async () => {
+    const now = Date.parse('2026-03-26T12:00:00.000Z');
+    const pendingFollowUpStore = makePendingFollowUpStore({
+      list: vi.fn(async () => [
+        makeFollowUp({ id: 'due', dueAt: new Date(now - 1_000).toISOString() }),
+        makeFollowUp({ id: 'future', dueAt: new Date(now + 60_000).toISOString() }),
+        makeFollowUp({ id: 'other-channel', channelId: 'api:other', dueAt: new Date(now - 1_000).toISOString() }),
+        makeFollowUp({ id: 'current-message', sourceMessageId: 'msg-current', dueAt: new Date(now - 1_000).toISOString() }),
+      ]),
+    });
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore);
+
+    const surfaced = await hooks.getPendingFollowUpsForResurfacing({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-current',
+      isBackgroundTurn: false,
+      now,
+      currentMoodValence: 0,
+    });
+
+    expect(surfaced.map(followUp => followUp.id)).toEqual(['due']);
+    expect(pendingFollowUpStore.list).toHaveBeenCalledWith({
+      contactId: 'contact-a',
+      includeActivated: false,
+      includeExpired: false,
+      asOf: '2026-03-26T12:00:00.000Z',
+    });
+  });
+
+  it('maps emotion snapshots into behavioral outcome updates', async () => {
+    const tryRecordOutcomeForLatestPending = vi.fn(async () => null);
+    const tracker = {
+      setPromotionHook: vi.fn(),
+      recordResponseStrategy: vi.fn(),
+      recordOutcomeForSample: vi.fn(),
+      tryRecordOutcomeForLatestPending,
+      listSamples: vi.fn(),
+      listStrategySummaries: vi.fn(),
+    } as unknown as BehavioralPatternStorePort;
+    const hooks = createIntentionBehavioralPatternHooks(tracker);
+
+    await hooks.onBehavioralPatternOutcome({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-outcome',
+      emotionSnapshot: {
+        vad: { valence: 0.6, arousal: 0.2, dominance: 0.1 },
+        mood: { valence: 0.4, arousal: 0.1, dominance: 0.1 },
+        discrete: { relief: 0.5 },
+        confidence: 0.8,
+      },
+      observedAtMs: Date.parse('2026-03-06T12:01:00.000Z'),
+    });
+
+    expect(tryRecordOutcomeForLatestPending).toHaveBeenCalledTimes(1);
+    expect(tryRecordOutcomeForLatestPending.mock.calls[0]?.[0]).toMatchObject({
+      contactId: 'contact-a',
+      observedAt: '2026-03-06T12:01:00.000Z',
+      outcomeSourceMessageId: 'msg-outcome',
+    });
+    expect(tryRecordOutcomeForLatestPending.mock.calls[0]?.[0]?.outcomeScore).toBeCloseTo(0.53, 5);
   });
 });

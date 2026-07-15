@@ -27,6 +27,9 @@ export class FakePostgresPool {
   contactMutationAudit: ContactMutationAuditRow[] = [];
   socialGraphEntities = new Map<string, SocialGraphEntityRow>();
   socialRelationshipEdges = new Map<string, SocialRelationshipEdgeRow>();
+  l2MemoryContacts = new Map<string, string>();
+  contactProfiles = new Map<string, unknown>();
+  contactMaintenanceWatermarks = new Map<string, string>();
   failNextWriteForChannel: string | null = null;
   failNextMutationAudit = false;
   beforeNextContactProfileUpdate: ((row: ContactRow) => void) | null = null;
@@ -87,8 +90,41 @@ export class FakePostgresPool {
 
     if (normalized.startsWith('select to_regclass')) {
       const tableName = String(values[0] ?? '');
-      const exists = tableName !== 'l2_memories' && tableName !== 'contact_profiles';
+      const exists = tableName === 'l2_memories'
+        ? this.l2MemoryContacts.size > 0
+        : tableName === 'contact_profiles'
+          ? this.contactProfiles.size > 0
+          : true;
       return result([{ exists }]);
+    }
+
+    if (normalized.startsWith('update l2_memories set contact_id = $1 where contact_id = $2')) {
+      const targetId = String(values[0] ?? '');
+      const sourceId = String(values[1] ?? '');
+      for (const [memoryId, contactId] of this.l2MemoryContacts) {
+        if (contactId === sourceId) this.l2MemoryContacts.set(memoryId, targetId);
+      }
+      return result();
+    }
+
+    if (normalized.startsWith('select 1 as exists_flag from contact_profiles where contact_id = $1 limit 1')) {
+      return result(this.contactProfiles.has(String(values[0] ?? '')) ? [{ exists_flag: 1 }] : []);
+    }
+
+    if (normalized.startsWith('delete from contact_profiles where contact_id = $1')) {
+      this.contactProfiles.delete(String(values[0] ?? ''));
+      return result();
+    }
+
+    if (normalized.startsWith('update contact_profiles set contact_id = $1 where contact_id = $2')) {
+      const targetId = String(values[0] ?? '');
+      const sourceId = String(values[1] ?? '');
+      const profile = this.contactProfiles.get(sourceId);
+      if (profile !== undefined) {
+        this.contactProfiles.delete(sourceId);
+        this.contactProfiles.set(targetId, profile);
+      }
+      return result();
     }
 
     if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where id = $1 limit 1')) {
@@ -105,6 +141,13 @@ export class FakePostgresPool {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);
       return result(row ? [row] : []);
+    }
+
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where trust_level = $1 order by last_seen desc')) {
+      const trustLevel = String(values[0] ?? '');
+      return result([...this.contacts.values()]
+        .filter(row => row.trust_level === trustLevel)
+        .sort((left, right) => right.last_seen.localeCompare(left.last_seen)));
     }
 
     if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
@@ -282,6 +325,12 @@ export class FakePostgresPool {
     if (normalized.startsWith('update contacts set display_name = $1 where id = $2')) {
       const row = this.contacts.get(String(values[1] ?? ''));
       if (row) row.display_name = String(values[0] ?? row.display_name);
+      return result();
+    }
+
+    if (normalized.startsWith('update contacts set notes = $1 where id = $2')) {
+      const row = this.contacts.get(String(values[1] ?? ''));
+      if (row) row.notes = values[0] == null ? null : String(values[0]);
       return result();
     }
 
@@ -553,14 +602,22 @@ export class FakePostgresPool {
       const row = this.contactChannelIds.get(key);
       if (row && row.contact_id === String(values[0] ?? '')) {
         this.contactChannelIds.delete(key);
-        return result([]);
+        return { ...result(), rowCount: 1 };
       }
       return result([]);
     }
 
     if (normalized.startsWith('delete from contact_channel_activity where contact_id = $1 and channel = $2 and channel_id = $3')) {
       const key = this.contactKey(String(values[0] ?? ''), `${String(values[1] ?? '')}:${String(values[2] ?? '')}`);
-      return this.contactChannelActivity.delete(key) ? result([]) : result([]);
+      const existed = this.contactChannelActivity.delete(key);
+      return { ...result(), rowCount: existed ? 1 : 0 };
+    }
+
+    if (normalized.startsWith('select * from contact_identity_link_verifications order by created_at desc limit $1')) {
+      const limit = Number(values[0] ?? 25);
+      return result([...this.contactIdentityLinkVerifications.values()]
+        .sort((left, right) => right.created_at.localeCompare(left.created_at))
+        .slice(0, limit));
     }
 
     if (normalized.startsWith('select * from contact_identity_link_verifications where contact_id = $1 and source_channel = $2 and source_user_id = $3 and target_channel = $4 and target_user_id = $5 and status = \'pending\' order by created_at desc limit 1')) {
@@ -624,6 +681,23 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
+    if (normalized.startsWith("select count(*) as count from contact_identity_link_verifications where contact_id = $1 and status = 'verified'")) {
+      const contactId = String(values[0] ?? '');
+      const count = [...this.contactIdentityLinkVerifications.values()]
+        .filter(row => row.contact_id === contactId && row.status === 'verified').length;
+      return result([{ count }]);
+    }
+
+    if (normalized.startsWith('select last_run_at from contact_maintenance_watermarks where processor = $1')) {
+      const lastRunAt = this.contactMaintenanceWatermarks.get(String(values[0] ?? ''));
+      return result(lastRunAt ? [{ last_run_at: lastRunAt }] : []);
+    }
+
+    if (normalized.startsWith('insert into contact_maintenance_watermarks (processor, last_run_at)')) {
+      this.contactMaintenanceWatermarks.set(String(values[0] ?? ''), String(values[1] ?? ''));
+      return result();
+    }
+
     if (normalized.startsWith('update contact_channel_ids set privacy_level = $1, last_seen = $2 where contact_id = $3 and channel = $4 and channel_user_id = $5')) {
       const row = this.contactChannelIds.get(this.contactKey(String(values[3] ?? ''), String(values[4] ?? '')));
       if (row && row.contact_id === String(values[2] ?? '')) {
@@ -645,6 +719,22 @@ export class FakePostgresPool {
 
     if (normalized.startsWith('delete from contact_mutation_audit where contact_id = $1')) {
       this.contactMutationAudit = this.contactMutationAudit.filter(row => row.contact_id !== String(values[0] ?? ''));
+      return result();
+    }
+
+    if (normalized.startsWith('delete from contact_channel_ids where contact_id = $1')) {
+      const contactId = String(values[0] ?? '');
+      for (const [key, row] of [...this.contactChannelIds.entries()]) {
+        if (row.contact_id === contactId) this.contactChannelIds.delete(key);
+      }
+      return result();
+    }
+
+    if (normalized.startsWith('delete from contact_channel_activity where contact_id = $1')) {
+      const contactId = String(values[0] ?? '');
+      for (const [key, row] of [...this.contactChannelActivity.entries()]) {
+        if (row.contact_id === contactId) this.contactChannelActivity.delete(key);
+      }
       return result();
     }
 

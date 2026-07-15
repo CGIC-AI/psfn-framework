@@ -1,13 +1,11 @@
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
-import { createConcernStorePort } from './concern-store-port.js';
-import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { applyConcernCandidateReview, type ConcernCandidate } from './concern-candidates.js';
 import { groomConcernSet } from './concern-grooming.js';
 import {
@@ -51,12 +49,11 @@ function makeRequest(overrides: Partial<ConcernRouteRequest> = {}): ConcernRoute
 }
 
 function makeConcernStore() {
-  const db = new Database(':memory:');
   let counter = 0;
-  return createConcernStorePort(new ActiveConcernStore(db, {
+  return createTestPostgresIntentionPorts({
     now: () => new Date('2026-06-29T12:00:00.000Z'),
     idFactory: () => `concern-${++counter}`,
-  }));
+  }).ports.concernStore;
 }
 
 function makeCandidate(id: string, overrides: Partial<ConcernCandidate> = {}): ConcernCandidate {

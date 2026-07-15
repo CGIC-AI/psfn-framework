@@ -73,6 +73,20 @@ export class FakeIntentionPool {
   private behavioralPatternEvents = new Map<string, BehavioralPatternRow>();
   private ids = 1;
 
+  corruptActiveConcern(
+    id: string,
+    patch: Partial<ActiveConcernRow>,
+  ): void {
+    const row = this.activeConcerns.get(id);
+    if (!row) {
+      throw new Error(`Missing fake active concern "${id}"`);
+    }
+    this.activeConcerns.set(id, {
+      ...row,
+      ...patch,
+    });
+  }
+
   corruptPendingFollowUp(
     id: string,
     patch: Partial<PendingFollowUpRow>,
@@ -180,16 +194,21 @@ export class FakeIntentionPool {
     if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY CASE priority')) {
       const filtersExpired = normalized.includes('expires_at >');
       const filtersResolved = normalized.includes('resolved_at IS NULL');
-      const maybeAsOf = filtersExpired ? values[0] as string : undefined;
-      const maybeContactId = values.length === (filtersExpired ? 3 : 2)
-        ? values[filtersExpired ? 1 : 0]
+      let cursor = 0;
+      const maybeAsOf = filtersExpired ? values[cursor++] as string : undefined;
+      const hardLifetimeCutoff = normalized.includes('created_at >')
+        ? values[cursor++] as string
+        : undefined;
+      const maybeContactId = normalized.includes('contact_id IS NULL OR contact_id =')
+        ? values[cursor++]
         : undefined;
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
-      const limit = Number(values[values.length - 1]);
+      const limit = Number(values[cursor]);
       const rows = [...this.activeConcerns.values()]
         .filter((row) => !filtersResolved || row.resolved_at === null)
         .filter((row) => !filtersResolved || (row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed'))
         .filter((row) => !maybeAsOf || row.expires_at > maybeAsOf)
+        .filter((row) => !hardLifetimeCutoff || row.created_at > hardLifetimeCutoff)
         .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => concernSort(left, right))
         .slice(0, limit)
@@ -356,8 +375,9 @@ export class FakeIntentionPool {
     if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('ORDER BY created_at ASC, id ASC')) {
       const [maybeContactId] = values as [string | undefined];
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
+      const pendingOnly = normalized.includes('activated_at IS NULL');
       const rows = [...this.pendingFollowUps.values()]
-        .filter(row => row.activated_at === null)
+        .filter(row => !pendingOnly || row.activated_at === null)
         .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
         .map(row => row as Row);
@@ -483,25 +503,53 @@ export class FakeIntentionPool {
       return { rows: [row as Row] };
     }
 
-    if (normalized.includes('GROUP BY strategy') && normalized.includes('FROM behavioral_pattern_events')) {
-      const [contactId, minResolvedCount, limit] = values as [string, number, number];
-      const grouped = groupBehavioralEvents([...this.behavioralPatternEvents.values()].filter(row => row.contact_id === contactId));
-      const rows = grouped
-        .filter(row => row.resolved_count >= Number(minResolvedCount))
-        .sort((left, right) => right.average_outcome - left.average_outcome || right.resolved_count - left.resolved_count || left.strategy.localeCompare(right.strategy))
+    if (normalized.includes('FROM behavioral_pattern_events') && normalized.includes('WHERE contact_id = $1') && normalized.includes('ORDER BY created_at DESC, id DESC') && normalized.includes('LIMIT $2')) {
+      const [contactId, limit] = values as [string, number];
+      const includePending = !normalized.includes('outcome_score IS NOT NULL');
+      const rows = [...this.behavioralPatternEvents.values()]
+        .filter(row => row.contact_id === contactId)
+        .filter(row => includePending || row.outcome_score !== null)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))
         .slice(0, Number(limit))
         .map(row => row as Row);
       return { rows };
     }
 
-    if (normalized.includes('SELECT promoted_memory_id') && normalized.includes('FROM behavioral_pattern_events')) {
-      return { rows: [] };
+    if (normalized.includes('GROUP BY strategy') && normalized.includes('FROM behavioral_pattern_events')) {
+      const [contactId] = values as [string];
+      const strategy = normalized.includes('AND strategy = $2') ? String(values[1]) : undefined;
+      const grouped = groupBehavioralEvents([...this.behavioralPatternEvents.values()]
+        .filter(row => row.contact_id === contactId)
+        .filter(row => !strategy || row.strategy === strategy));
+      if (!normalized.includes('HAVING')) {
+        return { rows: grouped.map(row => row as Row) };
+      }
+      const minResolvedCount = Number(values[1]);
+      const limit = Number(values[2]);
+      const rows = grouped
+        .filter(row => row.resolved_count >= minResolvedCount)
+        .sort((left, right) => right.average_outcome - left.average_outcome || right.resolved_count - left.resolved_count || left.strategy.localeCompare(right.strategy))
+        .slice(0, limit)
+        .map(row => row as Row);
+      return { rows };
     }
 
-    if (normalized.includes('FROM behavioral_pattern_events') && normalized.includes('WHERE contact_id = $1 AND strategy = $2')) {
+    if (normalized.includes('SELECT promoted_memory_id') && normalized.includes('FROM behavioral_pattern_events')) {
       const [contactId, strategy] = values as [string, string];
-      const rows = groupBehavioralEvents([...this.behavioralPatternEvents.values()].filter(row => row.contact_id === contactId && row.strategy === strategy));
-      return { rows: rows.length > 0 ? [rows[0] as Row] : [] };
+      const row = [...this.behavioralPatternEvents.values()]
+        .filter(event => event.contact_id === contactId && event.strategy === strategy && event.promoted_at !== null)
+        .sort((left, right) => (left.promoted_at ?? '').localeCompare(right.promoted_at ?? ''))[0];
+      return { rows: row ? [{ promoted_memory_id: row.promoted_memory_id } as Row] : [] };
+    }
+
+    if (normalized.startsWith('UPDATE behavioral_pattern_events SET promoted_at')) {
+      const [promotedAt, promotedMemoryId, contactId, strategy] = values as [string, string | null, string, string];
+      for (const row of this.behavioralPatternEvents.values()) {
+        if (row.contact_id !== contactId || row.strategy !== strategy || row.promoted_at !== null || row.outcome_score === null) continue;
+        row.promoted_at = promotedAt;
+        row.promoted_memory_id ??= promotedMemoryId;
+      }
+      return { rows: [] };
     }
 
     throw new Error(`Unhandled SQL in FakeIntentionPool: ${normalized}`);

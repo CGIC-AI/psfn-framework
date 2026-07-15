@@ -1,7 +1,6 @@
-import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
-import { createConcernStorePort } from './concern-store-port.js';
+import type { ConcernStorePort } from './concern-store-port.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { createOrientTool } from '../../faculties/core-memory/tools.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -9,8 +8,7 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 }
 
 describe('orient concern actions', () => {
-  let db: Database.Database;
-  let store: ReturnType<typeof createConcernStorePort>;
+  let store: ConcernStorePort;
 
   function makeTool(): ReturnType<typeof createOrientTool> {
     const unusedCoreMemoryStore = {
@@ -28,8 +26,7 @@ describe('orient concern actions', () => {
   }
 
   beforeEach(() => {
-    db = new Database(':memory:');
-    store = createConcernStorePort(new ActiveConcernStore(db));
+    store = createTestPostgresIntentionPorts().ports.concernStore;
   });
 
   it('create_concern writes a new concern', async () => {

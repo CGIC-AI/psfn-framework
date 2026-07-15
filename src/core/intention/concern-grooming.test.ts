@@ -1,18 +1,15 @@
-import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
-import { createConcernStorePort } from './concern-store-port.js';
-import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { groomConcernSet, registerConcernGroomingTask } from './concern-grooming.js';
 
 function makeStore() {
-  const db = new Database(':memory:');
   let counter = 0;
-  return createConcernStorePort(new ActiveConcernStore(db, {
+  return createTestPostgresIntentionPorts({
     now: () => new Date('2026-06-29T12:00:00.000Z'),
     idFactory: () => `concern-${++counter}`,
-  }));
+  }).ports.concernStore;
 }
 
 const activeGroomingTexts = [

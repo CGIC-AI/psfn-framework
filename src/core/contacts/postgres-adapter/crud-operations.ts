@@ -120,7 +120,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const nextDisplayName = partial.displayName.trim() || target.displayName;
       const requestedNickname = normalizeNicknameValue(partial.nickname);
       const nextNickname = requestedNickname === undefined ? (target.nickname ?? undefined) : requestedNickname;
-      const nextTrustLevel = partial.trustLevel ?? target.trustLevel;
+      const nextTrustLevel = target.trustLevel === 'primary'
+        ? 'primary'
+        : (partial.trustLevel ?? target.trustLevel);
       const relationshipMutationRequested = partial.relationshipType !== undefined;
       const nextRelationshipType = partial.relationshipType ?? target.relationshipType;
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};

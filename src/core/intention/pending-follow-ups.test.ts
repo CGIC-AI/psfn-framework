@@ -1,17 +1,19 @@
-import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { PendingFollowUpStore } from './sqlite-stores/pending-follow-up-store.js';
-import { createPendingFollowUpStorePort, evaluatePendingFollowUpWakeState, filterPendingFollowUpsForActiveChannel } from './pending-follow-ups.js';
+import {
+  DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP,
+  evaluatePendingFollowUpWakeState,
+  filterPendingFollowUpsForActiveChannel,
+} from './pending-follow-ups.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 
 describe('PendingFollowUpStore', () => {
-  it('creates and lists pending follow-ups by contact scope', () => {
-    const db = new Database(':memory:');
-    const store = new PendingFollowUpStore(db, {
+  it('creates and lists pending follow-ups by contact scope', async () => {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => 'follow-up-1',
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    store.create({
+    await store.enqueue({
       content: 'Check back in after the meeting.',
       priority: 'medium',
       timing: 'soon',
@@ -25,25 +27,24 @@ describe('PendingFollowUpStore', () => {
       wakeConditions: ['next_user_turn'],
     });
 
-    expect(store.getPendingFollowUps('contact-a')).toEqual([
+    expect(await store.list({ contactId: 'contact-a' })).toEqual([
       expect.objectContaining({
         id: 'follow-up-1',
         contextSummary: 'Follow up after the meeting outcome settles.',
         wakeConditions: ['next_user_turn'],
       }),
     ]);
-    expect(store.getPendingFollowUps('contact-b')).toHaveLength(0);
+    expect(await store.list({ contactId: 'contact-b' })).toHaveLength(0);
   });
 
-  it('marks follow-ups activated and excludes them from pending lists', () => {
-    const db = new Database(':memory:');
+  it('marks follow-ups activated and excludes them from pending lists', async () => {
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    const created = store.create({
+    const created = await store.enqueue({
       content: 'Circle back gently later.',
       priority: 'low',
       timing: 'scheduled',
@@ -53,26 +54,24 @@ describe('PendingFollowUpStore', () => {
       authorName: 'Whisper',
     });
 
-    const activated = store.markActivated(created.id, {
+    const activated = await store.dequeue(created!.id, {
       activatedAt: '2026-03-25T12:05:00.000Z',
       activationReason: 'post_turn_action',
     });
     expect(activated).toMatchObject({
-      id: created.id,
+      id: created!.id,
       activationReason: 'post_turn_action',
       activatedAt: '2026-03-25T12:05:00.000Z',
     });
-    expect(store.getPendingFollowUps()).toHaveLength(0);
-    expect(store.list({ includeActivated: true })).toHaveLength(1);
+    expect(await store.list()).toHaveLength(0);
+    expect(await store.list({ includeActivated: true })).toHaveLength(1);
   });
 
   it('exposes pending follow-up queue operations through the port', async () => {
-    const db = new Database(':memory:');
-    const store = new PendingFollowUpStore(db, {
+    const port = createTestPostgresIntentionPorts({
       idFactory: () => 'follow-up-1',
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
-    const port = createPendingFollowUpStorePort(store);
+    }).ports.pendingFollowUpStore;
 
     const created = await port.enqueue({
       content: 'Check back through the port.',
@@ -85,12 +84,12 @@ describe('PendingFollowUpStore', () => {
       contactId: 'contact-a',
     });
 
-    await expect(port.peek(created.id)).resolves.toMatchObject({
-      id: created.id,
+    await expect(port.peek(created!.id)).resolves.toMatchObject({
+      id: created!.id,
       content: 'Check back through the port.',
     });
     await expect(port.list({ contactId: 'contact-a' })).resolves.toHaveLength(1);
-    await expect(port.dequeue(created.id, {
+    await expect(port.dequeue(created!.id, {
       activatedAt: '2026-03-25T12:05:00.000Z',
       activationReason: 'port_dequeue',
     })).resolves.toMatchObject({
@@ -101,14 +100,13 @@ describe('PendingFollowUpStore', () => {
   });
 
   it('deduplicates near-identical enqueue requests by superseding the existing row', async () => {
-    const db = new Database(':memory:');
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    const first = store.enqueue({
+    const first = await store.enqueue({
       content: 'Check in about the medication plan tomorrow.',
       priority: 'medium',
       timing: 'soon',
@@ -119,7 +117,7 @@ describe('PendingFollowUpStore', () => {
       contactId: 'contact-a',
       sourceMessageId: 'msg-1',
     });
-    const second = store.enqueue({
+    const second = await store.enqueue({
       content: 'Check in tomorrow about the medication plan.',
       priority: 'high',
       timing: 'soon',
@@ -133,7 +131,7 @@ describe('PendingFollowUpStore', () => {
     });
 
     expect(second?.id).toBe(first?.id);
-    expect(store.list({ contactId: 'contact-a', includeExpired: true })).toEqual([
+    expect(await store.list({ contactId: 'contact-a', includeExpired: true })).toEqual([
       expect.objectContaining({
         id: first?.id,
         content: 'Check in tomorrow about the medication plan.',
@@ -145,16 +143,14 @@ describe('PendingFollowUpStore', () => {
     expect(nextId).toBe(1);
   });
 
-  it('enforces the per-channel/contact pending backlog cap with supersede or drop telemetry paths', () => {
-    const db = new Database(':memory:');
+  it('enforces the per-channel/contact pending backlog cap with supersede or drop telemetry paths', async () => {
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-      backlogCap: 2,
-    });
+    }).ports.pendingFollowUpStore;
 
-    const first = store.enqueue({
+    const first = await store.enqueue({
       content: 'Plan the garden watering reminder.',
       priority: 'medium',
       timing: 'soon',
@@ -164,19 +160,34 @@ describe('PendingFollowUpStore', () => {
       authorName: 'Whisper',
       contactId: 'contact-a',
     });
-    store.enqueue({
-      content: 'Review the tax upload checklist.',
-      priority: 'medium',
-      timing: 'scheduled',
-      channelId: 'discord:primary',
-      channelType: 'discord',
-      authorId: 'system:intention',
-      authorName: 'Whisper',
-      contactId: 'contact-a',
-      dueAt: '2026-03-26T12:00:00.000Z',
-    });
+    const distinctBacklogItems = [
+      'Review the tax upload checklist.',
+      'Book the annual veterinary appointment.',
+      'Confirm the database rollback rehearsal.',
+      'Replace the kitchen water filter.',
+      'Ask about the cardiology test results.',
+      'Renew the library membership online.',
+      'Inspect the bicycle brake cable.',
+      'Prepare the conference travel receipt.',
+      'Send the landlord a heating update.',
+      'Schedule the piano tuning visit.',
+      'Verify the overnight backup checksum.',
+    ];
+    for (const content of distinctBacklogItems.slice(0, DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP - 1)) {
+      await store.enqueue({
+        content,
+        priority: 'medium',
+        timing: 'scheduled',
+        channelId: 'discord:primary',
+        channelType: 'discord',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        contactId: 'contact-a',
+        dueAt: '2026-03-26T12:00:00.000Z',
+      });
+    }
 
-    expect(store.enqueue({
+    expect(await store.enqueue({
       content: 'Schedule the piano tuning question.',
       priority: 'low',
       timing: 'soon',
@@ -187,7 +198,7 @@ describe('PendingFollowUpStore', () => {
       contactId: 'contact-a',
     })).toBeNull();
 
-    const cappedSupersede = store.enqueue({
+    const cappedSupersede = await store.enqueue({
       content: 'Plan garden tomorrow.',
       priority: 'high',
       timing: 'soon',
@@ -199,23 +210,21 @@ describe('PendingFollowUpStore', () => {
     });
 
     expect(cappedSupersede?.id).toBe(first?.id);
-    expect(store.list({ contactId: 'contact-a', includeExpired: true }).map(followUp => followUp.content)).toEqual([
-      'Plan garden tomorrow.',
-      'Review the tax upload checklist.',
-    ]);
-    expect(nextId).toBe(2);
+    const retained = await store.list({ contactId: 'contact-a', includeExpired: true });
+    expect(retained).toHaveLength(DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP);
+    expect(retained[0]?.content).toBe('Plan garden tomorrow.');
+    expect(nextId).toBe(DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP);
   });
 
   it('quarantines invalid persisted rows instead of silently dropping them', async () => {
-    const db = new Database(':memory:');
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const { pool, ports } = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
     });
-    const port = createPendingFollowUpStorePort(store);
+    const port = ports.pendingFollowUpStore;
 
-    store.create({
+    await port.enqueue({
       content: 'This row will be quarantined.',
       priority: 'medium',
       timing: 'soon',
@@ -226,7 +235,7 @@ describe('PendingFollowUpStore', () => {
       contactId: 'contact-a',
       wakeConditions: ['next_user_turn'],
     });
-    store.create({
+    await port.enqueue({
       content: 'This row should survive.',
       priority: 'medium',
       timing: 'soon',
@@ -236,14 +245,7 @@ describe('PendingFollowUpStore', () => {
       authorName: 'Whisper',
       contactId: 'contact-a',
     });
-    db.prepare(`
-      UPDATE intention_pending_follow_ups
-      SET wake_conditions = @wakeConditions
-      WHERE id = @id
-    `).run({
-      id: 'follow-up-1',
-      wakeConditions: 'not-json',
-    });
+    pool.corruptPendingFollowUp('follow-up-1', { wake_conditions: 'not-json' });
 
     await expect(port.list({ contactId: 'contact-a' })).resolves.toEqual([
       expect.objectContaining({
@@ -265,15 +267,14 @@ describe('PendingFollowUpStore', () => {
     ]);
   });
 
-  it('expires stale pending follow-ups by age and overdue dueAt', () => {
-    const db = new Database(':memory:');
+  it('expires stale pending follow-ups by age and overdue dueAt', async () => {
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    store.create({
+    await store.enqueue({
       content: 'This should age out.',
       priority: 'medium',
       timing: 'soon',
@@ -283,7 +284,7 @@ describe('PendingFollowUpStore', () => {
       authorName: 'Whisper',
       createdAt: '2026-03-24T11:00:00.000Z',
     });
-    store.create({
+    await store.enqueue({
       content: 'This should expire after its overdue window.',
       priority: 'medium',
       timing: 'scheduled',
@@ -294,7 +295,7 @@ describe('PendingFollowUpStore', () => {
       createdAt: '2026-03-24T09:00:00.000Z',
       dueAt: '2026-03-24T10:30:00.000Z',
     });
-    store.create({
+    await store.enqueue({
       content: 'This should stay pending.',
       priority: 'medium',
       timing: 'scheduled',
@@ -306,35 +307,35 @@ describe('PendingFollowUpStore', () => {
       dueAt: '2026-03-25T18:00:00.000Z',
     });
 
-    expect(store.getPendingFollowUps().map(followUp => followUp.content)).toEqual([
+    expect((await store.list()).map(followUp => followUp.content)).toEqual([
       'This should stay pending.',
     ]);
-    expect(store.list({ includeExpired: true }).map(followUp => followUp.content)).toEqual([
+    expect((await store.list({ includeExpired: true })).map(followUp => followUp.content)).toEqual([
       'This should expire after its overdue window.',
       'This should age out.',
       'This should stay pending.',
     ]);
   });
 
-  it('updates an existing pending follow-up while it is still active', () => {
-    const db = new Database(':memory:');
-    const store = new PendingFollowUpStore(db, {
-      idFactory: () => 'follow-up-1',
+  it('updates an active pending follow-up through the deduplicating enqueue path', async () => {
+    let nextId = 0;
+    const store = createTestPostgresIntentionPorts({
+      idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    const created = store.create({
+    const created = await store.enqueue({
       content: 'Check back in later.',
       priority: 'medium',
-      timing: 'soon',
+      timing: 'scheduled',
+      dueAt: '2026-03-25T12:30:00.000Z',
       channelId: 'api:test',
       channelType: 'api',
       authorId: 'system:intention',
       authorName: 'Whisper',
     });
-
-    const updated = store.update(created.id, {
-      content: 'Check back in on their next message.',
+    const updated = await store.enqueue({
+      content: 'Check back in later.',
       priority: 'high',
       timing: 'scheduled',
       dueAt: '2026-03-25T13:00:00.000Z',
@@ -347,7 +348,7 @@ describe('PendingFollowUpStore', () => {
     });
 
     expect(updated).toMatchObject({
-      id: created.id,
+      id: created!.id,
       priority: 'high',
       timing: 'scheduled',
       dueAt: '2026-03-25T13:00:00.000Z',
@@ -356,15 +357,14 @@ describe('PendingFollowUpStore', () => {
     });
   });
 
-  it('filters pending follow-ups to the active session or thread', () => {
-    const db = new Database(':memory:');
+  it('filters pending follow-ups to the active session or thread', async () => {
     let nextId = 0;
-    const store = new PendingFollowUpStore(db, {
+    const store = createTestPostgresIntentionPorts({
       idFactory: () => `follow-up-${++nextId}`,
       now: () => new Date('2026-03-25T12:00:00.000Z'),
-    });
+    }).ports.pendingFollowUpStore;
 
-    store.create({
+    await store.enqueue({
       content: 'Stay with session-a.',
       priority: 'medium',
       timing: 'soon',
@@ -374,7 +374,7 @@ describe('PendingFollowUpStore', () => {
       authorName: 'Whisper',
       contactId: 'contact-a',
     });
-    store.create({
+    await store.enqueue({
       content: 'Do not leak from session-b.',
       priority: 'medium',
       timing: 'soon',
@@ -387,7 +387,7 @@ describe('PendingFollowUpStore', () => {
 
     expect(
       filterPendingFollowUpsForActiveChannel(
-        store.getPendingFollowUps('contact-a'),
+        await store.list({ contactId: 'contact-a' }),
         'api:principal-a:session-a',
       ),
     ).toEqual([

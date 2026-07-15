@@ -1405,6 +1405,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     return await this.upsert({
       displayName: displayName?.trim() || identity.userId,
+      trustLevel: 'public',
       channels: [{
         channel: identity.channel,
         userId: identity.userId,
@@ -1427,6 +1428,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return await this.upsert({
       displayName: discordUserId.trim() || discordUserId,
       discordUserId,
+      trustLevel: 'public',
     });
   },
 

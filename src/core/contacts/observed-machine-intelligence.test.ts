@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
-import { ContactStore } from './store.js';
 import type { ContactStorePort } from './contact-store-port.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   applyObservedMachineIntelligence,
   isDeliberateMachineIntelligenceCorrection,
@@ -14,12 +13,10 @@ const PRIMARY_USER_ID = 'owner-1';
 const silentLogger = { warn: () => undefined };
 
 describe('applyObservedMachineIntelligence (E7.3 auto-tagging)', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+  let store: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ store } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('marks a bot-flagged contact as machine intelligence through the real store path', async () => {
@@ -174,10 +171,10 @@ describe('applyObservedMachineIntelligence (E7.3 auto-tagging)', () => {
     // read-check-then-write helper sequence clobbered the correction here; the
     // atomic store operation must preserve it.
     const racingStore: Pick<ContactStorePort, 'markMachineIntelligenceFromObservation'> = {
-      markMachineIntelligenceFromObservation: (id, actor) => {
-        store.setMachineIntelligence(id, true, observedMachineIntelligenceActor('discord'));
-        store.setMachineIntelligence(id, false, 'admin:api');
-        return store.markMachineIntelligenceFromObservation(id, actor);
+      markMachineIntelligenceFromObservation: async (id, actor) => {
+        await store.setMachineIntelligence(id, true, observedMachineIntelligenceActor('discord'));
+        await store.setMachineIntelligence(id, false, 'admin:api');
+        return await store.markMachineIntelligenceFromObservation(id, actor);
       },
     };
 
@@ -196,22 +193,20 @@ describe('applyObservedMachineIntelligence (E7.3 auto-tagging)', () => {
 });
 
 describe('ContactStore.markMachineIntelligenceFromObservation', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+  let store: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ store } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('marks and writes a provenance-honest audit row in one operation', async () => {
     const contact = await store.resolveChannelIdentity('discord', 'peer-bot-7', 'PeerBot7');
     const actor = observedMachineIntelligenceActor('discord');
 
-    expect(store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('marked');
+    expect(await store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('marked');
     expect((await store.getById(contact.id))?.isMachineIntelligence).toBe(true);
 
-    const audit = store.listMutationAuditEntries({
+    const audit = await store.listMutationAuditEntries({
       contactId: contact.id,
       field: 'is_machine_intelligence',
     });
@@ -224,9 +219,9 @@ describe('ContactStore.markMachineIntelligenceFromObservation', () => {
     const contact = await store.resolveChannelIdentity('discord', 'peer-bot-8', 'PeerBot8');
     const actor = observedMachineIntelligenceActor('discord');
 
-    expect(store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('marked');
-    expect(store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('already_marked');
-    expect(store.listMutationAuditEntries({
+    expect(await store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('marked');
+    expect(await store.markMachineIntelligenceFromObservation(contact.id, actor)).toBe('already_marked');
+    expect(await store.listMutationAuditEntries({
       contactId: contact.id,
       field: 'is_machine_intelligence',
     })).toHaveLength(1);
@@ -234,10 +229,10 @@ describe('ContactStore.markMachineIntelligenceFromObservation', () => {
 
   it('refuses to clobber a deliberate correction and reports override_preserved', async () => {
     const contact = await store.resolveChannelIdentity('discord', 'peer-bot-9', 'PeerBot9');
-    store.setMachineIntelligence(contact.id, true, observedMachineIntelligenceActor('discord'));
-    store.setMachineIntelligence(contact.id, false, 'admin:api');
+    await store.setMachineIntelligence(contact.id, true, observedMachineIntelligenceActor('discord'));
+    await store.setMachineIntelligence(contact.id, false, 'admin:api');
 
-    const outcome = store.markMachineIntelligenceFromObservation(
+    const outcome = await store.markMachineIntelligenceFromObservation(
       contact.id,
       observedMachineIntelligenceActor('discord'),
     );
@@ -246,8 +241,8 @@ describe('ContactStore.markMachineIntelligenceFromObservation', () => {
     expect((await store.getById(contact.id))?.isMachineIntelligence).not.toBe(true);
   });
 
-  it('reports not_found for an unknown contact', () => {
-    expect(store.markMachineIntelligenceFromObservation(
+  it('reports not_found for an unknown contact', async () => {
+    expect(await store.markMachineIntelligenceFromObservation(
       'missing-contact',
       observedMachineIntelligenceActor('discord'),
     )).toBe('not_found');

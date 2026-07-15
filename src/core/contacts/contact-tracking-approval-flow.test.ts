@@ -7,14 +7,13 @@
 // AC5: the Garden pending-contacts service drives approve/deny/reset.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolveAuthorContext } from '../agent/substrate-agent/runtime-context.js';
 import { createAdminPendingContactsService } from '../../operator/garden/services/pending-contacts-service.js';
-import { createSQLiteContactStore } from './sqlite-adapter.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import {
   createFilePendingContactApprovalStore,
@@ -43,16 +42,14 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
 }
 
 describe('contact-tracking approval flow (E3.4)', () => {
-  let db: Database.Database;
   let contactStore: ContactStorePort;
   let tempDir: string;
   let pendingApprovals: PendingContactApprovalStore;
   let notify: ReturnType<typeof vi.fn>;
   let gate: ContactTrackingGate;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    contactStore = createSQLiteContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
     tempDir = mkdtempSync(join(tmpdir(), 'psfn-approval-flow-'));
     pendingApprovals = createFilePendingContactApprovalStore(join(tempDir, 'pending-approvals.json'));
     notify = vi.fn().mockResolvedValue(undefined);
@@ -70,7 +67,6 @@ describe('contact-tracking approval flow (E3.4)', () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
-    db.close();
   });
 
   async function resolveWithGate(message: SubstrateMessage) {
@@ -197,8 +193,7 @@ describe('contact-tracking approval flow (E3.4)', () => {
     expect(withGate.resolvedUserName).toBe('vtubegooner69');
 
     // Fresh identical store without any gate: same observable result shape.
-    const bareDb = new Database(':memory:');
-    const bareStore = createSQLiteContactStore(bareDb, PRIMARY_USER_ID);
+    const { store: bareStore } = await createTestPostgresContactStore(PRIMARY_USER_ID);
     const withoutGate = await resolveAuthorContext({
       message: makeMessage({ channelId: AUTO_CHANNEL, id: 'msg-auto-1' }),
       contactStore: bareStore,
@@ -211,7 +206,6 @@ describe('contact-tracking approval flow (E3.4)', () => {
       .toEqual({ ...withoutGate, canonicalContactKey: 'normalized', continuitySubjectKey: 'normalized' });
     expect(await pendingApprovals.list()).toHaveLength(0);
     expect(notify).not.toHaveBeenCalled();
-    bareDb.close();
   });
 
   it('AC4: a role_gated room fails closed at use with a clear, unswallowed error', async () => {

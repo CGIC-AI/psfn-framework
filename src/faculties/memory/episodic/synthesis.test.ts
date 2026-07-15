@@ -1,8 +1,10 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import type { Pool } from 'pg';
+import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
-import { EpisodicStore } from './store.js';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
+import type { EpisodicStorePort } from './store-port.js';
 import {
   EpisodicSynthesizer,
   sessionEntryClaimKey,
@@ -10,16 +12,11 @@ import {
 } from './synthesis.js';
 
 describe('EpisodicSynthesizer', () => {
-  let db: Database.Database | undefined;
+  let pool: FakeEpisodicPool;
 
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
-
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, {
+  function makeStore(): PostgresEpisodicStore {
+    pool = new FakeEpisodicPool();
+    return new PostgresEpisodicStore(pool as unknown as Pool, {
       now: () => new Date('2026-04-02T08:00:00.000Z'),
     });
   }
@@ -81,7 +78,7 @@ describe('EpisodicSynthesizer', () => {
       arcKind: 'continuation',
     });
 
-    const episodes = store.searchByTime({
+    const episodes = await store.searchByTime({
       from: '2026-04-01T00:00:00.000Z',
       to: '2026-04-01T23:59:59.999Z',
     });
@@ -120,8 +117,8 @@ describe('EpisodicSynthesizer', () => {
     expect(second.candidateEpisodeCount).toBe(0);
     expect(second.createdEpisodes).toEqual([]);
     expect(second.skippedEpisodeIds).toEqual([]);
-    expect(store.listEpisodes()).toHaveLength(1);
-    expect(store.listEpisodeMessageClaims({ status: 'active' }).map(claim => claim.claimKey).sort()).toEqual([
+    expect(await store.listEpisodes()).toHaveLength(1);
+    expect((await store.listEpisodeMessageClaims({ status: 'active' })).map(claim => claim.claimKey).sort()).toEqual([
       'l0-message:terminal:daily:1',
       'l0-message:terminal:daily:2',
     ]);
@@ -140,7 +137,7 @@ describe('EpisodicSynthesizer', () => {
     const first = await synthesizer.run({ sessionId: 'terminal:daily' });
     // Simulate a pre-claiming database: the overlap-merge heuristic must
     // still stop sliding-window duplicates when no claims exist.
-    db?.exec('DELETE FROM l01_episode_message_claims');
+    pool.messageClaims.clear();
     entries = [
       ...entries,
       entry(3, '2026-04-01T10:04:00.000Z', 'user', 'Project atlas linting should include the boundary regression test.'),
@@ -154,7 +151,7 @@ describe('EpisodicSynthesizer', () => {
     expect(second.createdEpisodes).toEqual([]);
     expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
 
-    const episodes = store.listEpisodes();
+    const episodes = await store.listEpisodes();
     expect(episodes).toHaveLength(1);
     expect(episodes[0]).toMatchObject({
       id: first.createdEpisodes[0].id,
@@ -181,7 +178,7 @@ describe('EpisodicSynthesizer', () => {
       skippedEpisodeIds: [first.createdEpisodes[0].id],
     });
 
-    const decisions = store.listEpisodeCandidateDecisions({ canonicalEpisodeId: first.createdEpisodes[0].id });
+    const decisions = await store.listEpisodeCandidateDecisions({ canonicalEpisodeId: first.createdEpisodes[0].id });
     expect(decisions).toHaveLength(2);
     expect(decisions.map(decision => decision.status).sort()).toEqual(['canonical', 'merged']);
     const mergedDecision = decisions.find(decision => decision.status === 'merged');
@@ -197,7 +194,7 @@ describe('EpisodicSynthesizer', () => {
         },
       },
     });
-    const durableWatermark = store.getProcessingWatermark({
+    const durableWatermark = await store.getProcessingWatermark({
       processor: 'episodic_synthesis',
       sourceRef: 'terminal:daily',
       sessionId: 'terminal:daily',
@@ -212,7 +209,7 @@ describe('EpisodicSynthesizer', () => {
         candidateDecisionIds: expect.arrayContaining(decisions.map(decision => decision.id)),
       },
     });
-    const diagnostics = store.getMaintenanceDiagnostics({ now: '2026-04-01T10:10:00.000Z' });
+    const diagnostics = await store.getMaintenanceDiagnostics({ now: '2026-04-01T10:10:00.000Z' });
     expect(diagnostics).toMatchObject({
       candidateDecisionCount: 2,
       decisionCountsByStatus: { canonical: 1, merged: 1 },
@@ -227,7 +224,7 @@ describe('EpisodicSynthesizer', () => {
     expect(diagnostics.oldestQueueAgeMs).toBe(6 * 60 * 1000);
 
     // The merged pass re-established claims on the canonical episode.
-    const activeClaims = store.listEpisodeMessageClaims({ status: 'active' });
+    const activeClaims = await store.listEpisodeMessageClaims({ status: 'active' });
     expect(activeClaims.every(claim => claim.episodeId === first.createdEpisodes[0].id)).toBe(true);
     expect(activeClaims.map(claim => claim.claimKey).sort()).toEqual([
       'l0-message:terminal:daily:1',
@@ -263,7 +260,6 @@ describe('EpisodicSynthesizer', () => {
 
     for (const testCase of cases) {
       const store = makeStore();
-      try {
         const sessionReader = {
           getRecentMessages: () => [
             entry(10, '2026-04-01T10:00:00.000Z', 'user', 'Atlas project baseline validation plan.'),
@@ -306,10 +302,6 @@ describe('EpisodicSynthesizer', () => {
             expect.objectContaining({ kind: 'operator_note', refId: 'operator-note-1' }),
           ]));
         }
-      } finally {
-        db?.close();
-        db = undefined;
-      }
     }
   });
 
@@ -337,7 +329,7 @@ describe('EpisodicSynthesizer', () => {
     expect(second.createdEpisodes).toEqual([]);
     expect(second.skippedEpisodeIds).toEqual([]);
 
-    const episodes = store.searchByThread('terminal:daily');
+    const episodes = await store.searchByThread('terminal:daily');
     expect(episodes).toHaveLength(1);
     expect(episodes[0]).toMatchObject({
       id: first.createdEpisodes[0].id,
@@ -345,7 +337,7 @@ describe('EpisodicSynthesizer', () => {
       endedAt: '2026-04-01T10:02:00.000Z',
     });
     // The tail entry remains unclaimed and available for a later pass.
-    expect(store.listEpisodeMessageClaims({
+    expect(await store.listEpisodeMessageClaims({
       claimKeys: ['l0-message:terminal:daily:3'],
     })).toEqual([]);
   });
@@ -391,8 +383,8 @@ describe('EpisodicSynthesizer', () => {
     expect(secondEpisode.endedAt).toBe('2026-04-01T16:52:30.000Z');
 
     // No live episode overlaps another live episode's claimed messages.
-    const firstClaims = store.listEpisodeMessageClaims({ episodeId: firstEpisode.id, status: 'active' });
-    const secondClaims = store.listEpisodeMessageClaims({ episodeId: secondEpisode.id, status: 'active' });
+    const firstClaims = await store.listEpisodeMessageClaims({ episodeId: firstEpisode.id, status: 'active' });
+    const secondClaims = await store.listEpisodeMessageClaims({ episodeId: secondEpisode.id, status: 'active' });
     expect(firstClaims.map(claim => claim.claimKey).sort()).toEqual(
       [1, 2, 3, 4, 5, 6, 7].map(id => `l0-message:terminal:daily:${id}`),
     );
@@ -402,13 +394,12 @@ describe('EpisodicSynthesizer', () => {
     ]);
 
     // DB-level invariant: no source message is actively claimed twice.
-    const duplicates = db?.prepare(`
-      SELECT claim_key
-      FROM l01_episode_message_claims
-      WHERE status = 'active'
-      GROUP BY claim_key
-      HAVING COUNT(*) > 1
-    `).all();
+    const claimCounts = new Map<string, number>();
+    for (const claim of pool.messageClaims.values()) {
+      if (claim.status !== 'active') continue;
+      claimCounts.set(claim.claim_key, (claimCounts.get(claim.claim_key) ?? 0) + 1);
+    }
+    const duplicates = [...claimCounts.entries()].filter(([, count]) => count > 1);
     expect(duplicates).toEqual([]);
   });
 
@@ -482,7 +473,7 @@ describe('EpisodicSynthesizer', () => {
     expect(result.linkedArcs).toHaveLength(3);
     expect(result.linkedArcs.map(arc => arc.arcKind)).toEqual(['continuation', 'continuation', 'continuation']);
 
-    const episodes = store.searchByThread('terminal:trip-month', { limit: 10 });
+    const episodes = await store.searchByThread('terminal:trip-month', { limit: 10 });
     expect(episodes.map(episode => episode.startedAt.slice(0, 10))).toEqual([
       '2026-04-01',
       '2026-04-10',
@@ -507,12 +498,7 @@ describe('EpisodicSynthesizer', () => {
 });
 
 describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
+  let pool: FakeEpisodicPool;
 
   const SESSION_ID = 'terminal:daily';
   const WATERMARK_SCOPE = {
@@ -523,9 +509,9 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     sessionId: SESSION_ID,
   };
 
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, {
+  function makeStore(): PostgresEpisodicStore {
+    pool = new FakeEpisodicPool();
+    return new PostgresEpisodicStore(pool as unknown as Pool, {
       now: () => new Date('2026-04-02T08:00:00.000Z'),
     });
   }
@@ -639,13 +625,13 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     });
 
     // Only the eight topic-A turns are claimed; the held B turns stay free.
-    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    const claims = await store.listEpisodeMessageClaims({ status: 'active' });
     expect(claims.map(claim => claim.claimKey).sort()).toEqual(
       entries.slice(0, 8).map(sessionEntryClaimKey).sort(),
     );
 
     // Watermark stays behind the held turns so the next pass still sees them.
-    const watermark = store.getProcessingWatermark(WATERMARK_SCOPE);
+    const watermark = await store.getProcessingWatermark(WATERMARK_SCOPE);
     expect(watermark?.processedEndedAt).toBe(entryTimestamp(8));
 
     expect(events).toEqual([
@@ -698,7 +684,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       endTurnId: turnId(12),
     });
 
-    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    const claims = await store.listEpisodeMessageClaims({ status: 'active' });
     expect(claims).toHaveLength(12);
     const episodeByClaimKey = new Map(claims.map(claim => [claim.claimKey, claim.episodeId]));
     expect(episodeByClaimKey.get(sessionEntryClaimKey(firstPass[8]))).toBe(second.createdEpisodes[0].id);
@@ -726,8 +712,8 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     expect(result.candidateEpisodeCount).toBe(0);
     expect(result.segmentationFailedChunkCount).toBe(1);
     expect(result.heldBackEntryCount).toBe(0);
-    expect(store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(0);
-    expect(store.getProcessingWatermark(WATERMARK_SCOPE)).toBeUndefined();
+    expect(await store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(0);
+    expect(await store.getProcessingWatermark(WATERMARK_SCOPE)).toBeUndefined();
     expect(events).toEqual([
       expect.objectContaining({
         outcome: 'failed',
@@ -755,11 +741,11 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
 
     expect(result.createdEpisodes).toHaveLength(1);
     expect(result.candidateEpisodeCount).toBe(1);
-    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    const claims = await store.listEpisodeMessageClaims({ status: 'active' });
     expect(claims.map(claim => claim.claimKey).sort()).toEqual(
       entries.slice(0, 8).map(sessionEntryClaimKey).sort(),
     );
-    const watermark = store.getProcessingWatermark(WATERMARK_SCOPE);
+    const watermark = await store.getProcessingWatermark(WATERMARK_SCOPE);
     expect(watermark?.processedEndedAt).toBe(entryTimestamp(8));
   });
 
@@ -778,7 +764,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     expect(result.heldBackEntryCount).toBe(0);
     expect(result.segmentationFailedChunkCount).toBe(0);
     // Deterministic cutting keeps the whole 10-turn chunk as one episode.
-    expect(store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(10);
+    expect(await store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(10);
   });
 
   it('fails closed at construction when segmentation is enabled without a provider', () => {
@@ -842,7 +828,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
         const value = Reflect.get(target, prop, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as unknown as EpisodicStore;
+    }) as unknown as EpisodicStorePort;
 
     const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
       topicSegmentation: { enabled: false },
@@ -853,14 +839,14 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
 
     // No candidate episode was created in the candidate's window: the conflict
     // aborted the run before any episode mutation persisted.
-    const candidateWindow = realStore.searchByTime({
+    const candidateWindow = await realStore.searchByTime({
       from: '2026-04-01T00:00:00.000Z',
       to: '2026-04-01T23:59:59.999Z',
     });
     expect(candidateWindow).toHaveLength(0);
-    expect(realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
+    expect(await realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
     // Only the decoy's own claim exists; no claims were written for a candidate.
-    const activeClaims = realStore.listEpisodeMessageClaims({ status: 'active' });
+    const activeClaims = await realStore.listEpisodeMessageClaims({ status: 'active' });
     expect(activeClaims).toHaveLength(1);
     expect(activeClaims[0].episodeId).toBe('episode:decoy');
   });
@@ -879,7 +865,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
         const value = Reflect.get(target, prop, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
       },
-    }) as unknown as EpisodicStore;
+    }) as unknown as EpisodicStorePort;
 
     const entries = eightPlusTwoEntries();
     const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
@@ -890,12 +876,12 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       .rejects.toThrow('injected candidate-decision write failure');
 
     // No decision was persisted, so the span must not be marked processed.
-    expect(realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
+    expect(await realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
 
     // The watermark row exists (it is the decision's FK target) but its
     // processed span was NOT advanced to cover the candidate: a later run must
     // still reconsider these turns rather than treat them as already processed.
-    const watermark = realStore.getProcessingWatermark(WATERMARK_SCOPE);
+    const watermark = await realStore.getProcessingWatermark(WATERMARK_SCOPE);
     expect(watermark).toBeDefined();
     expect(Date.parse(watermark!.processedEndedAt)).toBeLessThan(Date.parse(entryTimestamp(10)));
     expect(watermark!.processedEndedAt).toBe(entryTimestamp(1));

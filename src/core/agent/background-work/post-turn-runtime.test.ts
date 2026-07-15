@@ -6,6 +6,7 @@ import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionEntry } from '../../session/types.js';
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
+import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
 import {
   BackgroundWorkDeferredError,
@@ -22,6 +23,12 @@ import {
 } from './types.js';
 
 const TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 function makeTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -393,6 +400,133 @@ describe('executePostTurnBackgroundWork', () => {
     expect(prompt).toContain('Authoritative source turn B response.');
     expect(prompt).not.toContain('Unfenced live turn A must not enter the prompt.');
     expect(prompt).not.toContain('Unfenced newer live turn C must not enter the prompt.');
+  });
+
+  it('does not complete durable B from an unrelated in-flight group extraction', async () => {
+    const record = makeTurnRecord({
+      sessionId: 'logical-session-coalesced-b',
+      channelId: 'discord:coalesced-b',
+    });
+    const execution = makeExecution(record);
+    delete execution.payload.canonicalContactId;
+    execution.job.payloadFingerprint = fingerprintBackgroundWorkPayload(execution.payload);
+    const sourceEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'Exact fenced turn B contains a durable private preference.',
+        authorName: 'Partner',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: 'Exact fenced turn B response.',
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const fixture = makeDependencies({ record, recentEntries: sourceEntries });
+    const groupStarted = deferred();
+    const releaseGroup = deferred();
+    const boundedBStarted = deferred();
+    const releaseBoundedB = deferred();
+    let completionCall = 0;
+    const complete = vi.fn(async (_context: Parameters<LLMProviderPort['complete']>[0]) => {
+      completionCall += 1;
+      if (completionCall === 1) {
+        groupStarted.resolve();
+        await releaseGroup.promise;
+      } else {
+        boundedBStarted.resolve();
+        await releaseBoundedB.promise;
+      }
+      return { content: '<response></response>' };
+    });
+    const extractor = new RealMemoryExtractor(
+      { complete } as unknown as LLMProviderPort,
+      fixture.dependencies.sessionManager,
+      {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[2],
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as ConstructorParameters<typeof RealMemoryExtractor>[3],
+      {
+        emit: vi.fn().mockResolvedValue(undefined),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[4],
+      {
+        extractionInterval: 1,
+        minImportance: 0,
+        minConfidence: 0,
+        minNovelty: 0,
+        telemetryEnabled: true,
+      },
+    );
+    fixture.dependencies.getMemoryExtractor = () => extractor;
+
+    const groupPromise = extractor.extractObservedGroupRange({
+      channelId: record.sessionId!,
+      triggerReason: 'observed_count',
+      recoveredEntries: [
+        {
+          id: 101,
+          channelId: record.sessionId!,
+          role: 'user',
+          content: 'Unrelated group range discusses a substantial travel plan.',
+          authorName: 'Group member',
+          timestamp: 10,
+        },
+        {
+          id: 102,
+          channelId: record.sessionId!,
+          role: 'assistant',
+          content: 'Unrelated group range response.',
+          timestamp: 11,
+        },
+      ],
+      groupWriteCaps: createDefaultGroupMemorySettings().writeCaps,
+    });
+    await groupStarted.promise;
+
+    let postTurnCompleted = false;
+    const postTurnPromise = executePostTurnBackgroundWork(
+      execution,
+      fixture.dependencies,
+    ).finally(() => { postTurnCompleted = true; });
+    await Promise.resolve();
+    expect(execution.effects.run).toHaveBeenCalledOnce();
+
+    releaseGroup.resolve();
+    const afterGroup = await Promise.race([
+      boundedBStarted.promise.then(() => 'bounded_b_started' as const),
+      postTurnPromise.then(() => 'post_turn_completed' as const),
+    ]);
+    expect(afterGroup).toBe('bounded_b_started');
+    expect(postTurnCompleted).toBe(false);
+    expect(complete).toHaveBeenCalledTimes(2);
+    const boundedPrompt = complete.mock.calls[1]?.[0].systemPrompt as string;
+    expect(boundedPrompt).toContain('Exact fenced turn B contains a durable private preference.');
+    expect(boundedPrompt).not.toContain('Unrelated group range discusses a substantial travel plan.');
+
+    releaseBoundedB.resolve();
+    await expect(postTurnPromise).resolves.toBeUndefined();
+    await expect(groupPromise).resolves.toBe(true);
   });
 
   it('rehydrates an exact physical-source/logical-session turn without copying content into the job', async () => {

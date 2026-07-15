@@ -62,6 +62,7 @@ import {
   emitExtractionEnd as emitExtractionEndEvent,
   emitExtractionStart as emitExtractionStartEvent,
   evaluateExtractionTrigger,
+  evaluateExtractionTriggerForSnapshot,
   recordExtractionMarker as persistExtractionMarker,
   resetLastExtractionCount,
   resolveCoveredUpToMessageId as resolveCoveredMarker,
@@ -262,12 +263,20 @@ export class MemoryExtractor {
       return;
     }
 
-    const trigger = evaluateExtractionTrigger(
-      channelId,
-      this.sessionManager,
-      this.runtimeConfig,
-      this.extractionInterval,
-    );
+    const boundedEntries = recoveredEntries !== undefined ? [...recoveredEntries] : undefined;
+    const trigger = boundedEntries === undefined
+      ? evaluateExtractionTrigger(
+        channelId,
+        this.sessionManager,
+        this.runtimeConfig,
+        this.extractionInterval,
+      )
+      : evaluateExtractionTriggerForSnapshot(
+        channelId,
+        boundedEntries,
+        this.runtimeConfig,
+        this.extractionInterval,
+      );
     if (!trigger) return;
 
     if (this.isTelemetryEnabled()) {
@@ -288,13 +297,23 @@ export class MemoryExtractor {
       channelId,
       trigger.triggerReason,
       canonicalContactId,
-      recoveredEntries !== undefined ? [...recoveredEntries] : undefined,
+      boundedEntries,
       turnId,
       undefined,
       placeId,
       icpCorrelation,
       assertEffectAllowed,
+      // A durable bounded callback may complete an effect receipt only after
+      // its own snapshot runs; reusing unrelated channel work would drop it.
+      boundedEntries === undefined ? 'coalesce' : 'serialize',
     );
+    if (boundedEntries !== undefined) {
+      this.advanceIntervalWatermarkAfterCoverage(
+        channelId,
+        trigger.triggerReason,
+        boundedEntries,
+      );
+    }
   }
 
   async extract(
@@ -435,15 +454,16 @@ export class MemoryExtractor {
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
+    scheduling: 'coalesce' | 'serialize' = 'coalesce',
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
-    if (existing) {
+    if (existing && scheduling === 'coalesce') {
       log.debug('Reusing in-flight extraction', { channelId, logicalSessionId, triggerReason });
       return existing;
     }
 
-    const promise = this.runExtraction(
+    const start = () => this.runExtraction(
       channelId,
       logicalSessionId,
       triggerReason,
@@ -455,6 +475,16 @@ export class MemoryExtractor {
       icpCorrelation,
       assertEffectAllowed,
     );
+    const promise = existing
+      ? existing.then(start, start)
+      : start();
+    if (existing) {
+      log.debug('Queued bounded extraction behind in-flight channel work', {
+        channelId,
+        logicalSessionId,
+        triggerReason,
+      });
+    }
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(logicalSessionId, promise);
     void promise
@@ -608,13 +638,10 @@ export class MemoryExtractor {
   }
 
   /**
-   * Advances the interval watermark after an out-of-band extraction
-   * (pre_compaction / crash_recovery) successfully consumed a batch, so the
-   * next interval trigger does not re-send the same messages
-   * (psfn-framework-xcw8). Callers must only invoke this after the awaited
-   * extraction resolved and only when the batch was actually consumed by this
-   * run (not coalesced into an unrelated in-flight run) — on failure the
-   * watermark stays put so no content is skipped without extraction.
+   * Advances the interval watermark after an explicit bounded extraction
+   * successfully consumed its snapshot. Callers must invoke this only after
+   * the awaited extraction resolved and only when that snapshot was consumed
+   * by this run — on failure the watermark stays put so no content is skipped.
    */
   private advanceIntervalWatermarkAfterCoverage(
     channelId: string,
@@ -633,7 +660,6 @@ export class MemoryExtractor {
 
     const advance = advanceExtractionWatermarkForCoverage(
       channelId,
-      this.sessionManager,
       consumedEntries,
     );
     if (advance && this.isTelemetryEnabled()) {

@@ -18,10 +18,15 @@ const log = createComponentLogger('Extraction');
 
 // ── Trigger evaluation ──
 
-const lastExtractionCount = new Map<string, number>();
+interface ExtractionCoverageState {
+  count: number;
+  coveredUpToMessageId: number | null;
+}
+
+const extractionCoverage = new Map<string, ExtractionCoverageState>();
 
 export function resetLastExtractionCount(): void {
-  lastExtractionCount.clear();
+  extractionCoverage.clear();
 }
 
 function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } | null {
@@ -46,38 +51,27 @@ export interface ExtractionTriggerResult {
   tokenBudget: number;
 }
 
-/**
- * Evaluates whether an extraction should be triggered based on message interval
- * and/or context token threshold. Returns the trigger result, or null if no
- * extraction is needed.
- *
- * Side-effect: updates lastExtractionCount when a trigger fires.
- */
-export function evaluateExtractionTrigger(
-  channelId: string,
-  sessionManager: SessionManager,
-  runtimeConfig: SubstrateConfig | null,
-  extractionInterval: number,
-): ExtractionTriggerResult | null {
-  const currentCount = sessionManager.getMessageCount(channelId);
-  const lastCount = lastExtractionCount.get(channelId) ?? 0;
-
-  const interval = runtimeConfig?.extractionInterval ?? extractionInterval;
-  const intervalMet = currentCount - lastCount >= interval;
-
+function evaluateExtractionTriggerInputs(input: {
+  currentCount: number;
+  lastCount: number;
+  deltaMessages: number;
+  runtimeConfig: SubstrateConfig | null;
+  extractionInterval: number;
+  thresholdEntries: () => readonly SessionEntry[];
+}): ExtractionTriggerResult | null {
+  const interval = input.runtimeConfig?.extractionInterval ?? input.extractionInterval;
+  const intervalMet = input.deltaMessages >= interval;
   let thresholdMet = false;
   let totalTokens = 0;
   let tokenBudget = 0;
   let thresholdPct: number | null = null;
-  if (runtimeConfig && !intervalMet) {
-    const chatSlot = runtimeConfig.modelRoster.chat;
-    const contextWindow = chatSlot?.contextWindow ?? runtimeConfig.defaultContextWindow;
-    thresholdPct = runtimeConfig.extractionThresholdPct;
+  if (input.runtimeConfig && !intervalMet) {
+    const chatSlot = input.runtimeConfig.modelRoster.chat;
+    const contextWindow = chatSlot?.contextWindow ?? input.runtimeConfig.defaultContextWindow;
+    thresholdPct = input.runtimeConfig.extractionThresholdPct;
     tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
-
-    const recent = sessionManager.getRecentMessages(channelId);
     totalTokens = countMessageTokens(
-      recent
+      input.thresholdEntries()
         .filter(isCountableExtractionEntry)
         .map(toTokenMessage)
         .filter((message): message is { role: string; content: string } => message !== null),
@@ -86,24 +80,85 @@ export function evaluateExtractionTrigger(
   }
 
   if (!intervalMet && !thresholdMet) return null;
-
-  const triggerReason: ExtractionTriggerReason = intervalMet && thresholdMet
-    ? 'interval_and_threshold'
-    : intervalMet
-      ? 'interval'
-      : 'context_threshold';
-
-  lastExtractionCount.set(channelId, currentCount);
-
   return {
-    triggerReason,
-    currentCount,
-    lastCount,
+    triggerReason: intervalMet && thresholdMet
+      ? 'interval_and_threshold'
+      : intervalMet
+        ? 'interval'
+        : 'context_threshold',
+    currentCount: input.currentCount,
+    lastCount: input.lastCount,
     interval,
     thresholdPct,
     totalTokens,
     tokenBudget,
   };
+}
+
+/**
+ * Evaluates whether an extraction should be triggered based on message interval
+ * and/or context token threshold. Returns the trigger result, or null if no
+ * extraction is needed.
+ *
+ * Side-effect: updates extraction coverage when a trigger fires.
+ */
+export function evaluateExtractionTrigger(
+  channelId: string,
+  sessionManager: SessionManager,
+  runtimeConfig: SubstrateConfig | null,
+  extractionInterval: number,
+): ExtractionTriggerResult | null {
+  const currentCount = sessionManager.getMessageCount(channelId);
+  const previous = extractionCoverage.get(channelId);
+  const lastCount = previous?.count ?? 0;
+  const trigger = evaluateExtractionTriggerInputs({
+    currentCount,
+    lastCount,
+    deltaMessages: currentCount - lastCount,
+    runtimeConfig,
+    extractionInterval,
+    thresholdEntries: () => sessionManager.getRecentMessages(channelId),
+  });
+  if (!trigger) return null;
+
+  extractionCoverage.set(channelId, {
+    count: currentCount,
+    coveredUpToMessageId: previous?.coveredUpToMessageId ?? null,
+  });
+
+  return trigger;
+}
+
+/**
+ * Evaluates a durable bounded snapshot without consulting newer live session
+ * state. Unlike the foreground evaluator, coverage is committed separately
+ * after the bounded extraction succeeds.
+ */
+export function evaluateExtractionTriggerForSnapshot(
+  channelId: string,
+  entries: readonly SessionEntry[],
+  runtimeConfig: SubstrateConfig | null,
+  extractionInterval: number,
+): ExtractionTriggerResult | null {
+  const previous = extractionCoverage.get(channelId);
+  const lastCount = previous?.count ?? 0;
+  const coveredUpToMessageId = previous?.coveredUpToMessageId;
+  const uncoveredCount = entries.filter(entry => (
+    isCountableExtractionEntry(entry)
+    && Number.isSafeInteger(entry.id)
+    && (coveredUpToMessageId === null
+      || coveredUpToMessageId === undefined
+      || entry.id > coveredUpToMessageId)
+  )).length;
+  const currentCount = lastCount + uncoveredCount;
+  return evaluateExtractionTriggerInputs({
+    currentCount,
+    lastCount,
+    deltaMessages: uncoveredCount,
+    runtimeConfig,
+    extractionInterval,
+    thresholdEntries: () => entries,
+  });
 }
 
 export interface ExtractionWatermarkAdvance {
@@ -113,20 +168,17 @@ export interface ExtractionWatermarkAdvance {
 }
 
 /**
- * Advances the interval watermark (lastExtractionCount) after an out-of-band
- * extraction (pre_compaction / crash_recovery) consumed a batch of entries, so
- * the next interval trigger does not re-send messages that were already
- * extracted (psfn-framework-xcw8).
+ * Advances interval coverage after any successful extraction that supplied an
+ * explicit bounded snapshot, so later triggers do not re-send those entries.
  *
- * Coverage is recorded only for the consumed range: the watermark moves to the
- * current message count minus the countable messages newer than the last
- * consumed entry, and it never regresses. Callers must invoke this only after
- * the extraction completed successfully — on failure the watermark stays put so
- * crash recovery and the next interval trigger still cover the content.
+ * Coverage is recorded only from the consumed snapshot: countable entries
+ * beyond the prior bounded marker advance the count, and the maximum consumed
+ * id advances the marker. This helper never consults live session state.
+ * Callers must invoke it only after extraction succeeds so failures remain
+ * eligible for crash recovery or a later interval trigger.
  */
 export function advanceExtractionWatermarkForCoverage(
   channelId: string,
-  sessionManager: SessionManager,
   consumedEntries: readonly SessionEntry[],
 ): ExtractionWatermarkAdvance | null {
   let coveredUpToMessageId: number | null = null;
@@ -137,19 +189,23 @@ export function advanceExtractionWatermarkForCoverage(
     }
   }
   if (coveredUpToMessageId === null) return null;
-  const maxConsumedId = coveredUpToMessageId;
-
-  const currentCount = sessionManager.getMessageCount(channelId);
-  const newerCount = sessionManager.getRecentMessages(channelId)
-    .filter(entry => isCountableExtractionEntry(entry)
-      && Number.isFinite(entry.id)
-      && entry.id > maxConsumedId)
-    .length;
-  const nextCount = Math.max(0, currentCount - newerCount);
-  const previousCount = lastExtractionCount.get(channelId) ?? 0;
+  const previous = extractionCoverage.get(channelId);
+  const previousCount = previous?.count ?? 0;
+  const previousCoveredId = previous?.coveredUpToMessageId;
+  const newlyCoveredCount = consumedEntries.filter(entry => (
+    isCountableExtractionEntry(entry)
+    && Number.isSafeInteger(entry.id)
+    && (previousCoveredId === null
+      || previousCoveredId === undefined
+      || entry.id > previousCoveredId)
+  )).length;
+  const nextCount = previousCount + newlyCoveredCount;
+  extractionCoverage.set(channelId, {
+    count: nextCount,
+    coveredUpToMessageId: Math.max(previousCoveredId ?? 0, coveredUpToMessageId),
+  });
   if (nextCount <= previousCount) return null;
 
-  lastExtractionCount.set(channelId, nextCount);
   return { previousCount, nextCount, coveredUpToMessageId };
 }
 

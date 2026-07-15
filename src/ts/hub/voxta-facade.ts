@@ -6,6 +6,7 @@ import type { Duplex } from "node:stream";
 
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
+import { abortReason, awaitWithAbort, throwIfAborted } from "../shared/abort.js";
 import type { VoxtaFacadeConfig } from "../shared/env.js";
 import { sanitizeSpokenText } from "../shared/text.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
@@ -34,7 +35,7 @@ interface VoxtaFacadeDependencies {
 }
 
 export interface VoxtaTtsAdapter {
-  synthesizeWav(text: string): Promise<Buffer>;
+  synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer>;
 }
 
 export interface VoxtaAudioInputSpec {
@@ -423,6 +424,7 @@ class VoxtaConnection {
   private readonly voxtaContexts = new Map<string, string[]>();
   private replyAbort = false;
   private replySequence = 0;
+  private replyTask: Promise<void> | null = null;
   private replyAbortController: AbortController | null = null;
   private keepAlive: NodeJS.Timeout | null = null;
 
@@ -618,12 +620,12 @@ class VoxtaConnection {
     this.runtime.connectionsByConfigurationId.set(this.servicesConfigurationsSetId, this);
   }
 
-  async emitRecordingRequest(enabled: boolean): Promise<void> {
+  async emitRecordingRequest(enabled: boolean, signal?: AbortSignal): Promise<void> {
     await this.sendReceive({
       $type: "recordingRequest",
       sessionId: this.sessionId,
       enabled,
-    });
+    }, signal);
   }
 
   async emitSpeechRecognitionStart(): Promise<void> {
@@ -705,6 +707,14 @@ class VoxtaConnection {
     this.attachSatellite();
     this.registerSession();
 
+    const previousReply = this.replyTask;
+    if (previousReply) {
+      this.cancelReply();
+      // SAFETY: SignalR frames stay serialized, but the long model request is
+      // observed outside that queue. Await only its cancellation settlement so
+      // the replacement user turn cannot enter the prior reply's history.
+      await previousReply.catch(() => undefined);
+    }
     this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
     if (!shouldReplyToVoxtaSend(input, payload.doReply)) {
       await this.sendReceive({
@@ -716,22 +726,43 @@ class VoxtaConnection {
       return;
     }
     const replyTask = this.streamAssistantReply(input.promptText);
-    await replyTask;
-    await this.sendCompletion(invocationId);
+    this.replyTask = replyTask;
+    void this.observeReplyTask(replyTask, invocationId).catch((error) => {
+      console.error("Voxta reply observer failed:", error);
+    });
   }
 
   private async handleInterrupt(invocationId: string | undefined, _payload: VoxtaClientPayload): Promise<void> {
-    this.cancelReply();
+    const hadActiveReply = this.cancelReply();
     await this.sendReceive({
       $type: "interruptSpeech",
       sessionId: this.sessionId,
     });
-    await this.sendReceive({
-      $type: "replyCancelled",
-      sessionId: this.sessionId,
-      messageId: crypto.randomUUID(),
-    });
+    if (!hadActiveReply) {
+      await this.sendReceive({
+        $type: "replyCancelled",
+        sessionId: this.sessionId,
+        messageId: crypto.randomUUID(),
+      });
+    }
     await this.sendCompletion(invocationId);
+  }
+
+  private async observeReplyTask(task: Promise<void>, invocationId: string | undefined): Promise<void> {
+    try {
+      await task;
+      await this.sendCompletion(invocationId);
+    } catch (error) {
+      console.error("Voxta message handling failed:", error);
+      await this.sendReceive({
+        $type: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (this.replyTask === task) {
+        this.replyTask = null;
+      }
+    }
   }
 
   private async handleUpdateContext(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
@@ -808,13 +839,15 @@ class VoxtaConnection {
     replyAbortController: AbortController,
   ): Promise<void> {
     let responseText = "";
-    await this.requestVisionCapturesIfNeeded();
+    await this.requestVisionCapturesIfNeeded(replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
 
     await this.sendReceive({
       $type: "chatFlow",
       state: "Thinking",
       sessionId: this.sessionId,
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyGenerating",
       sessionId: this.sessionId,
@@ -823,7 +856,8 @@ class VoxtaConnection {
       role: this.assistant.role,
       thinkingSpeechUrl: "",
       isNarration: false,
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyStart",
       sessionId: this.sessionId,
@@ -832,9 +866,11 @@ class VoxtaConnection {
       senderName: this.assistant.name,
       role: this.assistant.role,
       timestamp: new Date().toISOString(),
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
 
     const stream = this.deps.agent.streamReply({
+      inputMode: "voice",
       userText,
       conversationId: this.sessionId,
       history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],
@@ -842,21 +878,20 @@ class VoxtaConnection {
       signal: replyAbortController.signal,
     });
     for await (const delta of stream) {
-      if (this.replyAbort || replyId !== this.replySequence) {
-        await this.sendReceive({
-          $type: "replyCancelled",
-          sessionId: this.sessionId,
-          messageId,
-        });
-        return;
-      }
+      this.assertReplyActive(replyId, replyAbortController);
       responseText += delta;
     }
 
+    this.assertReplyActive(replyId, replyAbortController);
     responseText = responseText.trim();
-    this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
-    const audioUrl = await this.createSpeechArtifact(messageId, responseText);
+    const audioUrl = await this.createSpeechArtifact(
+      messageId,
+      responseText,
+      replyAbortController.signal,
+    );
+    this.assertReplyActive(replyId, replyAbortController);
     const wireResponseText = sanitizeVoxtaWireText(responseText);
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyChunk",
       sessionId: this.sessionId,
@@ -870,24 +905,33 @@ class VoxtaConnection {
       isNarration: false,
       audioGapMs: 0,
       timestamp: new Date().toISOString(),
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
+    this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
     await this.sendReceive({
       $type: "replyEnd",
       sessionId: this.sessionId,
       messageId,
       senderId: this.assistant.id,
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "chatFlow",
       state: "WaitingForUser",
       sessionId: this.sessionId,
-    });
+    }, replyAbortController.signal);
+    this.assertReplyActive(replyId, replyAbortController);
     if (this.deps.config.sttStreamEnabled && this.currentServiceState().SpeechToText) {
-      await this.emitRecordingRequest(true);
+      await this.emitRecordingRequest(true, replyAbortController.signal);
+      this.assertReplyActive(replyId, replyAbortController);
     }
   }
 
-  private async createSpeechArtifact(messageId: string, text: string): Promise<string> {
+  private async createSpeechArtifact(
+    messageId: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     const serviceState = this.runtime.serviceStates.get(this.servicesConfigurationsSetId);
     if (!this.deps.tts || serviceState?.TextToSpeech === false) {
       return "silence:0";
@@ -897,7 +941,8 @@ class VoxtaConnection {
       return "silence:0";
     }
     try {
-      const wav = await this.deps.tts.synthesizeWav(spokenText);
+      const wav = await awaitWithAbort(this.deps.tts.synthesizeWav(spokenText, signal), signal);
+      throwIfAborted(signal);
       if (wav.length === 0) {
         return "silence:0";
       }
@@ -915,6 +960,9 @@ class VoxtaConnection {
       fs.writeFileSync(filePath, wav);
       return filePath;
     } catch (error) {
+      if (signal.aborted) {
+        throw abortReason(signal);
+      }
       console.error("Voxta TTS artifact generation failed:", error);
       return "silence:0";
     }
@@ -961,12 +1009,12 @@ class VoxtaConnection {
     }
   }
 
-  private async requestVisionCapturesIfNeeded(): Promise<void> {
+  private async requestVisionCapturesIfNeeded(signal: AbortSignal): Promise<void> {
     if (!this.currentServiceState().ComputerVision) {
       return;
     }
     const sources: VoxtaVisionSource[] = ["Screen", "Eyes"];
-    const captures = await Promise.all(sources.map((source) => this.requestVisionCapture(source)));
+    const captures = await Promise.all(sources.map((source) => this.requestVisionCapture(source, signal)));
     for (const capture of captures) {
       if (capture) {
         this.recordVisionCapture(capture);
@@ -974,7 +1022,8 @@ class VoxtaConnection {
     }
   }
 
-  private async requestVisionCapture(source: VoxtaVisionSource): Promise<VisionCaptureImage | null> {
+  private async requestVisionCapture(source: VoxtaVisionSource, signal: AbortSignal): Promise<VisionCaptureImage | null> {
+    throwIfAborted(signal);
     const requestId = crypto.randomUUID();
     const promise = new Promise<VisionCaptureImage | null>((resolve) => {
       const timeout = setTimeout(() => {
@@ -989,21 +1038,31 @@ class VoxtaConnection {
         timeout,
       });
     });
-    await this.sendReceive({
-      $type: "visionCaptureRequest",
-      sessionId: this.sessionId,
-      visionCaptureRequestId: requestId,
-      source,
-    });
-    return promise;
+    try {
+      await this.sendReceive({
+        $type: "visionCaptureRequest",
+        sessionId: this.sessionId,
+        visionCaptureRequestId: requestId,
+        source,
+      }, signal);
+      return await awaitWithAbort(promise, signal);
+    } catch (error) {
+      const pending = this.runtime.pendingVisionRequests.get(requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.runtime.pendingVisionRequests.delete(requestId);
+        pending.resolve(null);
+      }
+      throw error;
+    }
   }
 
-  private async sendReceive(payload: VoxtaServerPayload): Promise<void> {
+  private async sendReceive(payload: VoxtaServerPayload, signal?: AbortSignal): Promise<void> {
     await this.sendFrame({
       type: 1,
       target: "ReceiveMessage",
       arguments: [payload],
-    });
+    }, signal);
   }
 
   private async sendCompletion(invocationId?: string, error?: string): Promise<void> {
@@ -1017,12 +1076,15 @@ class VoxtaConnection {
     });
   }
 
-  private async sendFrame(payload: Record<string, unknown>): Promise<void> {
+  private async sendFrame(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+    if (signal) {
+      throwIfAborted(signal);
+    }
     if (this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
     const wirePayload = sanitizeVoxtaWireValue(payload) as Record<string, unknown>;
-    await new Promise<void>((resolve, reject) => {
+    const sendOperation = new Promise<void>((resolve, reject) => {
       this.socket.send(`${JSON.stringify(wirePayload)}${SIGNALR_RECORD_SEPARATOR}`, (error) => {
         if (error) {
           reject(error);
@@ -1031,6 +1093,14 @@ class VoxtaConnection {
         resolve();
       });
     });
+    // SAFETY: reply cancellation releases only the logical waiter. The shared
+    // authenticated socket stays open, and awaitWithAbort keeps observing a
+    // callback that settles after detachment so it cannot reject unhandled.
+    if (signal) {
+      await awaitWithAbort(sendOperation, signal);
+      return;
+    }
+    await sendOperation;
   }
 
   private attachSatellite(): void {
@@ -1070,10 +1140,19 @@ class VoxtaConnection {
     }
   }
 
-  private cancelReply(): void {
+  private cancelReply(): boolean {
+    const hadActiveReply = this.replyAbortController !== null;
     this.replyAbort = true;
     this.replySequence += 1;
     this.replyAbortController?.abort(new DOMException("voxta reply cancelled", "AbortError"));
+    return hadActiveReply;
+  }
+
+  private assertReplyActive(replyId: number, controller: AbortController): void {
+    if (this.replyAbort || replyId !== this.replySequence) {
+      throw controller.signal.reason ?? new DOMException("voxta reply cancelled", "AbortError");
+    }
+    throwIfAborted(controller.signal);
   }
 
   private characterSummary(): Record<string, unknown> {

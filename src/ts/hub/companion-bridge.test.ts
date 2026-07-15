@@ -11,6 +11,7 @@ import type {
   SatelliteCapabilities,
 } from "../shared/protocol.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import type { FrameworkReplyInputMode } from "./framework-agent.js";
 import {
   CompanionBridge,
   CompanionRequestError,
@@ -723,6 +724,7 @@ test("hub without a companion bridge fails closed for approvals and previews", a
 
 class FakeAgent implements FrameworkAgentAdapter {
   async *streamReply(_input: {
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -976,6 +978,10 @@ function testHubConfig(): HubConfig {
       model: "psfn",
       channelType: satelliteClaim.channelType,
       satelliteClaim,
+      voiceReplyDeadlineMs: 8_000,
+      voiceAttemptTimeoutMs: 6_000,
+      textReplyDeadlineMs: 80_000,
+      textAttemptTimeoutMs: 75_000,
     },
     companion: null,
     homeAssistant: null,

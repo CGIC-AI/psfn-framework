@@ -24,6 +24,10 @@ const PSFN_ENV_KEYS = [
   "PSFN_CLIENT_CERT_PATH",
   "PSFN_CLIENT_KEY_PATH",
   "PSFN_CA_CERT_PATH",
+  "PSFN_VOICE_REPLY_DEADLINE_MS",
+  "PSFN_VOICE_ATTEMPT_TIMEOUT_MS",
+  "PSFN_TEXT_REPLY_DEADLINE_MS",
+  "PSFN_TEXT_ATTEMPT_TIMEOUT_MS",
 ] as const;
 
 const HUB_ENV_KEYS = [
@@ -41,6 +45,10 @@ const HUB_ENV_KEYS = [
   "PSFN_SATELLITE_ID",
   "PSFN_ENDPOINT_ID",
   "PSFN_CLAIM_TYPE",
+  "PSFN_VOICE_REPLY_DEADLINE_MS",
+  "PSFN_VOICE_ATTEMPT_TIMEOUT_MS",
+  "PSFN_TEXT_REPLY_DEADLINE_MS",
+  "PSFN_TEXT_ATTEMPT_TIMEOUT_MS",
   "PSFN_COMPANION_BASE_URL",
   "PSFN_COMPANION_API_KEY",
   "PSFN_COMPANION_PREVIEW_MAX_BYTES",
@@ -90,6 +98,10 @@ test("loadPsfnRuntime reads registry claim identity and certificate paths", () =
     assert.equal(runtime.satelliteClaim.tls?.certPath, path.join(projectRoot, "client.pem"));
     assert.equal(runtime.satelliteClaim.tls?.keyPath, path.join(projectRoot, "client.key"));
     assert.equal(runtime.satelliteClaim.tls?.caPath, path.join(projectRoot, "ca.pem"));
+    assert.equal(runtime.voiceReplyDeadlineMs, 8_000);
+    assert.equal(runtime.voiceAttemptTimeoutMs, 6_000);
+    assert.equal(runtime.textReplyDeadlineMs, 80_000);
+    assert.equal(runtime.textAttemptTimeoutMs, 75_000);
   });
 });
 
@@ -101,6 +113,95 @@ test("loadPsfnRuntime rejects incomplete client certificate pairs", () => {
     assert.throws(
       () => loadPsfnRuntime(process.cwd()),
       /PSFN_CLIENT_CERT_PATH and PSFN_CLIENT_KEY_PATH must both be set/,
+    );
+  });
+});
+
+test("loadPsfnRuntime separates strictly validated voice and text reply budgets", () => {
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_VOICE_REPLY_DEADLINE_MS: "9000",
+    PSFN_VOICE_ATTEMPT_TIMEOUT_MS: "7000",
+    PSFN_TEXT_REPLY_DEADLINE_MS: "80000",
+    PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "75000",
+  }, () => {
+    const runtime = loadPsfnRuntime(process.cwd());
+    assert.deepEqual({
+      voiceReplyDeadlineMs: runtime.voiceReplyDeadlineMs,
+      voiceAttemptTimeoutMs: runtime.voiceAttemptTimeoutMs,
+      textReplyDeadlineMs: runtime.textReplyDeadlineMs,
+      textAttemptTimeoutMs: runtime.textAttemptTimeoutMs,
+    }, {
+      voiceReplyDeadlineMs: 9_000,
+      voiceAttemptTimeoutMs: 7_000,
+      textReplyDeadlineMs: 80_000,
+      textAttemptTimeoutMs: 75_000,
+    });
+  });
+});
+
+test("loadPsfnRuntime fails closed on malformed or contradictory reply budgets", () => {
+  const invalidValues = ["0", "-1", "1.5", "1000ms", "9007199254740992"];
+  for (const invalidValue of invalidValues) {
+    withPsfnEnv({
+      PSFN_API_BASE_URL: "https://psfn.example/v1",
+      PSFN_TEXT_REPLY_DEADLINE_MS: invalidValue,
+      PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "1",
+    }, () => {
+      assert.throws(
+        () => loadPsfnRuntime(process.cwd()),
+        /PSFN_TEXT_REPLY_DEADLINE_MS must be a positive (?:safe )?integer/,
+      );
+    });
+  }
+
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_VOICE_REPLY_DEADLINE_MS: "2147483648",
+    PSFN_VOICE_ATTEMPT_TIMEOUT_MS: "1",
+  }, () => {
+    assert.throws(
+      () => loadPsfnRuntime(process.cwd()),
+      /PSFN_VOICE_REPLY_DEADLINE_MS must not exceed 2147483647 ms/,
+    );
+  });
+
+  for (const oneSidedConfig of [
+    { PSFN_VOICE_REPLY_DEADLINE_MS: "8000" },
+    { PSFN_VOICE_ATTEMPT_TIMEOUT_MS: "6000" },
+    { PSFN_TEXT_REPLY_DEADLINE_MS: "80000" },
+    { PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "75000" },
+  ]) {
+    withPsfnEnv({
+      PSFN_API_BASE_URL: "https://psfn.example/v1",
+      ...oneSidedConfig,
+    }, () => {
+      assert.throws(
+        () => loadPsfnRuntime(process.cwd()),
+        /PSFN_(?:VOICE|TEXT)_REPLY_DEADLINE_MS and PSFN_(?:VOICE|TEXT)_ATTEMPT_TIMEOUT_MS must be configured together/,
+      );
+    });
+  }
+
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_TEXT_REPLY_DEADLINE_MS: "80001",
+    PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "75000",
+  }, () => {
+    assert.throws(
+      () => loadPsfnRuntime(process.cwd()),
+      /PSFN_TEXT_REPLY_DEADLINE_MS must not exceed 80000 ms/,
+    );
+  });
+
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_TEXT_REPLY_DEADLINE_MS: "1000",
+    PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "1001",
+  }, () => {
+    assert.throws(
+      () => loadPsfnRuntime(process.cwd()),
+      /PSFN_TEXT_ATTEMPT_TIMEOUT_MS must be less than or equal to PSFN_TEXT_REPLY_DEADLINE_MS/,
     );
   });
 });

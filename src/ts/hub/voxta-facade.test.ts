@@ -11,15 +11,18 @@ import WebSocket, { type RawData } from "ws";
 import { wrapPcmAsWav } from "../shared/audio.js";
 import type { HubConfig } from "../shared/env.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import type { FrameworkReplyInputMode } from "./framework-agent.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import { RealtimeHubServer } from "./server.js";
 import type { ConversationMessage } from "./session-store.js";
+import type { VoxtaTtsAdapter } from "./voxta-facade.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
 
 class FakeAgent implements FrameworkAgentAdapter {
   readonly calls: Array<{
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -29,6 +32,7 @@ class FakeAgent implements FrameworkAgentAdapter {
   constructor(private readonly chunks: string[] = ["Hello", " from PSFN"]) {}
 
   async *streamReply(input: {
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -42,6 +46,61 @@ class FakeAgent implements FrameworkAgentAdapter {
   }
 
   async close(): Promise<void> {}
+}
+
+type AgentReplyInput = Parameters<FrameworkAgentAdapter["streamReply"]>[0];
+
+class BlockingVoxtaAgent implements FrameworkAgentAdapter {
+  readonly calls: AgentReplyInput[] = [];
+  readonly aborted: string[] = [];
+
+  async *streamReply(input: AgentReplyInput): AsyncGenerator<string, string, void> {
+    this.calls.push(input);
+    if (input.userText.startsWith("block")) {
+      await new Promise<void>((_resolve, reject) => {
+        const onAbort = (): void => {
+          this.aborted.push(input.userText);
+          reject(input.signal?.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        if (input.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        input.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+    const response = `reply:${input.userText}`;
+    yield response;
+    return response;
+  }
+
+  async close(): Promise<void> {}
+}
+
+class FirstReplyStallingVoxtaTts implements VoxtaTtsAdapter {
+  readonly calls: Array<{ text: string; signal: AbortSignal }> = [];
+  private resolveFirstStarted: () => void = () => undefined;
+  private releaseStalledReply: () => void = () => undefined;
+  readonly firstStarted = new Promise<void>((resolve) => {
+    this.resolveFirstStarted = resolve;
+  });
+  private readonly stalledReply = new Promise<void>((resolve) => {
+    this.releaseStalledReply = resolve;
+  });
+
+  async synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer> {
+    const callIndex = this.calls.push({ text, signal }) - 1;
+    if (callIndex === 0) {
+      this.resolveFirstStarted();
+      await this.stalledReply;
+      throw new Error("late stale TTS rejection");
+    }
+    return Buffer.alloc(0);
+  }
+
+  releaseFirst(): void {
+    this.releaseStalledReply();
+  }
 }
 
 test("Voxta facade negotiates SignalR and routes SendMessage into the embodied session", async () => {
@@ -145,6 +204,7 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
 
     assert.deepEqual(voxtaPayloads(frames).filter((payload) => payload.$type === "message"), []);
     assert.equal(agent.calls.length, 1);
+    assert.equal(agent.calls[0]?.inputMode, "voice");
     assert.equal(agent.calls[0]?.userText, "hello there");
     assert.equal(agent.calls[0]?.conversationId, sessionId);
     assert.equal(agent.calls[0]?.channel?.sourceSatelliteId, "voxta-vam");
@@ -155,6 +215,316 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
       agent.calls[0]?.channel?.activeSatellites[0]?.capabilities.output.includes("action"),
     );
   } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta replacement and interrupt frames preempt active replies without blocking SignalR", async () => {
+  const agent = new BlockingVoxtaAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-preempt", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-preempt");
+    socket.send(encodeFrame(invocation("start-preempt", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-preempt");
+
+    socket.send(encodeFrame(invocation("send-block-replacement", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "block replacement",
+    })));
+    await waitForCondition(() => agent.calls.length === 1);
+    socket.send(encodeFrame(invocation("send-replacement", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+    await waitForCondition(() => agent.aborted.includes("block replacement"));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-replacement");
+
+    socket.send(encodeFrame(invocation("send-block-interrupt", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "block explicit interrupt",
+    })));
+    await waitForCondition(() => agent.calls.length === 3);
+    socket.send(encodeFrame(invocation("interrupt-active", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForCondition(() => agent.aborted.includes("block explicit interrupt"));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-active");
+
+    socket.send(encodeFrame(invocation("send-after-interrupt", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after interrupt",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after interrupt");
+    await waitForCompletion(frames, "send-after-interrupt");
+
+    assert.deepEqual(agent.calls.map((call) => call.userText), [
+      "block replacement",
+      "replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+    ]);
+    assert.deepEqual(agent.calls[3]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+      "reply:replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("authenticated Voxta interruption detaches stalled TTS before admitting a replacement", async () => {
+  const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-cancelled-tts-"));
+  const agent = new BlockingVoxtaAgent();
+  const tts = new FirstReplyStallingVoxtaTts();
+  const server = new RealtimeHubServer(testHubConfig({ artifactsRoot }), { agent, voxtaTts: tts });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-stalled-tts", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-stalled-tts");
+    socket.send(encodeFrame(invocation("start-stalled-tts", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-stalled-tts");
+
+    socket.send(encodeFrame(invocation("send-old-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "old reply",
+    })));
+    const oldReplyStart = await waitForVoxta(frames, "replyStart");
+    await tts.firstStarted;
+    assert.equal(agent.calls.length, 1, "the old model reply must finish before TTS stalls");
+
+    socket.send(encodeFrame(invocation("interrupt-stalled-tts", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-stalled-tts");
+    socket.send(encodeFrame(invocation("send-replacement-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+
+    await waitForCondition(() => agent.calls.length === 2);
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-replacement-tts");
+
+    const oldTtsCall = tts.calls[0];
+    assert.ok(oldTtsCall?.signal);
+    assert.equal(oldTtsCall.signal, agent.calls[0]?.signal);
+    assert.equal(oldTtsCall.signal.aborted, true);
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "old reply",
+      "replacement",
+    ]);
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === oldReplyStart.messageId
+        && (payload.$type === "replyChunk" || payload.$type === "replyEnd")
+      )),
+      [],
+    );
+
+    tts.releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === oldReplyStart.messageId
+        && (payload.$type === "replyChunk" || payload.$type === "replyEnd")
+      )),
+      [],
+    );
+
+    socket.send(encodeFrame(invocation("send-after-stalled-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after release",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after release");
+    await waitForCompletion(frames, "send-after-stalled-tts");
+    assert.deepEqual(agent.calls[2]?.history?.map((message) => message.content), [
+      "old reply",
+      "replacement",
+      "reply:replacement",
+      "after release",
+    ]);
+  } finally {
+    tts.releaseFirst();
+    socket?.close();
+    await server.close();
+    fs.rmSync(artifactsRoot, { recursive: true, force: true });
+  }
+});
+
+test("Voxta interrupt detaches a stalled replyChunk send before admitting a replacement", async () => {
+  const agent = new BlockingVoxtaAgent();
+  const server = new RealtimeHubServer(testHubConfig({ sttStreamEnabled: true }), { agent, voxtaTts: null });
+  const originalSend = WebSocket.prototype.send;
+  let delayedFirstReplyChunk = false;
+  let notifyReplyChunkSendStarted: () => void = () => undefined;
+  const replyChunkSendStarted = new Promise<void>((resolve) => {
+    notifyReplyChunkSendStarted = resolve;
+  });
+  let releaseReplyChunkSend: (error?: Error) => void = () => undefined;
+  const replyChunkSendRelease = new Promise<Error | undefined>((resolve) => {
+    releaseReplyChunkSend = resolve;
+  });
+  type SendCallback = (error?: Error) => void;
+  const delayedSend = function (
+    this: WebSocket,
+    data: Parameters<WebSocket["send"]>[0],
+    optionsOrCallback?: Parameters<WebSocket["send"]>[1] | SendCallback,
+    callback?: SendCallback,
+  ): void {
+    const sendCallback = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;
+    const isFirstReplyChunk = (
+      !delayedFirstReplyChunk
+      && typeof sendCallback === "function"
+      && data.toString().includes('"$type":"replyChunk"')
+    );
+    if (!isFirstReplyChunk) {
+      Reflect.apply(originalSend, this, [data, optionsOrCallback, callback]);
+      return;
+    }
+    delayedFirstReplyChunk = true;
+    notifyReplyChunkSendStarted();
+    const delayedCallback: SendCallback = (error) => {
+      void replyChunkSendRelease.then((lateError) => sendCallback(lateError ?? error));
+    };
+    if (typeof optionsOrCallback === "function") {
+      Reflect.apply(originalSend, this, [data, delayedCallback]);
+      return;
+    }
+    Reflect.apply(originalSend, this, [data, optionsOrCallback, delayedCallback]);
+  };
+  WebSocket.prototype.send = delayedSend as WebSocket["send"];
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-delayed-chunk", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-delayed-chunk");
+    socket.send(encodeFrame(invocation("start-delayed-chunk", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-delayed-chunk");
+
+    socket.send(encodeFrame(invocation("send-cancelled-chunk", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "cancel while sending",
+    })));
+    const cancelledChunk = await waitForVoxta(
+      frames,
+      "replyChunk",
+      (payload) => payload.text === "reply:cancel while sending",
+    );
+    await replyChunkSendStarted;
+
+    socket.send(encodeFrame(invocation("interrupt-delayed-chunk", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-delayed-chunk");
+    socket.send(encodeFrame(invocation("send-after-delayed-chunk", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+
+    await waitForVoxta(
+      frames,
+      "replyCancelled",
+      (payload) => payload.messageId === cancelledChunk.messageId,
+    );
+    await waitForCondition(() => agent.calls.length === 2);
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-after-delayed-chunk");
+    assert.equal(socket.readyState, WebSocket.OPEN);
+
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "cancel while sending",
+      "replacement",
+    ]);
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === cancelledChunk.messageId && payload.$type === "replyEnd"
+      )),
+      [],
+    );
+
+    const payloadsBeforeLateCallback = voxtaPayloads(frames);
+    releaseReplyChunkSend(new Error("late stale replyChunk send failure"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(voxtaPayloads(frames), payloadsBeforeLateCallback);
+
+    socket.send(encodeFrame(invocation("send-after-late-chunk-callback", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after late callback",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after late callback");
+    await waitForCompletion(frames, "send-after-late-chunk-callback");
+    assert.deepEqual(agent.calls[2]?.history?.map((message) => message.content), [
+      "cancel while sending",
+      "replacement",
+      "reply:replacement",
+      "after late callback",
+    ]);
+  } finally {
+    releaseReplyChunkSend();
+    WebSocket.prototype.send = originalSend;
     socket?.close();
     await server.close();
   }
@@ -817,6 +1187,10 @@ function testHubConfig(overrides: {
       model: "psfn",
       channelType: satelliteClaim.channelType,
       satelliteClaim,
+      voiceReplyDeadlineMs: 8_000,
+      voiceAttemptTimeoutMs: 6_000,
+      textReplyDeadlineMs: 80_000,
+      textAttemptTimeoutMs: 75_000,
     },
     companion: null,
     homeAssistant: null,
@@ -1045,6 +1419,15 @@ async function waitForFrame(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail(`Timed out waiting for SignalR frame. Received: ${JSON.stringify(frames)}`);
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("Timed out waiting for condition");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

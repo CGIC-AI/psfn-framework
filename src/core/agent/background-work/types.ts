@@ -1,15 +1,24 @@
 import { createHash } from 'node:crypto';
 
-import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
-import type { AdaptiveContextBudgetProfile } from '../../../shared/context-budget.js';
+import {
+  MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  SESSION_HISTORY_BUDGET_PCT_RANGE,
+  type AdaptiveContextBudgetProfile,
+  type ContextBudgetTurnCharacteristics,
+} from '../../../shared/context-budget.js';
+import type { ContextBudgetModelSelectionLike } from '../../../shared/context-budget-contracts.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type {
+  ModelPurpose,
   TurnRecord,
   TurnRecordBackgroundWorkHandoff,
 } from '../../../shared/contracts/runtime.js';
-import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import {
+  isChannelPrivacy,
+  type ChannelPrivacy,
+} from '../../../system/trust/context-envelope.js';
 import {
   parseEmotionAppraisalStateSnapshot,
   type EmotionAppraisalStateSnapshot,
@@ -21,6 +30,17 @@ export const BACKGROUND_WORK_KINDS = [
   'emotion_appraisal',
   'auto_compaction',
 ] as const;
+
+const MODEL_PURPOSES: Readonly<Record<ModelPurpose, true>> = {
+  chat: true,
+  background: true,
+  memory: true,
+  context: true,
+  reasoning: true,
+  longContext: true,
+  vision: true,
+  moa: true,
+};
 
 export type BackgroundWorkKind = typeof BACKGROUND_WORK_KINDS[number];
 
@@ -235,6 +255,19 @@ function optionalPositiveInteger(value: unknown, field: string): number | undefi
   return value as number;
 }
 
+function requirePercentageInRange(
+  value: unknown,
+  field: string,
+  range: { min: number; max: number },
+): number {
+  if (!Number.isSafeInteger(value)
+    || (value as number) < range.min
+    || (value as number) > range.max) {
+    throw new Error(`${field} must be a safe integer from ${String(range.min)} to ${String(range.max)}`);
+  }
+  return value as number;
+}
+
 function parseSourceRef(value: unknown): BackgroundWorkSourceRef {
   if (!isRecord(value) || value.schemaVersion !== 1) {
     throw new Error('background payload source must use schemaVersion 1');
@@ -290,10 +323,10 @@ function parseChannelMeta(value: unknown): BackgroundChannelProjection | undefin
     result.isDirectMessage = value.isDirectMessage;
   }
   if (value.privacyLevel !== undefined) {
-    if (!['direct', 'private_group', 'public'].includes(String(value.privacyLevel))) {
+    if (!isChannelPrivacy(value.privacyLevel)) {
       throw new Error('compaction channelMeta.privacyLevel is invalid');
     }
-    result.privacyLevel = value.privacyLevel as ChannelPrivacy;
+    result.privacyLevel = value.privacyLevel;
   }
   if (value.disclosureConsentGranted !== undefined) {
     if (typeof value.disclosureConsentGranted !== 'boolean') {
@@ -324,11 +357,24 @@ function parseAdaptiveProfile(value: unknown): AdaptiveContextBudgetProfile {
   if (typeof value.enabled !== 'boolean') {
     throw new Error('compaction adaptiveProfile.enabled must be boolean');
   }
-  const sessionHistoryBudgetPct = Number(value.sessionHistoryBudgetPct);
-  const memoryRetrievalBudgetPct = Number(value.memoryRetrievalBudgetPct);
-  if (!Number.isFinite(sessionHistoryBudgetPct) || !Number.isFinite(memoryRetrievalBudgetPct)) {
-    throw new Error('compaction adaptiveProfile budgets must be finite');
+  const hasValidProducerShape = source === 'disabled'
+    ? value.enabled === false && category === 'default'
+    : source === 'default'
+      ? value.enabled === true && category === 'default'
+      : value.enabled === true && category !== 'default';
+  if (!hasValidProducerShape) {
+    throw new Error('compaction adaptiveProfile enabled/source/category combination is invalid');
   }
+  const sessionHistoryBudgetPct = requirePercentageInRange(
+    value.sessionHistoryBudgetPct,
+    'compaction adaptiveProfile.sessionHistoryBudgetPct',
+    SESSION_HISTORY_BUDGET_PCT_RANGE,
+  );
+  const memoryRetrievalBudgetPct = requirePercentageInRange(
+    value.memoryRetrievalBudgetPct,
+    'compaction adaptiveProfile.memoryRetrievalBudgetPct',
+    MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
+  );
   return {
     enabled: value.enabled,
     source,
@@ -336,6 +382,39 @@ function parseAdaptiveProfile(value: unknown): AdaptiveContextBudgetProfile {
     sessionHistoryBudgetPct,
     memoryRetrievalBudgetPct,
   };
+}
+
+function parseModelSelection(value: unknown): ContextBudgetModelSelectionLike {
+  if (!isRecord(value)) {
+    throw new Error('compaction turnBudgetCharacteristics.modelSelection must be an object');
+  }
+  assertOnlyKeys(value, [
+    'purpose',
+    'slotKey',
+    'provider',
+    'model',
+    'contextWindow',
+  ], 'compaction turnBudgetCharacteristics.modelSelection');
+  const result: ContextBudgetModelSelectionLike = {};
+  if (value.purpose !== undefined) {
+    if (typeof value.purpose !== 'string' || !Object.hasOwn(MODEL_PURPOSES, value.purpose)) {
+      throw new Error('compaction turnBudgetCharacteristics.modelSelection.purpose is invalid');
+    }
+    result.purpose = value.purpose;
+  }
+  for (const field of ['slotKey', 'provider', 'model'] as const) {
+    const normalized = optionalString(
+      value[field],
+      `compaction turnBudgetCharacteristics.modelSelection.${field}`,
+    );
+    if (normalized !== undefined) Object.assign(result, { [field]: normalized });
+  }
+  const contextWindow = optionalPositiveInteger(
+    value.contextWindow,
+    'compaction turnBudgetCharacteristics.modelSelection.contextWindow',
+  );
+  if (contextWindow !== undefined) result.contextWindow = contextWindow;
+  return result;
 }
 
 function parseTurnBudgetCharacteristics(
@@ -365,10 +444,7 @@ function parseTurnBudgetCharacteristics(
     result.isDirectMessage = value.isDirectMessage;
   }
   if (value.modelSelection !== undefined) {
-    if (!isRecord(value.modelSelection)) {
-      throw new Error('compaction turnBudgetCharacteristics.modelSelection must be an object');
-    }
-    result.modelSelection = { ...value.modelSelection };
+    result.modelSelection = parseModelSelection(value.modelSelection);
   }
   return result;
 }
@@ -552,9 +628,21 @@ export function createTurnRecordBackgroundWorkHandoff(
   if (jobs.length < 1 || jobs.length > BACKGROUND_WORK_KINDS.length) {
     throw new Error('Background work handoff must contain 1-4 jobs');
   }
+  const seenKinds = new Set<BackgroundWorkKind>();
+  const parsedJobs = jobs.map((job) => {
+    if (!BACKGROUND_WORK_KINDS.includes(job.kind) || seenKinds.has(job.kind)) {
+      throw new Error(`Background work handoff kind is invalid or duplicated: ${job.kind}`);
+    }
+    seenKinds.add(job.kind);
+    const payload = parseBackgroundWorkPayload(job.kind, job.payload);
+    if (fingerprintBackgroundWorkPayload(payload) !== job.payloadFingerprint) {
+      throw new Error(`Background work handoff payload fingerprint mismatch: ${job.kind}`);
+    }
+    return { ...job, payload };
+  });
   return {
     schemaVersion: 1,
-    jobs: jobs.map(job => ({ ...job })),
+    jobs: parsedJobs,
   };
 }
 

@@ -113,7 +113,7 @@ function makeCompactionInput(
   logicalSessionId: string,
   turnId: string,
   createdAtMs: number,
-): EnqueueBackgroundWorkInput {
+): EnqueueBackgroundWorkInput & { payload: AutoCompactionBackgroundPayload } {
   const payload: AutoCompactionBackgroundPayload = {
     schemaVersion: 1,
     kind: 'auto_compaction',
@@ -286,6 +286,196 @@ describe('PostgresBackgroundWorkStore', () => {
         [input.jobId],
       )).rejects.toThrow();
     } finally {
+      await inspectionPool.end();
+      await store.close();
+    }
+  });
+
+  it('fails a privacy-unsafe persisted compaction payload without running its handler', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'payload-validation-worker',
+      now: () => 1_000,
+      executor,
+    });
+    try {
+      const input = makeCompactionInput('session-a', 'turn-a', 100);
+      input.payload.turnBudgetCharacteristics.modelSelection = {
+        purpose: 'chat',
+        slotKey: 'chat-primary',
+        provider: 'test-provider',
+        model: 'test-model',
+        contextWindow: 16_384,
+      };
+      input.payloadFingerprint = fingerprintBackgroundWorkPayload(input.payload);
+
+      const malformedInput = structuredClone(input);
+      (malformedInput.payload.turnBudgetCharacteristics.modelSelection as Record<string, unknown>)
+        .partnerMessage = 'private partner text';
+      malformedInput.payloadFingerprint = fingerprintBackgroundWorkPayload(malformedInput.payload);
+      await expect(store.enqueue(malformedInput)).rejects.toThrow(
+        'modelSelection contains unsupported field partnerMessage',
+      );
+      const beforeValidEnqueue = await inspectionPool.query<{ count: string }>(
+        'SELECT COUNT(*)::text AS count FROM agent_background_work_jobs',
+      );
+      expect(beforeValidEnqueue.rows[0]?.count).toBe('0');
+
+      await store.enqueue(input);
+
+      const persisted = await inspectionPool.query<{ payload: unknown }>(
+        'SELECT payload FROM agent_background_work_jobs WHERE job_id = $1',
+        [input.jobId],
+      );
+      expect(persisted.rows[0]?.payload).toEqual(input.payload);
+      expect(JSON.stringify(persisted.rows[0]?.payload)).not.toContain('private partner text');
+
+      await inspectionPool.query(`
+        UPDATE agent_background_work_jobs
+        SET payload = jsonb_set(
+          payload,
+          '{turnBudgetCharacteristics,modelSelection,partnerMessage}',
+          to_jsonb($2::text),
+          true
+        )
+        WHERE job_id = $1
+      `, [input.jobId, 'private partner text']);
+
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+
+      expect(executor).not.toHaveBeenCalled();
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'failed',
+        reasonCode: 'malformed_payload',
+      });
+    } finally {
+      await supervisor.stop();
+      await inspectionPool.end();
+      await store.close();
+    }
+  });
+
+  it('fails producer-impossible persisted compaction payloads without running their handler', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'payload-shape-validation-worker',
+      now: () => 1_000,
+      executor,
+    });
+    const malformedPayloads: Array<[
+      string,
+      (payload: AutoCompactionBackgroundPayload) => void,
+    ]> = [
+      ['fractional session percentage', (payload) => {
+        payload.adaptiveProfile.sessionHistoryBudgetPct = 6.5;
+      }],
+      ['fractional memory percentage', (payload) => {
+        payload.adaptiveProfile.memoryRetrievalBudgetPct = 2.5;
+      }],
+      ['enabled disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'disabled',
+          category: 'default',
+        };
+      }],
+      ['categorized disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'disabled',
+          category: 'task',
+        };
+      }],
+      ['disabled default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'default',
+          category: 'default',
+        };
+      }],
+      ['categorized default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'default',
+          category: 'task',
+        };
+      }],
+      ['disabled adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'adaptive',
+          category: 'task',
+        };
+      }],
+      ['default-category adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'adaptive',
+          category: 'default',
+        };
+      }],
+      ['unsupported model purpose', (payload) => {
+        payload.turnBudgetCharacteristics.modelSelection = {
+          purpose: 'summary',
+          slotKey: 'summary-primary',
+          provider: 'test-provider',
+          model: 'test-model',
+          contextWindow: 16_384,
+        };
+      }],
+    ];
+
+    try {
+      for (const [index, [label, mutate]] of malformedPayloads.entries()) {
+        const input = makeCompactionInput(`session-${String(index)}`, `turn-${String(index)}`, 100);
+        await store.enqueue(input);
+
+        const malformedPayload = structuredClone(input.payload);
+        mutate(malformedPayload);
+        await inspectionPool.query(`
+          UPDATE agent_background_work_jobs
+          SET payload = $2::jsonb
+          WHERE job_id = $1
+        `, [input.jobId, JSON.stringify(malformedPayload)]);
+
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+
+        expect(executor, label).not.toHaveBeenCalled();
+        expect(await store.get(input.jobId), label).toMatchObject({
+          state: 'failed',
+          reasonCode: 'malformed_payload',
+        });
+      }
+    } finally {
+      await supervisor.stop();
       await inspectionPool.end();
       await store.close();
     }

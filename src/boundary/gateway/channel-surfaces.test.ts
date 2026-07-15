@@ -25,7 +25,7 @@ function createInput(): {
         },
       } as any,
       gateway: {
-        notifyChannelMessage: vi.fn(),
+        notifyChannelMessage: vi.fn(() => 1),
         requestAgentVoiceStream: vi.fn(async () => ({
           content: 'voice reply',
           channelId: 'telegram-channel',
@@ -46,7 +46,7 @@ function createInput(): {
 }
 
 describe('wireGatewayChannelMessages', () => {
-  it('forwards discord inbound messages to agent notifications and returns a placeholder reply', async () => {
+  it('forwards Discord inbound messages and returns an explicit non-delivery acknowledgement', async () => {
     const setup = createInput();
 
     wireGatewayChannelMessages(setup.input);
@@ -71,8 +71,26 @@ describe('wireGatewayChannelMessages', () => {
         inputTokens: 0,
         outputTokens: 0,
         durationMs: 0,
+        notificationAck: {
+          schemaVersion: 1,
+          disposition: 'notification_ack',
+          outcome: 'forwarded_to_agent',
+        },
       },
     });
+  });
+
+  it('does not acknowledge forwarding when the gateway delivers to zero agents', async () => {
+    const setup = createInput();
+    vi.mocked(setup.input.gateway.notifyChannelMessage).mockReturnValue(0);
+
+    wireGatewayChannelMessages(setup.input);
+
+    await expect(setup.discordHandler?.({
+      channelId: 'discord-channel',
+      content: 'hello',
+      timestamp: new Date('2026-03-28T00:00:00.000Z'),
+    })).rejects.toThrow('Discord inbound notification reached zero eligible agents');
   });
 
   it('routes telegram inbound messages through requestAgentVoiceStream', async () => {
@@ -113,7 +131,7 @@ describe('wireGatewayChannelMessages multi-account discord (W1-P2)', () => {
     });
 
     const sharedDiscordOnMessage = vi.fn();
-    const notifyChannelMessage = vi.fn();
+    const notifyChannelMessage = vi.fn(() => 1);
     wireGatewayChannelMessages({
       discord: { onMessage: sharedDiscordOnMessage } as any,
       discordAccounts: [

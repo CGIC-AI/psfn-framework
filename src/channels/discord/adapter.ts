@@ -676,6 +676,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
           channelId,
           reason: disposition.reason,
         });
+      } else if (disposition.kind === 'notification_ack') {
+        log.debug('Discord inbound notification acknowledged without direct delivery', {
+          channelId,
+          outcome: disposition.notificationAck.outcome,
+        });
       } else {
         log.warn('Discord handler returned empty response without a suppression marker', { channelId });
         await this.eventBus.emit('channel.message.error', {

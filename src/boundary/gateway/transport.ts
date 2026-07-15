@@ -55,6 +55,11 @@ export interface GatewayRpcSerializedTransportStats {
 }
 
 export interface GatewayRpcConnection extends EventEmitter {
+  /**
+   * Returns true only when the transport accepted the complete frame into its
+   * outbound path. A false result means nothing was accepted. For NDJSON,
+   * `net.Socket.write(false)` is still acceptance with backpressure.
+   */
   send(data: unknown): boolean;
   /** Send a transport-level liveness probe without entering JSON-RPC or audit handling. */
   sendHeartbeat(): boolean;
@@ -282,10 +287,18 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
   send(data: unknown): boolean {
     if (this.socket.destroyed) return false;
-    const serialized = JSON.stringify(data);
-    const writable = this.socket.write(serialized + '\n');
-    recordSerializedTransportFrame(this.outboundStats, data, serialized);
-    return writable;
+    try {
+      const serialized = JSON.stringify(data);
+      // Node's boolean reports buffer pressure, not frame acceptance: false
+      // means this frame was queued, not rejected, so it cannot be reused as
+      // the delivery-receipt result.
+      this.socket.write(serialized + '\n');
+      recordSerializedTransportFrame(this.outboundStats, data, serialized);
+      return true;
+    } catch (error) {
+      this.emitConnectionError(error);
+      return false;
+    }
   }
 
   sendHeartbeat(): boolean {

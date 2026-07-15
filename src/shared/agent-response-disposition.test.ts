@@ -59,6 +59,51 @@ describe('resolveAgentResponseDisposition', () => {
     expect(disposition.kind).toBe('empty_response_error');
   });
 
+  it('recognizes an empty gateway notification acknowledgement as non-delivery', () => {
+    const notificationAck = {
+      schemaVersion: 1,
+      disposition: 'notification_ack',
+      outcome: 'forwarded_to_agent',
+    } as const;
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      metadata: { notificationAck } as AgentResponse['metadata'],
+    }));
+
+    expect(disposition).toEqual({
+      kind: 'notification_ack',
+      notificationAck,
+    });
+  });
+
+  it('delivers authored content even when a contradictory notification acknowledgement is present', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      content: 'the authored reply',
+      metadata: {
+        notificationAck: {
+          schemaVersion: 1,
+          disposition: 'notification_ack',
+          outcome: 'forwarded_to_agent',
+        },
+      } as AgentResponse['metadata'],
+    }));
+
+    expect(disposition).toEqual({ kind: 'send', hasText: true, hasAttachments: false });
+  });
+
+  it('fails closed on malformed notification acknowledgement metadata', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      metadata: {
+        notificationAck: {
+          schemaVersion: 1,
+          disposition: 'notification_ack',
+          outcome: 'unexpected_outcome',
+        },
+      } as unknown as AgentResponse['metadata'],
+    }));
+
+    expect(disposition.kind).toBe('empty_response_error');
+  });
+
   it('holds broadcast-approval responses even when they carry text', () => {
     const disposition = resolveAgentResponseDisposition(makeResponse({
       content: 'held broadcast reply',

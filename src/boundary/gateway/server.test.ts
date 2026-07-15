@@ -1286,6 +1286,61 @@ describe('GatewayServer', () => {
   });
 
   describe('connection lifecycle', () => {
+    it('reports zero channel-message deliveries when no agents are connected', () => {
+      const server = new GatewayServer(createMinimalOptions());
+
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: 'msg-no-agent', channelId: 'ch1' } },
+      )).toBe(0);
+    });
+
+    it('reports zero channel-message deliveries when every connected agent is unhealthy', async () => {
+      const { server, conn } = await setupServerConnection(createMinimalOptions());
+      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
+      const status = statuses.get(conn.conn);
+      status.state = 'degraded';
+      status.health = 'failed';
+      status.stateReason = 'test_degraded';
+
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: 'msg-unhealthy', channelId: 'ch1' } },
+      )).toBe(0);
+      expect(conn.sent).not.toContainEqual(expect.objectContaining({ method: 'discord.message' }));
+    });
+
+    it('reports positive channel-message delivery after sending to a healthy ready agent', async () => {
+      const { server, conn } = await setupServerConnection(createMinimalOptions());
+
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: 'msg-delivered', channelId: 'ch1' } },
+      )).toBe(1);
+      expect(conn.sent).toContainEqual(expect.objectContaining({
+        method: 'discord.message',
+        params: { message: { id: 'msg-delivered', channelId: 'ch1' } },
+      }));
+    });
+
+    it('reports zero when a ready agent closes before accepting the notification frame', async () => {
+      const { server, conn } = await setupServerConnection(createMinimalOptions());
+      const send = vi.spyOn(conn.conn, 'send').mockReturnValue(false);
+
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: 'msg-close-race', channelId: 'ch1' } },
+      )).toBe(0);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({
+        method: 'discord.message',
+        params: { message: { id: 'msg-close-race', channelId: 'ch1' } },
+      }));
+    });
+
     it('removes disconnected agents from rpcClients', async () => {
       const server = new GatewayServer(createMinimalOptions());
 

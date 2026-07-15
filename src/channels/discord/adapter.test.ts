@@ -2277,6 +2277,48 @@ describe('DiscordAdapter status visibility', () => {
     }));
   });
 
+  it('accepts gateway notification acknowledgements without reporting an empty model response', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-notification-ack';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const sentEvents: any[] = [];
+    const diagnostics: any[] = [];
+    (eventBus as any).on('message.sent', (event: any) => {
+      sentEvents.push(event);
+    });
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    adapter.onMessage(async () => {
+      return {
+        content: '',
+        channelId,
+        metadata: {
+          model: '',
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: 0,
+          notificationAck: {
+            schemaVersion: 1,
+            disposition: 'notification_ack',
+            outcome: 'forwarded_to_agent',
+          },
+        },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
+  });
+
   it('suppresses Discord output for structured intentional no-reply responses', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

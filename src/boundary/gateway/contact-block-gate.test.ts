@@ -41,7 +41,7 @@ describe('gateway contact block gate', () => {
   function wire(blockGate: ReturnType<typeof createGatewayContactBlockGate>) {
     let discordHandler: ((message: any) => Promise<any>) | undefined;
     let telegramHandler: ((message: any) => Promise<any>) | undefined;
-    const notifyChannelMessage = vi.fn();
+    const notifyChannelMessage = vi.fn(() => 1);
     const requestAgentVoiceStream = vi.fn(async () => ({
       content: '', channelId: 'telegram', model: '', durationMs: 0,
     }));

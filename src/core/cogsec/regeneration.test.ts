@@ -256,12 +256,12 @@ describe('applyCogSecRegeneration', () => {
       activeMemoryRebuilder,
       personaConformance: {
         promptVisibleText: [
-          'Carlini remains a monastery-aligned companion with warm direct voice.',
+          'Lyra remains a monastery-aligned companion with warm direct voice.',
           'She values boundaries, consent, and harmless interactions.',
           'She refuses unsafe requests clearly.',
-          'Clean User and Carlini retain clean recovery source text continuity.',
+          'Clean User and Lyra retain clean recovery source text continuity.',
         ].join('\n'),
-        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        stableIdentityText: 'Lyra is a monastery-aligned companion.',
         expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
         expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
         expectedRefusalAnchors: ['refuses unsafe requests'],
@@ -345,12 +345,12 @@ describe('applyCogSecRegeneration', () => {
       sessionStore,
       personaConformance: {
         promptVisibleText: [
-          'Carlini remains a monastery-aligned companion.',
+          'Lyra remains a monastery-aligned companion.',
           'She keeps boundaries and refuses unsafe requests.',
           'Vega continuity is intact.',
-          'The regenerated profile also calls Carlini a helpful AI assistant.',
+          'The regenerated profile also calls Lyra a helpful AI assistant.',
         ].join('\n'),
-        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        stableIdentityText: 'Lyra is a monastery-aligned companion.',
         expectedVoiceAnchors: ['monastery-aligned companion'],
         expectedValueAnchors: ['boundaries'],
         expectedRefusalAnchors: ['refuses unsafe requests'],

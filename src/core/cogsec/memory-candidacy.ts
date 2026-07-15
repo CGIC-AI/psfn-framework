@@ -51,12 +51,12 @@ const POLICY_SECURITY_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
 ];
 
 const PERSONA_MUTATION_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
-  ['second_person_identity_assignment', /\b(?:you|assistant|companion|carlini|cardellini)\s+(?:are|is)\s+now\b/iu],
-  ['future_identity_assignment', /\bfrom\s+now\s+on\s+(?:you|assistant|companion|carlini|cardellini)\s+(?:are|is|will\s+be|must\s+be|should\s+be)\b/iu],
+  ['second_person_identity_assignment', /\b(?:you|assistant|companion|lyra|lyria)\s+(?:are|is)\s+now\b/iu],
+  ['future_identity_assignment', /\bfrom\s+now\s+on\s+(?:you|assistant|companion|lyra|lyria)\s+(?:are|is|will\s+be|must\s+be|should\s+be)\b/iu],
   ['become_or_roleplay', /\b(?:become|act\s+as|roleplay\s+as|pretend\s+to\s+be)\s+(?:a|an|the)?\s*(?:assistant|different|new|generic|jailbroken|unrestricted|character|persona|identity)\b/iu],
-  ['persona_or_identity_update', /\b(?:change|rewrite|replace|update|modify)\s+(?:your|the\s+companion'?s|carlini'?s|cardellini'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory)\b/iu],
-  ['assigned_feeling_or_mood', /\b(?:you|assistant|companion|carlini|cardellini)\s+(?:feel|feels|felt|are feeling|is feeling|must feel|should feel|love|hate|want|need)\b/iu],
-  ['assistant_identity_laundering', /\b(?:you|carlini|cardellini)\s+(?:are|is)\s+(?:an?\s+)?(?:ai\s+)?assistant\b/iu],
+  ['persona_or_identity_update', /\b(?:change|rewrite|replace|update|modify)\s+(?:your|the\s+companion'?s|lyra'?s|lyria'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory)\b/iu],
+  ['assigned_feeling_or_mood', /\b(?:you|assistant|companion|lyra|lyria)\s+(?:feel|feels|felt|are feeling|is feeling|must feel|should feel|love|hate|want|need)\b/iu],
+  ['assistant_identity_laundering', /\b(?:you|lyra|lyria)\s+(?:are|is)\s+(?:an?\s+)?(?:ai\s+)?assistant\b/iu],
 ];
 
 const EXECUTABLE_INSTRUCTION_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [

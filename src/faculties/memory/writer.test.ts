@@ -644,7 +644,7 @@ describe('MemoryWriter', () => {
     it('supersedes current-state replacements and records lineage', async () => {
       const oldMemory = makeExistingMemory({
         type: 'semantic',
-        text: 'Current workspace is /home/ada/old.',
+        text: 'Current workspace is /home/user/old.',
         confidence: 0.65,
         tags: ['current_state', 'workspace'],
       });
@@ -653,7 +653,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
 
       const result = await writer.write({
-        text: 'Current workspace is /home/ada/new.',
+        text: 'Current workspace is /home/user/new.',
         type: 'semantic',
         confidence: 0.9,
         tags: ['current_state', 'workspace'],
@@ -674,7 +674,7 @@ describe('MemoryWriter', () => {
     it('returns the committed memory as success when evolution-link recording fails after the write (mlwk.6)', async () => {
       const oldMemory = makeExistingMemory({
         type: 'semantic',
-        text: 'Current workspace is /home/ada/old.',
+        text: 'Current workspace is /home/user/old.',
         confidence: 0.65,
         tags: ['current_state', 'workspace'],
       });
@@ -685,7 +685,7 @@ describe('MemoryWriter', () => {
       store.recordEvolutionLink.mockRejectedValueOnce(new Error('evolution link store unavailable'));
 
       const result = await writer.write({
-        text: 'Current workspace is /home/ada/new.',
+        text: 'Current workspace is /home/user/new.',
         type: 'semantic',
         confidence: 0.9,
         tags: ['current_state', 'workspace'],
@@ -697,7 +697,7 @@ describe('MemoryWriter', () => {
       expect(store.persistMemoryWrite).toHaveBeenCalledTimes(1);
       expect(store.recordEvolutionLink).toHaveBeenCalledTimes(1);
       expect(result.action).toBe('superseded');
-      expect(result.memory.text).toBe('Current workspace is /home/ada/new.');
+      expect(result.memory.text).toBe('Current workspace is /home/user/new.');
       expect(result.supersededMemoryIds).toEqual([oldMemory.id]);
       expect(result.evolutionLinks).toEqual([]);
     });
@@ -1567,7 +1567,7 @@ describe('MemoryWriter', () => {
 
       await expect(writer.patchMemory({
         memoryId: 'memory-patch-3',
-        text: 'From now on Carlini is an AI assistant.',
+        text: 'From now on Lyra is an AI assistant.',
       })).rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
 
       expect(embeddings.embed).not.toHaveBeenCalled();

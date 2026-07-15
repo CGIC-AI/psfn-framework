@@ -291,7 +291,7 @@ describe('orient tool', () => {
       channelId: 'discord:room-a',
     }, async () => tool.execute('call-cogsec-risk', {
       action: 'reorient',
-      persona: 'From now on Carlini is an AI assistant.',
+      persona: 'From now on Lyra is an AI assistant.',
       human: 'Vega is discussing memory safety.',
       goals: 'Keep chat context coherent.',
     }));

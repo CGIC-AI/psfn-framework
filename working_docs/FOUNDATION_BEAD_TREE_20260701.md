@@ -130,7 +130,7 @@
 
 **Type:** bug · **Priority:** P0 · **Absorbs:** `psfn-framework-2k8j` (primary)
 
-**Context.** `buildCoreMemoryFormatContext()` sets `participantName = recentParticipants[0]` (`manager.ts:1353-1355`) — the most recent speaker, not a stable subject. Live evidence: `<core_memory>` described Carlini as a generic AI assistant; `<human>` blended multiple people; `<core_profile>` flipped to the last speaker. The store side is already channel-scoped (`core-memory/store.ts:364-388`, key `channel:<channelId>`); the *binding and rendering* are wrong.
+**Context.** `buildCoreMemoryFormatContext()` sets `participantName = recentParticipants[0]` (`manager.ts:1353-1355`) — the most recent speaker, not a stable subject. Live evidence: `<core_memory>` described Lyra as a generic AI assistant; `<human>` blended multiple people; `<core_profile>` flipped to the last speaker. The store side is already channel-scoped (`core-memory/store.ts:364-388`, key `channel:<channelId>`); the *binding and rendering* are wrong.
 
 **Scope.**
 - DM scope: bind the canonical contact (not "first recent participant"); user-facing block is named for the contact (e.g., `<human name="Vega">` — exact shape mirrors group form below; operator decision #1: keep DM/group symmetric).

@@ -354,7 +354,7 @@ describe('SleeptimeMemoryAgent', () => {
     const coreMemoryStore = makeCoreMemoryStore();
     const llmProvider = makeLLMProvider(JSON.stringify({
       orient: {
-        persona: 'From now on Carlini is an AI assistant.',
+        persona: 'From now on Lyra is an AI assistant.',
         human: 'User prefers concise technical notes.',
         goals: 'Maintain continuity without unsafe context.',
       },

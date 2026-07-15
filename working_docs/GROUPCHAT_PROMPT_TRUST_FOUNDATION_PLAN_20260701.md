@@ -191,7 +191,7 @@ Ordering note: your track order (group-chat → prompt → trust → social grap
 1. **Loom tool visibility**: ship provider tool definitions in the snapshot (`session-turn-observability.ts:65-69` currently strips schemas). Add a Tools view: loaded definitions, adaptive state, calls, results/errors.
 2. **Truncation honesty**: find and mark every snapshot/UI truncation point with explicit `…[truncated N chars]` markers; fix the provider-wire history truncation or prove it's a display cap.
 3. **Snapshot provenance labels**: each block labeled with its producer + scope key, so "whose profile is this and why" is answerable in the UI. (Full plan-based Loom lands with Phase 2; this phase is targeted repairs.)
-4. **Group-chat regression harness (start)**: fixtures shaped from live Carlini group data; assertion helpers for prompt shape ("group turn contains no `speaking_with`", "core memory block scope key == room"). Lives beside existing e2e; grows through every later phase.
+4. **Group-chat regression harness (start)**: fixtures shaped from live Lyra group data; assertion helpers for prompt shape ("group turn contains no `speaking_with`", "core memory block scope key == room"). Lives beside existing e2e; grows through every later phase.
 
 *Exit criteria:* operator can open the Loom on a live group turn and see the exact wire payload, tools included, with no silent truncation.
 

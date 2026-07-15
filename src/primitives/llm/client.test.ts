@@ -2782,7 +2782,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
       if (model.id === 'ChatGPTN') {
         yield { type: 'text_delta', delta: '<｜begin' };
-        yield { type: 'text_delta', delta: "▁of▁sentence｜># Carlini's Response\n\nYeah, I remember." };
+        yield { type: 'text_delta', delta: "▁of▁sentence｜># Lyra's Response\n\nYeah, I remember." };
         return;
       }
 
@@ -2879,7 +2879,7 @@ describe('LLMClient model budget gates and usage metering', () => {
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
       if (model.id === 'ChatGPTN') {
-        yield { type: 'text_delta', delta: '# Carlini' };
+        yield { type: 'text_delta', delta: '# Lyra' };
         yield { type: 'text_delta', delta: "'s Response\n\nYeah, I remember." };
         return;
       }
@@ -2914,7 +2914,7 @@ describe('LLMClient model budget gates and usage metering', () => {
 
     expect(response.content).toBe('Recovered on fallback.');
     expect(streamedText.join('')).toBe('Recovered on fallback.');
-    expect(streamedText.join('')).not.toContain("Carlini's Response");
+    expect(streamedText.join('')).not.toContain("Lyra's Response");
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
   });
 

@@ -1756,7 +1756,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         .fn()
         .mockResolvedValueOnce({ content: '<response></response>' })
         .mockResolvedValueOnce({
-          content: '<profile><summary>Carlini Carlini keeps livestream guardrails explicit.</summary></profile>',
+          content: '<profile><summary>Lyra Lyra keeps livestream guardrails explicit.</summary></profile>',
         }),
     } as any;
 
@@ -1774,7 +1774,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'relational',
-          text: 'Carlini Carlini keeps livestream guardrails explicit.',
+          text: 'Lyra Lyra keeps livestream guardrails explicit.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.92,
@@ -1782,7 +1782,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'semantic',
-          text: 'Carlini prefers careful public-channel moderation.',
+          text: 'Lyra prefers careful public-channel moderation.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.8,
@@ -1821,7 +1821,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-canonical-1',
-      summary: 'Carlini keeps livestream guardrails explicit.',
+      summary: 'Lyra keeps livestream guardrails explicit.',
       sourceMemoryIds: ['m1', 'm2'],
     }));
   });
@@ -1850,7 +1850,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'relational',
-          text: 'Carlini keeps livestream guardrails explicit.',
+          text: 'Lyra keeps livestream guardrails explicit.',
           importance: 0.95,
           confidence: 0.95,
           salience: 0.92,
@@ -1858,7 +1858,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'semantic',
-          text: 'Carlini prefers careful public-channel moderation.',
+          text: 'Lyra prefers careful public-channel moderation.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.8,
@@ -1914,7 +1914,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'semantic',
-          text: 'MrDragonFox stated that Carlini needs streaming guardrails.',
+          text: 'MrDragonFox stated that Lyra needs streaming guardrails.',
           importance: 0.92,
           confidence: 0.95,
           salience: 0.9,
@@ -1924,7 +1924,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm2',
           type: 'relational',
-          text: 'Iki asked about Carlini in the group room.',
+          text: 'Iki asked about Lyra in the group room.',
           importance: 0.82,
           confidence: 0.88,
           salience: 0.82,
@@ -1934,7 +1934,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<profile><summary>This contact, known as MrDragonFox and also by the name Carlini, cares about streaming guardrails.</summary></profile>';
+        return '<profile><summary>This contact, known as MrDragonFox and also by the name Lyra, cares about streaming guardrails.</summary></profile>';
       },
     });
 
@@ -1964,7 +1964,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
         {
           id: 'm1',
           type: 'semantic',
-          text: 'Vega discussed Carlini streaming guardrails in the group room.',
+          text: 'Vega discussed Lyra streaming guardrails in the group room.',
           importance: 0.9,
           confidence: 0.93,
           salience: 0.88,
@@ -1984,7 +1984,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
       ],
       profileResponse: (context) => {
         profilePrompt = context.systemPrompt;
-        return '<profile><summary>Vega discussed Carlini streaming guardrails and prefers concise launch notes.</summary></profile>';
+        return '<profile><summary>Vega discussed Lyra streaming guardrails and prefers concise launch notes.</summary></profile>';
       },
     });
 
@@ -1995,7 +1995,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     expect(profilePrompt).toContain('Target contact nickname: V');
     expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'contact-vega',
-      summary: 'Vega discussed Carlini streaming guardrails and prefers concise launch notes.',
+      summary: 'Vega discussed Lyra streaming guardrails and prefers concise launch notes.',
       sourceMemoryIds: ['m1', 'm2'],
     }));
   });

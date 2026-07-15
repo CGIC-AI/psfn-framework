@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-26
 - **Reviewer:** pi coding agent (running GLM model pass)
-- **Scope:** READ-ONLY review of `/home/ada/psfn-framework`
+- **Scope:** READ-ONLY review of `~/psfn-framework`
 - **Guide:** `docs/PSFN_PROJECT_CHARTER.md` (the formerly duplicated `_524` path was retired after this historical review)
 - **Branch reviewed:** `sprint_9_memory` @ `07693575`
 - **Method:** static read of entrypoints, boundary, persistence, trust, faculties, message ontology; ran non-mutating gates (`lint`, `build`, `verify:settings-contract`, `verify:repository-hygiene`) to assess workability.

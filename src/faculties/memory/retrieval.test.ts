@@ -305,14 +305,14 @@ describe('MemoryRetriever trust-gated filtering', () => {
   it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
     const current = makeMemory({
       id: 'workspace-current',
-      text: 'Current workspace is /home/ada/new.',
+      text: 'Current workspace is /home/user/new.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.96,
     });
     const previous = makeMemory({
       id: 'workspace-old',
-      text: 'Current workspace is /home/ada/old.',
+      text: 'Current workspace is /home/user/old.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.2,
@@ -337,21 +337,21 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('what changed in the workspace history?', 'api:test', 'primary');
 
-    expect(result).toContain('Current workspace is /home/ada/new.');
-    expect(result).toContain('Supersedes [semantic] Current workspace is /home/ada/old.');
+    expect(result).toContain('Current workspace is /home/user/new.');
+    expect(result).toContain('Supersedes [semantic] Current workspace is /home/user/old.');
   });
 
   it('does not expand evolution chains for non-useful retrieval prompts', async () => {
     const current = makeMemory({
       id: 'workspace-current',
-      text: 'Current workspace is /home/ada/new.',
+      text: 'Current workspace is /home/user/new.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.96,
     });
     const previous = makeMemory({
       id: 'workspace-old',
-      text: 'Current workspace is /home/ada/old.',
+      text: 'Current workspace is /home/user/old.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.2,
@@ -372,8 +372,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('workspace status', 'api:test', 'primary');
 
-    expect(result).toContain('Current workspace is /home/ada/new.');
-    expect(result).not.toContain('Current workspace is /home/ada/old.');
+    expect(result).toContain('Current workspace is /home/user/new.');
+    expect(result).not.toContain('Current workspace is /home/user/old.');
     expect(store.getEvolutionLinksForSourceMemory).not.toHaveBeenCalled();
   });
 

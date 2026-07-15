@@ -30,6 +30,7 @@ const MEMORY_LANE_BLOCKS = {
     minConversationalEntries: 2,
     minSingleEntryChars: 120,
     topicSegmentationEnabled: false,
+    maxPriorCandidates: 24,
   },
   sleepConsolidation: {
     reviewWindowDays: 60,
@@ -37,6 +38,8 @@ const MEMORY_LANE_BLOCKS = {
     adjacencyGapMinutes: 45,
     maxRefinementsPerRun: 8,
     maxConsolidationsPerRun: 6,
+    transcriptMessageLimit: 200,
+    maxTranscriptCharsPerEpisode: 6000,
   },
   orientationRewrite: {
     minNewEntriesSinceRewrite: 4,

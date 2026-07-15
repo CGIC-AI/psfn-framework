@@ -8,6 +8,7 @@ import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import type {
   AgentResponse,
   NotificationAckMetadata,
@@ -168,6 +169,9 @@ export async function loadGatewayChannelSurfaces(
         'telegram',
       ),
       intakeScreening: input.intakeScreening,
+      // Owner-file backed ingest caps (zet.7); Discord resolves the same
+      // limits internally from its SubstrateConfig.
+      documentIngestLimits: resolveDocumentIngestLimits(input.config),
     }),
   ]);
 

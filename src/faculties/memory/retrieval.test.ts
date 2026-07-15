@@ -227,7 +227,13 @@ describe('MemoryRetriever active memory context', () => {
     store.listActiveMemories = listActiveMemories;
 
     const initialPolicy = createDefaultMemoryRetrievalPolicy();
-    initialPolicy.lexicalAugment = { pageSize: 2, maxScan: 3, selectedLimit: 1 };
+    initialPolicy.lexicalAugment = {
+      pageSize: 2,
+      maxScan: 3,
+      selectedLimit: 1,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
     const config = makeRuntimeConfig({
       embeddingProvider: 'api',
       embeddingApiModel: 'test-embedding-v1',
@@ -250,7 +256,13 @@ describe('MemoryRetriever active memory context', () => {
     expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toHaveLength(1);
 
     const reloadedPolicy = createDefaultMemoryRetrievalPolicy();
-    reloadedPolicy.lexicalAugment = { pageSize: 1, maxScan: 2, selectedLimit: 2 };
+    reloadedPolicy.lexicalAugment = {
+      pageSize: 1,
+      maxScan: 2,
+      selectedLimit: 2,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
     config.memoryRetrievalPolicy = reloadedPolicy;
     listActiveMemories.mockClear();
 

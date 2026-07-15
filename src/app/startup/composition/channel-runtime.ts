@@ -14,6 +14,7 @@ import type {
 import type { ChannelAdapterRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import type { DocumentIngestLimits } from '../../../faculties/file-ingest/index.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;
@@ -82,6 +83,8 @@ export interface TelegramChannelAdapterFactoryOptions {
   personalFilesDir?: string;
   /** Cognition intake firewall (htm9.2/htm9.9): screens parsed document attachment text. */
   intakeScreening?: IntakeScreeningService | null;
+  /** Owner-file backed document ingest caps (zet.7). */
+  documentIngestLimits?: DocumentIngestLimits;
 }
 
 export function createTelegramChannelAdapterFactoryEntry(
@@ -99,6 +102,7 @@ export function createTelegramChannelAdapterFactoryEntry(
       const adapter = new TelegramAdapter(options.config, options.eventBus, {
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
+        ...(options.documentIngestLimits ? { documentIngestLimits: options.documentIngestLimits } : {}),
       });
       if (options.onMessage) {
         adapter.onMessage(options.onMessage);

@@ -12,7 +12,6 @@ import {
   resolveMemorySelectionCap,
   type MemoryRetrievalPolicy,
 } from '../../../system/config/memory-retrieval-policy.js';
-import { SCORE_GUARANTEE_MIN_K } from './scoring.js';
 import type {
   RetrievalSelectionDecision,
   ScoredMemory,
@@ -28,9 +27,11 @@ function estimateMemoryPromptTokens(memory: PurrMemory): number {
 export function resolveGuaranteedSelectionFloor(
   rankedLength: number,
   scoreGuaranteedCount: number,
+  policyInput?: MemoryRetrievalPolicy,
 ): number {
   if (scoreGuaranteedCount > 0) {
-    return Math.min(rankedLength, Math.max(MEMORY_RETRIEVAL_MIN_ITEMS, SCORE_GUARANTEE_MIN_K));
+    const scoreGuaranteeMinK = resolveMemoryRetrievalPolicy(policyInput).scoreGuaranteeMinK;
+    return Math.min(rankedLength, Math.max(MEMORY_RETRIEVAL_MIN_ITEMS, scoreGuaranteeMinK));
   }
   return Math.min(rankedLength, MEMORY_RETRIEVAL_MIN_ITEMS);
 }

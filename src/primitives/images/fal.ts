@@ -8,6 +8,7 @@ import {
   type ImageGenerationResult,
   type ImageMode,
   type ImageResultAsset,
+  type ImageRuntimeConfig,
 } from './types.js';
 import { sleep } from '../../shared/utils/timing.js';
 
@@ -238,10 +239,19 @@ export function isFalContentPolicyError(error: unknown): error is FalApiError {
 }
 
 export class FalImageClient {
+  /** Resolved overall wait cap for queue results (owner-file backed, zet.7). */
+  readonly timeoutMs: number;
+  /** Resolved poll cadence for queue status (owner-file backed, zet.7). */
+  readonly pollIntervalMs: number;
+
   constructor(
     private readonly apiKey: string,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    polling?: Pick<ImageRuntimeConfig, 'imageFalTimeoutMs' | 'imageFalPollIntervalMs'>,
+  ) {
+    this.timeoutMs = polling?.imageFalTimeoutMs ?? DEFAULT_FAL_TIMEOUT_MS;
+    this.pollIntervalMs = polling?.imageFalPollIntervalMs ?? DEFAULT_FAL_POLL_INTERVAL_MS;
+  }
 
   async create(params: ImageCreateParams): Promise<ImageGenerationResult> {
     const model = normalizeCreateModel(params.model);
@@ -465,8 +475,8 @@ export class FalImageClient {
       : `${FAL_QUEUE_BASE_URL}/${model}/requests/${requestId}/status`;
     const startedAt = Date.now();
 
-    while (Date.now() - startedAt < DEFAULT_FAL_TIMEOUT_MS) {
-      await sleep(DEFAULT_FAL_POLL_INTERVAL_MS);
+    while (Date.now() - startedAt < this.timeoutMs) {
+      await sleep(this.pollIntervalMs);
       const response = await this.fetchImpl(statusUrl, {
         headers: {
           Authorization: `Key ${this.apiKey}`,
@@ -488,6 +498,6 @@ export class FalImageClient {
       }
     }
 
-    throw new Error(`FAL request ${requestId} timed out after ${DEFAULT_FAL_TIMEOUT_MS}ms`);
+    throw new Error(`FAL request ${requestId} timed out after ${this.timeoutMs}ms`);
   }
 }

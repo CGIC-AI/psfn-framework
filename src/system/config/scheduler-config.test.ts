@@ -58,6 +58,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       minConversationalEntries: 2,
       minSingleEntryChars: 120,
       topicSegmentationEnabled: false,
+      maxPriorCandidates: 24,
     },
     sleepConsolidation: {
       reviewWindowDays: 60,
@@ -65,6 +66,8 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       adjacencyGapMinutes: 45,
       maxRefinementsPerRun: 8,
       maxConsolidationsPerRun: 6,
+      transcriptMessageLimit: 200,
+      maxTranscriptCharsPerEpisode: 6000,
     },
     orientationRewrite: {
       minNewEntriesSinceRewrite: 4,
@@ -539,6 +542,62 @@ describe('scheduler config seed defaults', () => {
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'episodeSynthesis.topicSegmentationEnabled must be true or false',
+      );
+    });
+  });
+
+  // ── zet.7: episodic tuning knobs owned by scheduler.json ──
+  it('defaults the zet.7 episodic tuning knobs when keys are absent (compiled defaults preserved)', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      const episodeSynthesis = { ...(config.episodeSynthesis as Record<string, unknown>) };
+      delete episodeSynthesis.maxPriorCandidates;
+      config.episodeSynthesis = episodeSynthesis;
+      const sleepConsolidation = { ...(config.sleepConsolidation as Record<string, unknown>) };
+      delete sleepConsolidation.transcriptMessageLimit;
+      delete sleepConsolidation.maxTranscriptCharsPerEpisode;
+      config.sleepConsolidation = sleepConsolidation;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      const loaded = loadSchedulerSeedDefaults({ seedDir });
+      // Mirrors DEFAULT_MAX_PRIOR_CANDIDATES (synthesis.ts),
+      // DEFAULT_TRANSCRIPT_MESSAGE_LIMIT and DEFAULT_MAX_TRANSCRIPT_CHARS
+      // (sleep-consolidation.ts) exactly.
+      expect(loaded.episodeSynthesis.maxPriorCandidates).toBe(24);
+      expect(loaded.sleepConsolidation.transcriptMessageLimit).toBe(200);
+      expect(loaded.sleepConsolidation.maxTranscriptCharsPerEpisode).toBe(6000);
+    });
+  });
+
+  it('threads operator-set zet.7 episodic tuning values and fails closed on invalid ones', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.episodeSynthesis = {
+        ...(config.episodeSynthesis as Record<string, unknown>),
+        maxPriorCandidates: 48,
+      };
+      config.sleepConsolidation = {
+        ...(config.sleepConsolidation as Record<string, unknown>),
+        transcriptMessageLimit: 120,
+        maxTranscriptCharsPerEpisode: 9000,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      const loaded = loadSchedulerSeedDefaults({ seedDir });
+      expect(loaded.episodeSynthesis.maxPriorCandidates).toBe(48);
+      expect(loaded.sleepConsolidation.transcriptMessageLimit).toBe(120);
+      expect(loaded.sleepConsolidation.maxTranscriptCharsPerEpisode).toBe(9000);
+    });
+
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.sleepConsolidation = {
+        ...(config.sleepConsolidation as Record<string, unknown>),
+        transcriptMessageLimit: 0,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'sleepConsolidation.transcriptMessageLimit must be an integer >= 1',
       );
     });
   });

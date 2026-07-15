@@ -260,7 +260,6 @@ describe('SessionStore bounded logical-archive reads', () => {
       channels: Record<string, { archiveFingerprint?: string }>;
     };
     const indexed = index.channels[channelId];
-    if (!indexed) throw new Error('Expected channel index entry');
     indexed.archiveFingerprint = `${filePath}=${[
       fileStats.dev,
       fileStats.ino,
@@ -330,7 +329,6 @@ describe('SessionStore bounded logical-archive reads', () => {
       }>;
     };
     const entry = index.channels[fixture.channelId];
-    if (!entry) throw new Error('Expected channel index entry');
     entry.activeTurnTombstoneCount = 0;
     entry.activeTurnTombstoneIds = [];
     writeFileSync(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8');

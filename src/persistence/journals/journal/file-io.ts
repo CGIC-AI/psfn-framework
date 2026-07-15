@@ -18,7 +18,6 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../../core/turns/id.js';
 import type {
   JournalFileMetadata,
-  JournalBoundedReadStats,
   QuarantinedJournalEntry,
   ReadJournalBeforeOptions,
   ReadJournalBeforeResult,

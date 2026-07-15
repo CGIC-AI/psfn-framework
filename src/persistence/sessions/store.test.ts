@@ -1433,7 +1433,9 @@ describe('SessionStore', () => {
 
     expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
     expect(tailSpy).toHaveBeenCalledTimes(2);
-    expect(fingerprintSpy).toHaveBeenCalledTimes(2);
+    // The chain-aware path fingerprints once for journal-authoritative
+    // tombstones, before/after the bounded read, and before/after cache use.
+    expect(fingerprintSpy).toHaveBeenCalledTimes(5);
     const tailResult = tailSpy.mock.results.at(-1)?.value as { quarantined?: Array<{ raw: string }> } | undefined;
     expect(tailResult?.quarantined).toEqual([expect.objectContaining({ raw: '{bad' })]);
   });

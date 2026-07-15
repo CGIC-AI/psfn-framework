@@ -2323,7 +2323,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       .mockImplementation((evaluation, input) => originalRecord(evaluation, input));
     let durableResponse: AgentResponse | undefined;
     const recordAssistantMessage = vi.fn((...args: unknown[]) => {
-      durableResponse = args.at(-1) as AgentResponse;
+      durableResponse = args[7] as AgentResponse;
       return 2;
     });
     const reserve = vi.fn(async () => ({
@@ -3777,6 +3777,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'trusted',
       'contact-123',
       null,
+      undefined,
       undefined,
     );
     expect(buildContext.mock.calls[0]?.[4]).toBe('contact-123');

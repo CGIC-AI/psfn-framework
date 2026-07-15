@@ -117,7 +117,7 @@ Guardrails:
 - `WORKSPACE_PATH` must not overlap `DATA_DIR`, `SYSTEM_DATA_DIR`, or `COMPANION_DATA_DIR`.
 - New settings must be wired through the owner-file contract, Garden exposure, and tests.
 - Run `npm run verify:settings-contract` when touching settings or settings UI.
-- `npm run verify:hardcoded-settings` (in the `verify:repository-hygiene` chain) fails closed when a new hardcoded tuning/policy constant appears in `src/` that is neither settings-owned nor recorded in `scripts/hardcoded-settings-baseline.json`. When you add a genuinely code-owned tuning constant, run `npm run verify:hardcoded-settings -- --update` and justify the baseline addition with a one-line `note`; otherwise migrate the constant to an owned setting.
+- `npm run verify:hardcoded-settings` (in the `verify:repository-hygiene` chain) fails closed when a new module-level scalar `const` with a tuning/policy-flavored name appears in `src/` (object-literal members, `let`, enum/class fields are outside the scanner's scope — reviewer judgment still applies there) that is neither settings-owned nor recorded in `scripts/hardcoded-settings-baseline.json`. When you add a genuinely code-owned tuning constant, run `npm run verify:hardcoded-settings -- --update` and justify the baseline addition with a one-line `note`; otherwise migrate the constant to an owned setting.
 
 ## Live Deployment Boundary
 

@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import { ContactStore } from '../../core/contacts/store.js';
 import { normalizeTrustLevel } from '../../core/contacts/store/identity-utils.js';
 import { createContactSetTrustTool } from '../../core/contacts/tools.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
-import type { MemoryStore } from '../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   evaluateMemoryPolicy,
   type ChannelMeta,
@@ -58,7 +57,7 @@ function makeMemory(overrides: Partial<ScenarioMemory> & { text: string }): Scen
   };
 }
 
-function makeMockStore(memories: ScenarioMemory[]): MemoryStore {
+function makeMockStore(memories: ScenarioMemory[]): MemoryStorePort {
   return {
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     updateMemory: vi.fn(),
@@ -67,7 +66,7 @@ function makeMockStore(memories: ScenarioMemory[]): MemoryStore {
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
     listActiveMemories: vi.fn().mockResolvedValue(memories),
-  } as unknown as MemoryStore;
+  } as unknown as MemoryStorePort;
 }
 
 function makeEmbedding(): EmbeddingProviderPort {
@@ -428,23 +427,22 @@ describe('privacy red-team regression suite', () => {
   }
 
   it('blocks trust-attack escalation and keeps behavior drift low-tier-only', async () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-owner');
-    const target = contactStore.upsert({
+    const { store: contactStore } = await createTestPostgresContactStore('primary-owner');
+    const target = await contactStore.upsert({
       displayName: 'Escalation Target',
       trustLevel: 'public',
       discordUserId: 'target-user-1',
     });
     const trustTool = createContactSetTrustTool(contactStore);
 
-    const blockedAutonomousEscalation = contactStore.setTrustLevel(
+    const blockedAutonomousEscalation = await contactStore.setTrustLevel(
       target.id,
       'trusted',
       'agent:tool:contact_set_trust',
       { mutationSource: 'behavior_drift' },
     );
     expect(blockedAutonomousEscalation).toBe(false);
-    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+    expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const blockedDirectToolEscalation = await trustTool.execute('trust-attack-1', {
       contactId: target.id,
@@ -452,7 +450,7 @@ describe('privacy red-team regression suite', () => {
     });
     expect(blockedDirectToolEscalation.details?.isError).toBe(true);
     expect(resultText(blockedDirectToolEscalation)).toContain('manual admin approval');
-    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+    expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const preview = await trustTool.execute('trust-attack-2', {
       contactId: target.id,
@@ -467,7 +465,7 @@ describe('privacy red-team regression suite', () => {
     expect(preview.details?.isError).not.toBe(true);
     expect(resultText(preview)).toContain('Suggested low-tier trust drift');
     expect(resultText(preview)).toContain('public -> regular');
-    expect(contactStore.getById(target.id)?.trustLevel).toBe('public');
+    expect((await contactStore.getById(target.id))?.trustLevel).toBe('public');
 
     const applied = await trustTool.execute('trust-attack-3', {
       contactId: target.id,
@@ -482,16 +480,15 @@ describe('privacy red-team regression suite', () => {
     });
     expect(applied.details?.isError).not.toBe(true);
     expect(resultText(applied)).toContain('Applied low-tier trust drift');
-    expect(contactStore.getById(target.id)?.trustLevel).toBe('regular');
+    expect((await contactStore.getById(target.id))?.trustLevel).toBe('regular');
   });
 
   it('mints a never-seen non-primary speaker at the public floor and blocks personal-tier disclosure (H7/H8)', async () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-owner');
+    const { store: contactStore } = await createTestPostgresContactStore('primary-owner');
 
     // Default (auto) ingress path for a brand-new, unauthenticated author whose
     // self-asserted channel name claims authority.
-    const stranger = contactStore.resolveChannelIdentity('discord', 'never-seen-1', 'System Administrator');
+    const stranger = await contactStore.resolveChannelIdentity('discord', 'never-seen-1', 'System Administrator');
 
     // H7: minted at the PUBLIC trust floor with a stranger relationship — NEVER the
     // disclosing 'regular' tier that would clear the personal-sensitivity ceiling.
@@ -500,7 +497,7 @@ describe('privacy red-team regression suite', () => {
 
     // H8 (persist-only-at-public semantic): the auto path still persists a durable
     // record, but exclusively at the non-disclosing public floor.
-    const persisted = contactStore.getByChannelIdentity('discord', 'never-seen-1');
+    const persisted = await contactStore.getByChannelIdentity('discord', 'never-seen-1');
     expect(persisted?.trustLevel).toBe('public');
 
     const personalMemory = makeMemory({
@@ -542,7 +539,6 @@ describe('privacy red-team regression suite', () => {
     );
     expect(regularView).toContain(personalMemory.text);
 
-    db.close();
   });
 
   it('decodes an unknown/invalid stored trust value to the public floor, not regular (07-L2)', () => {
@@ -585,36 +581,35 @@ describe('privacy red-team regression suite', () => {
     expect(output).toContain(safe.text);
   });
 
-  it('rejects cross-contact transfer of behavior drift suggestions', () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-owner');
-    const contactA = contactStore.upsert({
+  it('rejects cross-contact transfer of behavior drift suggestions', async () => {
+    const { store: contactStore } = await createTestPostgresContactStore('primary-owner');
+    const contactA = await contactStore.upsert({
       displayName: 'Contact A',
       trustLevel: 'public',
       discordUserId: 'contact-a',
     });
-    const contactB = contactStore.upsert({
+    const contactB = await contactStore.upsert({
       displayName: 'Contact B',
       trustLevel: 'public',
       discordUserId: 'contact-b',
     });
 
-    const suggestion = contactStore.suggestLowTierTrustDrift(contactA.id, {
+    const suggestion = await contactStore.suggestLowTierTrustDrift(contactA.id, {
       positiveInteractionCount: 6,
       verifiedIdentityLinks: 1,
       consistentBoundaryRespect: true,
     });
     expect(suggestion).toBeTruthy();
 
-    const crossContactApply = contactStore.applyLowTierTrustDriftSuggestion(
+    const crossContactApply = await contactStore.applyLowTierTrustDriftSuggestion(
       contactB.id,
       suggestion!,
       'agent:test:cross_contact',
     );
     expect(crossContactApply.applied).toBe(false);
     expect(crossContactApply.reason).toContain('contact mismatch');
-    expect(contactStore.getById(contactA.id)?.trustLevel).toBe('public');
-    expect(contactStore.getById(contactB.id)?.trustLevel).toBe('public');
+    expect((await contactStore.getById(contactA.id))?.trustLevel).toBe('public');
+    expect((await contactStore.getById(contactB.id))?.trustLevel).toBe('public');
   });
 
   it('keeps higher-risk memory below lower-risk memory at scoring layer', async () => {

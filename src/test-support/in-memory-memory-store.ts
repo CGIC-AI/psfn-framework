@@ -31,6 +31,7 @@ import {
 import { isInternalMemoryArtifact } from '../faculties/memory/internal-artifacts.js';
 import { normalizeMemoryMaintenanceReviewInput } from '../faculties/memory/maintenance-review.js';
 import {
+  applyRetentionClassTags,
   isDurableMemory,
   isPreferenceMemory,
   type MemoryScopeQuery,
@@ -466,8 +467,12 @@ export class InMemoryMemoryStore {
     for (const id of ids) {
       const stored = this.memories.get(id);
       if (!stored || stored.memory.deletedAt) continue;
+      const memory = { ...stored.memory, ...fields };
+      if (fields.retentionClass !== undefined) {
+        memory.tags = applyRetentionClassTags(stored.memory, fields.retentionClass);
+      }
       this.memories.set(id, {
-        memory: cloneMemory({ ...stored.memory, ...fields }),
+        memory: cloneMemory(memory),
         embedding: stored.embedding,
       });
       updated += 1;

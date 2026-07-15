@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { MemoryExtractor } from '../extraction.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../embedding.js';
-import { MemoryStore } from '../store.js';
 import type { ExtractedFact } from '../types.js';
 import type { RelationshipType } from '../../../core/contacts/types.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
+import { createTestPostgresContactStore } from '../../../test-support/postgres-contact-store.js';
 import {
   __test as mentionOnlyTestHooks,
   extractMentionOnlyContactCandidate,
@@ -84,23 +83,20 @@ describe('extractMentionOnlyContactCandidate', () => {
 });
 
 describe('resolveMentionOnlyContactForFact', () => {
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
-  let contactStore: ContactStore;
+  let memoryStore: InMemoryMemoryStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    memoryStore = new InMemoryMemoryStore();
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('does not bypass HITL by promoting an existing contact to family from extracted facts', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
-    const alex = contactStore.upsert({
+    const alex = await contactStore.upsert({
       displayName: 'Alex',
       relationshipType: 'stranger',
     });
@@ -112,16 +108,16 @@ describe('resolveMentionOnlyContactForFact', () => {
       canonicalContactName: primary.displayName,
       companionName: 'Aster',
       contactStore,
-      memoryStore,
+      memoryStore: memoryStore.asPort(),
     });
 
     expect(resolved).toBeDefined();
     expect(resolved!.id).toBe(alex.id);
-    expect(contactStore.getById(alex.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(alex.id))?.relationshipType).toBe('stranger');
   });
 
   it('does not mint a duplicate contact when the canonical contact goes by a nickname', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Rowan',
       nickname: 'Ro',
       discordUserId: PRIMARY_USER_ID,
@@ -138,20 +134,20 @@ describe('resolveMentionOnlyContactForFact', () => {
         canonicalContactName: 'Ro',
         companionName: 'Aster',
         contactStore,
-        memoryStore,
+        memoryStore: memoryStore.asPort(),
       });
       expect(resolved).toBeUndefined();
     }
 
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Rowan')).toHaveLength(1);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Rowan')).toHaveLength(1);
   });
 
   it('matches an existing mention-only contact by display name even when it has a nickname', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
-    const alex = contactStore.upsert({
+    const alex = await contactStore.upsert({
       displayName: 'Alex',
       nickname: 'Lexi',
       relationshipType: 'acquaintance',
@@ -164,29 +160,26 @@ describe('resolveMentionOnlyContactForFact', () => {
       canonicalContactName: primary.displayName,
       companionName: 'Aster',
       contactStore,
-      memoryStore,
+      memoryStore: memoryStore.asPort(),
     });
 
     expect(resolved).toBeDefined();
     expect(resolved!.id).toBe(alex.id);
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
   });
 });
 
 describe('MemoryExtractor mention-only contacts', () => {
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
-  let contactStore: ContactStore;
+  let memoryStore: InMemoryMemoryStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    memoryStore = new InMemoryMemoryStore();
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('creates and relinks a mention-only contact only after recurring evidence', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
@@ -194,7 +187,7 @@ describe('MemoryExtractor mention-only contacts', () => {
     const extractor = new MemoryExtractor(
       { complete: vi.fn() } as any,
       { characterName: 'Aster' } as any,
-      memoryStore,
+      memoryStore.asPort(),
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
@@ -218,7 +211,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'Aster',
 	    );
 
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
     expect(memoryStore.getMemoriesByContact(primary.id, 10).map(memory => memory.text)).toContain(
       "Avery's sister Alex is moving to Seattle",
     );
@@ -234,7 +227,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'Aster',
 	    );
 
-    const alexContacts = contactStore.listAll().filter(contact => contact.displayName === 'Alex');
+    const alexContacts = (await contactStore.listAll()).filter(contact => contact.displayName === 'Alex');
     expect(alexContacts).toHaveLength(1);
 
     const alex = alexContacts[0];
@@ -247,7 +240,7 @@ describe('MemoryExtractor mention-only contacts', () => {
   });
 
   it('does not create a contact from a one-off relational mention', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
@@ -255,7 +248,7 @@ describe('MemoryExtractor mention-only contacts', () => {
     const extractor = new MemoryExtractor(
       { complete: vi.fn() } as any,
       { characterName: 'Aster' } as any,
-      memoryStore,
+      memoryStore.asPort(),
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
@@ -279,29 +272,26 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'Aster',
 	    );
 
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Jordan')).toHaveLength(0);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Jordan')).toHaveLength(0);
     expect(memoryStore.getMemoriesByContact(primary.id, 10)).toHaveLength(1);
   });
 });
 
 describe('MemoryExtractor group-room speaker ownership', () => {
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
-  let contactStore: ContactStore;
+  let memoryStore: InMemoryMemoryStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    memoryStore = new InMemoryMemoryStore();
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('writes clear mixed-speaker facts under the source speaker contact', async () => {
-    const marlow = contactStore.upsert({
+    const marlow = await contactStore.upsert({
       displayName: 'Marlow',
       discordUserId: 'discord-marlow',
     });
-    const rowan = contactStore.upsert({
+    const rowan = await contactStore.upsert({
       displayName: 'Rowan',
       discordUserId: 'discord-rowan',
     });
@@ -342,7 +332,7 @@ describe('MemoryExtractor group-room speaker ownership', () => {
         characterName: 'Aster',
         getRecentMessages: vi.fn().mockReturnValue(entries),
       } as any,
-      memoryStore,
+      memoryStore.asPort(),
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
@@ -387,17 +377,14 @@ describe('factStatesInterlocutorBond', () => {
 });
 
 describe('resolveInterlocutorRelationshipRatchet', () => {
-  let db: Database.Database;
-  let contactStore: ContactStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   it('ratchets a stranger interlocutor upward on a companion bond fact', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -411,11 +398,11 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBe('acquaintance');
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('acquaintance');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('acquaintance');
   });
 
   it('never downgrades an interlocutor with a stronger existing relationship', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'family',
     }, { actor: 'operator:test-setup' });
@@ -429,11 +416,11 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBeUndefined();
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('family');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('family');
   });
 
   it('does not ratchet the interlocutor when the fact names a third party (exclusion unchanged)', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -447,11 +434,11 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBeUndefined();
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('stranger');
   });
 
   it('does not ratchet on generic relational chatter about other people', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -465,11 +452,11 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBeUndefined();
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('stranger');
   });
 
   it('never ratchets to friend/family/partner from single weak evidence (ceiling is acquaintance)', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -483,15 +470,15 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBeUndefined();
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('stranger');
   });
 
   it('allows relationship progression independently from primary trust', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Juno',
       discordUserId: PRIMARY_USER_ID,
     });
-    expect(contactStore.getById(primary.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(primary.id))?.relationshipType).toBe('stranger');
 
     const result = await resolveInterlocutorRelationshipRatchet({
       fact: makeFact('Juno considers Aster their closest friend'),
@@ -502,8 +489,8 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     });
 
     expect(result).toBe('acquaintance');
-    expect(contactStore.getById(primary.id)?.trustLevel).toBe('primary');
-    expect(contactStore.getById(primary.id)?.relationshipType).toBe('acquaintance');
+    expect((await contactStore.getById(primary.id))?.trustLevel).toBe('primary');
+    expect((await contactStore.getById(primary.id))?.relationshipType).toBe('acquaintance');
   });
 
   it('returns undefined and reports no promotion when the store refuses the update', async () => {
@@ -536,22 +523,19 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
 });
 
 describe('MemoryExtractor interlocutor relationship ratchet', () => {
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
-  let contactStore: ContactStore;
+  let memoryStore: InMemoryMemoryStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    memoryStore = new InMemoryMemoryStore();
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   function makeExtractor(): MemoryExtractor {
     return new MemoryExtractor(
       { complete: vi.fn() } as any,
       { characterName: 'Aster' } as any,
-      memoryStore,
+      memoryStore.asPort(),
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
         embedBatch: vi.fn(),
@@ -566,7 +550,7 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
   }
 
   it('ratchets the routed interlocutor through the live processFact path', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -584,11 +568,11 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
       'Aster',
     );
 
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('acquaintance');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('acquaintance');
   });
 
   it('does not ratchet the interlocutor from a third-party mention on the live path', async () => {
-    const juno = contactStore.upsert({
+    const juno = await contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
     });
@@ -606,6 +590,6 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
       'Aster',
     );
 
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+    expect((await contactStore.getById(juno.id))?.relationshipType).toBe('stranger');
   });
 });

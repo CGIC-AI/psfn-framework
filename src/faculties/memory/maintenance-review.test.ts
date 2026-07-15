@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import {
-  createMemoryStorePort,
-  type MemoryStorePort,
-} from './memory-store-port.js';
-import { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';
 import { MemoryWriter } from './writer.js';
 import {
@@ -15,6 +10,7 @@ import {
   buildProvenanceConfidenceReviewInput,
   buildStaleMemoryReviewInput,
   extractUniqueDetails,
+  mapStoredMemoryMaintenanceReviewRow,
 } from './maintenance-review.js';
 
 function makeEmbedding(seed = 0): Float32Array {
@@ -307,154 +303,117 @@ describe('Memory maintenance review state', () => {
   });
 
   it('persists and exposes review queue metadata/status', async () => {
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const store = new MemoryStore(db, 4);
-    const port = createMemoryStorePort(store);
+    const store = new InMemoryMemoryStore();
+    const input = buildProvenanceConfidenceReviewInput(
+      makeMemory('low-confidence-1', 'Single source memory', {
+        confidence: 0.31,
+        sourceRef: 'api:only',
+        provenanceRefs: [],
+      }),
+      77,
+    );
+    expect(input).toBeDefined();
+    const saved = store.upsertMemoryMaintenanceReview(input!);
 
-    try {
-      const input = buildProvenanceConfidenceReviewInput(
-        makeMemory('low-confidence-1', 'Single source memory', {
-          confidence: 0.31,
-          sourceRef: 'api:only',
-          provenanceRefs: [],
-        }),
-        77,
-      );
-      expect(input).toBeDefined();
-      const saved = store.upsertMemoryMaintenanceReview(input!);
-
-      expect(saved.status).toBe('pending');
-      expect(store.getMemoryMaintenanceReview(saved.id)).toEqual(saved);
-      expect(store.listMemoryMaintenanceReviews({ status: 'pending' })).toEqual([saved]);
-      expect(store.listMemoryMaintenanceReviews({ kind: 'provenance_confidence' })).toEqual([saved]);
-      expect(port.listMemoryMaintenanceReviews).toBeDefined();
-      await expect(port.listMemoryMaintenanceReviews?.({ status: 'pending' })).resolves.toEqual([saved]);
-    } finally {
-      db.close();
-    }
+    expect(saved.status).toBe('pending');
+    expect(store.getMemoryMaintenanceReview(saved.id)).toEqual(saved);
+    expect(store.listMemoryMaintenanceReviews({ status: 'pending' })).toEqual([saved]);
+    expect(store.listMemoryMaintenanceReviews({ kind: 'provenance_confidence' })).toEqual([saved]);
+    const port = store.asPort();
+    expect(port.listMemoryMaintenanceReviews).toBeDefined();
+    await expect(Promise.resolve(
+      port.listMemoryMaintenanceReviews?.({ status: 'pending' }),
+    )).resolves.toEqual([saved]);
   });
 
   it('quarantines malformed review state instead of silently accepting it', () => {
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const store = new MemoryStore(db, 4);
-
-    try {
-      const saved = store.upsertMemoryMaintenanceReview({
-        id: 'malformed-review-1',
+    const store = new InMemoryMemoryStore();
+    const saved = store.upsertMemoryMaintenanceReview({
+      id: 'malformed-review-1',
+      kind: 'near_duplicate',
+      subjectMemoryId: 'memory-1',
+      candidateMemoryIds: ['memory-2'],
+      state: {
+        schemaVersion: 99,
         kind: 'near_duplicate',
-        subjectMemoryId: 'memory-1',
-        candidateMemoryIds: ['memory-2'],
-        state: {
-          schemaVersion: 99,
-          kind: 'near_duplicate',
-          status: 'pending',
-        } as any,
-        createdAt: 1,
-        updatedAt: 1,
-      });
+        status: 'pending',
+      } as any,
+      createdAt: 1,
+      updatedAt: 1,
+    });
 
-      expect(saved.status).toBe('quarantined');
-      expect(saved.quarantineReason).toContain('schemaVersion');
-      expect(saved.state.status).toBe('quarantined');
-      expect(store.listMemoryMaintenanceReviews({ status: 'pending' })).toEqual([]);
-      expect(store.listMemoryMaintenanceReviews({ status: 'quarantined' })).toEqual([saved]);
-    } finally {
-      db.close();
-    }
+    expect(saved.status).toBe('quarantined');
+    expect(saved.quarantineReason).toContain('schemaVersion');
+    expect(saved.state.status).toBe('quarantined');
+    expect(store.listMemoryMaintenanceReviews({ status: 'pending' })).toEqual([]);
+    expect(store.listMemoryMaintenanceReviews({ status: 'quarantined' })).toEqual([saved]);
   });
 
   it('reports review queue age and evolution decision diagnostics', () => {
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const store = new MemoryStore(db, 4);
+    const store = new InMemoryMemoryStore();
+    store.insertMemory(makeMemory('memory-1', 'Original durable fact'), makeEmbedding(1));
+    store.insertMemory(makeMemory('memory-2', 'Updated durable fact'), makeEmbedding(2));
+    store.recordEvolutionLink({
+      sourceMemoryId: 'memory-1',
+      targetMemoryId: 'memory-2',
+      relation: 'supersedes',
+      createdAt: 1_100,
+    });
+    store.recordEvolutionLink({
+      sourceMemoryId: 'memory-2',
+      targetMemoryId: 'memory-1',
+      relation: 'conflicts_with',
+      createdAt: 1_300,
+    });
+    const review = buildHighImpactLowConfidenceReviewInput({
+      memoryId: 'candidate-boundary-2',
+      text: 'Potential relationship boundary with low confidence.',
+      sourceRef: 'source:sleeptime|session:test',
+      confidence: 0.3,
+      type: 'boundary',
+      tags: ['relationship'],
+      sensitivity: 'confidential',
+    }, 1_000);
+    expect(review).toBeDefined();
+    store.upsertMemoryMaintenanceReview(review!);
 
-    try {
-      store.insertMemory(makeMemory('memory-1', 'Original durable fact'), makeEmbedding(1));
-      store.insertMemory(makeMemory('memory-2', 'Updated durable fact'), makeEmbedding(2));
-      store.recordEvolutionLink({
-        sourceMemoryId: 'memory-1',
-        targetMemoryId: 'memory-2',
-        relation: 'supersedes',
-        createdAt: 1_100,
-      });
-      store.recordEvolutionLink({
-        sourceMemoryId: 'memory-2',
-        targetMemoryId: 'memory-1',
-        relation: 'conflicts_with',
-        createdAt: 1_300,
-      });
-      const review = buildHighImpactLowConfidenceReviewInput({
-        memoryId: 'candidate-boundary-2',
-        text: 'Potential relationship boundary with low confidence.',
-        sourceRef: 'source:sleeptime|session:test',
-        confidence: 0.3,
-        type: 'boundary',
-        tags: ['relationship'],
-        sensitivity: 'confidential',
-      }, 1_000);
-      expect(review).toBeDefined();
-      store.upsertMemoryMaintenanceReview(review!);
-
-      const diagnostics = store.getMemoryMaintenanceDiagnostics({ now: 4_000 });
-
-      expect(diagnostics).toMatchObject({
-        reviewCount: 1,
-        pendingReviewCount: 1,
-        reviewCountsByKind: { high_impact_low_confidence: 1 },
-        reviewCountsByStatus: { pending: 1 },
-        oldestPendingReviewAgeMs: 3_000,
-        averagePendingReviewAgeMs: 3_000,
-        evolutionDecisionCount: 2,
-        evolutionDecisionCountsByRelation: {
-          supersedes: 1,
-          updates: 0,
-          negates: 0,
-          conflicts_with: 1,
-        },
-        supersessionDecisionCount: 1,
-        conflictDecisionCount: 1,
-        latestEvolutionDecisionAt: 1_300,
-      });
-    } finally {
-      db.close();
-    }
+    expect(store.getMemoryMaintenanceDiagnostics({ now: 4_000 })).toMatchObject({
+      reviewCount: 1,
+      pendingReviewCount: 1,
+      reviewCountsByKind: { high_impact_low_confidence: 1 },
+      reviewCountsByStatus: { pending: 1 },
+      oldestPendingReviewAgeMs: 3_000,
+      averagePendingReviewAgeMs: 3_000,
+      evolutionDecisionCount: 2,
+      evolutionDecisionCountsByRelation: {
+        supersedes: 1,
+        updates: 0,
+        negates: 0,
+        conflicts_with: 1,
+      },
+      supersessionDecisionCount: 1,
+      conflictDecisionCount: 1,
+      latestEvolutionDecisionAt: 1_300,
+    });
   });
 
   it('maps corrupt stored review JSON as quarantined on read', () => {
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const store = new MemoryStore(db, 4);
+    const mapped = mapStoredMemoryMaintenanceReviewRow({
+      id: 'corrupt-review-1',
+      kind: 'near_duplicate',
+      status: 'pending',
+      subjectMemoryId: 'memory-1',
+      candidateMemoryIdsJson: JSON.stringify(['memory-2']),
+      stateJson: '{not-json',
+      quarantineReason: null,
+      createdAt: 10,
+      updatedAt: 10,
+    });
 
-    try {
-      db.prepare(`
-        INSERT INTO l2_memory_maintenance_reviews (
-          id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
-          quarantine_reason, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        'corrupt-review-1',
-        'near_duplicate',
-        'pending',
-        'memory-1',
-        JSON.stringify(['memory-2']),
-        '{not-json',
-        null,
-        10,
-        10,
-      );
-
-      const listed = store.listMemoryMaintenanceReviews();
-      expect(listed).toHaveLength(1);
-      expect(listed[0]).toMatchObject({
-        id: 'corrupt-review-1',
-        status: 'quarantined',
-        quarantineReason: expect.stringContaining('JSON'),
-      });
-    } finally {
-      db.close();
-    }
+    expect(mapped).toMatchObject({
+      id: 'corrupt-review-1',
+      status: 'quarantined',
+      quarantineReason: expect.stringContaining('JSON'),
+    });
   });
 });

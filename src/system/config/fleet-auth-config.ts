@@ -19,6 +19,10 @@ import {
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { loadRequiredJson } from './load-or-seed.js';
+import type {
+  HubDeviceAssertionVerifierConfig,
+  HubDeviceAssertionVerifierKey,
+} from '../../boundary/fleet-auth/hub-device-assertion.js';
 
 export const FLEET_AUTH_ENV_VAR = 'PSFN_FLEET_AUTH';
 export const FLEET_AUTH_FILE_NAME = 'fleet-auth.json';
@@ -94,6 +98,7 @@ export interface FleetAuthConfig {
     backupRestore: string;
   };
   verifierKeys: FleetAuthVerifierKey[];
+  hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
   ttls: {
     oauthTransactionMs: number;
     sessionIdleMs: number;
@@ -119,6 +124,7 @@ export interface FleetAuthVerifierConfig {
   enabled: true;
   canonicalOrigin: string;
   verifierKeys: FleetAuthVerifierKey[];
+  hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
 }
 
 export interface FleetAuthGatewayConfig {
@@ -154,6 +160,9 @@ export interface FleetAuthGardenMetadata {
   rolePolicy: FleetAuthConfig['rolePolicy'];
   discordEvidenceMappings: FleetAuthConfig['discordEvidenceMappings'];
   verifierKeys: Array<Pick<FleetAuthVerifierKey, 'issuer' | 'kid' | 'notBefore' | 'notAfter' | 'status'>>;
+  hubDeviceAssertions: Omit<HubDeviceAssertionVerifierConfig, 'keys'> & {
+    keys: Array<Pick<HubDeviceAssertionVerifierKey, 'kid' | 'notBefore' | 'notAfter' | 'status'>>;
+  };
 }
 
 function fail(message: string): never {
@@ -294,6 +303,74 @@ function parseVerifierKeys(value: unknown): FleetAuthVerifierKey[] {
   return keys;
 }
 
+function parseHubDeviceAssertions(value: unknown): HubDeviceAssertionVerifierConfig {
+  const field = 'hubDeviceAssertions';
+  const record = requireRecord(value, field);
+  requireExactKeys(record, ['issuer', 'audience', 'maxTtlSeconds', 'clockSkewSeconds', 'keys'], field);
+  const issuer = requireString(record.issuer, `${field}.issuer`);
+  if (!KEY_ID_PATTERN.test(issuer)) fail(`${field}.issuer must use stable identifier characters`);
+  const audience = parseExactHttpsOrigin(record.audience, `${field}.audience`);
+  const maxTtlSeconds = requireInteger(record.maxTtlSeconds, `${field}.maxTtlSeconds`, 5, 60);
+  const clockSkewSeconds = requireInteger(record.clockSkewSeconds, `${field}.clockSkewSeconds`, 0, 10);
+  if (!Array.isArray(record.keys) || record.keys.length === 0) {
+    fail(`${field}.keys must be a non-empty array`);
+  }
+  const seen = new Set<string>();
+  let activeCount = 0;
+  const keys = record.keys.map((entry, index): HubDeviceAssertionVerifierKey => {
+    const keyField = `${field}.keys[${index}]`;
+    const key = requireRecord(entry, keyField);
+    requireExactKeys(key, ['kid', 'publicKeyPem', 'notBefore', 'notAfter', 'status'], keyField);
+    const kid = requireString(key.kid, `${keyField}.kid`);
+    if (!KEY_ID_PATTERN.test(kid)) fail(`${keyField}.kid must use stable identifier characters`);
+    if (seen.has(kid)) fail(`duplicate Hub device assertion key ${kid}`);
+    seen.add(kid);
+    const publicKeyPem = requireString(key.publicKeyPem, `${keyField}.publicKeyPem`);
+    if (publicKeyPem.includes('PRIVATE KEY')) fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
+    try {
+      const parsed = createPublicKey(publicKeyPem);
+      if (parsed.asymmetricKeyType !== 'ed25519') fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith(ERROR_PREFIX)) throw error;
+      fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
+    }
+    const notBefore = requireString(key.notBefore, `${keyField}.notBefore`);
+    const notAfter = requireString(key.notAfter, `${keyField}.notAfter`);
+    if (!isCanonicalIsoTimestamp(notBefore) || !isCanonicalIsoTimestamp(notAfter)
+      || Date.parse(notBefore) >= Date.parse(notAfter)) {
+      fail(`${keyField} must have an ordered ISO validity window`);
+    }
+    if (key.status !== 'active' && key.status !== 'retiring' && key.status !== 'revoked') {
+      fail(`${keyField}.status must be active, retiring, or revoked`);
+    }
+    if (key.status === 'active') activeCount += 1;
+    return { kid, publicKeyPem, notBefore, notAfter, status: key.status };
+  });
+  if (activeCount !== 1) fail('Hub device assertion keys must contain exactly one active key');
+  const active = keys.find(key => key.status === 'active')!;
+  const now = Date.now();
+  if (Date.parse(active.notBefore) > now || Date.parse(active.notAfter) <= now) {
+    fail('the active Hub device assertion key must be inside its configured validity window');
+  }
+  return { issuer, audience, maxTtlSeconds, clockSkewSeconds, keys };
+}
+
+function parseExactHttpsOrigin(value: unknown, field: string): string {
+  const raw = requireString(value, field);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    fail(`${field} must be a valid URL`);
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password
+    || parsed.pathname !== '/' || parsed.search || parsed.hash || raw.endsWith('/')
+    || raw !== parsed.origin) {
+    fail(`${field} must be an exact normalized https origin`);
+  }
+  return parsed.origin;
+}
+
 function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {
   const record = requireRecord(value, 'databaseRoles');
   requireExactKeys(record, ['runtime', 'migration', 'backupRestore'], 'databaseRoles');
@@ -419,6 +496,7 @@ export function validateFleetAuthConfig(value: unknown, _sourcePath: string): Fl
     'credentials',
     'databaseRoles',
     'verifierKeys',
+    'hubDeviceAssertions',
     'ttls',
     'rolePolicy',
     'discordEvidenceMappings',
@@ -486,6 +564,7 @@ export function validateFleetAuthConfig(value: unknown, _sourcePath: string): Fl
     credentials: parsedCredentials,
     databaseRoles: parseDatabaseRoles(root.databaseRoles),
     verifierKeys: parseVerifierKeys(root.verifierKeys),
+    hubDeviceAssertions: parseHubDeviceAssertions(root.hubDeviceAssertions),
     ttls: parseTtls(root.ttls),
     rolePolicy: parseRolePolicy(root.rolePolicy),
     discordEvidenceMappings,
@@ -550,6 +629,10 @@ export function resolveFleetAuthOwnerFile(options: {
     enabled: true,
     canonicalOrigin: config.canonicalOrigin,
     verifierKeys: config.verifierKeys.map(key => ({ ...key })),
+    hubDeviceAssertions: {
+      ...config.hubDeviceAssertions,
+      keys: config.hubDeviceAssertions.keys.map(key => ({ ...key })),
+    },
   };
 }
 
@@ -805,5 +888,17 @@ export function projectFleetAuthGardenMetadata(config: FleetAuthConfig): FleetAu
       notAfter,
       status,
     })),
+    hubDeviceAssertions: {
+      issuer: config.hubDeviceAssertions.issuer,
+      audience: config.hubDeviceAssertions.audience,
+      maxTtlSeconds: config.hubDeviceAssertions.maxTtlSeconds,
+      clockSkewSeconds: config.hubDeviceAssertions.clockSkewSeconds,
+      keys: config.hubDeviceAssertions.keys.map(({ kid, notBefore, notAfter, status }) => ({
+        kid,
+        notBefore,
+        notAfter,
+        status,
+      })),
+    },
   };
 }

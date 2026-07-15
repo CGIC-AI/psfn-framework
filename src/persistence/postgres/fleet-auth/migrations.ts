@@ -611,6 +611,36 @@ ALTER TABLE oauth_transactions
   CHECK (status <> 'pending' OR initiating_browser_digest IS NOT NULL);
 `;
 
+const HUB_DEVICE_ASSERTION_REPLAY_SQL = `
+CREATE TABLE hub_device_assertion_replays (
+  issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 128),
+  jti UUID NOT NULL,
+  assertion_digest TEXT NOT NULL CHECK (assertion_digest ~ '^[0-9a-f]{64}$'),
+  device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256),
+  enrollment_version BIGINT NOT NULL CHECK (enrollment_version >= 1),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (issuer, jti),
+  CHECK (expires_at > consumed_at)
+);
+
+CREATE INDEX hub_device_assertion_replays_expiry_idx
+  ON hub_device_assertion_replays (expires_at);
+`;
+
+const HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL = `
+ALTER TABLE hub_device_assertion_replays
+  ADD COLUMN replay_count BIGINT NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+  ADD COLUMN last_replayed_at TIMESTAMPTZ,
+  ADD COLUMN mismatch_count BIGINT NOT NULL DEFAULT 0 CHECK (mismatch_count >= 0),
+  ADD COLUMN last_mismatch_digest TEXT CHECK (last_mismatch_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN last_mismatch_at TIMESTAMPTZ,
+  ADD CONSTRAINT hub_device_assertion_replay_audit_consistency
+    CHECK ((replay_count = 0) = (last_replayed_at IS NULL)),
+  ADD CONSTRAINT hub_device_assertion_mismatch_audit_consistency
+    CHECK ((mismatch_count = 0) = (last_mismatch_digest IS NULL AND last_mismatch_at IS NULL));
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -619,4 +649,6 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 5, name: 'restored_history_identity_guard', sql: RESTORED_HISTORY_IDENTITY_GUARD_SQL },
   { version: 6, name: 'oauth_broker_sessions', sql: OAUTH_BROKER_SESSION_SQL },
   { version: 7, name: 'oauth_initiating_browser_binding', sql: OAUTH_INITIATING_BROWSER_SQL },
+  { version: 8, name: 'hub_device_assertion_replay', sql: HUB_DEVICE_ASSERTION_REPLAY_SQL },
+  { version: 9, name: 'hub_device_assertion_replay_audit', sql: HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL },
 ] as const;

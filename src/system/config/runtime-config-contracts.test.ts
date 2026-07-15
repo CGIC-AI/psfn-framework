@@ -30,6 +30,10 @@ describe('sanitizeCoreSubstrateConfig', () => {
         enabled: true,
         canonicalOrigin: 'https://fleet.example.test',
         verifierKeys: [],
+        hubDeviceAssertions: {
+          issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
+          maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
+        },
       },
       credentialVault: { resolve: () => undefined },
       litellmApiKeyRef: { env: 'LITELLM_API_KEY' },

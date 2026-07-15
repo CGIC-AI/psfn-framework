@@ -46,6 +46,10 @@ const VERIFIER: FleetAuthVerifierConfig = {
   enabled: true,
   canonicalOrigin: 'https://auth.example.test',
   verifierKeys: [],
+  hubDeviceAssertions: {
+    issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
+    maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
+  },
 };
 
 function buildScheduler(fleetAuthVerifier?: FleetAuthVerifierConfig): Scheduler {

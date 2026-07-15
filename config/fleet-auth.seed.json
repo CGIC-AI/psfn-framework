@@ -64,6 +64,21 @@
       "status": "active"
     }
   ],
+  "hubDeviceAssertions": {
+    "issuer": "psfn-satellite-hub",
+    "audience": "https://fleet.example.invalid",
+    "maxTtlSeconds": 60,
+    "clockSkewSeconds": 2,
+    "keys": [
+      {
+        "kid": "replace-before-enable",
+        "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA1QtSd1BkjN8MfcUdxGshRQsTRWmoPMPmcXtCQfY2Ytk=\n-----END PUBLIC KEY-----\n",
+        "notBefore": "2026-01-01T00:00:00.000Z",
+        "notAfter": "2099-01-01T00:00:00.000Z",
+        "status": "active"
+      }
+    ]
+  },
   "ttls": {
     "oauthTransactionMs": 300000,
     "sessionIdleMs": 1800000,

@@ -64,6 +64,19 @@ function validConfig(publicKeyPem: string): FleetAuthConfig {
       notAfter: '2099-07-01T00:00:00.000Z',
       status: 'active',
     }],
+    hubDeviceAssertions: {
+      issuer: 'psfn-satellite-hub',
+      audience: 'https://fleet.example.test',
+      maxTtlSeconds: 60,
+      clockSkewSeconds: 2,
+      keys: [{
+        kid: 'hub-2026-07',
+        publicKeyPem,
+        notBefore: '2026-07-01T00:00:00.000Z',
+        notAfter: '2099-07-01T00:00:00.000Z',
+        status: 'active',
+      }],
+    },
     ttls: {
       oauthTransactionMs: 300_000,
       sessionIdleMs: 1_800_000,
@@ -144,6 +157,10 @@ describe('fleet-auth owner-file configuration', () => {
         validConfig(publicKeyPem),
         FLEET_AUTH_FILE_NAME,
       ).verifierKeys,
+      hubDeviceAssertions: validateFleetAuthConfig(
+        validConfig(publicKeyPem),
+        FLEET_AUTH_FILE_NAME,
+      ).hubDeviceAssertions,
     });
     expect(operator).toEqual(agent);
     expect(JSON.stringify(agent)).not.toContain('clientSecretRef');
@@ -198,6 +215,20 @@ describe('fleet-auth owner-file configuration', () => {
       ...config,
       verifierKeys: [{ ...config.verifierKeys[0], status: 'revoked' }],
     }, 'fleet-auth.json')).toThrow(/active verifier key/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [{ ...config.hubDeviceAssertions.keys[0], status: 'revoked' }],
+      },
+    }, 'fleet-auth.json')).toThrow(/Hub device assertion.*active key/i);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [{ ...config.hubDeviceAssertions.keys[0], publicKeyPem: privateKeyPem }],
+      },
+    }, 'fleet-auth.json')).toThrow(/hubDeviceAssertions.*public Ed25519/i);
     expect(() => validateFleetAuthConfig({
       ...config,
       credentials: {
@@ -335,6 +366,11 @@ describe('fleet-auth owner-file configuration', () => {
         tokenCustody: 'discard',
       },
       verifierKeys: [{ issuer: 'psfn-fleet-auth', kid: '2026-07-primary', status: 'active' }],
+      hubDeviceAssertions: {
+        issuer: 'psfn-satellite-hub',
+        audience: 'https://fleet.example.test',
+        keys: [{ kid: 'hub-2026-07', status: 'active' }],
+      },
     });
     const serialized = JSON.stringify(metadata);
     expect(serialized).not.toContain('envName');

@@ -52,6 +52,7 @@ import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
   type TurnRecordRecentEntryHealDrop,
+  type TurnRecordWireBodyWithheld,
 } from './turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -131,6 +132,23 @@ function emitRecentEntryHealDrop(drop: TurnRecordRecentEntryHealDrop): void {
   log.info('turn_record_recent_entry_heal_drop', {
     ...drop,
     healDropsThisProcess: recentEntryHealDropCount,
+  });
+}
+
+/**
+ * Process-lifetime count of captured wire bodies withheld on read because a
+ * source L0 entry they embedded was redacted/removed (bead psfn-framework-eb14).
+ * Emitted as a stable structured event with a running counter, mirroring the
+ * recentEntries heal-drop telemetry above — no telemetry port is reachable from
+ * the persistence layer. Lets operators see redaction propagating into the
+ * observability wire surface.
+ */
+let wireBodyWithheldCount = 0;
+function emitWireBodyWithheld(event: TurnRecordWireBodyWithheld): void {
+  wireBodyWithheldCount += 1;
+  log.info('turn_record_wire_body_withheld', {
+    ...event,
+    wireBodiesWithheldThisProcess: wireBodyWithheldCount,
   });
 }
 
@@ -1116,13 +1134,16 @@ export class SessionStore implements TranscriptSearchPort {
    * consumer above the store sees fully inline, journal-current records. Pre-9ree
    * "old fat" records (inline recentEntries, no ref) are redaction-gated against
    * L0 here too (bead psfn-framework-hgw3.10); id-backed heal-drops emit
-   * structured telemetry via emitRecentEntryHealDrop.
+   * structured telemetry via emitRecentEntryHealDrop. The captured provider wire
+   * body is withheld here if a source L0 entry it embedded was redacted/removed
+   * (bead psfn-framework-eb14), emitting telemetry via emitWireBodyWithheld.
    */
   private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
     return resolveTurnRecordSessionEntries(
       record,
       (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
       emitRecentEntryHealDrop,
+      emitWireBodyWithheld,
     );
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {

@@ -67,7 +67,7 @@ import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kub
 import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
-import { resolveFleetAuthSchemaAccessContracts } from '../../persistence/backups/fleet-auth-schema-access.js';
+import { prepareFleetSharedSchemaRuntime } from '../../persistence/backups/fleet-shared-schema-startup.js';
 import {
   DEFAULT_SHARED_WORLD_SCHEMA,
   registerScheduledFleetAuthBackupTask,
@@ -130,6 +130,11 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
+  if (config.multiCompanion === true && !config.fleetAuth) {
+    throw new Error(
+      'Multi-companion startup requires fleet-auth shared migration authority configuration',
+    );
+  }
   const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,
@@ -227,8 +232,9 @@ async function main(): Promise<void> {
       });
     }
     const kubernetesHelm = resolveKubernetesHelmBackupConfig(env);
-    const schemaAccessContracts = await resolveFleetAuthSchemaAccessContracts({
-      databaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+    const schemaAccessContracts = await prepareFleetSharedSchemaRuntime({
+      backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      sharedMigrationDatabaseUrl: fleetAuthSecrets.database.sharedMigrationUrl,
       companionSchemas: config.companionFleet.companions.map(companion => companion.postgresSchema),
       sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
       roles: config.fleetAuth.databaseRoles,

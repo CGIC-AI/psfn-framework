@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthBackupArtifact } from './fleet-auth-coordinator.js';
 import { restoreFleetAuthConsistentFamily } from './fleet-restore.js';
 
@@ -39,10 +39,11 @@ vi.mock('./fleet-restore-database-marker.js', () => ({
   withFleetRestoreDatabaseLock: async <T>(_options: unknown, handler: () => Promise<T>) => await handler(),
 }));
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const roots: string[] = [];

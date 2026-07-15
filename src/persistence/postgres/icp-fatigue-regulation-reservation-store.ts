@@ -13,7 +13,6 @@ import type { FatigueEnforcementMetadata } from "../../shared/contracts/runtime.
 import { isRfc4122Uuid } from "../../shared/utils/types.js";
 import { createPostgresPool, withPostgresClient } from "../postgres.js";
 import { SHARED_SCHEMA_NAME } from "./migrations.js";
-import { ensureSharedSchema } from "./shared-schema.js";
 
 interface ReservationRow extends QueryResultRow {
   turn_id: string;
@@ -162,7 +161,6 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       schema: SHARED_SCHEMA_NAME,
     });
     try {
-      await ensureSharedSchema(pool);
       return new PostgresIcpFatigueRegulationReservationStore(pool, leasePool);
     } catch (error) {
       await Promise.allSettled([pool.end(), leasePool.end()]);

@@ -24,11 +24,13 @@ const ROLES = {
   runtime: 'fleet_auth_runtime',
   migration: 'fleet_auth_migration',
   backupRestore: 'fleet_auth_backup',
+  sharedMigration: 'shared_schema_migration',
 } as const;
 const PASSWORDS = {
   fleet_auth_runtime: 'runtime-password',
   fleet_auth_migration: 'migration-password',
   fleet_auth_backup: 'backup-password',
+  shared_schema_migration: 'shared-migration-password',
 } as const;
 const keyPair = generateKeyPairSync('ed25519');
 const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -83,6 +85,7 @@ function config(): FleetAuthConfig {
       runtimeDatabaseUrlRef: credential('FLEET_AUTH_RUNTIME_DATABASE_URL'),
       migrationDatabaseUrlRef: credential('FLEET_AUTH_MIGRATION_DATABASE_URL'),
       backupRestoreDatabaseUrlRef: credential('FLEET_AUTH_BACKUP_DATABASE_URL'),
+      sharedMigrationDatabaseUrlRef: credential('SHARED_SCHEMA_MIGRATION_DATABASE_URL'),
       authorityFloorRootRef: credential('FLEET_AUTH_AUTHORITY_FLOOR_ROOT'),
     },
     databaseRoles: ROLES,
@@ -140,6 +143,7 @@ async function freshContext(): Promise<GatewayTestContext> {
   const runtimeUrl = roleUrl(database.databaseUrl, ROLES.runtime);
   const migrationUrl = roleUrl(database.databaseUrl, ROLES.migration);
   const backupUrl = roleUrl(database.databaseUrl, ROLES.backupRestore);
+  const sharedMigrationUrl = roleUrl(database.databaseUrl, ROLES.sharedMigration);
   return {
     databaseName: database.databaseName,
     runtimeUrl,
@@ -153,6 +157,7 @@ async function freshContext(): Promise<GatewayTestContext> {
       FLEET_AUTH_RUNTIME_DATABASE_URL: runtimeUrl,
       FLEET_AUTH_MIGRATION_DATABASE_URL: migrationUrl,
       FLEET_AUTH_BACKUP_DATABASE_URL: backupUrl,
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL: sharedMigrationUrl,
       FLEET_AUTH_AUTHORITY_FLOOR_ROOT: authorityFloorRoot,
     }),
     systemDataDir,

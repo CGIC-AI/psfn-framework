@@ -10,7 +10,7 @@ import {
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import {
@@ -239,7 +239,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
   fleet: ResolvedCompanionsFleetConfig;
   systemDataDir: string;
   backupRestoreDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   schemaAccessContracts: readonly FleetAuthSchemaAccessContract[];
   backupConfig: BackupRuntimeConfig;

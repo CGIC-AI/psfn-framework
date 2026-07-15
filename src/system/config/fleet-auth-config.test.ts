@@ -49,12 +49,14 @@ function validConfig(publicKeyPem: string): FleetAuthConfig {
       runtimeDatabaseUrlRef: credential('FLEET_AUTH_RUNTIME_DATABASE_URL'),
       migrationDatabaseUrlRef: credential('FLEET_AUTH_MIGRATION_DATABASE_URL'),
       backupRestoreDatabaseUrlRef: credential('FLEET_AUTH_BACKUP_DATABASE_URL'),
+      sharedMigrationDatabaseUrlRef: credential('SHARED_SCHEMA_MIGRATION_DATABASE_URL'),
       authorityFloorRootRef: credential('FLEET_AUTH_AUTHORITY_FLOOR_ROOT'),
     },
     databaseRoles: {
       runtime: 'fleet_auth_runtime',
       migration: 'fleet_auth_migration',
       backupRestore: 'fleet_auth_backup',
+      sharedMigration: 'shared_schema_migration',
     },
     verifierKeys: [{
       issuer: 'psfn-fleet-auth',
@@ -219,6 +221,13 @@ describe('fleet-auth owner-file configuration', () => {
         runtimeDatabaseUrlRef: credential('POSTGRES_DATABASE_URL'),
       },
     }, 'fleet-auth.json')).toThrow(/must not reuse POSTGRES_DATABASE_URL/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      databaseRoles: {
+        ...config.databaseRoles,
+        sharedMigration: config.databaseRoles.migration,
+      },
+    }, 'fleet-auth.json')).toThrow(/four distinct roles/);
   });
 
   it('resolves every private credential only at the gateway and enforces role/database separation', () => {
@@ -235,6 +244,8 @@ describe('fleet-auth owner-file configuration', () => {
       FLEET_AUTH_RUNTIME_DATABASE_URL: 'postgres://fleet_auth_runtime:runtime@db.example.test/psfn',
       FLEET_AUTH_MIGRATION_DATABASE_URL: 'postgres://fleet_auth_migration:migrate@db.example.test/psfn',
       FLEET_AUTH_BACKUP_DATABASE_URL: 'postgres://fleet_auth_backup:backup@db.example.test/psfn',
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+        'postgres://shared_schema_migration:shared@db.example.test/psfn',
       FLEET_AUTH_AUTHORITY_FLOOR_ROOT: floorRoot,
     };
     const resolved = resolveGatewayFleetAuthSecrets({
@@ -245,8 +256,19 @@ describe('fleet-auth owner-file configuration', () => {
     expect(resolved.database.runtimeUrl).toContain('fleet_auth_runtime');
     expect(resolved.database.migrationUrl).toContain('fleet_auth_migration');
     expect(resolved.database.backupRestoreUrl).toContain('fleet_auth_backup');
+    expect(resolved.database.sharedMigrationUrl).toContain('shared_schema_migration');
     expect(resolved.authorityFloorRoot).toBe(floorRoot);
     expect(resolved.assertionSigningKid).toBe('2026-07-primary');
+
+    const {
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL: _missingSharedMigration,
+      ...missingSharedMigrationCredential
+    } = credentials;
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(missingSharedMigrationCredential),
+      protectedRestoreRoots: [],
+    })).toThrow(/Shared schema migration database credential/);
 
     expect(() => resolveGatewayFleetAuthSecrets({
       config,
@@ -320,6 +342,24 @@ describe('fleet-auth owner-file configuration', () => {
       }),
       protectedRestoreRoots: [],
     })).toThrow(/routing or authentication query override/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+          `${credentials.SHARED_SCHEMA_MIGRATION_DATABASE_URL}?dbname=other`,
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/routing or authentication query override/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+          'postgres://shared_schema_migration:shared@other.example.test/psfn',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/must target the same exact database/);
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {

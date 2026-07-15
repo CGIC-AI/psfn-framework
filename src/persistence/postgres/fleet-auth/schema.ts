@@ -19,6 +19,15 @@ export interface FleetAuthDatabaseRoles {
   backupRestore: string;
 }
 
+/**
+ * Complete database authority set for a fleet backup family. The shared-world
+ * schema has its own migration owner; it is deliberately not one of the three
+ * fleet_auth roles above and receives no fleet_auth privileges.
+ */
+export interface FleetAuthFamilyDatabaseRoles extends FleetAuthDatabaseRoles {
+  sharedMigration: string;
+}
+
 // The fleet-auth runtime, migration, and backup/restore credentials are
 // least-privilege LOGIN roles. Their exact attribute contract is: LOGIN only,
 // with NONE of PostgreSQL's cluster-wide authority attributes. Each of these
@@ -125,7 +134,7 @@ function migrationChecksum(sql: string): string {
 }
 
 function assertDistinctRoles(roles: FleetAuthDatabaseRoles): void {
-  const values = Object.values(roles);
+  const values = [roles.runtime, roles.migration, roles.backupRestore];
   values.forEach(quoteIdentifier);
   if (new Set(values).size !== values.length) {
     throw new Error('Fleet auth PostgreSQL runtime, migration, and backup/restore roles must be distinct');
@@ -199,7 +208,7 @@ async function assertCurrentRole(
       + memberships.rows.map(row => row.role_name).join(', '),
     );
   }
-  const protectedRoles = Object.values(roles);
+  const protectedRoles = [roles.runtime, roles.migration, roles.backupRestore];
   const inverseMemberships = await pool.query<{
     member_role: string;
     protected_role: string;

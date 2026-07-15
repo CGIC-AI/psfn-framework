@@ -3,16 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { buildFleetAuthBackupCycleOptions } from './fleet-scheduler.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const FLEET: ResolvedCompanionsFleetConfig = {

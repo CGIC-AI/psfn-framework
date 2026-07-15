@@ -44,6 +44,7 @@ import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
+import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -78,7 +79,12 @@ export interface AgentPersistenceRuntime {
 export interface CreateAgentPersistenceRuntimeOptions {
   config: Pick<
     SubstrateConfig,
-    'databasePath' | 'persistenceBackend' | 'postgresDatabaseUrl' | 'postgresSchema' | 'multiCompanion'
+    | 'databasePath'
+    | 'persistenceBackend'
+    | 'postgresDatabaseUrl'
+    | 'postgresSchema'
+    | 'multiCompanion'
+    | 'companionFleet'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -121,10 +127,22 @@ export async function createAgentPersistenceRuntime(
     }
   }
 
-  // Shared world schema (sprint 10, W5a). Multi-companion only: the store's
-  // connect provisions the `shared` schema (advisory-lock serialized, so N
-  // concurrently-starting agents are safe) before any presence access. With
-  // the flag off the shared schema is never created or touched.
+  // Shared world schema (sprint 10, W5a). The gateway has already run shared
+  // migrations under the dedicated shared owner before exposing its socket.
+  // Every agent proves its ordinary credential has exact own-schema + shared
+  // DML authority, reciprocal tenant isolation, and zero fleet_auth access
+  // before opening a shared store.
+  if (options.config.multiCompanion === true) {
+    if (!schema || !options.config.companionFleet) {
+      throw new Error('Multi-companion shared persistence requires a complete fleet schema identity');
+    }
+    await assertSharedSchemaRuntimeAuthority(databaseUrl, {
+      ownSchema: schema,
+      companionSchemas: options.config.companionFleet.companions.map(
+        companion => companion.postgresSchema,
+      ),
+    });
+  }
   const companionPresenceStore = options.config.multiCompanion === true
     ? await PostgresCompanionPresenceStore.connect(databaseUrl)
     : undefined;

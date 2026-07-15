@@ -31,6 +31,7 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
   ensurePostgresSchema: vi.fn(async () => undefined),
+  assertSharedSchemaRuntimeAuthority: vi.fn(async () => undefined),
   createReflectionMetacognitionJournalStore: vi.fn(function ReflectionMetacognitionJournalStore(path: string, options: unknown) {
     return {
       kind: 'reflection-metacognition-journal-store',
@@ -96,6 +97,10 @@ vi.mock('./postgres.js', () => ({
   ensurePostgresSchema: runtimeFactoryMocks.ensurePostgresSchema,
 }));
 
+vi.mock('./postgres/shared-schema.js', () => ({
+  assertSharedSchemaRuntimeAuthority: runtimeFactoryMocks.assertSharedSchemaRuntimeAuthority,
+}));
+
 beforeEach(() => {
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
   runtimeFactoryMocks.createPostgresEpisodicStore.mockClear();
@@ -109,6 +114,7 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
   runtimeFactoryMocks.createPostgresPool.mockClear();
   runtimeFactoryMocks.ensurePostgresSchemaExists.mockClear();
+  runtimeFactoryMocks.assertSharedSchemaRuntimeAuthority.mockClear();
   runtimeFactoryMocks.bootstrapPool.end.mockClear();
 });
 
@@ -236,6 +242,15 @@ describe('createAgentPersistenceRuntime', () => {
         postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
         postgresSchema: 'companion_x',
         multiCompanion: true,
+        companionFleet: {
+          persistenceRoot: '/tmp',
+          workspacesRoot: '/tmp/workspaces',
+          sharedWorkspacePath: '/tmp/workspaces/shared',
+          companions: [
+            { postgresSchema: 'companion_x' },
+            { postgresSchema: 'companion_y' },
+          ],
+        } as never,
       },
       pathSnapshot: {
         systemDataDir: '/tmp/system-data',
@@ -251,6 +266,13 @@ describe('createAgentPersistenceRuntime', () => {
 
     expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtimeFactoryMocks.assertSharedSchemaRuntimeAuthority).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      {
+        ownSchema: 'companion_x',
+        companionSchemas: ['companion_x', 'companion_y'],
+      },
     );
     expect(runtime.companionPresenceStore).toBe(runtimeFactoryMocks.postgresCompanionPresenceStore);
   });

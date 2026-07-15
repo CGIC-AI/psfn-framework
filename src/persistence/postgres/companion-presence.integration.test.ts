@@ -33,11 +33,12 @@ afterAll(async () => {
   }
 }, INTEGRATION_TIMEOUT_MS);
 
-async function freshDatabaseUrl(): Promise<string> {
+async function freshDatabaseUrl(options: { bootstrap?: boolean } = {}): Promise<string> {
   if (!harness) {
     throw new Error('Postgres integration harness is not available');
   }
   const database = await harness.createDatabase();
+  if (options.bootstrap !== false) await bootstrapSharedSchema(database.databaseUrl);
   return database.databaseUrl;
 }
 
@@ -88,7 +89,7 @@ describe('companion_presence shared-schema integration', () => {
   it(
     'is idempotent under N concurrently-provisioning agents (advisory-lock serialized)',
     async () => {
-      const databaseUrl = await freshDatabaseUrl();
+      const databaseUrl = await freshDatabaseUrl({ bootstrap: false });
       // Simulate a fleet of agents starting at once against a fresh database:
       // every concurrent provisioning path must succeed, not just one winner.
       await Promise.all(

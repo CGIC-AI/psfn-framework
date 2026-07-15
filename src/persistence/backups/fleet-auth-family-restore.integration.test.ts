@@ -14,12 +14,14 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { createPostgresPool, ensurePostgresSchema } from '../postgres.js';
+import { PostgresCompanionPresenceStore } from '../postgres/companion-presence-store.js';
+import { assertSharedSchemaRuntimeAuthority } from '../postgres/shared-schema.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import { reconcileFleetAuthAuthorityState } from '../postgres/fleet-auth/gateway-persistence.js';
 import {
   FLEET_AUTH_SCHEMA_NAME,
   migrateFleetAuthSchema,
-  type FleetAuthDatabaseRoles,
+  type FleetAuthFamilyDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import { runFleetAuthConsistentBackup } from './fleet-auth-coordinator.js';
 import {
@@ -27,17 +29,21 @@ import {
   verifyFleetAuthConsistentFamilyRestore,
 } from './fleet-restore.js';
 import { runFleetBackupCycle } from './service.js';
-import { resolveFleetAuthSchemaAccessContracts } from './fleet-auth-schema-access.js';
+import {
+  prepareFleetSharedSchemaRuntime,
+} from './fleet-shared-schema-startup.js';
 
 const TIMEOUT_MS = 120_000;
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'family_auth_runtime',
   migration: 'family_auth_migration',
   backupRestore: 'family_auth_backup',
+  sharedMigration: 'family_shared_migration',
 };
 const COMPANION_ROLE = 'family_companion_runtime';
 const COMPANION_ROLE_TWO = 'family_companion_two';
 const SHARED_OWNER_ROLE = 'family_shared_migration';
+const OVERPRIVILEGED_SHARED_ROLE = 'family_shared_overpriv';
 const PASSWORDS = {
   family_auth_runtime: 'runtime-password',
   family_auth_migration: 'migration-password',
@@ -45,6 +51,7 @@ const PASSWORDS = {
   family_companion_runtime: 'companion-password',
   family_companion_two: 'companion-two-password',
   family_shared_migration: 'shared-migration-password',
+  family_shared_overpriv: 'overprivileged-password',
 } as const;
 
 let harness: PostgresTestHarness | null = null;
@@ -65,13 +72,15 @@ beforeAll(async () => {
   const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
   try {
     for (const role of [
-      ...Object.values(ROLES), COMPANION_ROLE, COMPANION_ROLE_TWO, SHARED_OWNER_ROLE,
+      ...Object.values(ROLES), COMPANION_ROLE, COMPANION_ROLE_TWO,
+      OVERPRIVILEGED_SHARED_ROLE,
     ]) {
       await admin.query(
         `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 8 `
         + `PASSWORD '${PASSWORDS[role as keyof typeof PASSWORDS]}'`,
       );
     }
+    await admin.query(`ALTER ROLE ${quoteIdentifier(OVERPRIVILEGED_SHARED_ROLE)} SUPERUSER`);
   } finally {
     await admin.end();
   }
@@ -202,19 +211,57 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         GRANT USAGE ON SCHEMA companion_two TO ${quoteIdentifier(ROLES.backupRestore)};
         GRANT SELECT ON ALL TABLES IN SCHEMA companion_two TO ${quoteIdentifier(ROLES.backupRestore)};
       `);
+      const routedSharedMigrationUrl = new URL(source.sharedOwnerUrl);
+      routedSharedMigrationUrl.searchParams.set('service', 'shadow');
+      await expect(prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: routedSharedMigrationUrl.toString(),
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: ROLES,
+      })).rejects.toThrow(/routing or authentication query override/i);
+      await expect(prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: source.companionUrl,
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: ROLES,
+      })).rejects.toThrow(/must authenticate as PostgreSQL role family_shared_migration/i);
+      const mismatchedDatabase = await freshDatabase();
+      await expect(prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: mismatchedDatabase.sharedOwnerUrl,
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: ROLES,
+      })).rejects.toThrow(/targets another database/i);
+      const overprivilegedSharedUrl = roleUrl(
+        source.sharedOwnerUrl,
+        OVERPRIVILEGED_SHARED_ROLE,
+      );
+      await expect(prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: overprivilegedSharedUrl,
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: { ...ROLES, sharedMigration: OVERPRIVILEGED_SHARED_ROLE },
+      })).rejects.toThrow(/not a least-privilege LOGIN role/i);
+      await expect(sourceBackup.query("SELECT to_regnamespace('shared') IS NULL AS absent"))
+        .resolves.toMatchObject({ rows: [{ absent: true }] });
+      await prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: source.sharedOwnerUrl,
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: ROLES,
+      });
       await sourceSharedOwner.query(`
-        CREATE SCHEMA shared;
         CREATE TABLE shared.restore_probe (marker TEXT NOT NULL);
         INSERT INTO shared.restore_probe VALUES ('shared-source');
-        GRANT USAGE, CREATE ON SCHEMA shared
-          TO ${quoteIdentifier(COMPANION_ROLE)}, ${quoteIdentifier(COMPANION_ROLE_TWO)};
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA shared
-          TO ${quoteIdentifier(COMPANION_ROLE)}, ${quoteIdentifier(COMPANION_ROLE_TWO)};
-        GRANT USAGE ON SCHEMA shared TO ${quoteIdentifier(ROLES.backupRestore)};
-        GRANT SELECT ON ALL TABLES IN SCHEMA shared TO ${quoteIdentifier(ROLES.backupRestore)};
       `);
-      const productionAccessContracts = await resolveFleetAuthSchemaAccessContracts({
-        databaseUrl: source.backupUrl,
+      const productionAccessContracts = await prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: source.backupUrl,
+        sharedMigrationDatabaseUrl: source.sharedOwnerUrl,
         companionSchemas: ['companion_one', 'companion_two'],
         sharedSchema: 'shared',
         roles: ROLES,
@@ -358,7 +405,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
           shared: target.sharedOwnerUrl,
         },
         restoredAt: '2026-07-15T16:00:00.000Z',
-      })).rejects.toThrow(/role-routing override/i);
+      })).rejects.toThrow(/routing or authentication query override|role-routing override/i);
       const result = await restoreFleetAuthConsistentFamily({
         manifestPath: backup.manifestPath,
         backupRestoreDatabaseUrl: target.backupUrl,
@@ -373,13 +420,36 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         restoredAt: '2026-07-15T16:00:00.000Z',
       });
 
+      await prepareFleetSharedSchemaRuntime({
+        backupRestoreDatabaseUrl: target.backupUrl,
+        sharedMigrationDatabaseUrl: target.sharedOwnerUrl,
+        companionSchemas: ['companion_one', 'companion_two'],
+        sharedSchema: 'shared',
+        roles: ROLES,
+      });
+      await assertSharedSchemaRuntimeAuthority(target.companionUrl, {
+        ownSchema: 'companion_one',
+        companionSchemas: ['companion_one', 'companion_two'],
+      });
+      await assertSharedSchemaRuntimeAuthority(target.companionTwoUrl, {
+        ownSchema: 'companion_two',
+        companionSchemas: ['companion_one', 'companion_two'],
+      });
+
       expect(result.restoredSchemas).toEqual(['companion_one', 'companion_two', 'shared']);
       expect(result.fleetAuth.importedRows).toBeGreaterThan(0);
       const targetBackup = createPostgresPool(target.backupUrl, { max: 1 });
       const targetRuntime = createPostgresPool(target.runtimeUrl, { max: 1 });
       const targetCompanion = createPostgresPool(target.companionUrl, { max: 1 });
       const targetCompanionTwo = createPostgresPool(target.companionTwoUrl, { max: 1 });
+      const targetSharedMigration = createPostgresPool(target.sharedOwnerUrl, { max: 1 });
+      const presenceOne = await PostgresCompanionPresenceStore.connect(target.companionUrl);
+      const presenceTwo = await PostgresCompanionPresenceStore.connect(target.companionTwoUrl);
       try {
+        await expect(targetSharedMigration.query(`
+          CREATE TABLE shared.shared_authority_ddl_probe (marker TEXT NOT NULL);
+          DROP TABLE shared.shared_authority_ddl_probe;
+        `)).resolves.toBeDefined();
         await expect(targetBackup.query('SELECT marker FROM companion_one.restore_probe'))
           .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });
         await expect(targetBackup.query('SELECT marker FROM shared.restore_probe'))
@@ -422,11 +492,30 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
           .resolves.toMatchObject({
             rows: [{ marker: 'companion-write' }, { marker: 'shared-source' }],
           });
+        await presenceOne.upsertPresence({
+          companionId: '11111111-1111-4111-8111-111111111111',
+          siteId: 'site-one',
+          placeId: 'place-one',
+          kind: 'physical',
+        });
+        await expect(presenceTwo.listAll()).resolves.toHaveLength(1);
+        await expect(targetCompanion.query('ALTER TABLE shared.companion_presence ADD COLUMN denied TEXT'))
+          .rejects.toThrow(/must be owner|permission denied/i);
+        await expect(targetCompanionTwo.query('DROP TABLE shared.companion_presence'))
+          .rejects.toThrow(/must be owner|permission denied/i);
+        await expect(targetSharedMigration.query('SELECT 1 FROM companion_one.restore_probe'))
+          .rejects.toThrow(/permission denied/i);
+        await expect(targetSharedMigration.query(
+          `SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals`,
+        )).rejects.toThrow(/permission denied/i);
       } finally {
+        await presenceOne.close();
+        await presenceTwo.close();
         await targetBackup.end();
         await targetRuntime.end();
         await targetCompanion.end();
         await targetCompanionTwo.end();
+        await targetSharedMigration.end();
       }
 
       const conflictingTarget = await freshDatabase();

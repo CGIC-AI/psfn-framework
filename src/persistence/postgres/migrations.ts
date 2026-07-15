@@ -1931,7 +1931,13 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //   3 — shared_wiki_chunks (s10f9 shared-world wiki projection; SEPARATE
 //       statement list, see POSTGRES_SHARED_WIKI_MIGRATIONS below)
 //   4 — ICP autonomy content-free availability/episode/permit control plane
+//   5 — ICP autonomy invalidation fences
+//   6 — ICP fatigue turn reservations
+//   7 — ICP fatigue delivery fence
 export const SHARED_SCHEMA_NAME = 'shared';
+
+/** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki version 3). */
+export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [1, 2, 4, 5, 6, 7] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   // Version ledger for the shared schema. Independent of the per-companion

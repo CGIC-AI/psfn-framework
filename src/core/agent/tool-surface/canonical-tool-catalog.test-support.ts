@@ -27,7 +27,7 @@ import { createGenerateImageTool, createSelfieTool } from '../../../primitives/i
 import { createResponseControlTool } from '../no-reply-tool.js';
 import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
 
-export function createCanonicalFactoryTools(): AgentTool<any>[] {
+export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
   const inert = {} as never;
   return [
     createToolSearchTool(inert), createToolsetTool(inert),
@@ -40,13 +40,6 @@ export function createCanonicalFactoryTools(): AgentTool<any>[] {
     createNorthStarTool(inert), createBeadsTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
     createVaultTool(inert), createJournalTool(inert),
-  ];
-}
-
-export function createFullFactoryToolCatalog(): AgentTool<any>[] {
-  const inert = {} as never;
-  return [
-    ...createCanonicalFactoryTools(),
     createResearchLibraryTool(inert, inert),
   ];
 }

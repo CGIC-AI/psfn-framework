@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isRecord } from '../../../shared/utils/types.js';
-import { createCanonicalFactoryTools } from './canonical-tool-catalog.test-support.js';
+import { createProviderFactoryToolCatalog } from './canonical-tool-catalog.test-support.js';
 import {
   CANONICAL_TOOL_SURFACE_CONTRACTS,
   CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
@@ -72,16 +72,20 @@ function actionContractPattern(action: string): RegExp {
   return new RegExp(`\\baction\\s*=\\s*["']?${escaped}\\b`, 'u');
 }
 
+function countCompleteSentences(description: string): number {
+  return description.match(/[.!?](?=\s|$)/gu)?.length ?? 0;
+}
+
 describe('canonical first-party tool factories', () => {
   it('enumerates every canonical registry surface exactly once', () => {
-    const factoryNames = createCanonicalFactoryTools().map(tool => tool.name).sort();
+    const factoryNames = createProviderFactoryToolCatalog().map(tool => tool.name).sort();
     const registryNames = CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(entry => entry.name).sort();
 
     expect(factoryNames).toEqual(registryNames);
   });
 
   it('derives every concrete factory description from the canonical table', () => {
-    for (const tool of createCanonicalFactoryTools()) {
+    for (const tool of createProviderFactoryToolCatalog()) {
       expect(tool.description, tool.name).toBe(
         CANONICAL_TOOL_SURFACE_DESCRIPTIONS[
           tool.name as keyof typeof CANONICAL_TOOL_SURFACE_DESCRIPTIONS
@@ -90,8 +94,31 @@ describe('canonical first-party tool factories', () => {
     }
   });
 
+  it('gives every provider-visible factory a decision-ready schema description', () => {
+    for (const tool of createProviderFactoryToolCatalog()) {
+      const context = `${tool.name} description`;
+      expect(countCompleteSentences(tool.description), context).toBeGreaterThanOrEqual(3);
+      expect(tool.description, context).toMatch(/\bUse\b/u);
+      expect(tool.description, context).toContain('Example:');
+      expect(tool.description, context).toMatch(
+        /\b(?:returns?|reads?|writes?|changes?|reports?|does not|never|only)\b/iu,
+      );
+      expect(tool.description, `${context} missing adjacent-tool or when-not-use guidance`).toMatch(
+        /\b(?:do not|never|instead|prefer|does not replace)\b|\buse\s+[^.]{0,80}\b(?:for|first)\b/iu,
+      );
+
+      const contract = CANONICAL_TOOL_SURFACE_CONTRACTS[
+        tool.name as keyof typeof CANONICAL_TOOL_SURFACE_CONTRACTS
+      ];
+      expect(contract, `${tool.name} structured contract`).toBeDefined();
+      if (contract.actions.length <= 1) continue;
+      expect(tool.description, `${context} required-input boundary`).toMatch(/\brequire(?:d|s)?\b/iu);
+      expect(tool.description, `${context} optional-input boundary`).toMatch(/\boptional\b/iu);
+    }
+  });
+
   it('documents every preferred action exposed by a concrete factory schema', () => {
-    for (const tool of createCanonicalFactoryTools()) {
+    for (const tool of createProviderFactoryToolCatalog()) {
       const legacyAliases = LEGACY_ACTION_ALIASES_BY_TOOL[tool.name] ?? new Set<string>();
       const preferredActions = extractActionLiterals(tool.parameters)
         .filter(action => !legacyAliases.has(action));
@@ -104,10 +131,11 @@ describe('canonical first-party tool factories', () => {
   });
 
   it('keeps structured action contracts aligned with concrete factory schemas', () => {
-    for (const tool of createCanonicalFactoryTools()) {
+    for (const tool of createProviderFactoryToolCatalog()) {
       const contract = CANONICAL_TOOL_SURFACE_CONTRACTS[
         tool.name as keyof typeof CANONICAL_TOOL_SURFACE_CONTRACTS
       ];
+      expect(contract, `${tool.name} structured contract`).toBeDefined();
       const propertyNames = extractSchemaPropertyNames(tool.parameters);
       const legacyAliases = LEGACY_ACTION_ALIASES_BY_TOOL[tool.name] ?? new Set<string>();
       const schemaActions = extractActionLiterals(tool.parameters)

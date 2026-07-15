@@ -5,7 +5,7 @@ import { toPiTools } from '../../primitives/llm/conversion.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { ToolSchema } from '../../shared/contracts/runtime.js';
 import { PRE_DESCRIPTION_REWRITE_TOOL_DESCRIPTIONS } from './tool-schema-token-cost.fixture.js';
-import { createFullFactoryToolCatalog } from './tool-surface/canonical-tool-catalog.test-support.js';
+import { createProviderFactoryToolCatalog } from './tool-surface/canonical-tool-catalog.test-support.js';
 import {
   CANONICAL_FIRST_PARTY_TOOL_SURFACES,
   resolveToolPresentationRank,
@@ -35,7 +35,7 @@ function sha256(value: string): string {
 
 describe('full callable catalog schema token cost', () => {
   it('measures the fixed pre/post-description provider payload with the real schemas', () => {
-    const afterTools = orderLikeAgentState(createFullFactoryToolCatalog());
+    const afterTools = orderLikeAgentState(createProviderFactoryToolCatalog());
     const missingBaseline = afterTools
       .map(tool => tool.name)
       .filter(name => PRE_DESCRIPTION_REWRITE_TOOL_DESCRIPTIONS[name] === undefined);
@@ -77,11 +77,11 @@ describe('full callable catalog schema token cost', () => {
       totalTools: 29,
       includesLibrary: true,
       beforeTokens: 15_415,
-      afterTokens: 17_834,
-      deltaTokens: 2_419,
+      afterTokens: 18_009,
+      deltaTokens: 2_594,
       beforeBytes: 72_797,
-      afterBytes: 83_014,
-      providerSchemaHash: 'f78ebae5f66f3b1bba4bbd9ac941d325561d6149d6e1291b2f89d586a8550b47',
+      afterBytes: 83_859,
+      providerSchemaHash: 'cd04cfa7881b3209735a54c76f574d4b128914ff4d8b52263f74c4e396313f0c',
       parameterSchemaHash: '4411655d3f29691fe17b20af5a2eae8bc9d3417e8aac14c7ef73d4c3a6dcd997',
     });
 

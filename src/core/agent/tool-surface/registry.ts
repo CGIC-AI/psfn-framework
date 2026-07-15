@@ -45,6 +45,7 @@ export interface CanonicalToolSurfaceEntry {
   name: string;
   domain: FirstPartyToolDomain;
   exposure: CanonicalToolExposure;
+  presentationRankOverride?: number;
   description: string;
   actions?: readonly string[];
   capabilityMetadata: ToolCapabilityMetadata;
@@ -53,6 +54,8 @@ export interface CanonicalToolSurfaceEntry {
 
 const CAPABILITIES_REQUIREMENTS = 'src/system/capabilities/requirements.ts';
 const TOOLSET_RUNTIME = 'src/core/agent/substrate-agent/adaptive-tools-runtime.ts';
+
+export const TOOL_PRESENTATION_RANK_UNKNOWN = 200;
 
 export const MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES = [
   'session_new',
@@ -381,6 +384,20 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     retiredAliases: [],
   },
   {
+    name: 'library',
+    domain: 'knowledge',
+    exposure: 'extended',
+    // Preserve its already-shipped tail position while canonicalizing only its description contract.
+    presentationRankOverride: TOOL_PRESENTATION_RANK_UNKNOWN,
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.library,
+    actions: ['list', 'read', 'import_text', 'import_file', 'promote_scratchpad'],
+    capabilityMetadata: {
+      kind: 'action_aware',
+      source: 'src/faculties/memory/research-library/tools.ts',
+    },
+    retiredAliases: [],
+  },
+  {
     name: 'schedule',
     domain: 'scheduler',
     exposure: 'core',
@@ -529,12 +546,10 @@ const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, numbe
   system: 170,
 };
 
-export const TOOL_PRESENTATION_RANK_UNKNOWN = 200;
-
 export function resolveToolPresentationRank(toolName: string): number {
   const canonical = CANONICAL_BY_NAME.get(toolName);
   if (!canonical) return TOOL_PRESENTATION_RANK_UNKNOWN;
-  return TOOL_PRESENTATION_DOMAIN_RANK[canonical.domain];
+  return canonical.presentationRankOverride ?? TOOL_PRESENTATION_DOMAIN_RANK[canonical.domain];
 }
 
 const CANONICAL_BY_NAME = new Map(

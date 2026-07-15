@@ -25,6 +25,19 @@ export interface PostgresFleetAuthBrokerStoreOptions {
   pool: Pool;
   sessionPepper: string;
   tokenEncryptionKey: string;
+  providerRevocationAuthority: ProviderRevocationAuthorityPort;
+}
+
+export interface ProviderRevocationAuthorityPort {
+  fence(input: {
+    provider: 'discord';
+    subjectId: string;
+    reasonDigest: string;
+    at: Date;
+  }): Promise<{
+    authorityGeneration: number;
+    reconcile(client: PoolClient): Promise<{ globalAuthEpoch: number }>;
+  }>;
 }
 
 function safeInteger(value: string, field: string): number {
@@ -38,10 +51,12 @@ function safeInteger(value: string, field: string): number {
 export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   private readonly pool: Pool;
   private readonly codec: FleetAuthSecretCodec;
+  private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort;
 
   constructor(options: PostgresFleetAuthBrokerStoreOptions) {
     this.pool = options.pool;
     this.codec = new FleetAuthSecretCodec(options);
+    this.providerRevocationAuthority = options.providerRevocationAuthority;
   }
 
   async createOAuthTransaction(
@@ -51,10 +66,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   }
 
   async consumeOAuthTransaction(
-    stateDigest: string,
-    now: Date,
+    input: Parameters<FleetAuthBrokerStore['consumeOAuthTransaction']>[0],
   ): ReturnType<FleetAuthBrokerStore['consumeOAuthTransaction']> {
-    return await consumeOAuthTransaction(this.pool, this.codec, stateDigest, now);
+    return await consumeOAuthTransaction(this.pool, this.codec, input);
   }
 
   async createLoginSession(
@@ -267,6 +281,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   ): Promise<void> {
     await revokeProviderAuthority(
       this.pool,
+      this.providerRevocationAuthority,
       (client, token, csrfToken, now) => this.lockValidSession(
         client,
         token,
@@ -326,6 +341,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     if (existing) {
       if ((existing.provider_state !== 'pending' && existing.provider_state !== 'active')
         || (existing.principal_status !== 'pending' && existing.principal_status !== 'active')
+        || existing.provider_state !== existing.principal_status
         || existing.provider_restore_state !== 'live'
         || existing.principal_restore_state !== 'live') {
         throw new FleetAuthBrokerError(

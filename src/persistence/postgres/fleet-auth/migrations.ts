@@ -507,10 +507,28 @@ CREATE INDEX browser_sessions_token_lookup_idx
   ON browser_sessions (token_digest, revoked_at);
 `;
 
+const OAUTH_INITIATING_BROWSER_SQL = `
+ALTER TABLE oauth_transactions
+  ADD COLUMN initiating_browser_digest TEXT
+    CHECK (initiating_browser_digest ~ '^[0-9a-f]{64}$');
+
+-- Transactions created before browser binding cannot safely complete. Preserve
+-- historical receipts but revoke every still-pending unbound transaction.
+UPDATE oauth_transactions
+SET status = 'revoked'
+WHERE initiating_browser_digest IS NULL
+  AND status = 'pending';
+
+ALTER TABLE oauth_transactions
+  ADD CONSTRAINT oauth_transactions_pending_browser_bound
+  CHECK (status <> 'pending' OR initiating_browser_digest IS NOT NULL);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
   { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
   { version: 5, name: 'oauth_broker_sessions', sql: OAUTH_BROKER_SESSION_SQL },
+  { version: 6, name: 'oauth_initiating_browser_binding', sql: OAUTH_INITIATING_BROWSER_SQL },
 ] as const;

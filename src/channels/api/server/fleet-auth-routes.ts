@@ -13,6 +13,7 @@ const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
+const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
 const CSRF_HEADER_NAME = 'x-psfn-csrf';
 const MUTATION_BODY_LIMIT = 2048;
 
@@ -20,19 +21,23 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return typeof value === 'string' ? value : undefined;
 }
 
-function readSessionCookie(request: IncomingMessage): string | undefined {
+function readOpaqueCookie(request: IncomingMessage, name: string): string | undefined {
   const raw = singleHeader(request.headers.cookie);
   if (!raw) return undefined;
   const matches: string[] = [];
   for (const part of raw.split(';')) {
     const separator = part.indexOf('=');
     if (separator <= 0) continue;
-    if (part.slice(0, separator).trim() !== SESSION_COOKIE_NAME) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
     const value = part.slice(separator + 1).trim();
     if (value) matches.push(value);
   }
   if (matches.length !== 1 || !/^[A-Za-z0-9_-]{43}$/u.test(matches[0]!)) return undefined;
   return matches[0];
+}
+
+function readSessionCookie(request: IncomingMessage): string | undefined {
+  return readOpaqueCookie(request, SESSION_COOKIE_NAME);
 }
 
 function requireSingleQuery(url: URL, name: string): string | undefined {
@@ -59,6 +64,15 @@ function sessionCookie(token: string, absoluteExpiresAt: Date, now = Date.now())
 
 function clearSessionCookie(): string {
   return `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
+}
+
+function preauthCookie(token: string, expiresAt: Date, now = Date.now()): string {
+  const maxAge = Math.max(0, Math.floor((expiresAt.getTime() - now) / 1000));
+  return `${PREAUTH_COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;
+}
+
+function clearPreauthCookie(): string {
+  return `${PREAUTH_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function sendRouteError(response: ServerResponse, error: unknown): void {
@@ -97,6 +111,7 @@ export class FleetAuthHttpRoutes {
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Referrer-Policy', 'no-referrer');
+    const isCallback = request.method === 'GET' && url.pathname === this.callbackPath;
     try {
       if (request.method === 'GET' && url.pathname === LOGIN_PATH) {
         const returnPath = requireSingleQuery(url, 'return_to');
@@ -106,6 +121,10 @@ export class FleetAuthHttpRoutes {
         const started = await this.broker.beginLogin({ returnPath });
         response.statusCode = 302;
         response.setHeader('Location', started.authorizationUrl);
+        response.setHeader('Set-Cookie', preauthCookie(
+          started.initiatingBrowserToken,
+          started.expiresAt,
+        ));
         response.end();
         return;
       }
@@ -119,12 +138,13 @@ export class FleetAuthHttpRoutes {
           state,
           code,
           requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
+          initiatingBrowserToken: readOpaqueCookie(request, PREAUTH_COOKIE_NAME) ?? '',
         });
         response.statusCode = 303;
-        response.setHeader('Set-Cookie', sessionCookie(
-          completed.session.token,
-          completed.session.absoluteExpiresAt,
-        ));
+        response.setHeader('Set-Cookie', [
+          clearPreauthCookie(),
+          sessionCookie(completed.session.token, completed.session.absoluteExpiresAt),
+        ]);
         response.setHeader('Location', completed.returnPath);
         response.end();
         return;
@@ -189,7 +209,10 @@ export class FleetAuthHttpRoutes {
       }
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     } catch (error) {
-      if (!response.writableEnded) sendRouteError(response, error);
+      if (!response.writableEnded) {
+        if (isCallback) response.setHeader('Set-Cookie', clearPreauthCookie());
+        sendRouteError(response, error);
+      }
     }
   }
 }

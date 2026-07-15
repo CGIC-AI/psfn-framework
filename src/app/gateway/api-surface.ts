@@ -299,26 +299,33 @@ export async function startOptionalGatewayApiServer(
   }
 
   const env = options.env ?? process.env;
+  const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
   assertFleetAuthLegacySurfacesUnavailable({
     fleetAuthEnabled: options.config.fleetAuth !== undefined,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },
-    principalAuthenticationWired: options.fleetAuthBroker !== undefined,
+    principalAuthenticationWired: false,
+    fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
   });
-  const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
+  const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
+    && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
-  const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
-  const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
-    reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
-  });
+  const trustedProxyClientCertToken = fleetAuthBootstrapOnly
+    ? undefined
+    : parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
+  const satelliteApiKeys = fleetAuthBootstrapOnly
+    ? []
+    : parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
+        reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
+      });
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });
-  const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
+  const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
@@ -339,7 +346,7 @@ export async function startOptionalGatewayApiServer(
   const voiceWebSocketPath = voiceWebSocketRuntime
     ? undefined
     : DISABLED_VOICE_WEBSOCKET_PATH;
-  const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay
+  const companionRelay: CompanionRelayHttpDeps | undefined = !fleetAuthBootstrapOnly && options.companionRelay
     ? {
         ...options.companionRelay,
         stimuli: new CompanionStimulusIngress({
@@ -379,12 +386,13 @@ export async function startOptionalGatewayApiServer(
     eventBus: inertEventBus,
     sessionManager: inertSessionManager,
     sensorIngest: inertSensorIngest,
-    apiKey: env.API_KEY || undefined,
-    adminToken: env.ADMIN_TOKEN || undefined,
+    apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
+    adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,
     ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
+    fleetAuthBootstrapOnly,
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,

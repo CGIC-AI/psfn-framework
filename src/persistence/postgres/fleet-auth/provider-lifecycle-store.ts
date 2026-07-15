@@ -8,18 +8,12 @@ import {
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME } from './first-owner-sql.js';
 import type { InsertSession, LockValidSession } from './oauth-session-store-types.js';
+import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
-
-function safeInteger(value: string, field: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid fleet_auth ${field}`);
-  }
-  return parsed;
-}
 
 export async function revokeProviderAuthority(
   pool: Pool,
+  providerRevocationAuthority: ProviderRevocationAuthorityPort,
   lockValidSession: LockValidSession,
   input: Parameters<FleetAuthBrokerStore['revokeProvider']>[0],
 ): Promise<void> {
@@ -37,18 +31,15 @@ export async function revokeProviderAuthority(
     if (!subject || (subject.state !== 'pending' && subject.state !== 'active')) {
       throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
     }
-    const globalAuthEpoch = safeInteger(current.global_auth_epoch, 'global_auth_epoch');
-    const authority = await client.query<{
-      authority_generation: string;
-      global_auth_epoch: string;
-    }>(`
-      SELECT authority_generation, global_auth_epoch
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      WHERE singleton = TRUE
-      FOR SHARE
-    `);
-    const authorityRow = authority.rows.at(0);
-    if (!authorityRow) throw new Error('fleet_auth authority_state singleton is missing');
+    // Publish the non-restored provider tombstone before any database mutation.
+    // If reconciliation or later SQL fails, the durable floor remains advanced
+    // and the next startup quarantines the stale database (safe over-fencing).
+    const authorityFence = await providerRevocationAuthority.fence({
+      provider: 'discord',
+      subjectId: subject.subject_id,
+      reasonDigest: input.reasonDigest,
+      at: input.now,
+    });
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
         (provider, subject_id, prior_principal_id, authority_generation,
@@ -57,7 +48,7 @@ export async function revokeProviderAuthority(
     `, [
       subject.subject_id,
       current.principal_id,
-      authorityRow.authority_generation,
+      authorityFence.authorityGeneration,
       input.now,
       input.reasonDigest,
     ]);
@@ -71,7 +62,7 @@ export async function revokeProviderAuthority(
       randomUUID(),
       subject.subject_id,
       current.principal_id,
-      authorityRow.authority_generation,
+      authorityFence.authorityGeneration,
       input.now,
     ]);
     await client.query(`
@@ -116,6 +107,10 @@ export async function revokeProviderAuthority(
       DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
       WHERE principal_id = $1
     `, [current.principal_id]);
+    // Reconcile only after the explicit revocation mutations have run because
+    // reconciliation quarantines all remaining durable authority. It still
+    // runs inside this transaction and therefore precedes COMMIT.
+    const reconciledAuthority = await authorityFence.reconcile(client);
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
         (event_id, actor_context, action, resource, decision, reason_code,
@@ -125,8 +120,8 @@ export async function revokeProviderAuthority(
     `, [
       randomUUID(),
       current.principal_id,
-      authorityRow.authority_generation,
-      globalAuthEpoch,
+      authorityFence.authorityGeneration,
+      reconciledAuthority.globalAuthEpoch,
       input.now,
     ]);
     await client.query('COMMIT');

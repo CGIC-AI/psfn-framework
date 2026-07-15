@@ -54,6 +54,8 @@ function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>
   const broker = {
     beginLogin: vi.fn(async () => ({
       authorizationUrl: 'https://discord.com/oauth2/authorize?state=opaque',
+      initiatingBrowserToken: 'p'.repeat(43),
+      expiresAt: new Date('2099-07-15T12:05:00.000Z'),
     })),
     completeCallback: vi.fn(async (input: { requestOrigin: string }) => {
       if (input.requestOrigin !== 'https://fleet.example.test') {
@@ -97,7 +99,7 @@ function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>
 }
 
 describe('gateway-only fleet auth HTTP routes', () => {
-  it('redirects login to the broker-generated authorization URL without setting credentials', async () => {
+  it('redirects login with only an opaque initiating-browser __Host- cookie', async () => {
     const { handler, broker } = routes();
     const res = response();
     await handler.handle(
@@ -108,7 +110,9 @@ describe('gateway-only fleet auth HTTP routes', () => {
     expect(broker.beginLogin).toHaveBeenCalledWith({ returnPath: '/fleet' });
     expect(res.statusCode).toBe(302);
     expect(res.headers.get('location')).toBe('https://discord.com/oauth2/authorize?state=opaque');
-    expect(res.headers.has('set-cookie')).toBe(false);
+    expect(res.headers.get('set-cookie')).toMatch(
+      /^__Host-psfn_preauth=p{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/u,
+    );
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
   });
@@ -125,23 +129,34 @@ describe('gateway-only fleet auth HTTP routes', () => {
       requestOrigin: 'invalid://callback-origin',
     }));
     expect(res.statusCode).toBe(400);
-    expect(res.headers.has('set-cookie')).toBe(false);
+    expect(res.headers.get('set-cookie')).toBe(
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
   });
 
   it('sets only an opaque secure HttpOnly __Host- cookie on an exact TLS callback', async () => {
-    const { handler } = routes();
+    const { handler, broker } = routes();
     const res = response();
     const tlsSocket = new TLSSocket(new Socket());
     await handler.handle(
-      request('GET', { host: 'fleet.example.test' }, tlsSocket),
+      request('GET', {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
+      }, tlsSocket),
       res,
       new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
     );
     expect(res.statusCode).toBe(303);
     expect(res.headers.get('location')).toBe('/fleet');
-    expect(res.headers.get('set-cookie')).toMatch(
-      /^__Host-psfn_session=a{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/u,
-    );
+    expect(broker.completeCallback).toHaveBeenCalledWith(expect.objectContaining({
+      initiatingBrowserToken: 'p'.repeat(43),
+    }));
+    expect(res.headers.get('set-cookie')).toEqual([
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+      expect.stringMatching(
+        /^__Host-psfn_session=a{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/u,
+      ),
+    ]);
     expect(res.body).toBe('');
     expect(String(res.headers.get('location'))).not.toContain('a'.repeat(43));
     tlsSocket.destroy();

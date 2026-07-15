@@ -30,6 +30,7 @@ export class FleetAuthBrokerError extends Error {
 export interface OAuthTransactionInput {
   transactionId: string;
   stateDigest: string;
+  initiatingBrowserDigest: string;
   pkceVerifier: string;
   callbackUri: string;
   returnPath: string;
@@ -58,7 +59,11 @@ export interface FleetAuthSessionRecord {
 
 export interface FleetAuthBrokerStore {
   createOAuthTransaction(input: OAuthTransactionInput): Promise<void>;
-  consumeOAuthTransaction(stateDigest: string, now: Date): Promise<ConsumedOAuthTransaction>;
+  consumeOAuthTransaction(input: {
+    stateDigest: string;
+    initiatingBrowserDigest: string;
+    now: Date;
+  }): Promise<ConsumedOAuthTransaction>;
   createLoginSession(input: {
     transactionId: string;
     providerSubjectId: string;
@@ -218,9 +223,14 @@ export class GatewayFleetAuthBroker {
     this.firstOwnerAssurance = options.firstOwnerAssurance;
   }
 
-  async beginLogin(input: { returnPath: string }): Promise<{ authorizationUrl: string }> {
+  async beginLogin(input: { returnPath: string }): Promise<{
+    authorizationUrl: string;
+    initiatingBrowserToken: string;
+    expiresAt: Date;
+  }> {
     const returnPath = parseReturnPath(input.returnPath, this.config.canonicalOrigin);
     const state = opaqueToken(this.randomBytes);
+    const initiatingBrowserToken = opaqueToken(this.randomBytes);
     const pkceVerifier = opaqueToken(this.randomBytes);
     const callbackUri = `${this.config.canonicalOrigin}${this.config.callbackPath}`;
     const createdAt = this.now();
@@ -228,6 +238,7 @@ export class GatewayFleetAuthBroker {
     await this.store.createOAuthTransaction({
       transactionId: randomUUID(),
       stateDigest: this.digest(state),
+      initiatingBrowserDigest: this.digest(initiatingBrowserToken),
       pkceVerifier,
       callbackUri,
       returnPath,
@@ -247,13 +258,14 @@ export class GatewayFleetAuthBroker {
       createHash('sha256').update(pkceVerifier).digest('base64url'),
     );
     authorization.searchParams.set('code_challenge_method', 'S256');
-    return { authorizationUrl: authorization.toString() };
+    return { authorizationUrl: authorization.toString(), initiatingBrowserToken, expiresAt };
   }
 
   async completeCallback(input: {
     state: string;
     code: string;
     requestOrigin: string;
+    initiatingBrowserToken: string;
   }): Promise<{ returnPath: string; session: FleetAuthSessionRecord }> {
     if (input.requestOrigin !== this.config.canonicalOrigin) {
       throw new FleetAuthBrokerError(
@@ -262,11 +274,16 @@ export class GatewayFleetAuthBroker {
         'OAuth callback origin does not match the configured fleet origin',
       );
     }
-    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)) {
+    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)
+      || !/^[A-Za-z0-9_-]{43}$/u.test(input.initiatingBrowserToken)) {
       throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
     }
     const now = this.now();
-    const transaction = await this.store.consumeOAuthTransaction(this.digest(input.state), now);
+    const transaction = await this.store.consumeOAuthTransaction({
+      stateDigest: this.digest(input.state),
+      initiatingBrowserDigest: this.digest(input.initiatingBrowserToken),
+      now,
+    });
     if (transaction.kind !== 'login') {
       throw new FleetAuthBrokerError(
         'oauth_transaction_kind_mismatch',

@@ -65,11 +65,15 @@ class FakeStore implements FleetAuthBrokerStore {
     this.transaction = input;
   }
 
-  async consumeOAuthTransaction(stateDigest: string, now: Date): Promise<ConsumedOAuthTransaction> {
-    if (!this.transaction || this.consumed || this.transaction.stateDigest !== stateDigest) {
+  async consumeOAuthTransaction(
+    input: Parameters<FleetAuthBrokerStore['consumeOAuthTransaction']>[0],
+  ): Promise<ConsumedOAuthTransaction> {
+    if (!this.transaction || this.consumed
+      || this.transaction.stateDigest !== input.stateDigest
+      || this.transaction.initiatingBrowserDigest !== input.initiatingBrowserDigest) {
       throw new FleetAuthBrokerError('invalid_oauth_state', 400);
     }
-    if (this.transaction.expiresAt.getTime() <= now.getTime()) {
+    if (this.transaction.expiresAt.getTime() <= input.now.getTime()) {
       throw new FleetAuthBrokerError('expired_oauth_transaction', 400);
     }
     this.consumed = true;
@@ -236,6 +240,7 @@ describe('gateway fleet auth broker', () => {
       state: new URL(started.authorizationUrl).searchParams.get('state')!,
       code: 'one-time-code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
     });
 
     expect(completed.returnPath).toBe('/fleet');
@@ -254,6 +259,39 @@ describe('gateway fleet auth broker', () => {
     }));
   });
 
+  it('binds callback state to the opaque initiating browser without consuming it on mismatch', async () => {
+    const store = new FakeStore();
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(200, {
+        access_token: 'access-secret', token_type: 'Bearer', expires_in: 3600, scope: 'identify',
+      }))
+      .mockResolvedValueOnce(response(200, { id: '123456789012345679' }));
+    const { broker } = makeBroker(store, fetchImpl);
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+
+    expect(started.initiatingBrowserToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(store.transaction?.initiatingBrowserDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(JSON.stringify(store.transaction)).not.toContain(started.initiatingBrowserToken);
+
+    await expect(broker.completeCallback({
+      state,
+      code: 'code',
+      requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: 'z'.repeat(43),
+    })).rejects.toMatchObject({ code: 'invalid_oauth_state' });
+    expect(store.consumed).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await expect(broker.completeCallback({
+      state,
+      code: 'code',
+      requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    })).resolves.toMatchObject({ session: { principalStatus: 'pending' } });
+    expect(store.consumed).toBe(true);
+  });
+
   it('consumes state once and fails closed on origin mismatch, expiry, provider outage, and malformed identity', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const { broker, store } = makeBroker(new FakeStore(), fetchImpl);
@@ -264,6 +302,7 @@ describe('gateway fleet auth broker', () => {
       state,
       code: 'code',
       requestOrigin: 'https://attacker.example',
+      initiatingBrowserToken: started.initiatingBrowserToken,
     })).rejects.toMatchObject({ code: 'callback_origin_mismatch' });
     expect(store.consumed).toBe(false);
 
@@ -272,11 +311,13 @@ describe('gateway fleet auth broker', () => {
       state,
       code: 'code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
     })).rejects.toMatchObject({ code: 'provider_unavailable', message: 'Discord OAuth provider unavailable' });
     await expect(broker.completeCallback({
       state,
       code: 'code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
     })).rejects.toMatchObject({ code: 'invalid_oauth_state' });
 
     const malformedFetch = vi.fn<typeof fetch>()
@@ -290,6 +331,7 @@ describe('gateway fleet auth broker', () => {
       state: new URL(malformedStart.authorizationUrl).searchParams.get('state')!,
       code: 'code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: malformedStart.initiatingBrowserToken,
     })).rejects.toMatchObject({ code: 'malformed_provider_response' });
   });
 
@@ -306,6 +348,7 @@ describe('gateway fleet auth broker', () => {
       state: new URL(started.authorizationUrl).searchParams.get('state')!,
       code: 'code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
     });
 
     await expect(broker.rotateSession({
@@ -359,6 +402,7 @@ describe('gateway fleet auth broker', () => {
       state: new URL(started.authorizationUrl).searchParams.get('state')!,
       code: 'code',
       requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
     });
 
     const elevated = await broker.completeFirstOwnerBootstrap({

@@ -414,6 +414,8 @@ export interface ApiServerConfig {
   icpAutonomyOperator?: IcpAutonomyOperatorPort;
   /** Gateway-only OAuth/session routes. Never constructed in operator/agent processes. */
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  /** Before opl1.6 installs the SSO resolver, expose only fleet-auth bootstrap/session routes. */
+  fleetAuthBootstrapOnly?: boolean;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -459,6 +461,7 @@ export class ApiServer implements ChannelAdapterPort {
   private companionRelay?: CompanionRelayHttpDeps;
   private icpAutonomyOperator?: IcpAutonomyOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  private fleetAuthBootstrapOnly: boolean;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -490,6 +493,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.companionRelay = config.companionRelay;
     this.icpAutonomyOperator = config.icpAutonomyOperator;
     this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
+    this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -548,19 +552,25 @@ export class ApiServer implements ChannelAdapterPort {
   async init(): Promise<void> {}
 
   async start(): Promise<void> {
-    validateApiServerAuthConfig({
-      host: this.host,
-      port: this.port,
-      apiKey: this.apiKey,
-      allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
-      logger: log,
-    });
+    if (this.fleetAuthBootstrapOnly) {
+      if (!this.fleetAuthHttpRoutes) {
+        throw new Error('Fleet auth bootstrap routes are required before the bootstrap-only API can listen');
+      }
+    } else {
+      validateApiServerAuthConfig({
+        host: this.host,
+        port: this.port,
+        apiKey: this.apiKey,
+        allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
+        logger: log,
+      });
+    }
 
     return listenApiHttpServer({
       server: this.server,
       host: this.host,
       port: this.port,
-      apiKey: this.apiKey,
+      apiKey: this.fleetAuthBootstrapOnly ? undefined : this.apiKey,
       corsAllowedOrigins: this.corsAllowedOrigins,
       logger: log,
     });
@@ -574,6 +584,10 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.fleetAuthBootstrapOnly) {
+      this.voiceWebSocket.rejectUnknownUpgrade(socket);
+      return;
+    }
     const handled = this.voiceWebSocket.handleUpgrade(req, socket, head);
     if (!handled) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
@@ -582,6 +596,22 @@ export class ApiServer implements ChannelAdapterPort {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (!applyApiCorsPolicy(req, res, this.corsAllowedOrigins)) return;
+
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const path = url.pathname;
+    if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
+      void this.fleetAuthHttpRoutes.handle(req, res, url);
+      return;
+    }
+    if (this.fleetAuthBootstrapOnly) {
+      sendApiError(
+        res,
+        503,
+        'fleet_auth_principal_resolver_unavailable',
+        'Fleet-auth principal routing is unavailable until the SSO resolver is installed',
+      );
+      return;
+    }
 
     if (req.method === 'OPTIONS') {
       sendEmpty(res, 204);
@@ -598,12 +628,6 @@ export class ApiServer implements ChannelAdapterPort {
     });
     stripClientCertHeaders(req.headers);
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const path = url.pathname;
-    if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
-      void this.fleetAuthHttpRoutes.handle(req, res, url);
-      return;
-    }
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const companionRoute = matchCompanionRelayRoute(req.method, path);
     const icpOperatorCancelMatch = req.method === 'POST'

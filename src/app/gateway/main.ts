@@ -106,7 +106,8 @@ async function main(): Promise<void> {
     fleetAuthEnabled: config.fleetAuth !== undefined,
     processMode: 'gateway',
     env,
-    principalAuthenticationWired: config.fleetAuth !== undefined,
+    principalAuthenticationWired: false,
+    fleetAuthBootstrapRoutesWired: config.fleetAuth !== undefined,
   });
   applyGatewayTlsConfig({
     caPath: config.gatewayTlsCaPath,

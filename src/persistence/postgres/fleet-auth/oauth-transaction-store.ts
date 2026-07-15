@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import {
   FleetAuthBrokerError,
   type ConsumedOAuthTransaction,
+  type FleetAuthBrokerStore,
   type OAuthTransactionInput,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthSecretCodec } from './oauth-secret-codec.js';
@@ -36,13 +37,14 @@ export async function createOAuthTransaction(
     if (!globalAuthEpoch) throw new Error('fleet_auth authority_state singleton is missing');
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
-        (transaction_id, state_digest, pkce_verifier_digest,
+        (transaction_id, state_digest, initiating_browser_digest, pkce_verifier_digest,
          pkce_verifier_ciphertext, callback_uri, return_path, kind, status,
          global_auth_epoch, created_at, expires_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11)
     `, [
       input.transactionId,
       input.stateDigest,
+      input.initiatingBrowserDigest,
       codec.digest(input.pkceVerifier),
       codec.encrypt(input.pkceVerifier),
       input.callbackUri,
@@ -64,8 +66,7 @@ export async function createOAuthTransaction(
 export async function consumeOAuthTransaction(
   pool: Pool,
   codec: FleetAuthSecretCodec,
-  stateDigest: string,
-  now: Date,
+  input: Parameters<FleetAuthBrokerStore['consumeOAuthTransaction']>[0],
 ): Promise<ConsumedOAuthTransaction> {
   const client = await pool.connect();
   try {
@@ -77,18 +78,19 @@ export async function consumeOAuthTransaction(
              transaction.expires_at, transaction.global_auth_epoch
       FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions AS transaction
       WHERE transaction.state_digest = $1
+        AND transaction.initiating_browser_digest = $2
       FOR UPDATE
-    `, [stateDigest]);
+    `, [input.stateDigest, input.initiatingBrowserDigest]);
     const transaction = result.rows.at(0);
     if (!transaction || transaction.status !== 'pending') {
       throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth state is invalid or already used');
     }
-    if (transaction.expires_at.getTime() <= now.getTime()) {
+    if (transaction.expires_at.getTime() <= input.now.getTime()) {
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
         SET status = 'expired', consumed_at = $2
         WHERE transaction_id = $1
-      `, [transaction.transaction_id, now]);
+      `, [transaction.transaction_id, input.now]);
       await client.query('COMMIT');
       throw new FleetAuthBrokerError(
         'expired_oauth_transaction',
@@ -112,7 +114,7 @@ export async function consumeOAuthTransaction(
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
       SET status = 'consumed', consumed_at = $2
       WHERE transaction_id = $1
-    `, [transaction.transaction_id, now]);
+    `, [transaction.transaction_id, input.now]);
     await client.query('COMMIT');
     return {
       transactionId: transaction.transaction_id,

@@ -77,6 +77,27 @@ The headline fact governing everything below: the multi-companion substrate is *
   memory-port/trust-policy support 87/87, lint, ESM+DTS build, and worktree plus
   branch-range diff checks passed. The parent epic `psfn-framework-2z12` remains
   open for its other children.
+- `psfn-framework-2z12.10` is closed on integration merge `65c79e38`
+  (implementation `4c70daac`, bounded review remediation `4acbd9b1`). Salience
+  decay now runs on its own scheduler-owned `salienceDecayIntervalMs` key
+  defaulting to hourly (previously a 60s-seeded key aliased with
+  `maintenanceIntervalMs`), the compaction-guideline review rides the gated
+  heartbeat lane instead of the decay key, and retrieval computes decay lazily
+  so scoring is cadence-independent. Seed, runtime-config contract, owner-file
+  settings contract, Garden admin UI, and docs moved in the same change.
+- Both independent adversarial reviews (Opus and Pi, blind to each other)
+  converged on one verified blocker: retrieval re-applied exponential decay on
+  top of sweep-persisted already-decayed salience (squared decay; a one-half-life
+  memory scored 0.25 instead of 0.5). The bounded remediation adds a dedicated
+  `salience_decay_anchor_at` column persisted atomically with swept salience in
+  both stores (legacy rows backfill from `last_accessed`), makes retrieval decay
+  only the residual since the anchor, routes duplicate reinforcement through
+  effective salience, and pins the gap with sweep-then-retrieve and 120-day
+  aged-memory regressions that the original tests could not see.
+- Final integrated gate for `2z12.10`: memory/scheduler/config/settings
+  focused suites 378/378, real-PostgreSQL store integration 6/6 (new anchor
+  column exercised against a live database), lint, and ESM+DTS build passed on
+  the integrated branch.
 - Final tracker classification for the original nine-child wave: six closed
   and three implementation children genuinely open. Three newer scheduler-census
   children (`2z12.10`-`.12`) were subsequently attached to the epic and are not

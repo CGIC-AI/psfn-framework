@@ -8,9 +8,11 @@ import type {
 } from './transport.js';
 
 /** Create a mock NdjsonConnection that captures sent messages */
-function createMockConnection() {
+function createMockConnection(options: { heartbeatResults?: boolean[] } = {}) {
   const emitter = new EventEmitter();
   const sent: unknown[] = [];
+  let heartbeatCount = 0;
+  let destroyed = false;
   const transportStats: GatewayRpcSerializedTransportStats = {
     frameCount: 0,
     serializedBytes: 0,
@@ -34,6 +36,13 @@ function createMockConnection() {
       }
       return true;
     },
+    sendHeartbeat(): boolean {
+      heartbeatCount += 1;
+      return options.heartbeatResults?.shift() ?? true;
+    },
+    onHeartbeat(handler: () => void): void {
+      emitter.on('heartbeat', handler);
+    },
     onMessage(handler: (message: unknown) => void): void {
       emitter.on('message', handler);
     },
@@ -41,10 +50,13 @@ function createMockConnection() {
       emitter.on(event, handler);
     },
     destroy(): void {
+      if (destroyed) return;
+      destroyed = true;
+      emitter.emit('close');
       emitter.removeAllListeners();
     },
     get destroyed(): boolean {
-      return false;
+      return destroyed;
     },
     get serializedTransportStats(): GatewayRpcSerializedTransportStats {
       return structuredClone(transportStats);
@@ -64,6 +76,12 @@ function createMockConnection() {
   return {
     conn: conn as unknown as NdjsonConnection,
     sent,
+    get heartbeatCount(): number {
+      return heartbeatCount;
+    },
+    get destroyed(): boolean {
+      return destroyed;
+    },
     _emit: conn._emit,
     _emitClose: conn._emitClose,
     _emitError: conn._emitError,
@@ -1553,7 +1571,7 @@ describe('GatewayClient beads RPC wrappers', () => {
 });
 
 describe('GatewayClient keepalive', () => {
-  it('emits lightweight keepalive RPC frames while idle', async () => {
+  it('emits transport heartbeats without JSON-RPC frames while idle', async () => {
     vi.useFakeTimers();
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 1_000 });
@@ -1562,22 +1580,13 @@ describe('GatewayClient keepalive', () => {
       expect(conn.sent).toHaveLength(0);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(conn.sent).toHaveLength(1);
+      expect(conn.heartbeatCount).toBe(1);
+      expect(conn.sent).toHaveLength(0);
+      expect(conn.conn.serializedTransportStats.rpcCallCount).toBe(0);
 
-      const keepaliveReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
-      expect(keepaliveReq.method).toBe('discord.typing');
-      expect(keepaliveReq.params).toEqual({ channelId: 'internal:gateway-keepalive' });
-
-      conn._emit({
-        jsonrpc: '2.0',
-        id: keepaliveReq.id,
-        result: { success: true },
-      });
       await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(conn.sent).toHaveLength(2);
-      const secondKeepaliveReq = conn.sent[1] as { method: string };
-      expect(secondKeepaliveReq.method).toBe('discord.typing');
+      expect(conn.heartbeatCount).toBe(2);
+      expect(conn.sent).toHaveLength(0);
     } finally {
       client.destroy();
       vi.useRealTimers();
@@ -1591,19 +1600,32 @@ describe('GatewayClient keepalive', () => {
 
     try {
       await vi.advanceTimersByTimeAsync(500);
-      expect(conn.sent).toHaveLength(1);
-
-      const keepaliveReq = conn.sent[0] as { id: number };
-      conn._emit({
-        jsonrpc: '2.0',
-        id: keepaliveReq.id,
-        result: { success: true },
-      });
+      expect(conn.heartbeatCount).toBe(1);
 
       client.destroy();
       await vi.advanceTimersByTimeAsync(2_000);
 
-      expect(conn.sent).toHaveLength(1);
+      expect(conn.heartbeatCount).toBe(1);
+    } finally {
+      client.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('disconnects within one interval when the transport heartbeat cannot be sent', async () => {
+    vi.useFakeTimers();
+    const conn = createMockConnection({ heartbeatResults: [false] });
+    const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 1_000 });
+    const onDisconnect = vi.fn();
+    client.onDisconnect(onDisconnect);
+
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(conn.heartbeatCount).toBe(1);
+      expect(conn.destroyed).toBe(true);
+      expect(onDisconnect).toHaveBeenCalledOnce();
+      expect(onDisconnect).toHaveBeenCalledWith({ source: 'close' });
     } finally {
       client.destroy();
       vi.useRealTimers();

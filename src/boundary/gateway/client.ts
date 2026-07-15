@@ -151,7 +151,6 @@ const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
-const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 
 export interface GatewayClientOptions {
   voiceStreamQueueSize?: number;
@@ -209,7 +208,6 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private readonly keepaliveIntervalMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  private keepaliveInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
@@ -1087,7 +1085,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       return;
     }
     this.keepaliveTimer = setInterval(() => {
-      void this.sendKeepalive();
+      this.sendKeepalive();
     }, this.keepaliveIntervalMs);
     this.keepaliveTimer.unref();
   }
@@ -1100,19 +1098,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.keepaliveTimer = null;
   }
 
-  private async sendKeepalive(): Promise<void> {
-    if (this.isDestroying || this.keepaliveInFlight) {
+  private sendKeepalive(): void {
+    if (this.isDestroying) {
       return;
     }
-    this.keepaliveInFlight = true;
-    try {
-      await this.rpcInstance.request('discord.typing', {
-        channelId: GATEWAY_KEEPALIVE_CHANNEL_ID,
-      });
-    } catch (error) {
-      log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
-    } finally {
-      this.keepaliveInFlight = false;
+    if (!this.conn.sendHeartbeat()) {
+      log.debug('Gateway transport heartbeat failed; closing connection');
+      this.conn.destroy();
     }
   }
 

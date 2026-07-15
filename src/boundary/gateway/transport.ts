@@ -20,6 +20,8 @@ import {
 
 const log = createComponentLogger('Transport');
 const FRAME_PREVIEW_LIMIT = 200;
+const GATEWAY_RPC_HEARTBEAT_PING_FRAME = 'PSFN_RPC_HEARTBEAT_PING';
+const GATEWAY_RPC_HEARTBEAT_PONG_FRAME = 'PSFN_RPC_HEARTBEAT_PONG';
 export const GATEWAY_RPC_WS_PROTOCOL = 'psfn-rpc-v1';
 export const DEFAULT_GATEWAY_RPC_WS_PATH = '/rpc';
 export const GATEWAY_RPC_ENDPOINT_ENV = 'GATEWAY_RPC_ENDPOINT';
@@ -54,6 +56,8 @@ export interface GatewayRpcSerializedTransportStats {
 
 export interface GatewayRpcConnection extends EventEmitter {
   send(data: unknown): boolean;
+  /** Send a transport-level liveness probe without entering JSON-RPC or audit handling. */
+  sendHeartbeat(): boolean;
   onMessage(handler: MessageHandler): void;
   destroy(): void;
   readonly destroyed: boolean;
@@ -236,6 +240,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   private socket: net.Socket;
   private rl: readline.Interface;
   private closed = false;
+  private heartbeatAwaitingAck = false;
   private readonly outboundStats = createSerializedTransportStats();
 
   constructor(socket: net.Socket) {
@@ -244,6 +249,15 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     this.rl = readline.createInterface({ input: socket, crlfDelay: Infinity });
 
     this.rl.on('line', (line) => {
+      if (line === GATEWAY_RPC_HEARTBEAT_PING_FRAME) {
+        this.emit('heartbeat');
+        this.writeHeartbeatFrame(GATEWAY_RPC_HEARTBEAT_PONG_FRAME);
+        return;
+      }
+      if (line === GATEWAY_RPC_HEARTBEAT_PONG_FRAME) {
+        this.heartbeatAwaitingAck = false;
+        return;
+      }
       if (!line.trim()) return;
       try {
         const parsed = JSON.parse(line);
@@ -272,6 +286,16 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     const writable = this.socket.write(serialized + '\n');
     recordSerializedTransportFrame(this.outboundStats, data, serialized);
     return writable;
+  }
+
+  sendHeartbeat(): boolean {
+    if (this.socket.destroyed || this.heartbeatAwaitingAck) return false;
+    this.heartbeatAwaitingAck = true;
+    if (this.writeHeartbeatFrame(GATEWAY_RPC_HEARTBEAT_PING_FRAME)) {
+      return true;
+    }
+    this.heartbeatAwaitingAck = false;
+    return false;
   }
 
   onMessage(handler: MessageHandler): void {
@@ -303,6 +327,17 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     });
   }
 
+  private writeHeartbeatFrame(frame: string): boolean {
+    if (this.socket.destroyed) return false;
+    try {
+      this.socket.write(`${frame}\n`);
+      return true;
+    } catch (error) {
+      this.emitConnectionError(error);
+      return false;
+    }
+  }
+
   private finishClose(): void {
     if (this.closed) return;
     this.closed = true;
@@ -315,6 +350,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
 class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnection {
   private readonly outboundStats = createSerializedTransportStats();
+  private heartbeatAwaitingAck = false;
 
   constructor(private readonly socket: WebSocket) {
     super();
@@ -345,6 +381,10 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
 
     socket.on('close', () => this.emit('close'));
     socket.on('error', (err) => this.emitConnectionError(err));
+    socket.on('ping', () => this.emit('heartbeat'));
+    socket.on('pong', () => {
+      this.heartbeatAwaitingAck = false;
+    });
   }
 
   send(data: unknown): boolean {
@@ -355,6 +395,21 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
       recordSerializedTransportFrame(this.outboundStats, data, serialized);
       return true;
     } catch (error) {
+      this.emitConnectionError(error);
+      return false;
+    }
+  }
+
+  sendHeartbeat(): boolean {
+    if (this.destroyed || this.socket.readyState !== WebSocket.OPEN || this.heartbeatAwaitingAck) {
+      return false;
+    }
+    this.heartbeatAwaitingAck = true;
+    try {
+      this.socket.ping();
+      return true;
+    } catch (error) {
+      this.heartbeatAwaitingAck = false;
       this.emitConnectionError(error);
       return false;
     }

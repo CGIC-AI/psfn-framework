@@ -121,6 +121,7 @@ import {
 } from '../../faculties/introspection/model-runtime.js';
 import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
 import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
 import {
   createLLMValuesConsistencyEvaluator,
@@ -578,6 +579,20 @@ async function main(): Promise<void> {
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  // Durable tool-usage evaluator lane (psfn-framework-b0yl.5): closes the LOD
+  // loop by reading per-tool aggregates back out of model_usage_events to feed
+  // presentation ordering + operator-visible pin suggestions. Opt-in via
+  // scheduler.json (registers only when enabled); registered here so it can use
+  // the real MemoryWriter for its autonomous-action suggestion records.
+  if (schedulerConfig.toolUsageEvaluator) {
+    registerToolUsageEvaluatorTask({
+      scheduler,
+      agent: agentLoop,
+      getModelUsageQuery: coreRuntime.getModelUsageQuery,
+      getMemoryWriter: () => memoryWriter,
+      config: schedulerConfig.toolUsageEvaluator,
+    });
+  }
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.

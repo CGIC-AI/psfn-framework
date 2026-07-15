@@ -417,6 +417,12 @@ The companion-facing runtime prompt should describe the policy-constrained catal
 - Hide internal/background-only tools from ordinary direct turns unless the current turn is scheduled or explicitly about that background workflow.
 - Keep policy/source/debug detail on admin and observability surfaces rather than in the companion prompt.
 
+### Durable usage ordering and pin suggestions (psfn-framework-b0yl.5)
+
+The presentation order is: explicit pins first, then a fixed social/expressive-first domain rank, then a tie-break, then alphabetical. Durable per-tool usage aggregates — read back out of the Postgres `model_usage_events` store (never a new store) by the periodic tool-usage evaluator lane — feed the tie-break **inside** a presentation band. Usage never crosses a band, never overrides an explicit pin, and never changes what is callable.
+
+The same evaluator surfaces **operator-visible pin suggestions** for frequently and successfully used extended tools. Suggestions are recorded through the existing autonomous-action memory path (tagged `tool_usage_evaluator`/`pin_suggestion`) and are never applied silently: the companion or operator acts on them via `toolset action="pin"`. Higher durable failure counts demote a tool within its band (the explicit-correction signal folded from `psfn-framework-vvf.6`).
+
 ## Naming Rules
 
 - Prefer one top-level tool per semantic domain.
@@ -522,6 +528,7 @@ The table below maps current or retired first-party tool names to the canonical 
 ## Configuration Guidance
 
 - Keep `promotedExtendedTools` small. Despite the retained serialized key, its current contract is presentation ordering only; it never grants availability or capability.
+- The durable tool-usage evaluator lane is owned by `scheduler.json` under `toolUsageEvaluator` (`enabled`, `intervalMs`, `usageWindow`, `minPinSuggestionInvocations`). It is opt-in (absent/`enabled:false` => not registered) and reads existing `model_usage_events` telemetry; it never introduces a new persistence store and never gates callability.
 - Do not add more micro-tool-specific config keys as a substitute for `toolset`.
 - Treat `tool_search` as optional documentation lookup and `toolset` as the presentation-order control plane for pinning and unpinning.
 - Keep `shardToolsets` shard-specific. It should not become a general companion tool-selection mechanism.

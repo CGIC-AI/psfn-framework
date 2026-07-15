@@ -76,6 +76,7 @@ import {
 } from '../../system/capabilities/gate.js';
 import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
 import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
+import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
 import {
   isEgressCapabilityToken,
   type IntakeSinkGate,
@@ -791,6 +792,14 @@ export class SubstrateAgent {
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return this.toolRuntimeFacade.getToolCatalog();
+  }
+
+  /**
+   * Refresh the durable-usage presentation-ordering signal (psfn-framework-b0yl.5).
+   * Fed by the periodic tool-usage evaluator; presentation-only, never gates callability.
+   */
+  setToolUsageRanking(ranking: ToolUsageRanking | null): void {
+    this.toolRuntimeFacade.setToolUsageRanking(ranking);
   }
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {

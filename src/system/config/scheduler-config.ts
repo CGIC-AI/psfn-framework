@@ -10,6 +10,7 @@ import {
   parseIcpAutonomySchedulerConfig,
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
+import { MODEL_USAGE_RANGES, type ModelUsageRange } from '../../shared/telemetry/model-usage.js';
 
 export {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
@@ -590,6 +591,30 @@ export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
   reflectionMaxTokens: 300,
 };
 
+/** Durable-usage windows the tool-usage evaluator may aggregate over. */
+export type ToolUsageEvaluatorWindow = Exclude<ModelUsageRange, 'custom'>;
+
+/**
+ * Tool-usage evaluator cadence + thresholds (psfn-framework-b0yl.5). The
+ * evaluator reads durable per-tool aggregates from `model_usage_events` and
+ * feeds presentation ordering plus operator-visible pin suggestions. It never
+ * gates callability. Opt-in (fail-closed default) and registered only when
+ * enabled, mirroring the introspection-audit lane.
+ */
+export interface ToolUsageEvaluatorConfig {
+  enabled: boolean;
+  intervalMs: number;
+  usageWindow: ToolUsageEvaluatorWindow;
+  minPinSuggestionInvocations: number;
+}
+
+export const DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG: ToolUsageEvaluatorConfig = {
+  enabled: false,
+  intervalMs: 21_600_000, // 6h — durable rollup, cheap, no LLM cost
+  usageWindow: 'month',
+  minPinSuggestionInvocations: 25,
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -609,6 +634,7 @@ export interface SchedulerRuntimeConfig {
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
+  toolUsageEvaluator?: ToolUsageEvaluatorConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -1371,6 +1397,36 @@ function validateWeightedThoughtOutreachConfig(
   };
 }
 
+function toToolUsageEvaluatorWindow(value: unknown, field: string): ToolUsageEvaluatorWindow {
+  if (typeof value !== 'string' || value === 'custom' || !MODEL_USAGE_RANGES.includes(value as ModelUsageRange)) {
+    throw new Error(
+      `Invalid scheduler config: ${field} must be one of `
+      + `${MODEL_USAGE_RANGES.filter(range => range !== 'custom').join(', ')}`,
+    );
+  }
+  return value as ToolUsageEvaluatorWindow;
+}
+
+function validateToolUsageEvaluatorConfig(
+  value: unknown,
+  sourcePath: string,
+): ToolUsageEvaluatorConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: toolUsageEvaluator must be an object`);
+  }
+  return {
+    enabled: toBoolean(value.enabled, 'toolUsageEvaluator.enabled'),
+    intervalMs: toInterval(value.intervalMs, 'toolUsageEvaluator.intervalMs'),
+    usageWindow: toToolUsageEvaluatorWindow(value.usageWindow, 'toolUsageEvaluator.usageWindow'),
+    minPinSuggestionInvocations: toPositiveInteger(
+      value.minPinSuggestionInvocations,
+      'toolUsageEvaluator.minPinSuggestionInvocations',
+      1,
+    ),
+  };
+}
+
 function validateIntrospectionAuditConfig(
   value: unknown,
   sourcePath: string,
@@ -1427,6 +1483,9 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     ...(raw.introspectionAudit === undefined
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
+    ...(raw.toolUsageEvaluator === undefined
+      ? {}
+      : { toolUsageEvaluator: validateToolUsageEvaluatorConfig(raw.toolUsageEvaluator, sourcePath) }),
   };
 }
 

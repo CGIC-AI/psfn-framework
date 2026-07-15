@@ -63,6 +63,7 @@ import {
   getRetiredToolAlias,
 } from '../tool-surface/registry.js';
 import { isCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
+import type { ToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import {
@@ -324,6 +325,10 @@ export class ToolRuntimeFacade {
   private readonly toolTurnContext = new AsyncLocalStorage<ToolTurnContext>();
   private readonly candidateNotifyDelegateContext = new AsyncLocalStorage<ToolTurnContext>();
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
+  // Durable-usage ordering signal (psfn-framework-b0yl.5), refreshed by the
+  // periodic tool-usage evaluator. Presentation-only: it never gates callability
+  // and only breaks ties inside a presentation band.
+  private toolUsageRanking: ToolUsageRanking | null = null;
   private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
   private toolHealthStatusByName = new Map<string, RuntimeServiceHealthStatus>();
 
@@ -425,6 +430,22 @@ export class ToolRuntimeFacade {
         ...this.getExtendedToolsForCurrentTurn().map(tool => toSnapshotEntry(tool, 'extended')),
       ],
     };
+  }
+
+  /**
+   * Refresh the durable-usage ordering signal (psfn-framework-b0yl.5). The
+   * static agent tool list is re-applied immediately so ordering updates without
+   * waiting for the next turn. Presentation-only: callability is unchanged.
+   */
+  setToolUsageRanking(ranking: ToolUsageRanking | null): void {
+    this.toolUsageRanking = ranking;
+    if (!this.getCandidateTurnContext()) {
+      this.applyActiveToolsToAgent();
+    }
+  }
+
+  getToolUsageRanking(): ToolUsageRanking | null {
+    return this.toolUsageRanking;
   }
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
@@ -811,6 +832,7 @@ export class ToolRuntimeFacade {
       extendedTools: this.extendedTools,
       promotedResolution: this.resolvePromotedToolActivation(),
       additionalSkipped,
+      ...(this.toolUsageRanking ? { usageRanking: this.toolUsageRanking } : {}),
     });
     return resolution;
   }

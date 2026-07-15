@@ -49,6 +49,7 @@ import {
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
   getCrashRecoveryExtractionCandidates,
@@ -228,6 +229,7 @@ export class SessionStore implements TranscriptSearchPort {
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
+  private turnRecordEligibilityFence: TurnRecordEligibilityFencePort | null;
   private journalRuntime: SessionJournalRuntime;
   private channelIndexFailureLogged = false;
   /** Optional shared hot tail (psfn-framework-hgw3.5); null = file-only behavior. */
@@ -262,6 +264,7 @@ export class SessionStore implements TranscriptSearchPort {
       this.transcriptSearch = this.transcriptProjection;
     }
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.turnRecordEligibilityFence = options.turnRecordEligibilityFence ?? null;
     this.tailCache = options.tailCache ?? null;
     for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
       withSessionJournalWriteLock(rootPath, () => {
@@ -1072,8 +1075,42 @@ export class SessionStore implements TranscriptSearchPort {
       },
     );
   }
-  appendTurnRecord(record: TurnRecord): void {
-    this.turnRecordStore.appendTurnRecord(record);
+  async appendTurnRecord(record: TurnRecord): Promise<void> {
+    await this.withTurnRecordEligibilityMutationFence(
+      record.sessionId ?? record.channelId,
+      record.turnId,
+      async () => {
+        this.turnRecordStore.appendTurnRecord(record);
+      },
+    );
+  }
+  async withSourceTurnRecordEligibilityFence<T>(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!sourceChannelId.trim()) {
+      throw new Error('TurnRecord eligibility fence sourceChannelId cannot be empty');
+    }
+    if (!this.turnRecordEligibilityFence) {
+      throw new Error('TurnRecord eligibility fence is not configured');
+    }
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFence({
+      logicalSessionId,
+      turnId,
+    }, operation);
+  }
+  private async withTurnRecordEligibilityMutationFence<T>(
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.turnRecordEligibilityFence) return operation();
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFence({
+      logicalSessionId,
+      turnId,
+    }, operation);
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
@@ -1918,6 +1955,20 @@ export class SessionStore implements TranscriptSearchPort {
     });
   }
   private async appendTurnTombstone(
+    channelId: string,
+    turnId: string,
+    action: 'redact' | 'restore',
+    options: { actor?: string; reason?: string; timestamp?: number } = {},
+  ): Promise<void> {
+    this.refreshChannelIndexFromDisk();
+    const logicalSessionId = this.resolveSessionId(channelId) ?? channelId;
+    await this.withTurnRecordEligibilityMutationFence(
+      logicalSessionId,
+      turnId,
+      () => this.appendTurnTombstoneUnderFence(channelId, turnId, action, options),
+    );
+  }
+  private async appendTurnTombstoneUnderFence(
     channelId: string,
     turnId: string,
     action: 'redact' | 'restore',

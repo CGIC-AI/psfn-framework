@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   createBackgroundWorkIdentity,
   fingerprintBackgroundWorkPayload,
   type AutoCompactionBackgroundPayload,
   type BackgroundWorkPayload,
+  type ClaimedBackgroundWorkJob,
   type EnqueueBackgroundWorkInput,
   type MemoryExtractionBackgroundPayload,
 } from '../../core/agent/background-work/types.js';
@@ -15,6 +19,42 @@ import {
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
 import { PostgresBackgroundWorkStore } from './background-work-store.js';
+import { PostgresTurnRecordEligibilityFence } from './turn-record-eligibility-fence.js';
+import { SessionStore } from '../sessions/store.js';
+import { createTurnId } from '../../core/turns/id.js';
+import type { TurnRecord } from '../../shared/contracts/runtime.js';
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function makeCanonicalTurnRecord(
+  logicalSessionId: string,
+  turnId: TurnRecord['turnId'],
+  privateResponse: string,
+): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId,
+    requestId: `request-${turnId}`,
+    sessionId: logicalSessionId,
+    channelId: logicalSessionId,
+    channelType: 'api',
+    startedAt: 90,
+    completedAt: 100,
+    status: 'completed',
+    userMessage: { role: 'user', content: 'private prompt', timestamp: 90 },
+    assistantMessage: { role: 'assistant', content: privateResponse, timestamp: 100 },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: 'test-model' },
+    provenanceRefs: [],
+  };
+}
 
 function makeInput(
   logicalSessionId: string,
@@ -507,6 +547,204 @@ describe('PostgresBackgroundWorkStore', () => {
       await Promise.all([first.close(), second.close()]);
     }
   });
+
+  it('linearizes claimed effects with tombstone and uniqueness revocation across stores', async () => {
+    const database = await harness.createDatabase();
+    const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const second = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const firstFencePool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const secondFencePool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-source-fence-'));
+    const firstFence = new PostgresTurnRecordEligibilityFence(firstFencePool, 'companion_a');
+    const secondFence = new PostgresTurnRecordEligibilityFence(secondFencePool, 'companion_a');
+    const reader = new SessionStore(sessionsDir, { turnRecordEligibilityFence: firstFence });
+    const writer = new SessionStore(sessionsDir, { turnRecordEligibilityFence: secondFence });
+    const unfencedWriter = new SessionStore(sessionsDir);
+
+    const prepareClaim = async (logicalSessionId: string, turnId: TurnRecord['turnId']) => {
+      reader.append({
+        channelId: logicalSessionId,
+        role: 'user',
+        content: 'session owner',
+        timestamp: 50,
+        turnId,
+      });
+      const record = makeCanonicalTurnRecord(
+        logicalSessionId,
+        turnId,
+        `private-response-${logicalSessionId}`,
+      );
+      await reader.appendTurnRecord(record);
+      const input = makeInput(logicalSessionId, turnId);
+      await first.enqueue(input);
+      const claim = await second.claimNext({
+        leaseOwner: `worker-${logicalSessionId}`,
+        nowMs: 100,
+        leaseDurationMs: 10_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(claim?.jobId).toBe(input.jobId);
+      return { claim: claim!, record };
+    };
+
+    const persistClaimedEffect = async (
+      claim: ClaimedBackgroundWorkJob,
+      record: TurnRecord,
+      beforePersist?: () => Promise<void>,
+    ): Promise<boolean> => firstFence.withTurnRecordEligibilityFence({
+      logicalSessionId: record.sessionId!,
+      turnId: record.turnId,
+    }, async () => {
+      if (!reader.isSourceTurnRecordEligible(
+        record.channelId,
+        record.sessionId!,
+        record.turnId,
+      )) return false;
+      expect(await first.assertClaimOwned({
+        jobId: claim.jobId,
+        leaseOwner: claim.leaseOwner,
+        expectedRevision: claim.revision,
+        nowMs: 101,
+      })).toBe(true);
+      expect(await first.beginEffect({
+        jobId: claim.jobId,
+        effectKey: 'private-excerpt',
+        leaseOwner: claim.leaseOwner,
+        expectedRevision: claim.revision,
+        nowMs: 101,
+      })).toBe('execute');
+      await beforePersist?.();
+      await inspectionPool.query(
+        'INSERT INTO private_background_effects (turn_id, content) VALUES ($1, $2)',
+        [record.turnId, record.assistantMessage!.content],
+      );
+      await first.completeEffect({
+        jobId: claim.jobId,
+        effectKey: 'private-excerpt',
+        leaseOwner: claim.leaseOwner,
+        expectedRevision: claim.revision,
+        nowMs: 102,
+      });
+      return true;
+    });
+
+    try {
+      await inspectionPool.query(`
+        CREATE TABLE private_background_effects (
+          turn_id TEXT PRIMARY KEY,
+          content TEXT NOT NULL
+        )
+      `);
+
+      // Effect wins: redaction waits, the effect commits while the source is
+      // eligible, and only then may the writer revoke it.
+      const effectFirst = await prepareClaim('session-effect-first', createTurnId());
+      const effectEntered = deferred();
+      const allowEffect = deferred();
+      const effectPromise = persistClaimedEffect(
+        effectFirst.claim,
+        effectFirst.record,
+        async () => {
+          effectEntered.resolve();
+          await allowEffect.promise;
+        },
+      );
+      await effectEntered.promise;
+      const redactionPromise = writer.redactTurn(
+        effectFirst.record.sessionId!,
+        effectFirst.record.turnId,
+        { actor: 'test', reason: 'privacy revocation' },
+      );
+      allowEffect.resolve();
+      expect(await effectPromise).toBe(true);
+      await redactionPromise;
+
+      // Revocation wins: the background consumer blocks on the same durable
+      // fence, then observes the tombstone and persists no private content.
+      const tombstoneFirst = await prepareClaim('session-tombstone-first', createTurnId());
+      const tombstoneHeld = deferred();
+      const allowTombstone = deferred();
+      const tombstoneMutation = secondFence.withTurnRecordEligibilityFence({
+        logicalSessionId: tombstoneFirst.record.sessionId!,
+        turnId: tombstoneFirst.record.turnId,
+      }, async () => {
+        tombstoneHeld.resolve();
+        await allowTombstone.promise;
+        await unfencedWriter.redactTurn(
+          tombstoneFirst.record.sessionId!,
+          tombstoneFirst.record.turnId,
+          { actor: 'test', reason: 'privacy revocation' },
+        );
+      });
+      await tombstoneHeld.promise;
+      const rejectedTombstoneEffect = persistClaimedEffect(
+        tombstoneFirst.claim,
+        tombstoneFirst.record,
+      );
+      allowTombstone.resolve();
+      await tombstoneMutation;
+      expect(await rejectedTombstoneEffect).toBe(false);
+
+      // A duplicate canonical source is the equivalent uniqueness revocation:
+      // once that writer wins the fence, no effect may consume either copy.
+      const duplicateFirst = await prepareClaim('session-duplicate-first', createTurnId());
+      const duplicateHeld = deferred();
+      const allowDuplicate = deferred();
+      const duplicateMutation = secondFence.withTurnRecordEligibilityFence({
+        logicalSessionId: duplicateFirst.record.sessionId!,
+        turnId: duplicateFirst.record.turnId,
+      }, async () => {
+        duplicateHeld.resolve();
+        await allowDuplicate.promise;
+        await unfencedWriter.appendTurnRecord(duplicateFirst.record);
+      });
+      await duplicateHeld.promise;
+      const rejectedDuplicateEffect = persistClaimedEffect(
+        duplicateFirst.claim,
+        duplicateFirst.record,
+      );
+      allowDuplicate.resolve();
+      await duplicateMutation;
+      expect(await rejectedDuplicateEffect).toBe(false);
+
+      const persisted = await inspectionPool.query<{ turn_id: string; content: string }>(
+        'SELECT turn_id, content FROM private_background_effects ORDER BY turn_id',
+      );
+      expect(persisted.rows).toEqual([{
+        turn_id: effectFirst.record.turnId,
+        content: effectFirst.record.assistantMessage!.content,
+      }]);
+      expect(JSON.stringify(persisted.rows)).not.toContain(
+        tombstoneFirst.record.assistantMessage!.content,
+      );
+      expect(JSON.stringify(persisted.rows)).not.toContain(
+        duplicateFirst.record.assistantMessage!.content,
+      );
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await Promise.all([
+        first.close(),
+        second.close(),
+        firstFencePool.end(),
+        secondFencePool.end(),
+        inspectionPool.end(),
+      ]);
+    }
+  }, 30_000);
 
   it('keeps a permanent accepted-handoff ledger after terminal job cleanup', async () => {
     const database = await harness.createDatabase();

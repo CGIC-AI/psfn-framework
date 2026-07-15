@@ -994,8 +994,8 @@ export class SessionManager {
     });
   }
 
-  recordTurn(record: TurnRecord): void {
-    this.store.appendTurnRecord(record);
+  async recordTurn(record: TurnRecord): Promise<void> {
+    await this.store.appendTurnRecord(record);
   }
 
   hasRecordedTurn(channelId: string, turnId: string): boolean {
@@ -1024,6 +1024,20 @@ export class SessionManager {
     turnId: string,
   ): boolean {
     return this.store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  async withSourceRecordedTurnEligibilityFence<T>(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.store.withSourceTurnRecordEligibilityFence(
+      sourceChannelId,
+      logicalSessionId,
+      turnId,
+      operation,
+    );
   }
 
   /**

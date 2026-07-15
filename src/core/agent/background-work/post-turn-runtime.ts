@@ -130,70 +130,80 @@ export async function executePostTurnBackgroundWork(
   dependencies: PostTurnBackgroundRuntimeDependencies,
 ): Promise<void> {
   const { payload, job } = input;
-  await input.effects.assertOwned();
-  const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
-  switch (payload.kind) {
-    case 'memory_extraction': {
-      const extractor = dependencies.getMemoryExtractor();
-      if (!extractor) throw new Error('Memory extraction background handler is not wired');
-      await input.effects.run('memory-extraction', async (assertOwned) => {
-        await extractor.maybeExtract(
-          payload.source.logicalSessionId,
-          payload.canonicalContactId,
-          record.turnId,
-          payload.placeId,
-          payload.icpCorrelation,
-          assertOwned,
-        );
-      });
-      return;
-    }
-    case 'intention_post_turn_hooks':
-      await dependencies.runIntentionPostTurnHooks(
-        rehydrateIntentionContext(record, payload),
-        {
-          propagateFailures: true,
-          runEffect: input.effects.run,
-        },
-      );
-      return;
-    case 'emotion_appraisal':
-      if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
-        throw new BackgroundWorkPermanentError('source_mismatch');
+  await dependencies.sessionManager.withSourceRecordedTurnEligibilityFence(
+    payload.source.channelId,
+    payload.source.logicalSessionId,
+    payload.source.turnId,
+    async () => {
+      // The durable source fence is shared with turn-tombstone and duplicate
+      // TurnRecord writers. Queue ownership and canonical eligibility are both
+      // proved only after it is held, and raw content never leaves its scope.
+      await input.effects.assertOwned();
+      const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+      switch (payload.kind) {
+        case 'memory_extraction': {
+          const extractor = dependencies.getMemoryExtractor();
+          if (!extractor) throw new Error('Memory extraction background handler is not wired');
+          await input.effects.run('memory-extraction', async (assertOwned) => {
+            await extractor.maybeExtract(
+              payload.source.logicalSessionId,
+              payload.canonicalContactId,
+              record.turnId,
+              payload.placeId,
+              payload.icpCorrelation,
+              assertOwned,
+            );
+          });
+          return;
+        }
+        case 'intention_post_turn_hooks':
+          await dependencies.runIntentionPostTurnHooks(
+            rehydrateIntentionContext(record, payload),
+            {
+              propagateFailures: true,
+              runEffect: input.effects.run,
+            },
+          );
+          return;
+        case 'emotion_appraisal':
+          if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
+            throw new BackgroundWorkPermanentError('source_mismatch');
+          }
+          await input.effects.run('emotion-appraisal', async (assertOwned) => {
+            const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
+            // Identity may have legitimately changed since enqueue, so execution
+            // always consumes current canonical owner data rather than queued prose.
+            await dependencies.emotionRuntime.triggerEmotionAppraisal({
+              sessionChannelId: payload.emotionSessionId,
+              turnId: record.turnId,
+              appraisalState: payload.appraisalState,
+              templateVariables: canonicalTemplateVariables,
+              assertEffectAllowed: assertOwned,
+              ...(resolveMaxSessionEntryId(payload.source) !== undefined
+                ? { maxSessionEntryId: resolveMaxSessionEntryId(payload.source) }
+                : {}),
+              ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+            });
+          });
+          return;
+        case 'auto_compaction':
+          await input.effects.run('auto-compaction', async (assertOwned) => {
+            await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
+              channelId: payload.source.logicalSessionId,
+              systemPromptTokenCount: payload.systemPromptTokenCount,
+              memoriesTokenCount: payload.memoriesTokenCount,
+              adaptiveProfile: payload.adaptiveProfile,
+              turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
+              llmProvider: dependencies.llmProvider,
+              throwOnFailure: true,
+              assertEffectAllowed: assertOwned,
+              ...(payload.channelMeta ? { channelMeta: payload.channelMeta } : {}),
+              ...(payload.userId ? { userId: payload.userId } : {}),
+              ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+            });
+          });
+          return;
       }
-      await input.effects.run('emotion-appraisal', async (assertOwned) => {
-        const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
-        // Identity may have legitimately changed since enqueue, so execution
-        // always consumes current canonical owner data rather than queued prose.
-        await dependencies.emotionRuntime.triggerEmotionAppraisal({
-          sessionChannelId: payload.emotionSessionId,
-          turnId: record.turnId,
-          appraisalState: payload.appraisalState,
-          templateVariables: canonicalTemplateVariables,
-          assertEffectAllowed: assertOwned,
-          ...(resolveMaxSessionEntryId(payload.source) !== undefined
-            ? { maxSessionEntryId: resolveMaxSessionEntryId(payload.source) }
-            : {}),
-          ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
-        });
-      });
-      return;
-    case 'auto_compaction':
-      await input.effects.run('auto-compaction', async (assertOwned) => {
-        await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
-          channelId: payload.source.logicalSessionId,
-          systemPromptTokenCount: payload.systemPromptTokenCount,
-          memoriesTokenCount: payload.memoriesTokenCount,
-          adaptiveProfile: payload.adaptiveProfile,
-          turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
-          llmProvider: dependencies.llmProvider,
-          throwOnFailure: true,
-          assertEffectAllowed: assertOwned,
-          ...(payload.channelMeta ? { channelMeta: payload.channelMeta } : {}),
-          ...(payload.userId ? { userId: payload.userId } : {}),
-          ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
-        });
-      });
-      return;
-  }
+    },
+  );
 }

@@ -990,7 +990,7 @@ export async function handleMessageForTurn(
       });
       // Suppression still follows the ordinary completion contract: only
       // publish the durable completed-turn marker after its awaited end event.
-      runtime.sessionManager.recordTurn(suppressedTurnRecord);
+      await runtime.sessionManager.recordTurn(suppressedTurnRecord);
       return suppressedResponse;
     }
     runtime.ensureModel(message);
@@ -1682,7 +1682,7 @@ export async function handleMessageForTurn(
     // replay the manifest; appending a second failed record for the same turn
     // would destroy the source uniqueness gate and make recovery impossible.
     if (!runtime.sessionManager.hasRecordedTurn(message.channelId, turnId)) {
-      runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
+      await runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
         message,
         turnId,
         requestId,

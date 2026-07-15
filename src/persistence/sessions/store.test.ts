@@ -308,6 +308,18 @@ describe('SessionStore', () => {
     });
   });
 
+  it('fails closed when a background consumer requests an eligibility fence that is not configured', async () => {
+    const operation = vi.fn(async () => undefined);
+
+    await expect(store.withSourceTurnRecordEligibilityFence(
+      'api:source-channel',
+      'session:logical-owner',
+      createTurnId(),
+      operation,
+    )).rejects.toThrow('TurnRecord eligibility fence is not configured');
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it('accepts system-attributed turn records for internal scheduler prompts', () => {
     const turnId = createTurnId();
 

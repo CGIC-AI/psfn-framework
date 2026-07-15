@@ -105,27 +105,43 @@ function makeDependencies(input: {
   record: TurnRecord | null;
   now?: number;
   maybeExtract?: ReturnType<typeof vi.fn>;
+  runIntentionPostTurnHooks?: ReturnType<typeof vi.fn>;
+  beforeSourceEligibilityFence?: () => void;
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
   const maybeExtract = input.maybeExtract ?? vi.fn(async () => undefined);
   const triggerEmotionAppraisal = vi.fn(async () => undefined);
+  const runIntentionPostTurnHooks = input.runIntentionPostTurnHooks
+    ?? vi.fn(async () => undefined);
+  const withSourceRecordedTurnEligibilityFence = vi.fn(async (
+    _sourceChannelId: string,
+    _logicalSessionId: string,
+    _turnId: string,
+    operation: () => Promise<unknown>,
+  ) => {
+    input.beforeSourceEligibilityFence?.();
+    return operation();
+  });
   return {
     dependencies: {
       sessionManager: {
         findSourceRecordedTurn,
         isSourceRecordedTurnEligible,
+        withSourceRecordedTurnEligibilityFence,
       } as unknown as SessionManager,
       llmProvider: {} as LLMProviderPort,
       getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
-      runIntentionPostTurnHooks: vi.fn(async () => undefined),
+      runIntentionPostTurnHooks,
       emotionRuntime: { triggerEmotionAppraisal },
       getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
       now: () => input.now ?? 100,
     },
     findSourceRecordedTurn,
     isSourceRecordedTurnEligible,
+    withSourceRecordedTurnEligibilityFence,
     maybeExtract,
+    runIntentionPostTurnHooks,
     triggerEmotionAppraisal,
   };
 }
@@ -279,5 +295,44 @@ describe('executePostTurnBackgroundWork', () => {
 
     expect(fixture.findSourceRecordedTurn).not.toHaveBeenCalled();
     expect(fixture.maybeExtract).not.toHaveBeenCalled();
+  });
+
+  it('does not let a source revoked after rehydration reach an intention effect', async () => {
+    const record = makeTurnRecord();
+    const base = makeExecution(record);
+    const payload = {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source: base.payload.source,
+    } as const;
+    const execution = {
+      payload,
+      effects: base.effects,
+      job: {
+        ...base.job,
+        kind: payload.kind,
+        payload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      },
+    };
+    const persistedResponses: string[] = [];
+    const fixture = makeDependencies({
+      record,
+      runIntentionPostTurnHooks: vi.fn(async (context) => {
+        persistedResponses.push(context.response.content);
+      }),
+      beforeSourceEligibilityFence: () => {
+        fixture.isSourceRecordedTurnEligible.mockReturnValue(false);
+      },
+    });
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkPermanentError>>({
+        name: 'BackgroundWorkPermanentError',
+        reasonCode: 'source_missing',
+      }));
+
+    expect(persistedResponses).toEqual([]);
+    expect(fixture.runIntentionPostTurnHooks).not.toHaveBeenCalled();
   });
 });

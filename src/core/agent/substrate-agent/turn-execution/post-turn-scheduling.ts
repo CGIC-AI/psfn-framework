@@ -353,6 +353,6 @@ export async function schedulePostTurnWork(input: {
   // Record first, then atomically enqueue the complete manifest. A crash on
   // either side is recoverable: no queue row can outlive its canonical source,
   // and delivery/startup replay can safely re-enqueue the stable turn IDs.
-  runtime.sessionManager.recordTurn(turnRecord);
+  await runtime.sessionManager.recordTurn(turnRecord);
   await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
 }

@@ -166,11 +166,19 @@ function createSessionComposition(
   sessionTailCache: SessionTailCachePort | null,
 ): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  // Keep the adapter contract required at compile time while still rejecting
+  // malformed/custom runtime adapters at the composition boundary.
+  const turnRecordEligibilityFence = (sessionAdapters as Partial<typeof sessionAdapters>)
+    .turnRecordEligibilityFence;
+  if (!turnRecordEligibilityFence) {
+    throw new Error('PostgreSQL session composition requires a TurnRecord eligibility fence');
+  }
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
     sessionArchivePort: sessionAdapters.sessionArchivePort,
     transcriptProjection: sessionAdapters.transcriptProjection,
     turnRecordStore: sessionAdapters.turnRecordStore,
+    turnRecordEligibilityFence,
     tailCache: sessionTailCache,
   });
   const sessionManager = new SessionManager(

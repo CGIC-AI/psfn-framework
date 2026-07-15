@@ -14,6 +14,22 @@ const log = createComponentLogger('VoiceWebSocketServer');
 const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
 const DEFAULT_SESSION_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_PENDING_FRAMES = 32;
+
+// Control-plane frames dispatch synchronously on receipt, out of the data-plane
+// FIFO. A barge-in `interrupt` must not queue behind an in-flight `session.end`
+// whose `onFrame` is awaiting the full model+TTS pipeline (mmo9.6.2): the
+// interrupt aborts that in-flight turn, so it has to run concurrently with it,
+// not after it. `ping` is a keepalive and is likewise latency-sensitive.
+// Data-plane frames (session.start / audio.chunk / session.end) stay strictly
+// ordered through the queue.
+const CONTROL_FRAME_TYPES: ReadonlySet<VoiceWireInboundFrame['type']> = new Set([
+  'interrupt',
+  'ping',
+]);
+
+function isControlFrame(frame: VoiceWireInboundFrame): boolean {
+  return CONTROL_FRAME_TYPES.has(frame.type);
+}
 const CLOSE_CODE_MESSAGE_TOO_BIG = 1009;
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
 const CLOSE_CODE_SESSION_TIMEOUT = 4000;
@@ -75,6 +91,17 @@ export class WebSocketVoiceServer {
 
       try {
         const frame = parseInboundVoiceWireFrame(raw, this.maxFrameBytes);
+
+        if (isControlFrame(frame)) {
+          // Control-plane: dispatch immediately, bypassing the data-plane FIFO
+          // (and its backpressure ceiling) so an interrupt preempts an in-flight
+          // session.end instead of waiting behind it. fireHook swallows nothing
+          // the runtime doesn't already surface; it only guards against an
+          // unhandled rejection from the fire-and-forget dispatch.
+          void this.fireHook('onFrame', state.session, frame);
+          return;
+        }
+
         if (state.frameQueue.length >= this.maxPendingFrames) {
           log.warn('Voice websocket frame queue overflow', {
             connectionId: connection.id,

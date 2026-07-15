@@ -279,6 +279,65 @@ describe('WebSocketVoiceRuntime', () => {
     expect(findAckFrame(harness.outboundFrames, 'interrupt')).toBeDefined();
   });
 
+  it('aborts the in-flight model turn (not just playback) when interrupted', async () => {
+    const harness = createHarness();
+
+    // The assistant handler models a remote generation that only settles when
+    // its own cancellation signal fires. This is the seam mmo9.6.1 wires to
+    // SubstrateAgent.cancelTurn(cancellationId): aborting this signal cancels
+    // the MODEL turn, upstream of any local TTS/playback.
+    let modelSignal: AbortSignal | undefined;
+    const modelAborted = createDeferred<string>();
+    harness.onAssistantTurn.mockImplementation(async (request) => {
+      modelSignal = request.signal;
+      return await new Promise<string>((_resolve, reject) => {
+        request.signal.addEventListener(
+          'abort',
+          () => {
+            modelAborted.resolve(String(request.signal.reason));
+            const abortError = new Error('model turn aborted');
+            abortError.name = 'AbortError';
+            reject(abortError);
+          },
+          { once: true },
+        );
+      });
+    });
+
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+    harness.sttQueue.push({ type: 'final', text: 'barge in mid-turn' });
+
+    const endPromise = harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.end',
+      sessionId: 'voice-1',
+    });
+
+    // Wait until the model turn is genuinely in-flight and not yet aborted.
+    await waitForCondition(() => harness.onAssistantTurn.mock.calls.length === 1);
+    expect(modelSignal?.aborted).toBe(false);
+
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'interrupt',
+      sessionId: 'voice-1',
+      reason: 'barge-in',
+    });
+    await endPromise;
+
+    // The model turn's cancellation signal fired: remote generation aborts,
+    // and playback synthesis is never reached.
+    const abortReason = await modelAborted.promise;
+    expect(abortReason).toBe('barge-in');
+    expect(modelSignal?.aborted).toBe(true);
+    expect(harness.synthesizeStream).not.toHaveBeenCalled();
+    expect(findAckFrame(harness.outboundFrames, 'interrupt')).toBeDefined();
+  });
+
   it('emits error frames for invalid audio payloads', async () => {
     const harness = createHarness();
 

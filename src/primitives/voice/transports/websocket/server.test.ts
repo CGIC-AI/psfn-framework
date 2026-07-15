@@ -137,6 +137,107 @@ describe('WebSocketVoiceServer', () => {
     expect(onSessionClose).not.toHaveBeenCalled();
   });
 
+  it('dispatches control frames ahead of an in-flight session.end (barge-in preemption)', async () => {
+    const connection = new FakeConnection('conn-preempt');
+    const endGate = createDeferred();
+    const dispatched: string[] = [];
+    const onFrame = vi.fn(async (_session, frame) => {
+      dispatched.push(frame.type);
+      if (frame.type === 'session.end') {
+        // Stand-in for the model+TTS pipeline: session.end's onFrame stays
+        // in-flight until released.
+        await endGate.promise;
+      }
+    });
+    const server = new WebSocketVoiceServer(
+      { sessionTimeoutMs: 5_000, maxFrameBytes: 1024, maxPendingFrames: 4 },
+      { onFrame },
+    );
+
+    server.attach(connection);
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.end',
+      sessionId: 'conn-preempt',
+    }));
+    await flushPromises();
+    // session.end is now in-flight, blocked on the model pipeline gate.
+    expect(dispatched).toEqual(['session.end']);
+
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'interrupt',
+      sessionId: 'conn-preempt',
+      reason: 'barge-in',
+    }));
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'ping',
+      sessionId: 'conn-preempt',
+    }));
+
+    // Both control frames must dispatch BEFORE session.end resolves — the whole
+    // point of routing them out of the data-plane FIFO.
+    await waitForCondition(() => dispatched.includes('interrupt') && dispatched.includes('ping'));
+    expect(dispatched).toEqual(['session.end', 'interrupt', 'ping']);
+    expect(connection.close).not.toHaveBeenCalled();
+
+    endGate.resolve();
+    await flushPromises();
+    expect(dispatched).toEqual(['session.end', 'interrupt', 'ping']);
+  });
+
+  it('dispatches an interrupt even when the data-plane queue is saturated', async () => {
+    const connection = new FakeConnection('conn-preempt-full');
+    const startGate = createDeferred();
+    const dispatched: string[] = [];
+    const onFrame = vi.fn(async (_session, frame) => {
+      dispatched.push(frame.type);
+      if (frame.type === 'session.start') {
+        await startGate.promise;
+      }
+    });
+    const server = new WebSocketVoiceServer(
+      { sessionTimeoutMs: 5_000, maxFrameBytes: 1024, maxPendingFrames: 2 },
+      { onFrame },
+    );
+
+    server.attach(connection);
+    // session.start goes in-flight; the two audio.chunk frames fill the FIFO to
+    // its ceiling without overflowing it.
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'conn-preempt-full',
+    }));
+    for (let index = 1; index <= 2; index += 1) {
+      connection.emitMessage(serializeVoiceWireFrame({
+        wire: VOICE_WIRE_PROTOCOL,
+        type: 'audio.chunk',
+        sessionId: 'conn-preempt-full',
+        seq: index,
+        audio: new TextEncoder().encode('data'),
+      }));
+    }
+    await flushPromises();
+    expect(dispatched).toEqual(['session.start']);
+    expect(connection.close).not.toHaveBeenCalled();
+
+    // An interrupt arriving under a full queue still dispatches immediately.
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'interrupt',
+      sessionId: 'conn-preempt-full',
+      reason: 'barge-in',
+    }));
+    await waitForCondition(() => dispatched.includes('interrupt'));
+    expect(dispatched).toEqual(['session.start', 'interrupt']);
+    expect(connection.close).not.toHaveBeenCalled();
+
+    startGate.resolve();
+    await flushPromises();
+  });
+
   it('records client disconnects without issuing a server close frame', async () => {
     const connection = new FakeConnection('conn-1c');
     const onSessionClose = vi.fn();
@@ -156,7 +257,7 @@ describe('WebSocketVoiceServer', () => {
     );
   });
 
-  it('serializes frame dispatch per connection', async () => {
+  it('serializes data-plane frame dispatch per connection', async () => {
     const connection = new FakeConnection('conn-serial');
     const firstFrameGate = createDeferred();
     const secondFrameGate = createDeferred();
@@ -178,10 +279,14 @@ describe('WebSocketVoiceServer', () => {
       type: 'session.start',
       sessionId: 'conn-serial',
     }));
+    // audio.chunk is a data-plane frame; it must wait behind the in-flight
+    // session.start in the FIFO.
     connection.emitMessage(serializeVoiceWireFrame({
       wire: VOICE_WIRE_PROTOCOL,
-      type: 'ping',
+      type: 'audio.chunk',
       sessionId: 'conn-serial',
+      seq: 1,
+      audio: new TextEncoder().encode('data'),
     }));
 
     await flushPromises();
@@ -213,10 +318,14 @@ describe('WebSocketVoiceServer', () => {
       type: 'session.start',
       sessionId: 'conn-close-race',
     }));
+    // Queue a data-plane frame behind the in-flight session.start so the
+    // disconnect drops it before it dispatches.
     connection.emitMessage(serializeVoiceWireFrame({
       wire: VOICE_WIRE_PROTOCOL,
-      type: 'ping',
+      type: 'audio.chunk',
       sessionId: 'conn-close-race',
+      seq: 1,
+      audio: new TextEncoder().encode('data'),
     }));
 
     await flushPromises();
@@ -248,11 +357,21 @@ describe('WebSocketVoiceServer', () => {
     );
 
     server.attach(connection);
-    for (let index = 0; index < 4; index += 1) {
+    // First frame opens the session and stalls in-flight; the following
+    // data-plane frames pile up in the FIFO and overflow it. Control frames
+    // would bypass the queue, so backpressure is exercised with audio.chunk.
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'conn-backpressure',
+    }));
+    for (let index = 1; index < 4; index += 1) {
       connection.emitMessage(serializeVoiceWireFrame({
         wire: VOICE_WIRE_PROTOCOL,
-        type: index === 0 ? 'session.start' : 'ping',
+        type: 'audio.chunk',
         sessionId: 'conn-backpressure',
+        seq: index,
+        audio: new TextEncoder().encode('data'),
       }));
     }
 

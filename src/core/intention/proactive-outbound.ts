@@ -1,4 +1,5 @@
 import { createComponentLogger } from '../../shared/logger.js';
+import { stripLeadingHistoryStamps } from '../../shared/utils/history-stamp-hygiene.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
@@ -50,7 +51,10 @@ export class ProactiveOutboundDispatcher {
   }
 
   async dispatch(input: ProactiveOutboundDispatchInput): Promise<ProactiveOutboundDispatchResult> {
-    const content = input.content.trim();
+    // Outreach drafts are model-authored outside the turn-execution seam, so
+    // the mimicked-history-stamp fail-safe (psfn-framework-2x37.10) applies
+    // here before any external send.
+    const content = stripLeadingHistoryStamps(input.content.trim()).trim();
     const blocked = async (
       reason: string,
       retryAfterMs?: number,

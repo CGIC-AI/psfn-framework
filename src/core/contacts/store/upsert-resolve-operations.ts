@@ -5,7 +5,6 @@ import type {
   ContactChannel,
   ContactIdentityLinkOptions,
   ContactIdentityLinkResult,
-  RelationshipType,
 } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import {
@@ -25,6 +24,7 @@ import {
   findUpsertTarget,
   upsertIdentityLink,
 } from './upsert.js';
+import { appendMutationAuditEntry } from './audit.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -59,8 +59,7 @@ export interface UpsertResolveContext {
 export function promoteContactToPrimary(db: Database.Database, contactId: string): void {
   db.prepare(`
     UPDATE contacts
-    SET trust_level = 'primary',
-        relationship_type = 'partner'
+    SET trust_level = 'primary'
     WHERE id = ?
   `).run(contactId);
 }
@@ -86,6 +85,7 @@ export function reconcilePrimaryContactDuplicates(
 export function upsertContact(
   context: UpsertResolveContext,
   partial: Partial<Contact> & { displayName: string },
+  actor?: string,
 ): Contact {
   const now = new Date().toISOString();
   const identities = collectUpsertIdentities(partial);
@@ -100,9 +100,8 @@ export function upsertContact(
     const trustLevel = shouldForcePrimary
       ? 'primary' as TrustLevel
       : (partial.trustLevel ?? existing.trustLevel);
-    const relationshipType = shouldForcePrimary
-      ? 'partner' as RelationshipType
-      : (partial.relationshipType ?? existing.relationshipType);
+    const relationshipMutationRequested = partial.relationshipType !== undefined;
+    const relationshipType = partial.relationshipType ?? existing.relationshipType;
     const emotionalBaseline = partial.emotionalBaseline ?? existing.emotionalBaseline ?? {};
     const legacyDiscordUserId = getLegacyDiscordUserId(
       existing.discordUserId,
@@ -117,30 +116,61 @@ export function upsertContact(
       ? normalizeTimezoneValue(partial.timezone)
       : (existing.timezone ?? null);
 
-    context.db.prepare(`
-      UPDATE contacts SET
-        discord_user_id = COALESCE(discord_user_id, ?),
-        display_name = ?,
-        nickname = ?,
-        trust_level = ?,
-        relationship_type = ?,
-        emotional_baseline = ?,
-        last_seen = ?,
-        notes = ?,
-        timezone = ?
-      WHERE id = ?
-    `).run(
-      legacyDiscordUserId ?? null,
-      partial.displayName,
-      nickname,
-      trustLevel,
-      relationshipType,
-      JSON.stringify(emotionalBaseline),
-      now,
-      partial.notes ?? existing.notes ?? null,
-      timezone,
-      existing.id,
-    );
+    const applyContactUpdate = context.db.transaction(() => {
+      const commonParams = [
+        legacyDiscordUserId ?? null,
+        partial.displayName,
+        nickname,
+        trustLevel,
+      ];
+      const trailingParams = [
+        JSON.stringify(emotionalBaseline),
+        now,
+        partial.notes ?? existing.notes ?? null,
+        timezone,
+        existing.id,
+      ];
+      const result = relationshipMutationRequested
+        ? context.db.prepare(`
+          UPDATE contacts SET
+            discord_user_id = COALESCE(discord_user_id, ?),
+            display_name = ?,
+            nickname = ?,
+            trust_level = ?,
+            relationship_type = ?,
+            emotional_baseline = ?,
+            last_seen = ?,
+            notes = ?,
+            timezone = ?
+          WHERE id = ? AND relationship_type = ?
+        `).run(...commonParams, relationshipType, ...trailingParams, existing.relationshipType)
+        : context.db.prepare(`
+          UPDATE contacts SET
+            discord_user_id = COALESCE(discord_user_id, ?),
+            display_name = ?,
+            nickname = ?,
+            trust_level = ?,
+            emotional_baseline = ?,
+            last_seen = ?,
+            notes = ?,
+            timezone = ?
+          WHERE id = ?
+        `).run(...commonParams, ...trailingParams);
+      if (result.changes !== 1) {
+        throw new Error('Concurrent relationship change detected during contact upsert');
+      }
+      if (relationshipMutationRequested && relationshipType !== existing.relationshipType) {
+        appendMutationAuditEntry(
+          context.db,
+          existing.id,
+          'relationship_type',
+          existing.relationshipType,
+          relationshipType,
+          actor,
+        );
+      }
+    });
+    applyContactUpdate();
 
     applyIdentityLinks(
       context.db,
@@ -172,7 +202,7 @@ export function upsertContact(
     displayName: partial.displayName,
     nickname: normalizeNicknameValue(partial.nickname) ?? undefined,
     trustLevel: shouldForcePrimary ? 'primary' : (partial.trustLevel ?? 'regular'),
-    relationshipType: shouldForcePrimary ? 'partner' : (partial.relationshipType ?? 'stranger'),
+    relationshipType: partial.relationshipType ?? 'stranger',
     emotionalBaseline: partial.emotionalBaseline ?? {},
     firstSeen: partial.firstSeen ?? now,
     lastSeen: partial.lastSeen ?? now,
@@ -285,7 +315,7 @@ export function resolveChannelIdentity(
     // clears the 'public' ceiling. Promotion to 'regular'+ now requires an explicit
     // operator/tool action. Primary auto-detect is preserved (isPrimary → 'primary').
     trustLevel: isPrimary ? 'primary' : 'public',
-    relationshipType: isPrimary ? 'partner' : 'stranger',
+    relationshipType: 'stranger',
   });
 }
 

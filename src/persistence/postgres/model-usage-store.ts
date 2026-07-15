@@ -1,30 +1,83 @@
 import type { Pool } from 'pg';
+import { createHash } from 'node:crypto';
 import {
   createPostgresPool,
-  ensurePostgresSchema,
-  executeQuery,
+  ensurePostgresSchemaWithAdvisoryLock,
   queryOne,
   queryRows,
 } from '../postgres.js';
-import { POSTGRES_MODEL_USAGE_MIGRATIONS } from './migrations.js';
+import {
+  POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+  POSTGRES_MODEL_USAGE_MIGRATIONS,
+} from './migrations.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ModelUsageBreakdown,
+  ModelUsageAttributionCoverage,
+  ModelUsageBudgetQueryPort,
+  ModelUsageBudgetSpendSnapshot,
   ModelUsageCallKind,
+  ModelUsageCostHydrationBreakdown,
+  ModelUsageCostHydrationData,
+  ModelUsageCostHydrationQueryPort,
   ModelUsageCostSource,
+  ModelUsageCostBreakdown,
   ModelUsageData,
+  ModelUsageExportData,
+  ModelUsageExportPort,
+  ModelUsageExportRow,
   ModelUsageEvent,
   ModelUsageEventInput,
   ModelUsageQuery,
   ModelUsageQueryPort,
+  ModelUsageReconciliationQuery,
+  ModelUsageReconciliationQueryPort,
   ModelUsageRecorder,
   ModelUsageStatus,
+  ModelUsageSettlement,
   ModelUsageTotals,
+  ModelUsageGroupDimension,
+  ModelUsageGroup,
+  ModelUsageResolvedRange,
+  ModelUsageTimeBucket,
 } from '../../shared/telemetry/model-usage.js';
+import {
+  MODEL_USAGE_BUCKETS,
+  MODEL_USAGE_CALL_KINDS,
+  MODEL_USAGE_COST_SOURCES,
+  MODEL_USAGE_EVENT_ORDERS,
+  MODEL_USAGE_GROUP_SORTS,
+  MODEL_USAGE_RANGES,
+  MODEL_USAGE_SORT_DIRECTIONS,
+  MODEL_USAGE_STATUSES,
+} from '../../shared/telemetry/model-usage.js';
+import {
+  MODEL_USAGE_CALL_TYPES,
+  MODEL_USAGE_CHANNEL_TYPES,
+  MODEL_USAGE_CHARGE_LANES,
+  MODEL_USAGE_CHARGE_SURFACES,
+  MODEL_USAGE_GROUP_DIMENSIONS,
+  MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+  normalizeModelUsageAttribution,
+} from '../../shared/telemetry/model-usage-attribution.js';
+import {
+  reconcileModelUsageAccounting,
+  roundModelUsageUsd,
+} from '../../shared/telemetry/model-usage-accounting.js';
+import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
+import { isRecord } from '../../shared/utils/types.js';
+import {
+  createModelUsageBucketBoundaries,
+  resolveModelUsageRange,
+} from '../../shared/telemetry/model-usage-range.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 2_000;
 const DEFAULT_BREAKDOWN_LIMIT = 20;
+const DEFAULT_TOP_N = 20;
+const MAX_TOP_N = 100;
+const MAX_EXPORT_ROWS = 50_000;
 
 interface ModelUsageEventRow {
   id: string;
@@ -38,24 +91,35 @@ interface ModelUsageEventRow {
   day_key: string;
   month_key: string;
   status: ModelUsageStatus;
+  settlement: ModelUsageSettlement;
   call_kind: ModelUsageCallKind;
-  call_type: ModelUsageEvent['callType'];
+  call_type: ModelUsageEvent['attribution']['callType'];
   purpose: string;
   telemetry_visibility: NonNullable<ModelUsageEvent['telemetryVisibility']>;
-  origin_type: ModelUsageEvent['originType'] | null;
+  origin_type: ModelUsageEvent['attribution']['originType'] | null;
   origin_stage: string | null;
   service: string | null;
   process: string | null;
+  companion_id: string;
+  session_id: string;
   turn_id: string | null;
   request_id: string | null;
   channel_id: string | null;
+  channel_type: string;
   tool_name: string | null;
   tool_call_id: string | null;
-  charge_lane: ModelUsageEvent['chargeLane'] | null;
-  charge_surface: ModelUsageEvent['chargeSurface'] | null;
+  charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
+  charge_surface: ModelUsageEvent['attribution']['chargeSurface'] | null;
+  charge_event_id: string | null;
   charge_run_id: string | null;
   charge_root_run_id: string | null;
   charge_parent_run_id: string | null;
+  shard_id: string;
+  subagent_id: string;
+  conversation_id: string;
+  root_initiation_id: string;
+  workload_type: string;
+  workload_id: string;
   provider: string;
   model: string;
   slot_key: string | null;
@@ -66,14 +130,28 @@ interface ModelUsageEventRow {
   cache_read_tokens: number | string;
   cache_write_tokens: number | string;
   total_tokens: number | string;
+  provider_input_cost_usd: number | string | null;
+  provider_output_cost_usd: number | string | null;
+  provider_cache_read_cost_usd: number | string | null;
+  provider_cache_write_cost_usd: number | string | null;
   provider_cost_usd: number | string | null;
-  estimated_cost_usd: number | string;
+  estimated_input_cost_usd: number | string | null;
+  estimated_output_cost_usd: number | string | null;
+  estimated_cache_read_cost_usd: number | string | null;
+  estimated_cache_write_cost_usd: number | string | null;
+  estimated_cost_usd: number | string | null;
+  effective_input_cost_usd: number | string | null;
+  effective_output_cost_usd: number | string | null;
+  effective_cache_read_cost_usd: number | string | null;
+  effective_cache_write_cost_usd: number | string | null;
+  effective_cost_usd: number | string | null;
   cost_source: ModelUsageCostSource;
   currency: string | null;
   stop_reason: string | null;
   error_code: string | null;
   error_message: string | null;
   metadata_json: unknown;
+  event_fingerprint: string;
 }
 
 interface TotalsRow {
@@ -88,23 +166,150 @@ interface TotalsRow {
   provider_cost_usd: number | string | null;
   estimated_cost_usd: number | string | null;
   total_cost_usd: number | string | null;
+  provider_input_cost_usd: number | string | null;
+  provider_input_known_calls: number | string;
+  provider_output_cost_usd: number | string | null;
+  provider_output_known_calls: number | string;
+  provider_cache_read_cost_usd: number | string | null;
+  provider_cache_read_known_calls: number | string;
+  provider_cache_write_cost_usd: number | string | null;
+  provider_cache_write_known_calls: number | string;
+  provider_cost_known_calls: number | string;
+  estimated_input_cost_usd: number | string | null;
+  estimated_input_known_calls: number | string;
+  estimated_output_cost_usd: number | string | null;
+  estimated_output_known_calls: number | string;
+  estimated_cache_read_cost_usd: number | string | null;
+  estimated_cache_read_known_calls: number | string;
+  estimated_cache_write_cost_usd: number | string | null;
+  estimated_cache_write_known_calls: number | string;
+  estimated_cost_known_calls: number | string;
+  effective_input_cost_usd: number | string | null;
+  effective_input_known_calls: number | string;
+  effective_output_cost_usd: number | string | null;
+  effective_output_known_calls: number | string;
+  effective_cache_read_cost_usd: number | string | null;
+  effective_cache_read_known_calls: number | string;
+  effective_cache_write_cost_usd: number | string | null;
+  effective_cache_write_known_calls: number | string;
+  effective_cost_known_calls: number | string;
+  total_duration_ms: number | string | null;
+  duration_samples: number | string;
+  total_ttft_ms: number | string | null;
+  ttft_samples: number | string;
   average_duration_ms: number | string | null;
   average_ttft_ms: number | string | null;
 }
 
-interface BreakdownRow {
+interface BreakdownRow extends TotalsRow {
   key: string | null;
-  calls: number | string;
-  input_tokens: number | string | null;
-  output_tokens: number | string | null;
-  total_tokens: number | string | null;
-  total_cost_usd: number | string | null;
+}
+
+interface TimeBucketRow extends TotalsRow {
+  bucket_start_ms: number | string;
+}
+
+interface GroupRow extends TotalsRow {
+  dimension_0: string | null;
+  dimension_1: string | null;
+  is_other: boolean;
+  sort_rank: number | string;
+}
+
+interface CostHydrationBreakdownRow extends BreakdownRow {
+  model_key: string;
+  cost_source: ModelUsageCostSource;
+}
+
+type CoverageRow = Record<string, number | string | null | undefined> & {
+  total_calls: number | string;
+};
+
+interface BudgetSpendRow {
+  daily_estimated_cost_usd: number | string | null;
+  monthly_estimated_cost_usd: number | string | null;
+  daily_unknown_cost_attempts: number | string;
+  monthly_unknown_cost_attempts: number | string;
 }
 
 interface SqlWhere {
   clause: string;
   values: unknown[];
 }
+
+interface PreparedModelUsageQuery {
+  query: ModelUsageQuery;
+  resolvedRange: ModelUsageResolvedRange;
+  where: SqlWhere;
+}
+
+export type ModelUsageStoreScope =
+  | { companionId: string; fleetAggregation?: never }
+  | { companionId?: never; fleetAggregation: true };
+
+function resolveStoreCompanionId(scope: unknown): string | undefined {
+  if (!isRecord(scope)) {
+    throw new Error('PostgresModelUsageStore scope must be an object');
+  }
+  const keys = Object.keys(scope);
+  if (keys.some(key => key !== 'companionId' && key !== 'fleetAggregation')) {
+    throw new Error('PostgresModelUsageStore scope contains unsupported fields');
+  }
+  const hasCompanion = Object.prototype.hasOwnProperty.call(scope, 'companionId');
+  const hasFleet = Object.prototype.hasOwnProperty.call(scope, 'fleetAggregation');
+  if (hasCompanion === hasFleet) {
+    throw new Error(
+      'PostgresModelUsageStore scope requires exactly one of companionId or fleetAggregation',
+    );
+  }
+  if (hasCompanion) {
+    const companionId = optionalText(
+      typeof scope.companionId === 'string' ? scope.companionId : undefined,
+    );
+    if (!companionId) {
+      throw new Error('PostgresModelUsageStore companionId must be non-empty');
+    }
+    return companionId;
+  }
+  if (scope.fleetAggregation !== true) {
+    throw new Error('PostgresModelUsageStore fleetAggregation must be true');
+  }
+  return undefined;
+}
+
+const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
+  companionId: 'companion_id',
+  sessionId: 'session_id',
+  channelId: 'channel_id',
+  channelType: 'channel_type',
+  callKind: 'call_kind',
+  callType: 'call_type',
+  purpose: 'purpose',
+  originType: 'origin_type',
+  originStage: 'origin_stage',
+  service: 'service',
+  process: 'process',
+  provider: 'provider',
+  model: 'model',
+  slotKey: 'slot_key',
+  requestedProvider: 'requested_provider',
+  requestedModel: 'requested_model',
+  toolName: 'tool_name',
+  chargeLane: 'charge_lane',
+  chargeSurface: 'charge_surface',
+  chargeEventId: 'charge_event_id',
+  chargeRunId: 'charge_run_id',
+  chargeRootRunId: 'charge_root_run_id',
+  chargeParentRunId: 'charge_parent_run_id',
+  shardId: 'shard_id',
+  subagentId: 'subagent_id',
+  conversationId: 'conversation_id',
+  rootInitiationId: 'root_initiation_id',
+  workloadType: 'workload_type',
+  workloadId: 'workload_id',
+  status: 'status',
+  costSource: 'cost_source',
+};
 
 function normalizeText(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
@@ -144,20 +349,59 @@ function nonNegativeInteger(value: unknown): number {
   return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
 }
 
+function inputNonNegativeInteger(
+  value: unknown,
+  field: string,
+  fallback: number = 0,
+): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new Error(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
 function nonNegativeCost(value: unknown): number | undefined {
   const numeric = asNullableNumber(value);
   if (numeric === undefined || numeric < 0) return undefined;
   return numeric;
 }
 
-function resolveCostSource(
-  input: ModelUsageEventInput,
-  providerCostUsd: number | undefined,
-  estimatedCostUsd: number,
-): ModelUsageCostSource {
-  if (input.costSource) return input.costSource;
-  if (providerCostUsd !== undefined) return 'provider';
-  return estimatedCostUsd > 0 ? 'estimate' : 'none';
+function mergeCostTotal(
+  cost: ModelUsageCostBreakdown | undefined,
+  total: number | undefined,
+  field: string,
+): ModelUsageCostBreakdown | undefined {
+  if (!cost && total === undefined) return undefined;
+  if (
+    cost?.total !== undefined
+    && total !== undefined
+    && Math.round(cost.total * 1_000_000_000_000) !== Math.round(total * 1_000_000_000_000)
+  ) {
+    throw new Error(`${field}Usd must match the structured total`);
+  }
+  return {
+    ...(cost ?? {}),
+    ...(cost?.total === undefined && total !== undefined ? { total } : {}),
+  };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (typeof value !== 'object' || value === null) return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .filter(key => record[key] !== undefined)
+      .map(key => [key, canonicalize(record[key])]),
+  );
+}
+
+function eventFingerprint(event: ModelUsageEvent): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(event)))
+    .digest('hex');
 }
 
 function dayKey(timestampMs: number): string {
@@ -192,28 +436,74 @@ function parseMetadata(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
-  const recordedAtMs = nonNegativeInteger(input.recordedAtMs ?? Date.now());
-  const startedAtMs = nonNegativeInteger(input.startedAtMs ?? recordedAtMs);
+function normalizeEvent(
+  input: ModelUsageEventInput,
+  expectedCompanionId?: string,
+): ModelUsageEvent {
+  const declaredCurrency = optionalText(input.currency)?.toUpperCase();
+  if (declaredCurrency && declaredCurrency !== 'USD') {
+    throw new Error('currency must be USD until explicit currency conversion is implemented');
+  }
+  const recordedAtMs = inputNonNegativeInteger(input.recordedAtMs, 'recordedAtMs', Date.now());
+  const startedAtMs = inputNonNegativeInteger(input.startedAtMs, 'startedAtMs', recordedAtMs);
   const completedAtMs = input.completedAtMs !== undefined
-    ? nonNegativeInteger(input.completedAtMs)
+    ? inputNonNegativeInteger(input.completedAtMs, 'completedAtMs')
     : undefined;
   const durationMs = input.durationMs !== undefined
-    ? nonNegativeInteger(input.durationMs)
+    ? inputNonNegativeInteger(input.durationMs, 'durationMs')
     : (completedAtMs !== undefined ? Math.max(0, completedAtMs - startedAtMs) : undefined);
-  const inputTokens = nonNegativeInteger(input.inputTokens);
-  const outputTokens = nonNegativeInteger(input.outputTokens);
-  const cacheReadTokens = nonNegativeInteger(input.cacheReadTokens);
-  const cacheWriteTokens = nonNegativeInteger(input.cacheWriteTokens);
-  const totalTokens = nonNegativeInteger(
-    input.totalTokens ?? inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
-  );
-  const providerCostUsd = nonNegativeCost(input.providerCostUsd);
-  const estimatedCostUsd = nonNegativeCost(input.estimatedCostUsd) ?? 0;
+  const inputTokens = inputNonNegativeInteger(input.inputTokens, 'inputTokens');
+  const outputTokens = inputNonNegativeInteger(input.outputTokens, 'outputTokens');
+  const cacheReadTokens = inputNonNegativeInteger(input.cacheReadTokens, 'cacheReadTokens');
+  const cacheWriteTokens = inputNonNegativeInteger(input.cacheWriteTokens, 'cacheWriteTokens');
+  const providerCost = mergeCostTotal(input.providerCost, input.providerCostUsd, 'providerCost');
+  const estimatedCost = mergeCostTotal(input.estimatedCost, input.estimatedCostUsd, 'estimatedCost');
+  const effectiveCost = mergeCostTotal(input.effectiveCost, input.effectiveCostUsd, 'effectiveCost');
+  const accounting = reconcileModelUsageAccounting({
+    usage: {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      ...(input.totalTokens !== undefined ? { totalTokens: input.totalTokens } : {}),
+    },
+    ...(providerCost ? { providerCost } : {}),
+    ...(estimatedCost ? { estimatedCost } : {}),
+    ...(effectiveCost ? { effectiveCost } : {}),
+    ...(input.costSource ? { costSource: input.costSource } : {}),
+  });
+  const providerCostUsd = accounting.providerCost.total;
+  const estimatedCostUsd = accounting.estimatedCost.total;
+  const effectiveCostUsd = accounting.effectiveCost.total;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
-  const attempt = nonNegativeInteger(input.attempt);
+  const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
   const telemetryVisibility = normalizeTelemetryVisibility(input.telemetryVisibility);
   const operatorVisible = telemetryVisibility === 'operator_visible';
+  const declaredCompanionId = optionalText(input.attribution.companionId);
+  if (!expectedCompanionId && !declaredCompanionId) {
+    throw new Error('Fleet model usage events require an explicit companionId attribution');
+  }
+  if (expectedCompanionId && declaredCompanionId && declaredCompanionId !== expectedCompanionId) {
+    throw new Error(
+      `Model usage companion attribution ${JSON.stringify(declaredCompanionId)} does not match `
+      + `the store tenant ${JSON.stringify(expectedCompanionId)}`,
+    );
+  }
+  const attribution = normalizeModelUsageAttribution({
+    ...input.attribution,
+    ...(expectedCompanionId ? { companionId: expectedCompanionId } : {}),
+    // companion_private calls (e.g. blinded introspection audits) must not persist
+    // turn/request/channel/tool linkage that could re-identify the private context.
+    ...(operatorVisible
+      ? {}
+      : {
+          turnId: undefined,
+          requestId: undefined,
+          channelId: undefined,
+          toolName: undefined,
+          toolCallId: undefined,
+        }),
+  });
 
   return {
     id: normalizeText(input.id, `${logicalCallId}:${attempt}`),
@@ -223,28 +513,14 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     startedAtMs,
     ...(completedAtMs !== undefined ? { completedAtMs } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
-    ...(input.ttftMs !== undefined ? { ttftMs: nonNegativeInteger(input.ttftMs) } : {}),
+    ...(input.ttftMs !== undefined ? { ttftMs: inputNonNegativeInteger(input.ttftMs, 'ttftMs') } : {}),
     dayKey: dayKey(recordedAtMs),
     monthKey: monthKey(recordedAtMs),
     status: input.status,
+    settlement: input.settlement ?? (input.status === 'success' ? 'complete' : 'unknown'),
     callKind: input.callKind,
-    callType: input.callType,
-    purpose: normalizeText(input.purpose, 'unknown'),
     telemetryVisibility,
-    ...(input.originType ? { originType: input.originType } : {}),
-    ...(optionalText(input.originStage) ? { originStage: optionalText(input.originStage) } : {}),
-    ...(optionalText(input.service) ? { service: optionalText(input.service) } : {}),
-    ...(optionalText(input.process) ? { process: optionalText(input.process) } : {}),
-    ...(operatorVisible && optionalText(input.turnId) ? { turnId: optionalText(input.turnId) } : {}),
-    ...(operatorVisible && optionalText(input.requestId) ? { requestId: optionalText(input.requestId) } : {}),
-    ...(operatorVisible && optionalText(input.channelId) ? { channelId: optionalText(input.channelId) } : {}),
-    ...(operatorVisible && optionalText(input.toolName) ? { toolName: optionalText(input.toolName) } : {}),
-    ...(operatorVisible && optionalText(input.toolCallId) ? { toolCallId: optionalText(input.toolCallId) } : {}),
-    ...(input.chargeLane ? { chargeLane: input.chargeLane } : {}),
-    ...(input.chargeSurface ? { chargeSurface: input.chargeSurface } : {}),
-    ...(optionalText(input.chargeRunId) ? { chargeRunId: optionalText(input.chargeRunId) } : {}),
-    ...(optionalText(input.chargeRootRunId) ? { chargeRootRunId: optionalText(input.chargeRootRunId) } : {}),
-    ...(optionalText(input.chargeParentRunId) ? { chargeParentRunId: optionalText(input.chargeParentRunId) } : {}),
+    attribution,
     provider: normalizeText(input.provider, 'unknown'),
     model: normalizeText(input.model, 'unknown'),
     ...(optionalText(input.slotKey) ? { slotKey: optionalText(input.slotKey) } : {}),
@@ -254,15 +530,21 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
-    totalTokens,
+    totalTokens: accounting.usage.totalTokens,
     ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
-    estimatedCostUsd,
-    costSource: resolveCostSource(input, providerCostUsd, estimatedCostUsd),
-    ...(optionalText(input.currency) ? { currency: optionalText(input.currency) } : {}),
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+    ...(effectiveCostUsd !== undefined ? { effectiveCostUsd } : {}),
+    providerCost: accounting.providerCost,
+    estimatedCost: accounting.estimatedCost,
+    effectiveCost: accounting.effectiveCost,
+    costSource: accounting.costSource,
+    ...(optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency)
+      ? { currency: optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency) }
+      : {}),
     ...(optionalText(input.stopReason) ? { stopReason: optionalText(input.stopReason) } : {}),
     ...(optionalText(input.errorCode) ? { errorCode: optionalText(input.errorCode) } : {}),
     ...(optionalText(input.errorMessage) ? { errorMessage: optionalText(input.errorMessage) } : {}),
-    metadata: input.metadata ?? {},
+    metadata: boundModelUsageMetadata(input.metadata),
   };
 }
 
@@ -276,10 +558,48 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     dayKey: row.day_key,
     monthKey: row.month_key,
     status: row.status,
+    settlement: row.settlement,
     callKind: row.call_kind,
-    callType: row.call_type,
-    purpose: row.purpose,
     telemetryVisibility: normalizeTelemetryVisibility(row.telemetry_visibility),
+    attribution: normalizeModelUsageAttribution({
+      companionId: row.companion_id,
+      sessionId: row.session_id,
+      channelId: row.channel_id ?? undefined,
+      channelType: row.channel_type === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.channel_type as Exclude<
+            ModelUsageEvent['attribution']['channelType'],
+            typeof MODEL_USAGE_UNKNOWN_DIMENSION
+          >,
+      callType: row.call_type,
+      purpose: row.purpose,
+      originType: row.origin_type === null || row.origin_type === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.origin_type,
+      originStage: row.origin_stage ?? undefined,
+      service: row.service ?? undefined,
+      process: row.process ?? undefined,
+      turnId: row.turn_id ?? undefined,
+      requestId: row.request_id ?? undefined,
+      toolName: row.tool_name ?? undefined,
+      toolCallId: row.tool_call_id ?? undefined,
+      chargeLane: row.charge_lane === null || row.charge_lane === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.charge_lane,
+      chargeSurface: row.charge_surface === null || row.charge_surface === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.charge_surface,
+      chargeEventId: row.charge_event_id ?? undefined,
+      chargeRunId: row.charge_run_id ?? undefined,
+      chargeRootRunId: row.charge_root_run_id ?? undefined,
+      chargeParentRunId: row.charge_parent_run_id ?? undefined,
+      shardId: row.shard_id,
+      subagentId: row.subagent_id,
+      conversationId: row.conversation_id,
+      rootInitiationId: row.root_initiation_id,
+      workloadType: row.workload_type,
+      workloadId: row.workload_id,
+    }),
     provider: row.provider,
     model: row.model,
     inputTokens: nonNegativeInteger(row.input_tokens),
@@ -287,35 +607,35 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     cacheReadTokens: nonNegativeInteger(row.cache_read_tokens),
     cacheWriteTokens: nonNegativeInteger(row.cache_write_tokens),
     totalTokens: nonNegativeInteger(row.total_tokens),
-    estimatedCostUsd: nonNegativeCost(row.estimated_cost_usd) ?? 0,
+    providerCost: mapCostBreakdown(row, 'provider'),
+    estimatedCost: mapCostBreakdown(row, 'estimated'),
+    effectiveCost: mapCostBreakdown(row, 'effective'),
     costSource: row.cost_source,
     metadata: parseMetadata(row.metadata_json),
   };
   if (row.completed_at_ms !== null) event.completedAtMs = nonNegativeInteger(row.completed_at_ms);
   if (row.duration_ms !== null) event.durationMs = nonNegativeInteger(row.duration_ms);
   if (row.ttft_ms !== null) event.ttftMs = nonNegativeInteger(row.ttft_ms);
-  if (row.origin_type) event.originType = row.origin_type;
-  if (row.origin_stage) event.originStage = row.origin_stage;
-  if (row.service) event.service = row.service;
-  if (row.process) event.process = row.process;
-  if (row.turn_id) event.turnId = row.turn_id;
-  if (row.request_id) event.requestId = row.request_id;
-  if (row.channel_id) event.channelId = row.channel_id;
-  if (row.tool_name) event.toolName = row.tool_name;
-  if (row.tool_call_id) event.toolCallId = row.tool_call_id;
-  if (row.charge_lane) event.chargeLane = row.charge_lane;
-  if (row.charge_surface) event.chargeSurface = row.charge_surface;
-  if (row.charge_run_id) event.chargeRunId = row.charge_run_id;
-  if (row.charge_root_run_id) event.chargeRootRunId = row.charge_root_run_id;
-  if (row.charge_parent_run_id) event.chargeParentRunId = row.charge_parent_run_id;
-  if (row.slot_key) event.slotKey = row.slot_key;
-  if (row.requested_provider) event.requestedProvider = row.requested_provider;
-  if (row.requested_model) event.requestedModel = row.requested_model;
+  if (row.slot_key && row.slot_key !== MODEL_USAGE_UNKNOWN_DIMENSION) event.slotKey = row.slot_key;
+  if (row.requested_provider && row.requested_provider !== MODEL_USAGE_UNKNOWN_DIMENSION) {
+    event.requestedProvider = row.requested_provider;
+  }
+  if (row.requested_model && row.requested_model !== MODEL_USAGE_UNKNOWN_DIMENSION) {
+    event.requestedModel = row.requested_model;
+  }
   if (row.provider_cost_usd !== null) {
     const providerCostUsd = nonNegativeCost(row.provider_cost_usd);
     if (providerCostUsd !== undefined) {
       event.providerCostUsd = providerCostUsd;
     }
+  }
+  if (row.estimated_cost_usd !== null) {
+    const estimatedCostUsd = nonNegativeCost(row.estimated_cost_usd);
+    if (estimatedCostUsd !== undefined) event.estimatedCostUsd = estimatedCostUsd;
+  }
+  if (row.effective_cost_usd !== null) {
+    const effectiveCostUsd = nonNegativeCost(row.effective_cost_usd);
+    if (effectiveCostUsd !== undefined) event.effectiveCostUsd = effectiveCostUsd;
   }
   if (row.currency) event.currency = row.currency;
   if (row.stop_reason) event.stopReason = row.stop_reason;
@@ -324,7 +644,60 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
   return event;
 }
 
+function mapCostBreakdown(
+  row: ModelUsageEventRow,
+  source: 'provider' | 'estimated' | 'effective',
+): ModelUsageCostBreakdown {
+  const values = source === 'provider'
+    ? {
+        input: row.provider_input_cost_usd,
+        output: row.provider_output_cost_usd,
+        cacheRead: row.provider_cache_read_cost_usd,
+        cacheWrite: row.provider_cache_write_cost_usd,
+        total: row.provider_cost_usd,
+      }
+    : source === 'estimated'
+      ? {
+          input: row.estimated_input_cost_usd,
+          output: row.estimated_output_cost_usd,
+          cacheRead: row.estimated_cache_read_cost_usd,
+          cacheWrite: row.estimated_cache_write_cost_usd,
+          total: row.estimated_cost_usd,
+        }
+      : {
+          input: row.effective_input_cost_usd,
+          output: row.effective_output_cost_usd,
+          cacheRead: row.effective_cache_read_cost_usd,
+          cacheWrite: row.effective_cache_write_cost_usd,
+          total: row.effective_cost_usd,
+        };
+  return {
+    ...(values.input !== null ? { input: nonNegativeCost(values.input) } : {}),
+    ...(values.output !== null ? { output: nonNegativeCost(values.output) } : {}),
+    ...(values.cacheRead !== null ? { cacheRead: nonNegativeCost(values.cacheRead) } : {}),
+    ...(values.cacheWrite !== null ? { cacheWrite: nonNegativeCost(values.cacheWrite) } : {}),
+    ...(values.total !== null ? { total: nonNegativeCost(values.total) } : {}),
+    ...(row.currency ? { currency: row.currency } : {}),
+  };
+}
+
 function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
+  const cost = (value: unknown): number => roundModelUsageUsd(nonNegativeCost(value) ?? 0);
+  const aggregateCost = (
+    prefix: 'provider' | 'estimated' | 'effective',
+    totalField: 'provider_cost_usd' | 'estimated_cost_usd' | 'total_cost_usd',
+  ) => ({
+    inputUsd: cost(row?.[`${prefix}_input_cost_usd`]),
+    inputKnownCalls: nonNegativeInteger(row?.[`${prefix}_input_known_calls`]),
+    outputUsd: cost(row?.[`${prefix}_output_cost_usd`]),
+    outputKnownCalls: nonNegativeInteger(row?.[`${prefix}_output_known_calls`]),
+    cacheReadUsd: cost(row?.[`${prefix}_cache_read_cost_usd`]),
+    cacheReadKnownCalls: nonNegativeInteger(row?.[`${prefix}_cache_read_known_calls`]),
+    cacheWriteUsd: cost(row?.[`${prefix}_cache_write_cost_usd`]),
+    cacheWriteKnownCalls: nonNegativeInteger(row?.[`${prefix}_cache_write_known_calls`]),
+    totalUsd: cost(row?.[totalField]),
+    totalKnownCalls: nonNegativeInteger(row?.[`${prefix}_cost_known_calls`]),
+  });
   return {
     calls: nonNegativeInteger(row?.calls),
     successfulCalls: nonNegativeInteger(row?.successful_calls),
@@ -334,9 +707,16 @@ function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
     cacheReadTokens: nonNegativeInteger(row?.cache_read_tokens),
     cacheWriteTokens: nonNegativeInteger(row?.cache_write_tokens),
     totalTokens: nonNegativeInteger(row?.total_tokens),
-    providerCostUsd: nonNegativeCost(row?.provider_cost_usd) ?? 0,
-    estimatedCostUsd: nonNegativeCost(row?.estimated_cost_usd) ?? 0,
-    totalCostUsd: nonNegativeCost(row?.total_cost_usd) ?? 0,
+    providerCostUsd: cost(row?.provider_cost_usd),
+    estimatedCostUsd: cost(row?.estimated_cost_usd),
+    totalCostUsd: cost(row?.total_cost_usd),
+    providerCost: aggregateCost('provider', 'provider_cost_usd'),
+    estimatedCost: aggregateCost('estimated', 'estimated_cost_usd'),
+    effectiveCost: aggregateCost('effective', 'total_cost_usd'),
+    totalDurationMs: nonNegativeInteger(row?.total_duration_ms),
+    durationSamples: nonNegativeInteger(row?.duration_samples),
+    totalTtftMs: nonNegativeInteger(row?.total_ttft_ms),
+    ttftSamples: nonNegativeInteger(row?.ttft_samples),
     averageDurationMs: row?.average_duration_ms === null || row?.average_duration_ms === undefined
       ? null
       : asNumber(row.average_duration_ms),
@@ -347,58 +727,343 @@ function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
 }
 
 function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
+  const metrics = mapTotals(row);
   return {
     key: row.key?.trim() || 'unknown',
-    calls: nonNegativeInteger(row.calls),
-    inputTokens: nonNegativeInteger(row.input_tokens),
-    outputTokens: nonNegativeInteger(row.output_tokens),
-    totalTokens: nonNegativeInteger(row.total_tokens),
-    totalCostUsd: nonNegativeCost(row.total_cost_usd) ?? 0,
+    ...metrics,
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort {
-  private readonly ready: Promise<void>;
+function mapExportRow(event: ModelUsageEvent): ModelUsageExportRow {
+  return {
+    id: event.id,
+    logicalCallId: event.logicalCallId,
+    attempt: event.attempt,
+    recordedAtMs: event.recordedAtMs,
+    status: event.status,
+    callKind: event.callKind,
+    attribution: event.attribution,
+    provider: event.provider,
+    model: event.model,
+    ...(event.slotKey !== undefined ? { slotKey: event.slotKey } : {}),
+    ...(event.requestedProvider !== undefined ? { requestedProvider: event.requestedProvider } : {}),
+    ...(event.requestedModel !== undefined ? { requestedModel: event.requestedModel } : {}),
+    inputTokens: event.inputTokens,
+    cacheReadTokens: event.cacheReadTokens,
+    cacheWriteTokens: event.cacheWriteTokens,
+    outputTokens: event.outputTokens,
+    totalTokens: event.totalTokens,
+    providerCost: event.providerCost,
+    estimatedCost: event.estimatedCost,
+    effectiveCost: event.effectiveCost,
+    costSource: event.costSource,
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    ...(event.ttftMs !== undefined ? { ttftMs: event.ttftMs } : {}),
+  };
+}
 
-  constructor(private readonly pool: Pool) {
-    this.ready = ensurePostgresSchema(pool, POSTGRES_MODEL_USAGE_MIGRATIONS);
+const MODEL_USAGE_AGGREGATE_SQL = `
+  COUNT(*) AS calls,
+  COUNT(*) FILTER (WHERE status = 'success') AS successful_calls,
+  COUNT(*) FILTER (WHERE status = 'failure') AS failed_calls,
+  COALESCE(SUM(input_tokens), 0) AS input_tokens,
+  COALESCE(SUM(output_tokens), 0) AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+  COALESCE(SUM(total_tokens), 0) AS total_tokens,
+  COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
+  COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+  COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd,
+  COALESCE(SUM(provider_input_cost_usd), 0) AS provider_input_cost_usd,
+  COUNT(provider_input_cost_usd) AS provider_input_known_calls,
+  COALESCE(SUM(provider_output_cost_usd), 0) AS provider_output_cost_usd,
+  COUNT(provider_output_cost_usd) AS provider_output_known_calls,
+  COALESCE(SUM(provider_cache_read_cost_usd), 0) AS provider_cache_read_cost_usd,
+  COUNT(provider_cache_read_cost_usd) AS provider_cache_read_known_calls,
+  COALESCE(SUM(provider_cache_write_cost_usd), 0) AS provider_cache_write_cost_usd,
+  COUNT(provider_cache_write_cost_usd) AS provider_cache_write_known_calls,
+  COUNT(provider_cost_usd) AS provider_cost_known_calls,
+  COALESCE(SUM(estimated_input_cost_usd), 0) AS estimated_input_cost_usd,
+  COUNT(estimated_input_cost_usd) AS estimated_input_known_calls,
+  COALESCE(SUM(estimated_output_cost_usd), 0) AS estimated_output_cost_usd,
+  COUNT(estimated_output_cost_usd) AS estimated_output_known_calls,
+  COALESCE(SUM(estimated_cache_read_cost_usd), 0) AS estimated_cache_read_cost_usd,
+  COUNT(estimated_cache_read_cost_usd) AS estimated_cache_read_known_calls,
+  COALESCE(SUM(estimated_cache_write_cost_usd), 0) AS estimated_cache_write_cost_usd,
+  COUNT(estimated_cache_write_cost_usd) AS estimated_cache_write_known_calls,
+  COUNT(estimated_cost_usd) AS estimated_cost_known_calls,
+  COALESCE(SUM(effective_input_cost_usd), 0) AS effective_input_cost_usd,
+  COUNT(effective_input_cost_usd) AS effective_input_known_calls,
+  COALESCE(SUM(effective_output_cost_usd), 0) AS effective_output_cost_usd,
+  COUNT(effective_output_cost_usd) AS effective_output_known_calls,
+  COALESCE(SUM(effective_cache_read_cost_usd), 0) AS effective_cache_read_cost_usd,
+  COUNT(effective_cache_read_cost_usd) AS effective_cache_read_known_calls,
+  COALESCE(SUM(effective_cache_write_cost_usd), 0) AS effective_cache_write_cost_usd,
+  COUNT(effective_cache_write_cost_usd) AS effective_cache_write_known_calls,
+  COUNT(effective_cost_usd) AS effective_cost_known_calls,
+  COALESCE(SUM(duration_ms), 0) AS total_duration_ms,
+  COUNT(duration_ms) AS duration_samples,
+  COALESCE(SUM(ttft_ms), 0) AS total_ttft_ms,
+  COUNT(ttft_ms) AS ttft_samples,
+  AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS average_duration_ms,
+  AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL) AS average_ttft_ms
+`;
+
+function emptyAggregateCost(): ModelUsageTotals['providerCost'] {
+  return {
+    inputUsd: 0,
+    inputKnownCalls: 0,
+    outputUsd: 0,
+    outputKnownCalls: 0,
+    cacheReadUsd: 0,
+    cacheReadKnownCalls: 0,
+    cacheWriteUsd: 0,
+    cacheWriteKnownCalls: 0,
+    totalUsd: 0,
+    totalKnownCalls: 0,
+  };
+}
+
+function emptyModelUsageTotals(): ModelUsageTotals {
+  return {
+    calls: 0,
+    successfulCalls: 0,
+    failedCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    providerCostUsd: 0,
+    estimatedCostUsd: 0,
+    totalCostUsd: 0,
+    providerCost: emptyAggregateCost(),
+    estimatedCost: emptyAggregateCost(),
+    effectiveCost: emptyAggregateCost(),
+    totalDurationMs: 0,
+    durationSamples: 0,
+    totalTtftMs: 0,
+    ttftSamples: 0,
+    averageDurationMs: null,
+    averageTtftMs: null,
+  };
+}
+
+function addAggregateCost(
+  left: ModelUsageTotals['providerCost'],
+  right: ModelUsageTotals['providerCost'],
+): ModelUsageTotals['providerCost'] {
+  return {
+    inputUsd: roundModelUsageUsd(left.inputUsd + right.inputUsd),
+    inputKnownCalls: left.inputKnownCalls + right.inputKnownCalls,
+    outputUsd: roundModelUsageUsd(left.outputUsd + right.outputUsd),
+    outputKnownCalls: left.outputKnownCalls + right.outputKnownCalls,
+    cacheReadUsd: roundModelUsageUsd(left.cacheReadUsd + right.cacheReadUsd),
+    cacheReadKnownCalls: left.cacheReadKnownCalls + right.cacheReadKnownCalls,
+    cacheWriteUsd: roundModelUsageUsd(left.cacheWriteUsd + right.cacheWriteUsd),
+    cacheWriteKnownCalls: left.cacheWriteKnownCalls + right.cacheWriteKnownCalls,
+    totalUsd: roundModelUsageUsd(left.totalUsd + right.totalUsd),
+    totalKnownCalls: left.totalKnownCalls + right.totalKnownCalls,
+  };
+}
+
+function addModelUsageTotals(left: ModelUsageTotals, right: ModelUsageTotals): ModelUsageTotals {
+  const durationSamples = left.durationSamples + right.durationSamples;
+  const ttftSamples = left.ttftSamples + right.ttftSamples;
+  const totalDurationMs = left.totalDurationMs + right.totalDurationMs;
+  const totalTtftMs = left.totalTtftMs + right.totalTtftMs;
+  return {
+    calls: left.calls + right.calls,
+    successfulCalls: left.successfulCalls + right.successfulCalls,
+    failedCalls: left.failedCalls + right.failedCalls,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    providerCostUsd: roundModelUsageUsd(left.providerCostUsd + right.providerCostUsd),
+    estimatedCostUsd: roundModelUsageUsd(left.estimatedCostUsd + right.estimatedCostUsd),
+    totalCostUsd: roundModelUsageUsd(left.totalCostUsd + right.totalCostUsd),
+    providerCost: addAggregateCost(left.providerCost, right.providerCost),
+    estimatedCost: addAggregateCost(left.estimatedCost, right.estimatedCost),
+    effectiveCost: addAggregateCost(left.effectiveCost, right.effectiveCost),
+    totalDurationMs,
+    durationSamples,
+    totalTtftMs,
+    ttftSamples,
+    averageDurationMs: durationSamples === 0 ? null : totalDurationMs / durationSamples,
+    averageTtftMs: ttftSamples === 0 ? null : totalTtftMs / ttftSamples,
+  };
+}
+
+function groupComparator(query: ModelUsageQuery): (left: ModelUsageGroup, right: ModelUsageGroup) => number {
+  const sortBy = query.sortBy ?? 'effectiveCostUsd';
+  const direction = query.sortDirection === 'asc' ? 1 : -1;
+  const value = (group: ModelUsageGroup): number => {
+    switch (sortBy) {
+      case 'calls': return group.metrics.calls;
+      case 'totalTokens': return group.metrics.totalTokens;
+      case 'effectiveCostUsd': return group.metrics.totalCostUsd;
+      case 'averageDurationMs': return group.metrics.averageDurationMs ?? -1;
+      case 'averageTtftMs': return group.metrics.averageTtftMs ?? -1;
+    }
+  };
+  return (left, right) => (
+    direction * (value(left) - value(right))
+    || JSON.stringify(left.dimensions).localeCompare(JSON.stringify(right.dimensions))
+  );
+}
+
+interface ModelUsageEventCursor {
+  queryHash: string;
+  order: 'recent' | 'expensive';
+  recordedAtMs: number;
+  id: string;
+  effectiveCostUsd: number;
+}
+
+function eventCursorQueryHash(query: ModelUsageQuery): string {
+  const { cursor: _cursor, limit: _limit, ...stableQuery } = query;
+  return createHash('sha256').update(JSON.stringify(canonicalize(stableQuery))).digest('hex');
+}
+
+function encodeEventCursor(
+  event: ModelUsageEvent,
+  order: ModelUsageEventCursor['order'],
+  query: ModelUsageQuery,
+): string {
+  const cursor: ModelUsageEventCursor = {
+    queryHash: eventCursorQueryHash(query),
+    order,
+    recordedAtMs: event.recordedAtMs,
+    id: event.id,
+    effectiveCostUsd: event.effectiveCostUsd ?? 0,
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeEventCursor(value: string, query: ModelUsageQuery): ModelUsageEventCursor {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    throw new Error('cursor is malformed');
+  }
+  if (!isRecord(parsed)) throw new Error('cursor is malformed');
+  const keys = Object.keys(parsed);
+  if (keys.some(key => !['queryHash', 'order', 'recordedAtMs', 'id', 'effectiveCostUsd'].includes(key))) {
+    throw new Error('cursor contains unsupported fields');
+  }
+  if (
+    parsed.queryHash !== eventCursorQueryHash(query)
+    || (parsed.order !== 'recent' && parsed.order !== 'expensive')
+    || !Number.isSafeInteger(parsed.recordedAtMs)
+    || typeof parsed.id !== 'string'
+    || !parsed.id
+    || parsed.id.length > 512
+    || typeof parsed.effectiveCostUsd !== 'number'
+    || !Number.isFinite(parsed.effectiveCostUsd)
+    || parsed.effectiveCostUsd < 0
+  ) {
+    throw new Error('cursor does not match this model usage query');
+  }
+  return parsed as unknown as ModelUsageEventCursor;
+}
+
+function appendEventCursor(
+  where: SqlWhere,
+  order: ModelUsageEventCursor['order'],
+  cursor: ModelUsageEventCursor | undefined,
+): SqlWhere {
+  if (!cursor) return where;
+  if (cursor.order !== order) throw new Error('cursor event order does not match the query');
+  const values = [...where.values];
+  const addValue = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+  const recorded = addValue(cursor.recordedAtMs);
+  const id = addValue(cursor.id);
+  let cursorClause = `(recorded_at_ms < ${recorded} OR (recorded_at_ms = ${recorded} AND id < ${id}))`;
+  if (order === 'expensive') {
+    const cost = addValue(cursor.effectiveCostUsd);
+    cursorClause = `(COALESCE(effective_cost_usd, 0) < ${cost}
+      OR (COALESCE(effective_cost_usd, 0) = ${cost} AND recorded_at_ms < ${recorded})
+      OR (COALESCE(effective_cost_usd, 0) = ${cost} AND recorded_at_ms = ${recorded} AND id < ${id}))`;
+  }
+  return {
+    clause: where.clause ? `${where.clause} AND ${cursorClause}` : `WHERE ${cursorClause}`,
+    values,
+  };
+}
+
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort {
+  private readonly ready: Promise<void>;
+  private readonly companionId?: string;
+
+  constructor(
+    private readonly pool: Pool,
+    options: ModelUsageStoreScope,
+  ) {
+    this.companionId = resolveStoreCompanionId(options);
+    this.ready = ensurePostgresSchemaWithAdvisoryLock(
+      pool,
+      POSTGRES_MODEL_USAGE_MIGRATIONS,
+      POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
+    );
   }
 
-  static connect(databaseUrl: string): PostgresModelUsageStore {
+  static connect(databaseUrl: string, options: ModelUsageStoreScope): PostgresModelUsageStore {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-model-usage',
       allowExitOnIdle: true,
     });
-    return new PostgresModelUsageStore(pool);
+    return new PostgresModelUsageStore(pool, options);
   }
 
   async recordUsageEvent(input: ModelUsageEventInput): Promise<void> {
-    const event = normalizeEvent(input);
+    const event = normalizeEvent(input, this.companionId);
     await this.ready;
-    await executeQuery(this.pool, `
+    const inserted = await queryOne<{ id: string }>(this.pool, `
       INSERT INTO model_usage_events (
         id, logical_call_id, attempt, recorded_at_ms, started_at_ms, completed_at_ms,
-        duration_ms, ttft_ms, day_key, month_key, status, call_kind, call_type,
-        purpose, telemetry_visibility, origin_type, origin_stage, service, process, turn_id, request_id,
-        channel_id, tool_name, tool_call_id, charge_lane, charge_surface,
-        charge_run_id, charge_root_run_id, charge_parent_run_id, provider, model,
+        duration_ms, ttft_ms, day_key, month_key, status, settlement, call_kind, call_type,
+        purpose, origin_type, origin_stage, service, process, companion_id, session_id,
+        turn_id, request_id, channel_id, channel_type, tool_name, tool_call_id,
+        charge_lane, charge_surface, charge_event_id, charge_run_id, charge_root_run_id, charge_parent_run_id,
+        shard_id, subagent_id, conversation_id, root_initiation_id, workload_type, workload_id,
+        provider, model,
         slot_key, requested_provider, requested_model, input_tokens, output_tokens,
-        cache_read_tokens, cache_write_tokens, total_tokens, provider_cost_usd,
-        estimated_cost_usd, cost_source, currency, stop_reason, error_code,
-        error_message, metadata_json
+        cache_read_tokens, cache_write_tokens, total_tokens,
+        provider_input_cost_usd, provider_output_cost_usd,
+        provider_cache_read_cost_usd, provider_cache_write_cost_usd, provider_cost_usd,
+        estimated_input_cost_usd, estimated_output_cost_usd,
+        estimated_cache_read_cost_usd, estimated_cache_write_cost_usd, estimated_cost_usd,
+        effective_input_cost_usd, effective_output_cost_usd,
+        effective_cache_read_cost_usd, effective_cache_write_cost_usd, effective_cost_usd,
+        cost_source, currency, stop_reason, error_code, error_message, metadata_json,
+        event_fingerprint, telemetry_visibility
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21,
-        $22, $23, $24, $25, $26,
-        $27, $28, $29, $30, $31,
-        $32, $33, $34, $35, $36,
-        $37, $38, $39, $40,
-        $41, $42, $43, $44, $45,
-        $46, $47::jsonb
+        $7, $8, $9, $10, $11, $12, $13, $14,
+        $15, $16, $17, $18, $19, $20, $21,
+        $22, $23, $24, $25, $26, $27,
+        $28, $29, $30, $31, $32, $33,
+        $34, $35, $36, $37, $38, $39,
+        $40, $41,
+        $42, $43, $44, $45, $46,
+        $47, $48, $49,
+        $50, $51, $52, $53, $54,
+        $55, $56, $57, $58, $59,
+        $60, $61, $62, $63, $64,
+        $65, $66, $67, $68, $69, $70::jsonb,
+        $71, $72
       )
-      ON CONFLICT (logical_call_id, attempt) DO NOTHING
+      ON CONFLICT (logical_call_id, attempt) DO UPDATE
+        SET id = model_usage_events.id
+        WHERE model_usage_events.event_fingerprint = EXCLUDED.event_fingerprint
+      RETURNING id
     `, [
       event.id,
       event.logicalCallId,
@@ -411,86 +1076,260 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.dayKey,
       event.monthKey,
       event.status,
+      event.settlement,
       event.callKind,
-      event.callType,
-      event.purpose,
-      event.telemetryVisibility,
-      event.originType ?? null,
-      event.originStage ?? null,
-      event.service ?? null,
-      event.process ?? null,
-      event.turnId ?? null,
-      event.requestId ?? null,
-      event.channelId ?? null,
-      event.toolName ?? null,
-      event.toolCallId ?? null,
-      event.chargeLane ?? null,
-      event.chargeSurface ?? null,
-      event.chargeRunId ?? null,
-      event.chargeRootRunId ?? null,
-      event.chargeParentRunId ?? null,
+      event.attribution.callType,
+      event.attribution.purpose,
+      event.attribution.originType,
+      event.attribution.originStage,
+      event.attribution.service,
+      event.attribution.process,
+      event.attribution.companionId,
+      event.attribution.sessionId,
+      event.attribution.turnId,
+      event.attribution.requestId,
+      event.attribution.channelId,
+      event.attribution.channelType,
+      event.attribution.toolName,
+      event.attribution.toolCallId,
+      event.attribution.chargeLane,
+      event.attribution.chargeSurface,
+      event.attribution.chargeEventId,
+      event.attribution.chargeRunId,
+      event.attribution.chargeRootRunId,
+      event.attribution.chargeParentRunId,
+      event.attribution.shardId,
+      event.attribution.subagentId,
+      event.attribution.conversationId,
+      event.attribution.rootInitiationId,
+      event.attribution.workloadType,
+      event.attribution.workloadId,
       event.provider,
       event.model,
-      event.slotKey ?? null,
-      event.requestedProvider ?? null,
-      event.requestedModel ?? null,
+      event.slotKey ?? MODEL_USAGE_UNKNOWN_DIMENSION,
+      event.requestedProvider ?? MODEL_USAGE_UNKNOWN_DIMENSION,
+      event.requestedModel ?? MODEL_USAGE_UNKNOWN_DIMENSION,
       event.inputTokens,
       event.outputTokens,
       event.cacheReadTokens,
       event.cacheWriteTokens,
       event.totalTokens,
+      event.providerCost.input ?? null,
+      event.providerCost.output ?? null,
+      event.providerCost.cacheRead ?? null,
+      event.providerCost.cacheWrite ?? null,
       event.providerCostUsd ?? null,
-      event.estimatedCostUsd,
+      event.estimatedCost.input ?? null,
+      event.estimatedCost.output ?? null,
+      event.estimatedCost.cacheRead ?? null,
+      event.estimatedCost.cacheWrite ?? null,
+      event.estimatedCostUsd ?? null,
+      event.effectiveCost.input ?? null,
+      event.effectiveCost.output ?? null,
+      event.effectiveCost.cacheRead ?? null,
+      event.effectiveCost.cacheWrite ?? null,
+      event.effectiveCostUsd ?? null,
       event.costSource,
       event.currency ?? null,
       event.stopReason ?? null,
       event.errorCode ?? null,
       event.errorMessage ?? null,
       JSON.stringify(event.metadata),
+      eventFingerprint(event),
+      event.telemetryVisibility,
     ]);
+    if (!inserted) {
+      throw new Error(
+        `Model usage attempt ${event.logicalCallId}:${event.attempt} conflicts with an existing immutable model usage attempt`,
+      );
+    }
   }
 
   async getUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
     await this.ready;
-    const normalizedQuery = normalizeQuery(query);
-    const where = buildWhere(normalizedQuery);
-    const [totals, byModel, byPurpose, byTool, byCallKind, recentEvents, expensiveEvents] = await Promise.all([
-      this.queryTotals(where),
-      this.queryBreakdown(where, "provider || ':' || model"),
-      this.queryBreakdown(where, 'purpose'),
-      this.queryBreakdown(where, "COALESCE(tool_name, '(none)')"),
-      this.queryBreakdown(where, 'call_kind'),
-      this.queryEvents(where, normalizedQuery.limit, 'recorded_at_ms DESC, id DESC'),
-      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(provider_cost_usd, estimated_cost_usd, 0) DESC, recorded_at_ms DESC'),
-    ]);
-    return {
-      query: normalizedQuery,
+    const prepared = await this.prepareQuery(query);
+    const { query: normalizedQuery, resolvedRange, where } = prepared;
+    const groupedByDimensions = normalizedQuery.groupBy ?? [];
+    const [
       totals,
+      timeSeries,
+      groups,
+      eventPage,
       byModel,
       byPurpose,
       byTool,
       byCallKind,
       recentEvents,
       expensiveEvents,
+      attributionCoverage,
+      groupedByEntries,
+    ] = await Promise.all([
+      this.queryTotals(where),
+      this.queryTimeSeries(where, resolvedRange),
+      this.queryGroups(where, normalizedQuery),
+      this.queryEventPage(where, normalizedQuery),
+      this.queryBreakdown(where, "provider || ':' || model"),
+      this.queryBreakdown(where, 'purpose'),
+      this.queryBreakdown(where, 'tool_name'),
+      this.queryBreakdown(where, 'call_kind'),
+      this.queryEvents(where, normalizedQuery.limit, 'recorded_at_ms DESC, id DESC'),
+      this.queryEvents(where, normalizedQuery.limit, 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC, id DESC'),
+      this.queryAttributionCoverage(where),
+      Promise.all(groupedByDimensions.map(async dimension => [
+        dimension,
+        await this.queryBreakdown(where, MODEL_USAGE_DIMENSION_SQL[dimension]),
+      ] as const)),
+    ]);
+    return {
+      query: normalizedQuery,
+      resolvedRange,
+      totals,
+      timeSeries,
+      groups,
+      eventPage,
+      byModel,
+      byPurpose,
+      byTool,
+      byCallKind,
+      groupedBy: Object.fromEntries(groupedByEntries),
+      attributionCoverage,
+      recentEvents,
+      expensiveEvents,
+    };
+  }
+
+  async getUsageEventsForReconciliation(
+    query: ModelUsageReconciliationQuery = {},
+  ): Promise<ModelUsageEvent[]> {
+    await this.ready;
+    const normalizedQuery = normalizeQuery(query, this.companionId);
+    return await this.queryAllEvents(buildWhere(normalizedQuery));
+  }
+
+  async getUsageCostHydrationData(
+    query: ModelUsageQuery = {},
+    dimensions: readonly ModelUsageGroupDimension[],
+  ): Promise<ModelUsageCostHydrationData> {
+    await this.ready;
+    const { where } = await this.prepareQuery(query);
+    const uniqueDimensions = [...new Set(dimensions.map((dimension) => {
+      if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
+        throw new Error(`Cost hydration has unsupported dimension ${JSON.stringify(dimension)}`);
+      }
+      return dimension;
+    }))];
+    const entries = await Promise.all(uniqueDimensions.map(async dimension => [
+      dimension,
+      await this.queryCostHydrationBreakdown(where, dimension),
+    ] as const));
+    return { byDimension: Object.fromEntries(entries) };
+  }
+
+  async exportUsageEvents(query: ModelUsageQuery = {}): Promise<ModelUsageExportData> {
+    await this.ready;
+    const prepared = await this.prepareQuery({ ...query, cursor: undefined });
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${prepared.where.clause}
+      ORDER BY recorded_at_ms ASC, id ASC
+      LIMIT ${MAX_EXPORT_ROWS + 1}
+    `, prepared.where.values);
+    if (rows.length > MAX_EXPORT_ROWS) {
+      throw new Error(`Model usage export exceeds the ${MAX_EXPORT_ROWS} row safety limit`);
+    }
+    return {
+      query: prepared.query,
+      resolvedRange: prepared.resolvedRange,
+      rows: rows.map(row => mapExportRow(mapEventRow(row))),
+    };
+  }
+
+  private async prepareQuery(query: ModelUsageQuery): Promise<PreparedModelUsageQuery> {
+    const normalizedQuery = normalizeQuery(query, this.companionId);
+    let allSinceMs: number | undefined;
+    if ((normalizedQuery.range ?? 'all') === 'all') {
+      const unboundedWhere = buildWhere({ ...normalizedQuery, sinceMs: undefined, untilMs: undefined });
+      const earliest = await queryOne<{ earliest_ms: number | string | null }>(this.pool, `
+        SELECT MIN(recorded_at_ms) AS earliest_ms
+        FROM model_usage_events
+        ${unboundedWhere.clause}
+      `, unboundedWhere.values);
+      if (earliest?.earliest_ms !== null && earliest?.earliest_ms !== undefined) {
+        allSinceMs = nonNegativeInteger(earliest.earliest_ms);
+      }
+    }
+    const resolvedRange = resolveModelUsageRange(normalizedQuery, {
+      nowMs: Date.now(),
+      ...(allSinceMs !== undefined ? { allSinceMs } : {}),
+    });
+    const canonicalQuery: ModelUsageQuery = {
+      ...normalizedQuery,
+      range: resolvedRange.range,
+      timezone: resolvedRange.timezone,
+    };
+    const where = buildWhere({
+      ...canonicalQuery,
+      sinceMs: resolvedRange.sinceMs,
+      untilMs: resolvedRange.untilMs,
+    });
+    return { query: canonicalQuery, resolvedRange, where };
+  }
+
+  async getModelBudgetSpend(
+    nowMs = Date.now(),
+    scope?: { companionId: string },
+  ): Promise<ModelUsageBudgetSpendSnapshot> {
+    await this.ready;
+    const now = inputNonNegativeInteger(nowMs, 'nowMs');
+    const requestedCompanionId = normalizeQueryText(scope?.companionId, 'companionId');
+    if (this.companionId && requestedCompanionId && requestedCompanionId !== this.companionId) {
+      throw new Error(
+        `Model budget companionId ${JSON.stringify(requestedCompanionId)} does not match `
+        + `the store tenant ${JSON.stringify(this.companionId)}`,
+      );
+    }
+    const budgetCompanionId = this.companionId ?? requestedCompanionId;
+    if (!budgetCompanionId) {
+      throw new Error('Fleet model budget queries require an explicit companionId');
+    }
+    const nowDate = new Date(now);
+    const day = dayKey(now);
+    const month = monthKey(now);
+    const dayStartMs = Date.parse(`${day}T00:00:00.000Z`);
+    const monthStartMs = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
+    const row = await queryOne<BudgetSpendRow>(this.pool, `
+      SELECT
+        COALESCE(SUM(estimated_cost_usd) FILTER (
+          WHERE recorded_at_ms >= $1
+        ), 0) AS daily_estimated_cost_usd,
+        COALESCE(SUM(estimated_cost_usd), 0) AS monthly_estimated_cost_usd,
+        COUNT(*) FILTER (
+          WHERE recorded_at_ms >= $1 AND estimated_cost_usd IS NULL
+        ) AS daily_unknown_cost_attempts,
+        COUNT(*) FILTER (
+          WHERE estimated_cost_usd IS NULL
+        ) AS monthly_unknown_cost_attempts
+      FROM model_usage_events
+      WHERE recorded_at_ms >= $2
+        AND recorded_at_ms <= $3
+        AND call_kind IN ('chat', 'completion')
+        AND companion_id = $4
+    `, [dayStartMs, monthStartMs, now, budgetCompanionId]);
+    return {
+      dayKey: day,
+      monthKey: month,
+      dailyEstimatedCostUsd: roundModelUsageUsd(nonNegativeCost(row?.daily_estimated_cost_usd) ?? 0),
+      monthlyEstimatedCostUsd: roundModelUsageUsd(nonNegativeCost(row?.monthly_estimated_cost_usd) ?? 0),
+      dailyUnknownCostAttempts: nonNegativeInteger(row?.daily_unknown_cost_attempts),
+      monthlyUnknownCostAttempts: nonNegativeInteger(row?.monthly_unknown_cost_attempts),
     };
   }
 
   private async queryTotals(where: SqlWhere): Promise<ModelUsageTotals> {
     const row = await queryOne<TotalsRow>(this.pool, `
       SELECT
-        COUNT(*) AS calls,
-        COUNT(*) FILTER (WHERE status = 'success') AS successful_calls,
-        COUNT(*) FILTER (WHERE status = 'failure') AS failed_calls,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
-        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
-        COALESCE(SUM(COALESCE(provider_cost_usd, estimated_cost_usd, 0)), 0) AS total_cost_usd,
-        AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS average_duration_ms,
-        AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL) AS average_ttft_ms
+        ${MODEL_USAGE_AGGREGATE_SQL}
       FROM model_usage_events
       ${where.clause}
     `, where.values);
@@ -501,11 +1340,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     const rows = await queryRows<BreakdownRow>(this.pool, `
       SELECT
         ${expression} AS key,
-        COUNT(*) AS calls,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-        COALESCE(SUM(COALESCE(provider_cost_usd, estimated_cost_usd, 0)), 0) AS total_cost_usd
+        ${MODEL_USAGE_AGGREGATE_SQL}
       FROM model_usage_events
       ${where.clause}
       GROUP BY key
@@ -513,6 +1348,160 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       LIMIT ${DEFAULT_BREAKDOWN_LIMIT}
     `, where.values);
     return rows.map(mapBreakdown);
+  }
+
+  private async queryTimeSeries(
+    where: SqlWhere,
+    range: ModelUsageResolvedRange,
+  ): Promise<ModelUsageTimeBucket[]> {
+    const timezoneParameter = where.values.length + 1;
+    const expression = range.bucket === 'hour'
+      ? 'FLOOR(recorded_at_ms / 3600000.0) * 3600000'
+      : `EXTRACT(EPOCH FROM (date_trunc('${range.bucket}', to_timestamp(recorded_at_ms / 1000.0) AT TIME ZONE $${timezoneParameter}) AT TIME ZONE $${timezoneParameter})) * 1000`;
+    const values = range.bucket === 'hour' ? where.values : [...where.values, range.timezone];
+    const rows = await queryRows<TimeBucketRow>(this.pool, `
+      SELECT
+        ${expression} AS bucket_start_ms,
+        ${MODEL_USAGE_AGGREGATE_SQL}
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY bucket_start_ms
+      ORDER BY bucket_start_ms ASC
+    `, values);
+    const byStart = new Map(rows.map(row => [nonNegativeInteger(row.bucket_start_ms), mapTotals(row)]));
+    return createModelUsageBucketBoundaries(range).map(boundary => ({
+      startMs: boundary.startMs,
+      endMs: boundary.endMs,
+      ...emptyModelUsageTotals(),
+      ...(byStart.get(boundary.startMs) ?? {}),
+    }));
+  }
+
+  private async queryGroups(where: SqlWhere, query: ModelUsageQuery): Promise<ModelUsageGroup[]> {
+    const dimensions = query.groupBy ?? [];
+    if (dimensions.length === 0) return [];
+    const expressions = dimensions.map(dimension => MODEL_USAGE_DIMENSION_SQL[dimension]);
+    const rows = await queryRows<GroupRow>(this.pool, `
+      SELECT
+        ${expressions[0]} AS dimension_0,
+        ${expressions[1] ?? 'NULL::text'} AS dimension_1,
+        FALSE AS is_other,
+        0 AS sort_rank,
+        ${MODEL_USAGE_AGGREGATE_SQL}
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY ${expressions.join(', ')}
+      LIMIT 5001
+    `, where.values);
+    if (rows.length > 5_000) {
+      throw new Error('Model usage grouping exceeds the 5000-group safety limit');
+    }
+    const groups = rows.map((row): ModelUsageGroup => ({
+      dimensions: Object.fromEntries(dimensions.map((dimension, index) => [
+        dimension,
+        (index === 0 ? row.dimension_0 : row.dimension_1)?.trim() || MODEL_USAGE_UNKNOWN_DIMENSION,
+      ])),
+      isOther: false,
+      metrics: mapTotals(row),
+    }));
+    groups.sort(groupComparator(query));
+    const topN = query.topN ?? DEFAULT_TOP_N;
+    if (groups.length <= topN) return groups;
+    const visible = groups.slice(0, topN);
+    const otherMetrics = groups.slice(topN).reduce(
+      (total, group) => addModelUsageTotals(total, group.metrics),
+      emptyModelUsageTotals(),
+    );
+    return [...visible, {
+      dimensions: Object.fromEntries(dimensions.map(dimension => [dimension, 'Other'])),
+      isOther: true,
+      metrics: otherMetrics,
+    }];
+  }
+
+  private async queryEventPage(where: SqlWhere, query: ModelUsageQuery): Promise<ModelUsageData['eventPage']> {
+    const order = query.eventOrder ?? 'recent';
+    const limit = normalizeLimit(query.limit);
+    const cursor = query.cursor ? decodeEventCursor(query.cursor, query) : undefined;
+    const cursorWhere = appendEventCursor(where, order, cursor);
+    const orderBy = order === 'recent'
+      ? 'recorded_at_ms DESC, id DESC'
+      : 'COALESCE(effective_cost_usd, 0) DESC, recorded_at_ms DESC, id DESC';
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${cursorWhere.clause}
+      ORDER BY ${orderBy}
+      LIMIT ${limit + 1}
+    `, cursorWhere.values);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(mapEventRow);
+    const last = items.at(-1);
+    return {
+      order,
+      items,
+      hasMore,
+      nextCursor: hasMore && last ? encodeEventCursor(last, order, query) : null,
+    };
+  }
+
+  private async queryCostHydrationBreakdown(
+    where: SqlWhere,
+    dimension: ModelUsageGroupDimension,
+  ): Promise<ModelUsageCostHydrationBreakdown[]> {
+    const expression = MODEL_USAGE_DIMENSION_SQL[dimension];
+    const rows = await queryRows<CostHydrationBreakdownRow>(this.pool, `
+      SELECT
+        ${expression} AS key,
+        provider || ':' || model AS model_key,
+        cost_source,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(effective_cost_usd), 0) AS total_cost_usd
+      FROM model_usage_events
+      ${where.clause}
+      GROUP BY key, model_key, cost_source
+      ORDER BY key ASC, model_key ASC, cost_source ASC
+    `, where.values);
+    return rows.map(row => ({
+      ...mapBreakdown(row),
+      modelKey: row.model_key,
+      costSource: row.cost_source,
+    }));
+  }
+
+  private async queryAttributionCoverage(where: SqlWhere): Promise<ModelUsageAttributionCoverage> {
+    const coverageColumns = MODEL_USAGE_GROUP_DIMENSIONS.flatMap((dimension, index) => {
+      const expression = MODEL_USAGE_DIMENSION_SQL[dimension];
+      return [
+        `COUNT(*) FILTER (WHERE ${expression} <> '${MODEL_USAGE_UNKNOWN_DIMENSION}') AS known_${index}`,
+        `COUNT(*) FILTER (WHERE ${expression} = '${MODEL_USAGE_UNKNOWN_DIMENSION}') AS unknown_${index}`,
+      ];
+    });
+    const row = await queryOne<CoverageRow>(this.pool, `
+      SELECT
+        COUNT(*) AS total_calls,
+        ${coverageColumns.join(',\n        ')}
+      FROM model_usage_events
+      ${where.clause}
+    `, where.values);
+    const totalCalls = nonNegativeInteger(row?.total_calls);
+    return {
+      totalCalls,
+      byDimension: Object.fromEntries(MODEL_USAGE_GROUP_DIMENSIONS.map((dimension, index) => {
+        const knownCalls = nonNegativeInteger(row?.[`known_${index}`]);
+        const unknownCalls = nonNegativeInteger(row?.[`unknown_${index}`]);
+        return [dimension, {
+          knownCalls,
+          unknownCalls,
+          coveragePercent: totalCalls === 0 ? 0 : Math.round((knownCalls / totalCalls) * 10_000) / 100,
+        }];
+      })) as ModelUsageAttributionCoverage['byDimension'],
+    };
   }
 
   private async queryEvents(where: SqlWhere, limit: number | undefined, orderBy: string): Promise<ModelUsageEvent[]> {
@@ -526,20 +1515,162 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     `, where.values);
     return rows.map(mapEventRow);
   }
+
+  private async queryAllEvents(where: SqlWhere): Promise<ModelUsageEvent[]> {
+    const rows = await queryRows<ModelUsageEventRow>(this.pool, `
+      SELECT *
+      FROM model_usage_events
+      ${where.clause}
+      ORDER BY recorded_at_ms ASC, logical_call_id ASC, attempt ASC, id ASC
+    `, where.values);
+    return rows.map(mapEventRow);
+  }
 }
 
-function normalizeQuery(query: ModelUsageQuery): ModelUsageQuery {
-  return {
-    ...(Number.isFinite(query.sinceMs) ? { sinceMs: Math.max(0, Math.floor(query.sinceMs!)) } : {}),
-    ...(Number.isFinite(query.untilMs) ? { untilMs: Math.max(0, Math.floor(query.untilMs!)) } : {}),
-    limit: normalizeLimit(query.limit),
-    ...(optionalText(query.provider) ? { provider: optionalText(query.provider) } : {}),
-    ...(optionalText(query.model) ? { model: optionalText(query.model) } : {}),
-    ...(optionalText(query.toolName) ? { toolName: optionalText(query.toolName) } : {}),
-    ...(query.callKind ? { callKind: query.callKind } : {}),
-    ...(optionalText(query.runId) ? { runId: optionalText(query.runId) } : {}),
-    ...(query.telemetryVisibility ? { telemetryVisibility: query.telemetryVisibility } : {}),
+const QUERY_TEXT_FIELDS = [
+  'provider',
+  'model',
+  'toolName',
+  'purpose',
+  'originStage',
+  'service',
+  'process',
+  'companionId',
+  'sessionId',
+  'channelId',
+  'turnId',
+  'requestId',
+  'toolCallId',
+  'chargeEventId',
+  'chargeRunId',
+  'chargeRootRunId',
+  'chargeParentRunId',
+  'shardId',
+  'subagentId',
+  'conversationId',
+  'rootInitiationId',
+  'workloadType',
+  'workloadId',
+  'slotKey',
+  'requestedProvider',
+  'requestedModel',
+  'runId',
+  'timezone',
+  'cursor',
+] as const satisfies ReadonlyArray<keyof ModelUsageQuery>;
+
+const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<string>>> = {
+  callKind: new Set(MODEL_USAGE_CALL_KINDS),
+  callType: new Set(MODEL_USAGE_CALL_TYPES),
+  originType: new Set(MODEL_USAGE_ORIGIN_TYPES),
+  channelType: new Set(MODEL_USAGE_CHANNEL_TYPES),
+  chargeLane: new Set(MODEL_USAGE_CHARGE_LANES),
+  chargeSurface: new Set(MODEL_USAGE_CHARGE_SURFACES),
+  status: new Set(MODEL_USAGE_STATUSES),
+  costSource: new Set(MODEL_USAGE_COST_SOURCES),
+  range: new Set(MODEL_USAGE_RANGES),
+  bucket: new Set(MODEL_USAGE_BUCKETS),
+  sortBy: new Set(MODEL_USAGE_GROUP_SORTS),
+  sortDirection: new Set(MODEL_USAGE_SORT_DIRECTIONS),
+  eventOrder: new Set(MODEL_USAGE_EVENT_ORDERS),
+  telemetryVisibility: new Set(['operator_visible', 'companion_private']),
+};
+const GROUP_DIMENSION_SET: ReadonlySet<string> = new Set(MODEL_USAGE_GROUP_DIMENSIONS);
+const QUERY_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
+  'sinceMs',
+  'untilMs',
+  'limit',
+  'topN',
+  'groupBy',
+  ...QUERY_TEXT_FIELDS,
+  ...Object.keys(QUERY_ENUM_VALUES),
+]);
+
+function normalizeQueryInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function normalizeQueryText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`${field} must be a string`);
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${field} must be non-empty`);
+  const maxLength = field === 'cursor' ? 2_048 : 512;
+  if (normalized.length > maxLength) throw new Error(`${field} must be at most ${maxLength} characters`);
+  if (/[\u0000-\u001F\u007F-\u009F]/u.test(normalized)) {
+    throw new Error(`${field} must not contain control characters`);
+  }
+  return normalized;
+}
+
+function normalizeQuery(
+  query: ModelUsageQuery,
+  tenantCompanionId?: string,
+): ModelUsageQuery {
+  for (const field of Object.keys(query)) {
+    if (!QUERY_ALLOWED_FIELDS.has(field)) {
+      throw new Error(`Model usage query has unsupported field ${JSON.stringify(field)}`);
+    }
+  }
+  const sinceMs = normalizeQueryInteger(query.sinceMs, 'sinceMs');
+  const untilMs = normalizeQueryInteger(query.untilMs, 'untilMs');
+  if (sinceMs !== undefined && untilMs !== undefined && sinceMs > untilMs) {
+    throw new Error('sinceMs must be less than or equal to untilMs');
+  }
+  const limit = query.limit === undefined
+    ? DEFAULT_EVENT_LIMIT
+    : normalizeQueryInteger(query.limit, 'limit');
+  if (limit === 0) throw new Error('limit must be at least 1');
+  const topN = query.topN === undefined
+    ? DEFAULT_TOP_N
+    : normalizeQueryInteger(query.topN, 'topN');
+  if (topN === 0 || (topN ?? DEFAULT_TOP_N) > MAX_TOP_N) {
+    throw new Error(`topN must be between 1 and ${MAX_TOP_N}`);
+  }
+  const normalized: ModelUsageQuery = {
+    ...(sinceMs !== undefined ? { sinceMs } : {}),
+    ...(untilMs !== undefined ? { untilMs } : {}),
+    limit: Math.min(MAX_EVENT_LIMIT, limit ?? DEFAULT_EVENT_LIMIT),
+    topN: topN ?? DEFAULT_TOP_N,
   };
+  for (const field of QUERY_TEXT_FIELDS) {
+    const value = normalizeQueryText(query[field], String(field));
+    if (value !== undefined) (normalized as Record<string, unknown>)[field] = value;
+  }
+  for (const [field, allowed] of Object.entries(QUERY_ENUM_VALUES)) {
+    const value = query[field as keyof ModelUsageQuery];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !allowed.has(value)) {
+      throw new Error(`${field} has unsupported value ${JSON.stringify(value)}`);
+    }
+    (normalized as Record<string, unknown>)[field] = value;
+  }
+  if (query.groupBy !== undefined) {
+    if (!Array.isArray(query.groupBy)) throw new Error('groupBy must be an array');
+    const groupBy = [...new Set(query.groupBy.map((dimension) => {
+      if (typeof dimension !== 'string' || !GROUP_DIMENSION_SET.has(dimension)) {
+        throw new Error(`groupBy has unsupported dimension ${JSON.stringify(dimension)}`);
+      }
+      return dimension as ModelUsageGroupDimension;
+    }))];
+    normalized.groupBy = groupBy;
+    if (groupBy.length > 2) throw new Error('groupBy supports at most two dimensions');
+  }
+  if (tenantCompanionId) {
+    const requestedCompanionId = normalized.companionId;
+    if (requestedCompanionId && requestedCompanionId !== tenantCompanionId) {
+      throw new Error(
+        `Model usage query companionId ${JSON.stringify(requestedCompanionId)} is outside `
+        + `the Garden tenant ${JSON.stringify(tenantCompanionId)}`,
+      );
+    }
+    normalized.companionId = tenantCompanionId;
+  }
+  return normalized;
 }
 
 function buildWhere(query: ModelUsageQuery): SqlWhere {
@@ -550,12 +1681,47 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
     clauses.push(`${clause} $${values.length}`);
   };
   if (query.sinceMs !== undefined) push('recorded_at_ms >=', query.sinceMs);
-  if (query.untilMs !== undefined) push('recorded_at_ms <=', query.untilMs);
+  if (query.untilMs !== undefined) push('recorded_at_ms <', query.untilMs);
   if (query.provider) push('provider =', query.provider);
   if (query.model) push('model =', query.model);
-  if (query.toolName) push('tool_name =', query.toolName);
-  if (query.callKind) push('call_kind =', query.callKind);
   if (query.telemetryVisibility) push('telemetry_visibility =', query.telemetryVisibility);
+  const dimensionFilters: ReadonlyArray<[ModelUsageGroupDimension, unknown]> = [
+    ['companionId', query.companionId],
+    ['sessionId', query.sessionId],
+    ['channelId', query.channelId],
+    ['channelType', query.channelType],
+    ['callKind', query.callKind],
+    ['callType', query.callType],
+    ['purpose', query.purpose],
+    ['originType', query.originType],
+    ['originStage', query.originStage],
+    ['service', query.service],
+    ['process', query.process],
+    ['slotKey', query.slotKey],
+    ['requestedProvider', query.requestedProvider],
+    ['requestedModel', query.requestedModel],
+    ['toolName', query.toolName],
+    ['chargeLane', query.chargeLane],
+    ['chargeSurface', query.chargeSurface],
+    ['chargeEventId', query.chargeEventId],
+    ['chargeRunId', query.chargeRunId],
+    ['chargeRootRunId', query.chargeRootRunId],
+    ['chargeParentRunId', query.chargeParentRunId],
+    ['shardId', query.shardId],
+    ['subagentId', query.subagentId],
+    ['conversationId', query.conversationId],
+    ['rootInitiationId', query.rootInitiationId],
+    ['workloadType', query.workloadType],
+    ['workloadId', query.workloadId],
+    ['status', query.status],
+    ['costSource', query.costSource],
+  ];
+  for (const [dimension, value] of dimensionFilters) {
+    if (value !== undefined) push(`${MODEL_USAGE_DIMENSION_SQL[dimension]} =`, value);
+  }
+  if (query.turnId) push('turn_id =', query.turnId);
+  if (query.requestId) push('request_id =', query.requestId);
+  if (query.toolCallId) push('tool_call_id =', query.toolCallId);
   if (query.runId) {
     values.push(query.runId);
     const index = values.length;
@@ -568,11 +1734,18 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
 }
 
 export function createPostgresModelUsageStoreFromConfig(
-  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl'>,
+  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl' | 'companionId'>,
+  scope?: ModelUsageStoreScope,
 ): PostgresModelUsageStore | null {
   if (config.persistenceBackend !== 'postgres') {
     return null;
   }
   const databaseUrl = config.postgresDatabaseUrl?.trim();
-  return databaseUrl ? PostgresModelUsageStore.connect(databaseUrl) : null;
+  if (!databaseUrl) return null;
+  if (scope) return PostgresModelUsageStore.connect(databaseUrl, scope);
+  const companionId = optionalText(config.companionId);
+  if (!companionId) {
+    throw new Error('PostgreSQL model usage persistence requires a configured companionId');
+  }
+  return PostgresModelUsageStore.connect(databaseUrl, { companionId });
 }

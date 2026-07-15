@@ -1,5 +1,3 @@
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
 import type {
@@ -10,7 +8,9 @@ import type {
   CompanionApprovalDecisionRequest,
   CompanionEventEnvelope,
 } from '../../../shared/contracts/companion-relay.js';
-import { companionEventKindsForScopes } from '../../../shared/contracts/companion-relay.js';
+import {
+  companionEventKindsForScopes,
+} from '../../../shared/contracts/companion-relay.js';
 import {
   resolveCompanionApprovalActor,
   resolveCompanionRelayAccess,
@@ -25,6 +25,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { sendApiError } from './http.js';
+import type { CompanionStimulusPort } from './companion-stimuli.js';
 
 const log = createComponentLogger('CompanionRelayRoutes');
 
@@ -50,15 +51,17 @@ export interface CompanionRelayHttpDeps {
   approvals: CompanionApprovalDecisionPort;
   /** Records an audit summary; failures must reject (fail closed). */
   audit: (entry: CompanionRelayAuditEntry) => Promise<void>;
+  stimuli: CompanionStimulusPort;
 }
 
 export const COMPANION_EVENTS_PATH = '/v1/companion/events';
 const COMPANION_APPROVALS_PREFIX = '/v1/companion/approvals/';
+export const COMPANION_STIMULI_PATH = '/v1/companion/stimuli';
 const COMPANION_ARTIFACTS_PREFIX = '/v1/companion/artifacts/';
 const COMPANION_ARTIFACT_PREVIEW_SUFFIX = '/preview';
 
 export interface CompanionRelayRouteMatch {
-  route: 'events' | 'approval_decision' | 'artifact_preview';
+  route: 'events' | 'approval_decision' | 'artifact_preview' | 'touch_stimulus';
   id?: string;
 }
 
@@ -86,6 +89,9 @@ export function matchCompanionRelayRoute(
       return { route: 'approval_decision', id };
     }
   }
+  if (method === 'POST' && path === COMPANION_STIMULI_PATH) {
+    return { route: 'touch_stimulus' };
+  }
   if (
     method === 'GET'
     && path.startsWith(COMPANION_ARTIFACTS_PREFIX)
@@ -109,6 +115,7 @@ interface CompanionRelayRequestContext {
   principal: ApiAuthPrincipal;
   registry?: SatelliteRegistryConfig;
   clientCert?: SatelliteClientCertIdentity;
+  companionId: string;
   deps: CompanionRelayHttpDeps;
 }
 
@@ -367,38 +374,18 @@ export async function handleCompanionArtifactPreview(
     return;
   }
 
-  let sizeBytes: number;
-  try {
-    const stats = await stat(source.localPath);
-    if (!stats.isFile()) {
-      sendApiError(ctx.res, 404, 'artifact_not_found', 'Artifact preview source is unavailable');
-      return;
-    }
-    sizeBytes = stats.size;
-  } catch {
-    sendApiError(ctx.res, 404, 'artifact_not_found', 'Artifact preview source is unavailable');
-    return;
-  }
-  if (sizeBytes > ctx.deps.relay.maxPreviewSizeBytes()) {
+  if (!source.bytes || source.sizeBytes > ctx.deps.relay.maxPreviewSizeBytes()) {
     sendApiError(ctx.res, 403, 'artifact_preview_denied', 'Artifact exceeds the preview size cap');
     return;
   }
 
   ctx.res.writeHead(200, {
     'Content-Type': source.mediaType,
-    'Content-Length': String(sizeBytes),
+    'Content-Length': String(source.bytes.length),
     'Cache-Control': 'no-store',
     'Content-Disposition': 'inline',
   });
-  const stream = createReadStream(source.localPath);
-  stream.on('error', (error) => {
-    log.error('Companion artifact preview stream failed', {
-      artifactId,
-      error: toErrorMessage(error),
-    });
-    ctx.res.destroy();
-  });
-  stream.pipe(ctx.res);
+  ctx.res.end(source.bytes);
 }
 
 export type { CompanionRelayRequestContext };

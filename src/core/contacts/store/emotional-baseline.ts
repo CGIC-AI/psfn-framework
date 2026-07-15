@@ -3,6 +3,7 @@ import { clampSigned, clampUnit } from '../../../shared/utils/numeric.js';
 export const DEFAULT_EMOTIONAL_CONFIDENCE = 0.7;
 export const DEFAULT_SESSION_MOOD_LEARNING_RATE = 0.55;
 export const DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
+export const MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 64;
 
 export interface EmotionalSnapshot {
   baselineValence: number;
@@ -41,7 +42,7 @@ function round(value: number, precision = 4): number {
 
 function normalizeSeriesLimit(limit: number | undefined): number {
   if (!Number.isFinite(limit)) return DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT;
-  return Math.max(1, Math.min(64, Math.floor(limit as number)));
+  return Math.max(1, Math.min(MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT, Math.floor(limit as number)));
 }
 
 function normalizeObservedAtMs(value: number | undefined): number {

@@ -74,6 +74,7 @@
   },
   "temporalWakeup": {
     "enabled": true,
+    "activeChannelLookbackHours": 72,
     "morningWake": {
       "enabled": true,
       "timing": "fixed",
@@ -100,8 +101,8 @@
     "idleRefresher": {
       "enabled": true,
       "checkIntervalMs": 900000,
-      "minIdleMinutes": 240,
-      "minNoteIntervalMinutes": 240
+      "minIdleMinutes": 120,
+      "minNoteIntervalMinutes": 120
     },
     "wakeSummary": {
       "sessionSummaryMaxTokens": 160,

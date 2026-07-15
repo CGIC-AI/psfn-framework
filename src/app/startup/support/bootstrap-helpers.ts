@@ -227,7 +227,7 @@ export function hydrateCanonicalStartupConfig(
     nodeEnv: env.NODE_ENV,
     runtimeRootDir: env.PSFN_RUNTIME_ROOT,
     legacyDataDir: env.DATA_DIR,
-    workspacePath: env.WORKSPACE_PATH,
+    workspacePath: config.workspacePath ?? env.WORKSPACE_PATH,
     logsDir: env.PSFN_LOGS_DIR,
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
@@ -283,6 +283,7 @@ export function hydrateCanonicalStartupConfig(
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
     temporalWakeup: {
       enabled: persistedScheduler.temporalWakeup.enabled,
+      activeChannelLookbackHours: persistedScheduler.temporalWakeup.activeChannelLookbackHours,
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
       wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },

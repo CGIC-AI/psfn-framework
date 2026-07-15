@@ -42,6 +42,7 @@ export type {
 } from './types/wiki.js';
 
 export type {
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminModelUsageService,
 } from './types/runtime-telemetry.js';
@@ -61,6 +62,7 @@ export type {
 
 export type {
   AdminAdaptiveToolTelemetryEvent,
+  AdminToolInvocationEvent,
   AdminToolFailureEvent,
   AdminToolAvailabilityView,
   AdminToolHealthView,
@@ -165,6 +167,7 @@ export type {
   AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
 export type {

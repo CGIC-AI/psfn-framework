@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
@@ -1936,27 +1936,35 @@ describe('DiscordAdapter status visibility', () => {
     const interactive = makeInteractiveTextChannel();
     discordMock.channelsById.set(channelId, interactive.channel);
 
-    const mediaPath = join(tmpdir(), `psfn-discord-media-${Date.now()}.png`);
-    writeFileSync(mediaPath, Buffer.from('png-bytes'));
-
-    try {
-      await adapter.outbound.sendMedia?.(
-        { channelId },
-        {
-          url: 'https://images.example.test/purr.png',
-          contentType: 'image/png',
-          name: 'purr.png',
-          localPath: mediaPath,
-        },
-      );
-    } finally {
-      rmSync(mediaPath, { force: true });
-    }
+    await adapter.outbound.sendMedia?.(
+      { channelId },
+      {
+        url: 'https://images.example.test/purr.png',
+        contentType: 'image/png',
+        name: 'purr.png',
+        dataBase64: Buffer.from('png-bytes').toString('base64'),
+      },
+    );
 
     expect(interactive.sentPayloads).toHaveLength(1);
     expect(interactive.sentPayloads[0]).toEqual(expect.objectContaining({
-      files: [mediaPath],
+      files: [{ attachment: Buffer.from('png-bytes'), name: 'purr.png' }],
     }));
+  });
+
+  it('refuses to open an unmaterialized local attachment path', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+    const channelId = 'facet-local-path-denied';
+    discordMock.channelsById.set(channelId, makeInteractiveTextChannel().channel);
+
+    await expect(adapter.outbound.sendMedia?.({ channelId }, {
+      url: 'https://images.example.test/peer.png',
+      contentType: 'image/png',
+      name: 'peer.png',
+      localPath: '/tmp/peer-workspace/peer.png',
+    })).rejects.toThrow(/refuses unmaterialized localPath/);
   });
 
   // ── Sprint-10 6ny2: outbound media fetch is SSRF-guarded and byte-capped ──
@@ -2035,9 +2043,6 @@ describe('DiscordAdapter status visibility', () => {
     const interactive = makeInteractiveTextChannel();
     discordMock.channelsById.set(channelId, interactive.channel);
 
-    const mediaPath = join(tmpdir(), `psfn-discord-reply-${Date.now()}.png`);
-    writeFileSync(mediaPath, Buffer.from('png-bytes'));
-
     adapter.onMessage(async () => ({
       content: 'here you go',
       channelId,
@@ -2045,22 +2050,18 @@ describe('DiscordAdapter status visibility', () => {
         url: 'https://images.example.test/purr.png',
         contentType: 'image/png',
         name: 'purr.png',
-        localPath: mediaPath,
+        dataBase64: Buffer.from('png-bytes').toString('base64'),
       }],
       metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
     }));
 
-    try {
-      await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
-    } finally {
-      rmSync(mediaPath, { force: true });
-    }
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
     expect(interactive.sent).toContain('here you go');
     expect(interactive.sentPayloads).toEqual(expect.arrayContaining([
       'here you go',
       expect.objectContaining({
-        files: [mediaPath],
+        files: [{ attachment: Buffer.from('png-bytes'), name: 'purr.png' }],
       }),
     ]));
   });

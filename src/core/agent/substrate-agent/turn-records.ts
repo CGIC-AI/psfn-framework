@@ -1,19 +1,22 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
-import type { TurnObservabilityRecord } from '../../turns/observability.js';
+import type { TurnObservabilityRecord, TurnSnapshotRecord } from '../../turns/observability.js';
 import { cloneTurnObservabilityRecord, cloneUnknownValue } from '../../turns/observability.js';
+import { deriveProviderWireMessagesForTurnSnapshot } from './turn-execution/prompt-invocation-history.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
+import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session/runtime-fallback-provenance.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
+import { resolveMessagePlaceId } from './message-location.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -134,6 +137,9 @@ export function recordUserMessage(input: {
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
+    ...(input.message.replyToMessageId
+      ? { replyToMessageId: input.message.replyToMessageId }
+      : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
@@ -169,10 +175,17 @@ export function recordAssistantMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }): number | null {
-  const metadata = input.emotionSnapshot
+  const emotionMetadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
+  const metadata = input.runtimeFallbackProvenance
+    ? buildSessionMetadataWithRuntimeFallbackProvenance(
+      emotionMetadata,
+      input.runtimeFallbackProvenance,
+    )
+    : emotionMetadata;
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
@@ -284,11 +297,11 @@ export function buildTurnRecord(input: {
 
   const observability = cloneTurnObservabilityForRecord(input.turnObservability);
 
-  // Durable satellite/place origin. Fail-closed: only recorded when the turn
-  // actually carried a bound placeId (see satellite→place binding). Nothing is
-  // fabricated for non-satellite or unbound turns.
+  // Durable room/satellite place origin. Fail-closed: only recorded when the
+  // authoritative routing envelope carried a non-empty placeId.
   const satelliteRouting = input.message.routing?.satellite;
-  const boundPlaceId = satelliteRouting?.placeId?.trim();
+  const boundPlaceId = resolveMessagePlaceId(input.message);
+  const channelPrivacy = normalizeChannelPrivacy(input.message.routing?.channelPrivacy);
   const location = boundPlaceId
     ? {
       placeId: boundPlaceId,
@@ -315,6 +328,7 @@ export function buildTurnRecord(input: {
       input.requestId,
       input.introspectionSensitivityDecision,
     ),
+    ...(channelPrivacy ? { channelPrivacy } : {}),
     userMessage: {
       role: input.speakerRole,
       content: input.persistedUserMessageContent ?? input.message.content,
@@ -322,6 +336,9 @@ export function buildTurnRecord(input: {
       sourceMessageId: input.message.id,
       authorId: input.message.authorId,
       authorName: input.message.authorName,
+      ...(input.message.replyToMessageId
+        ? { replyToMessageId: input.message.replyToMessageId }
+        : {}),
       ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
     },
     ...(assistantMessageContent
@@ -332,6 +349,9 @@ export function buildTurnRecord(input: {
           timestamp: Math.max(input.startedAt, input.completedAt),
           sourceMessageId: input.message.id,
           ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
+          ...(input.response?.metadata.runtimeFallbackProvenance
+            ? { runtimeFallbackProvenance: input.response.metadata.runtimeFallbackProvenance }
+            : {}),
         },
       }
       : {}),
@@ -544,7 +564,59 @@ function cloneTurnObservabilityForRecord(
       delete cloned.snapshot.promptContext.response.reasoning;
     }
   }
+  if (cloned.snapshot) {
+    stripDerivableTurnSnapshotDuplicates(cloned.snapshot);
+  }
   return cloned;
+}
+
+/**
+ * Turn-record slimming (bead hgw3.3): the PERSISTED snapshot drops duplicated
+ * data that is byte-derivable from the canonical PromptPlan at read time. The
+ * LIVE snapshot on the event bus is untouched — this runs only on the cloned
+ * record inside buildTurnRecord.
+ *
+ * - promptContext.providerObservability.providerWireMessages is removed only
+ *   when byte-equal to the read-side derivation
+ *   (deriveProviderWireMessagesForTurnSnapshot — the same function the Garden
+ *   Loom uses). Turn shapes where the shipped current message diverges from
+ *   currentTurnInput (group-attribution wrapping, system-speaker notes, MoA
+ *   collapsed prompts, vision content blocks) fail the comparison and keep the
+ *   embedded capture verbatim.
+ * - toolContext.activeTools is removed only when byte-identical to
+ *   plan.toolDefinitions (bound from the same array at write time); readers
+ *   fall back to the plan.
+ *
+ * Absence is the signal ("derive from the plan") — fields are deleted, never
+ * coerced to [].
+ */
+function stripDerivableTurnSnapshotDuplicates(snapshot: TurnSnapshotRecord): void {
+  const plan = snapshot.plan;
+  if (!plan) return;
+
+  const promptContext = snapshot.promptContext;
+  const providerObservability = promptContext?.providerObservability;
+  if (promptContext && providerObservability?.providerWireMessages) {
+    const derived = deriveProviderWireMessagesForTurnSnapshot({
+      plan,
+      transport: providerObservability.systemRole.transport,
+      currentTurnInput: promptContext.currentTurnInput,
+    });
+    if (JSON.stringify(derived) === JSON.stringify(providerObservability.providerWireMessages)) {
+      delete providerObservability.providerWireMessages;
+    }
+  }
+
+  const toolContext = snapshot.toolContext;
+  if (
+    toolContext?.activeTools
+    && JSON.stringify(toolContext.activeTools) === JSON.stringify(plan.toolDefinitions)
+  ) {
+    delete toolContext.activeTools;
+    if (!toolContext.adaptiveSnapshot) {
+      delete snapshot.toolContext;
+    }
+  }
 }
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {

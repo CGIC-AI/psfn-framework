@@ -122,13 +122,14 @@
     registeredTools: data?.catalog?.tools.length ?? 0,
     activeTools: data?.state?.activeTools.length ?? 0,
     promotedActive: data?.state?.promotedToolsActive.length ?? 0,
+    recentInvocations: data?.recentInvocations.length ?? 0,
     recentFailures: data?.recentFailures.length ?? 0,
   }));
 
   let tabs = $derived.by<GardenTabItem[]>(() => [
     { id: 'health', label: 'Health', count: data?.serviceHealth.length ?? 0 },
     { id: 'tools', label: 'Tools', count: inventoryTotalCount },
-    { id: 'runs', label: 'Runs', count: summary.recentFailures },
+    { id: 'runs', label: 'Runs', count: summary.recentInvocations },
   ]);
 
   function selectTab(tabId: string): void {
@@ -228,9 +229,9 @@
       <p class="mt-2 text-sm text-shadow-600">Promoted extended tools currently in the active set.</p>
     </div>
     <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Failures</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentFailures}</p>
-      <p class="mt-2 text-sm text-shadow-600">Latest soft and hard tool failures observed by admin telemetry.</p>
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Runs</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentInvocations}</p>
+      <p class="mt-2 text-sm text-shadow-600">Successful and failed tool invocations retained by admin telemetry.</p>
     </div>
   </section>
 
@@ -610,16 +611,44 @@
 
     <section class="space-y-4" aria-labelledby="tools-failures-audit-heading">
       <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Failures / Audit</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Runs / Audit</p>
         <h2 id="tools-failures-audit-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
-          Recent failures and telemetry trail
+          Recent tool use, failures, and telemetry trail
         </h2>
         <p class="mt-1 text-sm text-shadow-600">
-          Latest error rows and adaptive selector events retained by admin telemetry.
+          Bounded tool/action/status records, error rows, and adaptive selector events retained by admin telemetry.
         </p>
       </div>
 
-      <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+      <div class="grid gap-4 lg:grid-cols-3">
+        <div class="card-garden p-5">
+          <h3 class="text-base font-serif font-semibold text-shadow-900">Recent Invocations</h3>
+          {#if data?.recentInvocations.length}
+            <BoundedList maxHeight="24rem" label="Recent tool invocations" class="mt-4">
+              <div class="space-y-3">
+                {#each data.recentInvocations as invocation}
+                  <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <code class="text-sm font-medium text-shadow-900">
+                        {invocation.toolName}{invocation.action ? `:${invocation.action}` : ''}
+                      </code>
+                      <span class={invocation.status === 'ok'
+                        ? 'rounded-full bg-moss-100 px-2 py-0.5 text-xs font-semibold text-moss-700'
+                        : 'rounded-full bg-wilt-100 px-2 py-0.5 text-xs font-semibold text-wilt-700'}>
+                        {invocation.status}
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm text-shadow-600">{invocation.channelId}</p>
+                    <p class="mt-2 text-xs text-shadow-500">{formatTimestamp(invocation.timestamp)}</p>
+                  </div>
+                {/each}
+              </div>
+            </BoundedList>
+          {:else}
+            <p class="mt-4 text-sm text-shadow-500">No recent tool invocations have been observed.</p>
+          {/if}
+        </div>
+
         <div class="card-garden p-5">
           <h3 class="text-base font-serif font-semibold text-shadow-900">Recent Failures</h3>
           {#if data?.recentFailures.length}

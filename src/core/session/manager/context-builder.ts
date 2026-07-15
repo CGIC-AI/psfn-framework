@@ -90,7 +90,7 @@ export { assembleSessionHistoryForContextWithLlmSummary } from './context-histor
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
-export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
+export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
@@ -618,6 +618,9 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
+    ...(collected.storeWindowMaxEntryId !== undefined
+      ? { storeWindowMaxEntryId: collected.storeWindowMaxEntryId }
+      : {}),
     ...(roomWindowGated
       ? {
         roomWindowFloorMs: roomWindowFloor,

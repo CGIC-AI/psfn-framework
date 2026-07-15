@@ -253,6 +253,50 @@ describe('turn-records tool persistence', () => {
     expect(record.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
   });
 
+  it('records companion-room location, privacy, and reply lineage on the durable turn', () => {
+    const record = buildTurnRecord({
+      message: {
+        id: 'source-message-room-reply',
+        channelId: 'companion-room:den',
+        channelType: 'companion',
+        authorId: 'comp-b',
+        authorName: 'Companion B',
+        content: 'following up',
+        timestamp: new Date(1_700_000_000_000),
+        replyToMessageId: 'source-message-opening',
+        routing: {
+          source: 'companion',
+          channelPrivacy: 'private',
+          room: { placeId: 'den', privacy: 'private' },
+        },
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-turn-records-room-reply',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'got it',
+        channelId: 'companion-room:den',
+        metadata: { model: 'test-model', inputTokens: 5, outputTokens: 3, durationMs: 250 },
+      },
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(record.location).toEqual({ placeId: 'den' });
+    expect(record.channelPrivacy).toBe('private');
+    expect(record.userMessage.replyToMessageId).toBe('source-message-opening');
+  });
+
   it('omits location when the turn carried no satellite place binding', () => {
     const record = buildTurnRecord({
       message: {

@@ -34,6 +34,8 @@ export interface RunChargeLedgerQuery {
   runId?: string;
 }
 
+export type RunChargeReconciliationQuery = Pick<RunChargeLedgerQuery, 'sinceMs' | 'untilMs'>;
+
 export interface RunChargeBreakdown {
   key: string;
   amount: number;
@@ -232,6 +234,11 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   const event = entry.event;
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event`);
+  }
+  const eventId = normalizeOptionalString(entry.eventId);
+  const nestedEventId = normalizeOptionalString(event.eventId);
+  if (nestedEventId && nestedEventId !== eventId) {
+    throw new Error(`Invalid charge ledger entry at line ${lineNumber}: eventId does not match event.eventId`);
   }
   if (normalizePositiveFiniteNumber(event.timestampMs) === undefined) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event timestamp`);
@@ -499,6 +506,18 @@ export class RunChargeLedger {
       .filter(entry => matchesQuery(entry, query))
       .sort((left, right) => right.event.timestampMs - left.event.timestampMs)
       .slice(0, limit)
+      .map(entry => ({
+        ...entry,
+        event: cloneChargeEvent(entry.event),
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      }));
+  }
+
+  /** Complete internal read for aggregate reconciliation; unlike listEntries, this is not display-limited. */
+  listReconciliationEntries(query: RunChargeReconciliationQuery = {}): RunChargeLedgerEntry[] {
+    return this.entries
+      .filter(entry => matchesQuery(entry, query))
+      .sort((left, right) => left.event.timestampMs - right.event.timestampMs || left.eventId.localeCompare(right.eventId))
       .map(entry => ({
         ...entry,
         event: cloneChargeEvent(entry.event),

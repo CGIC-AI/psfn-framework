@@ -159,6 +159,7 @@ describe('startup owner-file loaders', () => {
       },
       temporalWakeup: {
         enabled: true,
+        activeChannelLookbackHours: 72,
         morningWake: {
           enabled: true,
           timing: 'fixed',
@@ -177,6 +178,7 @@ describe('startup owner-file loaders', () => {
             upperQuantile: 0.75,
             maxSamplesScanned: 2000,
           },
+          minPartnerIdleMinutes: 60,
           catchUpEntryLimit: 32,
           catchUpSummaryMaxTokens: 160,
           fullTurnMaxIdleHours: 72,

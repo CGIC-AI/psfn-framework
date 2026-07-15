@@ -71,6 +71,7 @@ const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
   'turn.end',
   'approval.decision',
   'artifact.preview',
+  'touch.interaction',
 ]);
 
 
@@ -195,6 +196,23 @@ const STRICT_CLIENT_VALIDATORS: Partial<Record<ClientToHubMessage['type'], (payl
       isRecord(payload) &&
       isStringField(payload, 'requestId') &&
       isStringField(payload, 'artifactId')
+    );
+  },
+  'touch.interaction': (payload) => {
+    if (!isRecord(payload)) return false;
+    const count = payload['count'];
+    const durationMs = payload['durationMs'];
+    return (
+      isEnumField(payload, 'kind', ['headpat', 'petting', 'hug', 'kiss']) &&
+      isEnumField(payload, 'region', ['head', 'cheek', 'body']) &&
+      typeof count === 'number' &&
+      Number.isInteger(count) &&
+      count >= 1 &&
+      count <= 20 &&
+      typeof durationMs === 'number' &&
+      Number.isInteger(durationMs) &&
+      durationMs >= 0 &&
+      durationMs <= 60_000
     );
   },
 };

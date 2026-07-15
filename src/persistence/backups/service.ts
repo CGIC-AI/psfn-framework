@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   cpSync,
@@ -51,6 +52,7 @@ import {
 } from './kubernetes-helm.js';
 import {
   createBackupContentsManifest,
+  FLEET_ARTIFACT_IDENTITY_NAME,
   verifyBackupContentsManifest,
   type BackupContentsManifest,
 } from './backup-contents.js';
@@ -58,6 +60,11 @@ import type { BackupRuntimeConfig } from './config.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import {
+  createSanitizedPostgresChildEnv,
+  redactPostgresCredential,
+  sanitizePostgresConnection,
+} from './postgres-connection.js';
 
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
@@ -88,6 +95,14 @@ export interface BackupPostgresOptions {
   pgRestoreBinary?: string;
   /** Override the psql binary used for restore verification (defaults to `psql` on PATH). */
   psqlBinary?: string;
+}
+
+export interface FleetArtifactIdentity {
+  schemaVersion: 1;
+  kind: 'companion' | 'cluster' | 'group';
+  companionId?: string;
+  postgresSchema?: string;
+  postgresSchemas?: string[];
 }
 
 export interface BackupRunOptions {
@@ -130,6 +145,8 @@ export interface BackupRunOptions {
   mirrorDir?: string;
   verifyRestore?: boolean;
   encryption?: BackupEncryptionRuntimeConfig;
+  /** Artifact-local fleet identity, bound by backup-contents.json. */
+  fleetArtifactIdentity?: FleetArtifactIdentity;
   now?: () => number;
 }
 
@@ -294,26 +311,6 @@ function postgresDumpFileName(databaseUrl: string, schema?: string): string {
   return `postgres${schemaSuffix}.dump`;
 }
 
-/**
- * Splits a Postgres URL into a credential-free connection argument and the
- * password, so pg_dump argv never exposes secrets to local process observers.
- */
-function toCredentialFreePostgresConnection(
-  databaseUrl: string,
-): { connectionArg: string; password?: string } {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    throw new Error(
-      'Postgres backup requires a URL connection string (postgres://…) so credentials can be passed via the environment instead of pg_dump argv',
-    );
-  }
-  const password = url.password ? decodeURIComponent(url.password) : '';
-  url.password = '';
-  return { connectionArg: url.toString(), ...(password ? { password } : {}) };
-}
-
 async function dumpPostgresDatabase(
   postgres: BackupPostgresOptions,
   databaseDir: string,
@@ -325,7 +322,10 @@ async function dumpPostgresDatabase(
     ? assertValidPostgresSchemaName(postgres.schema)
     : undefined;
   const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl, schema));
-  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
+  const { connectionArg, password } = sanitizePostgresConnection(
+    postgres.databaseUrl,
+    'Postgres backup',
+  );
   mkdirSync(databaseDir, { recursive: true });
   try {
     await execFileAsync(binary, [
@@ -335,10 +335,10 @@ async function dumpPostgresDatabase(
       `--file=${dumpPath}`,
       connectionArg,
     ], {
-      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: createSanitizedPostgresChildEnv(password),
     });
   } catch (error) {
-    throw new Error(`pg_dump failed: ${describeExecError(error)}`);
+    throw new Error(`pg_dump failed: ${redactPostgresCredential(describeExecError(error), password)}`);
   }
   if (!existsSync(dumpPath) || statSync(dumpPath).size === 0) {
     throw new Error(`pg_dump produced no archive at ${dumpPath}`);
@@ -479,9 +479,16 @@ export async function runBackupCycle(
         now,
       })
       : undefined;
+    let fleetArtifactIdentitySha256: string | undefined;
+    if (options.fleetArtifactIdentity) {
+      const identityPath = join(backupDir, FLEET_ARTIFACT_IDENTITY_NAME);
+      writeJsonAtomic(identityPath, options.fleetArtifactIdentity);
+      fleetArtifactIdentitySha256 = createHash('sha256').update(readFileSync(identityPath)).digest('hex');
+    }
     const backupContents = createBackupContentsManifest({
       backupDir,
       kubernetesHelmRecovery: Boolean(kubernetesHelm),
+      ...(fleetArtifactIdentitySha256 ? { fleetArtifactIdentitySha256 } : {}),
       now,
     });
 
@@ -718,9 +725,9 @@ export function registerScheduledBackupTask(
 // pg_dump (every companion schema + `shared`) plus the system tree plus every
 // companion's files under the common companion-data parent.
 //
-// Restore is intentionally out of scope for this phase; the fleet manifest below
-// records the exact artifact layout and the schema/tree → destination mapping a
-// future restore needs.
+// Destination-aware restore is implemented in fleet-restore.ts. It verifies
+// every captured tree, refuses destination collisions, and restores the matching
+// Postgres slice without combining companion, shared-cluster, or group scopes.
 
 export const FLEET_BACKUP_MANIFEST_NAME = 'fleet-backup-manifest.json';
 export const FLEET_BACKUP_MANIFEST_SCHEMA_VERSION = 1;
@@ -738,6 +745,8 @@ export interface FleetBackupCompanionUnit {
   companionDataDir: string;
   /** Absolute path to this companion's session JSONL directory. */
   sessionsDir: string;
+  /** Canonical Personal Workspace captured only in this companion slice. */
+  personalWorkspacePath: string;
   characterCardPath?: string;
   characterCardHistoryPath?: string;
   memoriesJournalPath?: string;
@@ -750,6 +759,8 @@ export interface FleetBackupRunOptions {
   companions: FleetBackupCompanionUnit[];
   /** System-data root captured into the cluster (or group) artifact. */
   systemDataDir: string;
+  /** Governed Shared Companion Workspace captured only in cluster/group artifacts. */
+  sharedWorkspacePath: string;
   /** System-level recovery artifact, captured only by cluster/group units. */
   kubernetesHelm?: KubernetesHelmBackupConfig;
   /** Shared world schema dumped into the cluster artifact. Defaults to `shared`. */
@@ -766,6 +777,8 @@ export interface FleetBackupRunOptions {
    * `groupMode` is set.
    */
   groupCompanionDataDir?: string;
+  /** Canonical workspaces parent captured whole only in group mode. */
+  groupWorkspacesRoot?: string;
   maxRotatingBackups?: number;
   maxWeeklyBackups?: number;
   maxMonthlyBackups?: number;
@@ -781,6 +794,8 @@ export interface FleetBackupUnitOutcome {
   kind: FleetBackupUnitKind;
   companionId?: string;
   postgresSchema?: string;
+  /** Exact Postgres schemas contained in a whole-database group artifact. */
+  postgresSchemas?: string[];
   status: 'success' | 'failure';
   /** Artifact directory, relative to backupRootDir, when the unit succeeded. */
   artifactDir?: string;
@@ -828,7 +843,7 @@ interface FleetBackupManifest {
   overallStatus: 'success' | 'failure';
   sharedSchema?: string;
   units: FleetBackupUnitOutcome[];
-  /** Human/tooling-readable layout + restore mapping (restore build-out is deferred). */
+  /** Human/tooling-readable layout + restore mapping consumed by fleet-restore.ts. */
   layout: Record<string, string>;
 }
 
@@ -841,6 +856,7 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
       systemConfig: 'system-config/ + manifest — system-data owner files',
       helmRecovery: 'helm-recovery/ + manifest when running under Helm — content-bound recovery chart and non-secret release/workload-image descriptor',
       companionTree: 'companion-tree/ — the whole companion-data parent, i.e. every companion\'s files',
+      workspaces: 'workspace-tree/ — the whole fleet workspaces parent (personal slices plus governed shared artifacts)',
       restore: 'pg_restore the whole-database dump into a fresh cluster; unpack companion-tree into companion-data and system-config into system-data',
     };
   }
@@ -849,9 +865,11 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
     companionArtifact: `${FLEET_COMPANIONS_DIR_NAME}/<companionId>/<timestamp>/`,
     companionDatabase: 'database/<db>.<schema>.dump — pg_dump --schema=<postgresSchema> (pure companion slice, restorable into any cluster)',
     companionTree: 'companion-tree/ + manifest, sessions/, notes/, companion/ (character card) — this companion\'s files only',
+    companionWorkspace: 'workspace-tree/ + manifest — exactly this companion\'s Personal Workspace',
     clusterArtifact: `${FLEET_CLUSTER_DIR_NAME}/<timestamp>/`,
     clusterDatabase: 'database/<db>.<sharedSchema>.dump — pg_dump --schema=<sharedSchema> (shared world data)',
     clusterSystemConfig: 'system-config/ + manifest — system-data owner files',
+    clusterSharedWorkspace: 'workspace-tree/ + manifest — governed Shared Companion Workspace only',
     clusterHelmRecovery: 'helm-recovery/ + authenticated contents marker when running under Helm — stored only in the cluster artifact, never companion slices',
     restore: 'restore a companion slice by pg_restore of its schema dump into a target cluster + unpacking companion-tree into companion-data/<companionId>; restore shared+system from the cluster artifact',
   };
@@ -902,16 +920,31 @@ export async function runFleetBackupCycle(
   const results: BackupRunResult[] = [];
 
   const runUnit = async (
-    descriptor: { kind: FleetBackupUnitKind; companionId?: string; postgresSchema?: string },
+    descriptor: {
+      kind: FleetBackupUnitKind;
+      companionId?: string;
+      postgresSchema?: string;
+      postgresSchemas?: string[];
+    },
     runOptions: BackupRunOptions,
   ): Promise<void> => {
     try {
-      const result = await runBackupCycle(runOptions);
+      const result = await runBackupCycle({
+        ...runOptions,
+        fleetArtifactIdentity: {
+          schemaVersion: 1,
+          kind: descriptor.kind,
+          ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
+          ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+          ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
+        },
+      });
       results.push(result);
       outcomes.push({
         kind: descriptor.kind,
         ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
         ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
         status: 'success',
         artifactDir: relative(options.backupRootDir, result.backupDir),
       });
@@ -927,6 +960,7 @@ export async function runFleetBackupCycle(
         kind: descriptor.kind,
         ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
         ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        ...(descriptor.postgresSchemas ? { postgresSchemas: descriptor.postgresSchemas } : {}),
         status: 'failure',
         error: message,
       });
@@ -944,12 +978,26 @@ export async function runFleetBackupCycle(
         'Group backup mode requires groupCompanionDataDir (the common companion-data parent root)',
       );
     }
+    const groupWorkspacesRoot = options.groupWorkspacesRoot?.trim();
+    if (!groupWorkspacesRoot) {
+      throw new Error('Group backup mode requires groupWorkspacesRoot');
+    }
     await runUnit(
-      { kind: 'group' },
+      {
+        kind: 'group',
+        postgresSchemas: [
+          ...new Set([
+            ...options.companions.map(companion => assertValidPostgresSchemaName(companion.postgresSchema)),
+            assertValidPostgresSchemaName(sharedSchema),
+          ]),
+        ].sort(),
+      },
       {
         postgres: basePostgres,
         companionDataDir: groupCompanionDataDir,
         systemDataDir: options.systemDataDir,
+        workspacePath: groupWorkspacesRoot,
+        workspaceProtectedPaths: [groupCompanionDataDir, options.systemDataDir],
         ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_GROUP_DIR_NAME),
@@ -970,6 +1018,15 @@ export async function runFleetBackupCycle(
           },
           companionDataDir: companion.companionDataDir,
           sessionsDir: companion.sessionsDir,
+          workspacePath: companion.personalWorkspacePath,
+          workspaceProtectedPaths: [
+            options.systemDataDir,
+            options.sharedWorkspacePath,
+            ...options.companions.map(unit => unit.companionDataDir),
+            ...options.companions
+              .filter(unit => unit.companionId !== companion.companionId)
+              .map(unit => unit.personalWorkspacePath),
+          ],
           ...(companion.characterCardPath ? { characterCardPath: companion.characterCardPath } : {}),
           ...(companion.characterCardHistoryPath ? { characterCardHistoryPath: companion.characterCardHistoryPath } : {}),
           ...(companion.memoriesJournalPath ? { memoriesJournalPath: companion.memoriesJournalPath } : {}),
@@ -987,6 +1044,12 @@ export async function runFleetBackupCycle(
       {
         postgres: { ...basePostgres, schema: sharedSchema },
         systemDataDir: options.systemDataDir,
+        workspacePath: options.sharedWorkspacePath,
+        workspaceProtectedPaths: [
+          options.systemDataDir,
+          ...options.companions.map(unit => unit.companionDataDir),
+          ...options.companions.map(unit => unit.personalWorkspacePath),
+        ],
         ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_CLUSTER_DIR_NAME),

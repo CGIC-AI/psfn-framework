@@ -92,6 +92,8 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/skills.seed.json ./data/skills.json
    ```
 
+   The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
+
 3. Provision the intake firewall's L1.5 prompt-injection classifier model (optional but recommended; ~704 MiB, gitignored, never downloaded at runtime):
 
    ```bash
@@ -179,16 +181,16 @@ the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
 provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
-### Multi-companion workspace limitation
+### Multi-companion workspaces
 
-Personal Workspace isolation is a target contract, not current fleet behavior.
-Today the supervisor forwards one inherited `WORKSPACE_PATH` to every agent;
-`companions.json` has no workspace field. Do not run a fleet on the assumption
-that personal journals, personal wikis, managed skills, modules, or other
-workspace files are private to one companion. The target layout is one Personal
-Workspace per companion plus a separately governed Shared Companion Workspace;
-do not invent environment variables or paths for it before the runtime contract
-lands. See [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
+Do not set per-companion workspace paths in `companions.json`. The fleet
+resolver derives `<runtime-root>/workspaces/personal/<companion-uuid>` and the
+single `<runtime-root>/workspaces/shared` root, validates containment and
+non-overlap, and provisions them before launch. Each agent and its Garden
+receive only the matching personal root as `WORKSPACE_PATH`. The shared root is
+available through its authenticated, reviewed Garden surface and has no
+environment-variable escape hatch. See
+[`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
 The Helm deployment reads the isolated-worker proof from the application
 Secret key named by `secrets.keys.gatewaySessionIntegrityAuthToken` (default

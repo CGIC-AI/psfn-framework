@@ -29,6 +29,7 @@ import {
   resolveAdminTransportMode,
   resolveAdminTransportServerEndpoint,
 } from '../../operator/garden/transport-paths.js';
+import { resolveSharedWorkspaceCredentials } from '../../operator/garden/services/shared-workspace-service.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -123,6 +124,9 @@ export async function startOptionalAdminTransportServer(
     getCredentialPresence: () => options.gateway.getCredentialPresence(),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
     toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
+    ...(adminConfig.sharedWorkspacePath
+      ? { sharedWorkspaceCredentials: resolveSharedWorkspaceCredentials(env) }
+      : {}),
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),

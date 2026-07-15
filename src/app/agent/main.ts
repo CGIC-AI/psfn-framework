@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
@@ -172,13 +173,23 @@ async function main(): Promise<void> {
 
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
   const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
-    ...(config.companionId ? { companionId: config.companionId } : {}),
+    companionId: resolveCoreCompanionIdFromConfig(config),
     ...(config.gatewayCompanionAuthToken
       ? { companionAuthToken: config.gatewayCompanionAuthToken }
       : {}),
     ...(config.gatewaySessionIntegrityAuthToken
       ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
       : {}),
+    onModelBudgetBlocked: (event) => {
+      eventBus.emit('model.budget.blocked', event).catch((error) => {
+        log.error('Failed to bridge gateway model budget telemetry', {
+          error: error instanceof Error ? error.message : String(error),
+          provider: event.provider,
+          model: event.model,
+          reason: event.reason,
+        });
+      });
+    },
   });
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.
@@ -753,7 +764,7 @@ async function main(): Promise<void> {
   // config selects this companion's own bot account entry.
   const discordChannelView = resolveDiscordCompanionView(
     channelsConfig.discord,
-    config.companionId,
+    resolveCoreCompanionIdFromConfig(config),
   );
 
   const apiBackend = new AgentApiBackend({
@@ -880,6 +891,7 @@ async function main(): Promise<void> {
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;
+  shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

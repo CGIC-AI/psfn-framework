@@ -4,7 +4,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -50,6 +50,7 @@ import {
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
+import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('SubstrateAgent');
 export const DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS = 5_000;
@@ -523,7 +524,16 @@ export class TurnSupportRuntime {
     turnId: TurnID,
     requestId: string,
   ): CorrelationMetadata {
-    return buildTurnCorrelationForTurn(message, callType, turnId, requestId);
+    const resolvedSessionId = this.resolveSessionChannelId(message.channelId);
+    const wyomingSessionId = message.routing?.wyoming?.sessionId?.trim();
+    const sessionId = resolvedSessionId !== message.channelId
+      ? resolvedSessionId
+      : (wyomingSessionId || resolvedSessionId);
+    const rootInitiationId = getRunChargeSnapshot()?.lineage.rootRunId.trim() || requestId;
+    return buildTurnCorrelationForTurn(message, callType, turnId, requestId, {
+      sessionId,
+      rootInitiationId,
+    });
   }
 
   withCorrelationPurpose(
@@ -638,6 +648,7 @@ export class TurnSupportRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
+    runtimeFallbackProvenance?: RuntimeFallbackProvenance,
   ): number | null {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
@@ -648,6 +659,7 @@ export class TurnSupportRuntime {
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      runtimeFallbackProvenance,
     });
   }
 

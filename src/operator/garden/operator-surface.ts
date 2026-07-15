@@ -112,8 +112,8 @@ export class GardenOperatorSurface implements Lifecycle {
       token: this.config.token,
       checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
-      serveGardenBuildAsset: (path, response) => this.transport.serveGardenBuildAsset(path, response),
-      serveGardenPage: (path, response) => this.transport.serveGardenPage(path, response),
+      serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
+      serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
       route: (method, path, request, response) => this.route(method, path, request, response),
       sendNotFound: (path, response) => sendText(response, 404, `Not found: ${path}`),
       onRequestError: (path, error) => {

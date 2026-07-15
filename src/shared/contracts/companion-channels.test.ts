@@ -42,6 +42,10 @@ describe('companion channel identifiers (W6)', () => {
     expect(parseCompanionChannelId('companion-dm:same:same')).toBeNull();
     expect(parseCompanionChannelId('companion-dm:only-one')).toBeNull();
     expect(parseCompanionChannelId('companion-dm:a:b:c')).toBeNull();
+    expect(parseCompanionChannelId('companion-dm: a:b')).toBeNull();
+    expect(parseCompanionChannelId('companion-dm:a :b')).toBeNull();
+    expect(parseCompanionChannelId('companion-dm:a!:b')).toBeNull();
+    expect(parseCompanionChannelId(`companion-dm:a:${'b'.repeat(129)}`)).toBeNull();
   });
 
   it('returns null for non-companion channels', () => {

@@ -326,7 +326,7 @@
 
   async function loadSessionHistory(sessionId: string) {
     try {
-      const data = await getSessionMessages(sessionId);
+      const data = await getSessionMessages(sessionId, { messagesOnly: true });
       if (data.messages && data.messages.length > 0) {
         const loaded: ChatMessage[] = [];
         for (const entry of data.messages) {

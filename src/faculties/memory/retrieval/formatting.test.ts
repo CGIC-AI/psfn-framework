@@ -1,9 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  resetActiveTimezone,
+  setActiveTimezone,
+} from '../../../shared/time/active-timezone.js';
 import type { PurrMemory } from '../types.js';
 import type { EpisodicRetrievalChain } from './episodic.js';
-import { renderPromptBlock } from './formatting.js';
+import {
+  formatMemoryRecencyBand,
+  renderPromptBlock,
+  renderProactiveRecall,
+} from './formatting.js';
 import type { ScoredMemory } from './types.js';
+
+const ORIGINAL_TZ = process.env.TZ;
+
+// All temporal assertions pin the active timezone deterministically;
+// setActiveTimezone also writes process.env.TZ, so both are restored.
+beforeEach(() => {
+  setActiveTimezone('America/New_York');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetActiveTimezone();
+  if (ORIGINAL_TZ === undefined) {
+    delete process.env.TZ;
+  } else {
+    process.env.TZ = ORIGINAL_TZ;
+  }
+});
 
 // Companion-facing rendering contract (PSFNLIVE-snin): machine identifiers
 // stay in structured metadata and tool-only surfaces; the prose the model
@@ -151,14 +177,36 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expectNoIdentifierLeaks(rendered);
   });
 
-  it('renders episode time ranges as readable dates without salience bookkeeping', () => {
+  it('renders episode time ranges in the active timezone without salience bookkeeping', () => {
     const rendered = renderPromptBlock(undefined, [], {
       episodicChains: [buildEpisodicChainFixture()],
     });
 
-    expect(rendered).toContain('May 2 2026, 01:10-03:40 UTC');
+    // 2026-05-02T01:10Z-03:40Z is May 1 21:10-23:40 in America/New_York (EDT).
+    expect(rendered).toContain('May 1 2026, 21:10-23:40 America/New_York');
+    expect(rendered).not.toContain('UTC');
     expect(rendered).not.toContain('2026-05-02T01:10:00.000Z');
     expect(rendered).not.toContain('salience 0.8');
+  });
+
+  it('renders multi-day episode ranges with both active-timezone dates and one tz label', () => {
+    const chain = buildEpisodicChainFixture();
+    (chain.episodes[0] as { startedAt: string; endedAt: string }).startedAt =
+      '2026-05-02T01:10:00.000Z';
+    (chain.episodes[0] as { startedAt: string; endedAt: string }).endedAt =
+      '2026-05-02T20:00:00.000Z';
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: [chain] });
+
+    expect(rendered).toContain('May 1 2026 21:10 to May 2 2026 16:00 America/New_York');
+  });
+
+  it('falls back to the raw strings for unparseable episode timestamps', () => {
+    const chain = buildEpisodicChainFixture();
+    (chain.episodes[0] as { startedAt: string; endedAt: string }).startedAt = 'not-a-date';
+    (chain.episodes[0] as { startedAt: string; endedAt: string }).endedAt = 'also-not-a-date';
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: [chain] });
+
+    expect(rendered).toContain('(not-a-date to also-not-a-date;');
   });
 
   it('strips redundant ISO timestamp tails from auto-generated landmarks', () => {
@@ -169,5 +217,145 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
 
     expect(rendered).toContain('around ears, look.');
     expect(rendered).not.toContain('2026-05-14T12:04:42.103Z');
+  });
+});
+
+// 2026-07-10 12:00 in America/New_York (EDT).
+const FIXED_NOW_MS = Date.parse('2026-07-10T16:00:00.000Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function makeAgedMemory(extractedAt: number | undefined, overrides?: Partial<PurrMemory>): PurrMemory {
+  return {
+    id: 'aged-memory-fixture',
+    type: 'semantic',
+    text: 'The user keeps a small herb garden on the balcony.',
+    emotionalValence: 0,
+    tags: [],
+    sourceRef: 'fixture',
+    extractedAt,
+    ...overrides,
+  } as unknown as PurrMemory;
+}
+
+describe('formatMemoryRecencyBand', () => {
+  it.each([
+    [FIXED_NOW_MS - 60 * 60 * 1000, 'today'],
+    [FIXED_NOW_MS - 1 * DAY_MS, 'yesterday'],
+    [FIXED_NOW_MS - 3 * DAY_MS, 'this week'],
+    [FIXED_NOW_MS - 6 * DAY_MS, 'this week'],
+    [FIXED_NOW_MS - 7 * DAY_MS, '1 week ago'],
+    [FIXED_NOW_MS - 20 * DAY_MS, '2 weeks ago'],
+    [FIXED_NOW_MS - 56 * DAY_MS, '8 weeks ago'],
+    [FIXED_NOW_MS - 63 * DAY_MS, '2 months ago'],
+    [FIXED_NOW_MS - 200 * DAY_MS, '6 months ago'],
+    [FIXED_NOW_MS - 729 * DAY_MS, '23 months ago'],
+    [FIXED_NOW_MS - 731 * DAY_MS, '2 years ago'],
+    [FIXED_NOW_MS - 1096 * DAY_MS, '3 years ago'],
+  ])('bands extractedAt %d as "%s"', (extractedAt, expected) => {
+    expect(formatMemoryRecencyBand(extractedAt, FIXED_NOW_MS)).toBe(expected);
+  });
+
+  it('uses active-timezone day boundaries, not UTC ones', () => {
+    // 2026-07-10T04:00Z is Jul 10 00:00 EDT; two hours earlier is Jul 9 22:00
+    // EDT — a different local day even though both share the UTC date.
+    const localMidnight = Date.parse('2026-07-10T04:00:00.000Z');
+    expect(formatMemoryRecencyBand(localMidnight - 2 * 60 * 60 * 1000, localMidnight))
+      .toBe('yesterday');
+  });
+
+  it('clamps future extraction times to today', () => {
+    expect(formatMemoryRecencyBand(FIXED_NOW_MS + DAY_MS, FIXED_NOW_MS)).toBe('today');
+  });
+
+  it('returns undefined for missing or invalid extraction times', () => {
+    expect(formatMemoryRecencyBand(undefined, FIXED_NOW_MS)).toBeUndefined();
+    expect(formatMemoryRecencyBand(Number.NaN, FIXED_NOW_MS)).toBeUndefined();
+  });
+});
+
+describe('recency bands on rendered memory lines', () => {
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+  });
+
+  it('appends bands to relevant-memory lines, including multi-year ages', () => {
+    const rendered = renderPromptBlock(undefined, [
+      {
+        memory: makeAgedMemory(FIXED_NOW_MS - 60 * 60 * 1000, { emotionalValence: 0.5 }),
+        score: 0.9,
+      } as unknown as ScoredMemory,
+      {
+        memory: makeAgedMemory(FIXED_NOW_MS - 1096 * DAY_MS, {
+          id: 'aged-memory-fixture-2',
+          text: 'The user adopted a rescue dog named Biscuit.',
+        }),
+        score: 0.8,
+      } as unknown as ScoredMemory,
+    ]);
+
+    expect(rendered).toContain(
+      '- [semantic] The user keeps a small herb garden on the balcony. (+) (today)',
+    );
+    expect(rendered).toContain(
+      '- [semantic] The user adopted a rescue dog named Biscuit. (3 years ago)',
+    );
+  });
+
+  it('appends bands to emotional continuity lines', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      emotionalContinuityMemories: [
+        makeAgedMemory(FIXED_NOW_MS - 1 * DAY_MS, {
+          type: 'emotional',
+          emotionalValence: 0.6,
+          text: 'A quiet evening walk left the user feeling settled.',
+        }),
+      ],
+    });
+
+    expect(rendered).toContain(
+      '- [emotional] A quiet evening walk left the user feeling settled. (+) (yesterday)',
+    );
+  });
+
+  it('appends bands to attributed memory lines for other people', () => {
+    const rendered = renderPromptBlock(undefined, [
+      {
+        memory: makeAgedMemory(FIXED_NOW_MS - 20 * DAY_MS, {
+          contactId: 'contact-other',
+          text: 'Their neighbor started a pottery class.',
+        }),
+        score: 0.7,
+      } as unknown as ScoredMemory,
+    ], {
+      socialContext: {
+        canonicalContactId: 'contact-primary',
+        canonicalDisplayName: 'Primary Person',
+        relatedContactsById: new Map(),
+      } as never,
+    });
+
+    expect(rendered).toContain(
+      '- [semantic] Their neighbor started a pottery class. (2 weeks ago)',
+    );
+  });
+
+  it('appends bands to spontaneous recall lines', () => {
+    const rendered = renderProactiveRecall(makeAgedMemory(FIXED_NOW_MS - 3 * DAY_MS));
+
+    expect(rendered).toBe([
+      'Spontaneous recall:',
+      '- [semantic] The user keeps a small herb garden on the balcony. (this week)',
+    ].join('\n'));
+  });
+
+  it('renders without a band when extractedAt is missing', () => {
+    const rendered = renderPromptBlock(undefined, [
+      { memory: makeAgedMemory(undefined), score: 0.9 } as unknown as ScoredMemory,
+    ]);
+
+    expect(rendered).toContain(
+      '- [semantic] The user keeps a small herb garden on the balcony.\n',
+    );
+    expect(rendered).not.toContain('(today)');
   });
 });

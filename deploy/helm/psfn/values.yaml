@@ -42,6 +42,10 @@ runtime:
   mode: split
   layoutMode: production
   nodeEnv: production
+  # IANA timezone for the companion's clock, scheduler wall-clock windows, and
+  # temporal prompt signals. settings.json activeTimezone (when set) still wins
+  # over this env-level value at runtime.
+  timezone: America/New_York
   systemDataDir: /app/system-data
   companionDataDir: /app/companion-data
   workspacePath: /app/workspace
@@ -210,6 +214,10 @@ secrets:
     # COMPANION_ID. Production operators may supply it through an existing
     # Secret instead of persisting it in Helm values.
     gatewaySessionIntegrityAuthToken: ""
+    # Distinct role-bound agent proof derived from gatewaySessionHmacKey for
+    # COMPANION_ID. Required by multi-companion agents; optional for the
+    # default single-companion topology.
+    gatewayCompanionAuthToken: ""
     # Dedicated satellite-hub bearer credential (Sprint-10 H4: never reuse the
     # shared API_KEY for satellites). Injected into the hub as PSFN_API_KEY and
     # into the gateway inside API_SATELLITE_KEYS, so the hub authenticates as a
@@ -240,6 +248,7 @@ secrets:
     adminToken: ADMIN_TOKEN
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+    gatewayCompanionAuthToken: GATEWAY_COMPANION_AUTH_TOKEN
     satelliteHubApiKey: SATELLITE_HUB_API_KEY
     homeAssistantToken: HOME_ASSISTANT_TOKEN
     satelliteHubControlToken: SATELLITE_HUB_CONTROL_TOKEN
@@ -367,6 +376,15 @@ liteLlm:
             # z-ai/glm-5.2:exacto evaluated 10/10 clean (bead psfn-framework-mihm).
             # Keep model_name unprefixed so models.json/settings are unchanged.
             model: "openrouter/z-ai/glm-5.2:exacto"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "z-ai-glm-5.2-nitro"
+          litellm_params:
+            # LiteLLM treats the colon variant in a requested model name as a
+            # model-group separator. Keep the public alias colon-free while
+            # preserving OpenRouter's throughput-prioritized Nitro variant in
+            # the upstream model ID (bead psfn-framework-z82t).
+            model: "openrouter/z-ai/glm-5.2:nitro"
+            reasoning_effort: "none"
             api_key: "os.environ/OPENROUTER_API_KEY"
         - model_name: "moonshotai/kimi-k2.6"
           litellm_params:

@@ -137,6 +137,13 @@ export function formatActiveDateTimeCompact(now: Date): string {
   return `${parts.month}-${parts.day}-${shortYear} ${parts.hour}:${parts.minute}`;
 }
 
+export function formatActiveWeekdayShort(now: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveActiveTimezone(),
+    weekday: 'short',
+  }).format(now);
+}
+
 export function formatActiveDateTimeLabel(now: Date): string {
   return `${formatActiveDateTimeCompact(now)} ${resolveActiveTimezone()}`;
 }

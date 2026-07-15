@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   LLMPromptCacheObservability,
   LLMSystemPromptCacheBoundaries,
@@ -23,10 +24,10 @@ export interface PromptCacheCorrelation {
   channelId?: string;
 }
 
-export interface PromptCacheRequestOptions {
+export interface PromptCacheRequestOptions<PayloadModel = unknown> {
   cacheRetention?: PromptCacheRetention;
   sessionId?: string;
-  onPayload?: (payload: unknown, payloadModel: unknown) => unknown | Promise<unknown>;
+  onPayload?: (payload: unknown, payloadModel: PayloadModel) => unknown | Promise<unknown>;
 }
 
 export interface PromptCacheBoundaryWarningPayload {
@@ -48,9 +49,14 @@ function resolveSessionIdForScope(
   scope: PromptCacheScope,
   correlation: PromptCacheCorrelation | undefined,
 ): string | undefined {
-  return scope === 'request'
+  const raw = scope === 'request'
     ? correlation?.requestId
     : correlation?.channelId;
+  if (!raw) return undefined;
+  // Providers receive this as an affinity/cache key (e.g. Mistral x-affinity,
+  // OpenAI prompt_cache_key). Hash so raw internal/channel identifiers never
+  // leave the process; equal inputs still map to a stable affinity token.
+  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
 }
 
 function supportsCacheControlBreakpoints(
@@ -126,7 +132,7 @@ export function buildPromptCacheObservability(
  * returns the promptCaching observability reflecting what was applied.
  * Returns null when the flag is off — zero wire change.
  */
-export function applyModelAgnosticPromptCache(input: PromptCacheCandidateConfig & {
+export function applyModelAgnosticPromptCache<PayloadModel>(input: PromptCacheCandidateConfig & {
   promptCacheEnabled?: boolean;
   provider: string;
   modelId: string;
@@ -135,7 +141,7 @@ export function applyModelAgnosticPromptCache(input: PromptCacheCandidateConfig 
   systemPrompt: string;
   boundaries: LLMSystemPromptCacheBoundaries | undefined;
   correlation: PromptCacheCorrelation | undefined;
-  requestOptions: PromptCacheRequestOptions;
+  requestOptions: PromptCacheRequestOptions<PayloadModel>;
   onBoundaryMismatch: (payload: PromptCacheBoundaryWarningPayload) => void;
 }): LLMPromptCacheObservability | null {
   if (input.promptCacheEnabled !== true) return null;

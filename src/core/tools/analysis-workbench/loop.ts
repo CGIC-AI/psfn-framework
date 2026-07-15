@@ -33,11 +33,15 @@ import {
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
 import {
-  chargeSurface,
   getRunChargeContext,
   inspectChargeSurface,
   runWithChargeContext,
+  runWithChargedSurface,
 } from '../../../shared/telemetry/run-charge.js';
+import {
+  resolveCorrelationMetadata,
+  type ResolvedCorrelationMetadata,
+} from '../../../primitives/llm/correlation.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -424,33 +428,12 @@ function pushPassiveStep(
   }));
 }
 
-interface ResolvedAnalysisRequestMetadata {
-  requestId: string;
-  turnId?: string;
-  channelId?: string;
-  toolName?: string;
-  toolCallId?: string;
-  originType: 'tool' | 'background' | 'scheduled' | 'chat' | 'memory' | 'summary';
-}
+type ResolvedAnalysisRequestMetadata = ResolvedCorrelationMetadata;
 
 function normalizeMetadataValue(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeOriginType(value: string | undefined): ResolvedAnalysisRequestMetadata['originType'] | undefined {
-  if (
-    value === 'tool'
-    || value === 'background'
-    || value === 'scheduled'
-    || value === 'chat'
-    || value === 'memory'
-    || value === 'summary'
-  ) {
-    return value;
-  }
-  return undefined;
 }
 
 function resolveAnalysisRequestMetadata(
@@ -468,18 +451,12 @@ function resolveAnalysisRequestMetadata(
   const requestId = normalizeMetadataValue(merged.requestId)
     ?? turnId
     ?? `repl-analysis-${Date.now()}`;
-  const originType = normalizeOriginType(normalizeMetadataValue(merged.originType))
-    ?? normalizeOriginType(normalizeMetadataValue(merged.callType))
-    ?? 'tool';
-
-  return {
+  return resolveCorrelationMetadata({
+    ...merged,
     requestId,
     ...(turnId ? { turnId } : {}),
-    ...(normalizeMetadataValue(merged.channelId) ? { channelId: normalizeMetadataValue(merged.channelId) } : {}),
     toolName: normalizeMetadataValue(merged.toolName) ?? 'analysis_workbench',
-    ...(normalizeMetadataValue(merged.toolCallId) ? { toolCallId: normalizeMetadataValue(merged.toolCallId) } : {}),
-    originType,
-  };
+  }, undefined, 'reasoning');
 }
 
 function buildAnalysisCorrelation(
@@ -488,12 +465,9 @@ function buildAnalysisCorrelation(
   requestSuffix: string,
 ): CorrelationMetadata {
   return {
-    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+    ...metadata,
     requestId: `${metadata.requestId}:${requestSuffix}`,
-    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
     callType: metadata.originType,
-    ...(metadata.toolName ? { toolName: metadata.toolName } : {}),
-    ...(metadata.toolCallId ? { toolCallId: metadata.toolCallId } : {}),
     purpose: originStage,
     originType: metadata.originType,
     originStage,
@@ -505,10 +479,10 @@ function buildNestedAnalysisRequestMetadata(
   childId: number,
 ): Partial<LLMRequestMetadata> {
   const suffix = `nested-analysis-${childId}`;
+  const { callType: _callType, purpose: _purpose, ...requestMetadata } = metadata;
   return {
-    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+    ...requestMetadata,
     requestId: `${metadata.requestId}:${suffix}`,
-    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
     toolName: metadata.toolName ?? 'analysis_workbench',
     ...(metadata.toolCallId ? { toolCallId: `${metadata.toolCallId}:${suffix}` } : {}),
     originType: metadata.originType,
@@ -869,7 +843,7 @@ export async function runRLMLoop(
         break;
       }
 
-      const completion = llmProvider.complete(
+      const runCompletion = async () => await llmProvider.complete(
         {
           systemPrompt,
           messages,
@@ -881,6 +855,16 @@ export async function runRLMLoop(
         },
         'reasoning',
       );
+      const completion = iterationNumber > 1
+        ? runWithChargedSurface('analysisWorkbenchExtensionBand', {
+            chargePolicy,
+            details: {
+              iteration: iterationNumber,
+              depth,
+              ...(requestMetadata.turnId ? { turnId: requestMetadata.turnId } : {}),
+            },
+          }, runCompletion)
+        : runCompletion();
       response = timeoutMs === null
         ? await completion
         : await withTimeout(completion, timeoutMs);
@@ -901,16 +885,6 @@ export async function runRLMLoop(
     sharedState.totalOutputTokens += response.outputTokens;
 
     applyCostCharge(response.inputTokens, response.outputTokens);
-    if (iterationNumber > 1) {
-      chargeSurface('analysisWorkbenchExtensionBand', {
-        chargePolicy,
-        details: {
-          iteration: iterationNumber,
-          depth,
-          ...(requestMetadata.turnId ? { turnId: requestMetadata.turnId } : {}),
-        },
-      });
-    }
     refreshBudgetStatus();
 
     const text = response.content;

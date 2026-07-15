@@ -149,10 +149,62 @@ describe('execute', () => {
     expect(review.content).toContain('promotable');
     expect(review.content).toContain('public -> regular');
     expect(review.content).toContain('confirmSuggestion=true');
+    expect(review.content).toContain('Relationship: stranger -> acquaintance');
+    expect(review.content).toContain('action=set_relationship');
     expect(review.content).not.toContain('already-trusted');
     expect(store.watermarks.get(CONTACT_TRUST_DRIFT_REVIEW_PROCESSOR)).toBe(
       new Date(INSIDE_WINDOW_MS).toISOString(),
     );
+  });
+
+  it('reviews relationship progression even when high-tier trust has nothing to escalate', async () => {
+    const deliverReview = vi.fn();
+    const store = fakeStore({
+      contacts: [
+        fixtureContact({ id: 'trusted-stranger', trustLevel: 'trusted', relationshipType: 'stranger' }),
+      ],
+      timeSeriesByContact: { 'trusted-stranger': PROMOTABLE_SERIES },
+    });
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: store,
+      restWindow: REST_WINDOW,
+      deliverReview,
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'relationship-review', payload: {} });
+
+    expect(deliverReview).toHaveBeenCalledTimes(1);
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string; candidateCount: number };
+    expect(review.candidateCount).toBe(1);
+    expect(review.content).toContain('trusted-stranger');
+    expect(review.content).toContain('Relationship: stranger -> acquaintance');
+    expect(review.content).not.toContain('Trust: trusted');
+  });
+
+  it('routes family relationship suggestions through the HITL proposal action', async () => {
+    const deliverReview = vi.fn();
+    const store = fakeStore({
+      contacts: [
+        fixtureContact({ id: 'close-friend', trustLevel: 'trusted', relationshipType: 'friend' }),
+      ],
+      timeSeriesByContact: {
+        'close-friend': Array.from({ length: 24 }, () => point(0.4)),
+      },
+    });
+    const lane = new ContactTrustDriftReviewLane({
+      contactStore: store,
+      restWindow: REST_WINDOW,
+      deliverReview,
+      now: () => INSIDE_WINDOW_MS,
+    });
+
+    await lane.execute({ id: 'family-review', payload: {} });
+
+    const review = deliverReview.mock.calls[0]?.[0] as { content: string };
+    expect(review.content).toContain('Relationship: friend -> family');
+    expect(review.content).toContain('action=propose_relationship');
+    expect(review.content).toContain('operator approval');
   });
 
   it('advances the watermark without delivering when there are no candidates', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertCompanionAdminTransportIsolation,
   assertCompanionAdminTransportSocketPath,
   resolveCompanionAdminTransportSocketPath,
   resolveAdminTransportClientEndpoint,
@@ -42,6 +43,17 @@ describe('Garden admin transport endpoint resolution', () => {
       .toBe('/run/psfn/garden-admin-comp-a.sock');
     expect(() => assertCompanionAdminTransportSocketPath('comp-b', env))
       .toThrow(/Multi-companion admin transport mismatch/);
+  });
+
+  it('allows network admin transport for process-isolated companion pods', () => {
+    expect(() => assertCompanionAdminTransportIsolation('comp-a', {
+      ADMIN_TRANSPORT_MODE: 'network',
+    })).not.toThrow();
+
+    expect(() => assertCompanionAdminTransportIsolation('comp-a', {
+      ADMIN_TRANSPORT_MODE: 'socket',
+      ADMIN_TRANSPORT_SOCKET: '/run/psfn/garden-admin.sock',
+    })).toThrow(/Multi-companion admin transport mismatch/);
   });
 
   it('keeps socket mode cert-free and rejects network-only TLS env without network mode', () => {

@@ -127,6 +127,7 @@ export interface SessionMessageRecordOptions {
   turnId?: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
   metadata?: string;
   roleEnvelopePreview?: SessionRoleEnvelopePreview;
   channelMeta?: ChannelMeta;
@@ -161,6 +162,13 @@ export interface BudgetedRecentEntries {
 
 export interface SpanBoundRecentEntries extends BudgetedRecentEntries {
   cutoffTimestamp: number;
+  /**
+   * Highest entry id the store returned for the raw tail window, before any
+   * lane/span filtering. A caller that just recorded an entry can compare its
+   * id against this to detect a stale store read (psfn-framework-hgw3.1).
+   * Undefined when the store returned no entries.
+   */
+  storeWindowMaxEntryId?: number;
 }
 
 function isEntryWithinTemporalWindow(
@@ -439,10 +447,15 @@ export function collectRecentEntriesWithinHistorySpan(params: {
       || recent.length === previousFetchedCount
       || (typeof oldestVisibleTimestamp === 'number' && oldestVisibleTimestamp <= cutoffTimestamp)
     ) {
+      const storeWindowMaxEntryId = recent.reduce<number | undefined>(
+        (maxId, entry) => (maxId === undefined || entry.id > maxId ? entry.id : maxId),
+        undefined,
+      );
       return {
         entries: inRange,
         sourceCount: recent.length,
         cutoffTimestamp,
+        ...(storeWindowMaxEntryId !== undefined ? { storeWindowMaxEntryId } : {}),
       };
     }
 

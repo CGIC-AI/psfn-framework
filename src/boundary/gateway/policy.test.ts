@@ -784,7 +784,7 @@ describe('evaluateShardSessionMemorySyncPolicy', () => {
     });
   });
 
-  it('allows shard-to-prime memory writes and denies imports', () => {
+  it('denies direct shard-to-prime memory writes and imports', () => {
     const writeDecision = evaluateShardSessionMemorySyncPolicy({
       ...baseEnvelope,
       syncClass: 'derived_memory',
@@ -796,8 +796,8 @@ describe('evaluateShardSessionMemorySyncPolicy', () => {
       idempotencyKey: 'tool-call-77',
     });
     expect(writeDecision).toEqual({
-      allowed: true,
-      reason: 'allowed_shard_memory_write',
+      allowed: false,
+      reason: 'denied_operation',
     });
 
     const importDecision = evaluateShardSessionMemorySyncPolicy({

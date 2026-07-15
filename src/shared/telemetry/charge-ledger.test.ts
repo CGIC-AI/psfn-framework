@@ -239,6 +239,22 @@ describe('RunChargeLedger', () => {
     expect(ledger.listEntries()[0]?.event.eventId).toBe('ledger-entry-legacy-1');
     ledger.close();
   });
+
+  it('fails closed when persisted entry and event identities disagree', () => {
+    const dir = join(makeTempDir(), 'state');
+    mkdirSync(dir, { recursive: true });
+    const ledgerPath = join(dir, 'charge-ledger.jsonl');
+    const recordedAtMs = 1_800_000_000_000;
+    writeFileSync(ledgerPath, `${JSON.stringify({
+      schemaVersion: 1,
+      recordType: 'charge_event',
+      eventId: 'ledger-entry-id',
+      recordedAtMs,
+      event: makeEvent({ eventId: 'different-event-id' }),
+    })}\n`, 'utf-8');
+
+    expect(() => new RunChargeLedger(ledgerPath)).toThrow('eventId does not match event.eventId');
+  });
 });
 
 describe('RunChargeLedger calendar accrual', () => {

@@ -15,6 +15,7 @@ import {
   EligibilityDeniedError,
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
+import { COMPANION_SETTINGS_OVERLAY_FILE_NAME } from '../../../system/config/settings-overlay.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
 import {
   loadChargePolicySeedDefaults,
@@ -1311,6 +1312,121 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     expect(result.settingsDomains.runtime.observerEvalSidecar).toEqual(observerEvalSidecar);
     expect(config.observerEvalSidecar).toEqual(observerEvalSidecar);
+  });
+
+  it('deep-merges a per-companion settings.overlay.json over the global settings (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-overlay-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
+
+    const globalSidecar = {
+      ...createDefaultObserverEvalSidecarSettings(),
+      enabled: true,
+      adapter: {
+        kind: 'emosim_server' as const,
+        serverUrl: 'http://emosim.test:17342',
+        sessionLabel: 'psfn-fleet-shared',
+        agentName: 'fleet',
+        includeWorldState: false,
+      },
+    };
+    saveSettings(systemDataDir, {
+      activeTimezone: 'UTC',
+      uiThemeId: 'default',
+      observerEvalSidecar: globalSidecar,
+    });
+
+    // Per-companion overlay: override the clock, theme, and only the sidecar
+    // sessionLabel (the emosim session-collision fix).
+    writeFileSync(
+      join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME),
+      JSON.stringify({
+        activeTimezone: 'Europe/Berlin',
+        uiThemeId: 'dusk',
+        observerEvalSidecar: { adapter: { sessionLabel: 'psfn-purrsephone' } },
+      }),
+      'utf-8',
+    );
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(config.activeTimezone).toBe('Europe/Berlin');
+    expect(config.uiThemeId).toBe('dusk');
+    // Nested deep-merge: only sessionLabel changes; global sidecar fields survive.
+    expect(config.observerEvalSidecar?.enabled).toBe(true);
+    expect(config.observerEvalSidecar?.adapter.serverUrl).toBe('http://emosim.test:17342');
+    expect(config.observerEvalSidecar?.adapter.agentName).toBe('fleet');
+    expect(config.observerEvalSidecar?.adapter.sessionLabel).toBe('psfn-purrsephone');
+  });
+
+  it('is byte-identical to the global settings when no overlay is present (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-no-overlay-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
+
+    saveSettings(systemDataDir, { activeTimezone: 'UTC', uiThemeId: 'default' });
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(config.activeTimezone).toBe('UTC');
+    expect(config.uiThemeId).toBe('default');
+  });
+
+  it('fails closed on a non-whitelisted key in a companion overlay (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-overlay-reject-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
+
+    saveSettings(systemDataDir, { activeTimezone: 'UTC' });
+    writeFileSync(
+      join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME),
+      JSON.stringify({ activeTimezone: 'Europe/Berlin', capabilityTier: 'autonomous' }),
+      'utf-8',
+    );
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(/non-whitelisted keys: capabilityTier/);
   });
 
   it('fails closed when observer eval persistence shares a runtime state root', () => {

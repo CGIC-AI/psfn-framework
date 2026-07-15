@@ -29,9 +29,13 @@ was dependency-wired end to end, and the release path got tracker structure.
   MI-marked contacts with baseline trust one notch above default; fatigue fully
   applies; relationship level is earned or scenario-seeded on top of the floor.
   (This resolves the §3 "sibling-contact trust onboarding defaults" gap.)
-- **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
-  `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
-  charter-gap epic stays parked.
+- **Charter-gap tracker status**: `z7qe.2` (introspection landmarks) and
+  `z7qe.4` (brand CompanionId) are closed on their pushed feature branches.
+  `s10mc.1` and `s10mc.2` are also closed, so the old `z7qe.4`/`z7qe.1`
+  dependency arrows no longer describe live blockers. The parent remains open
+  for genuine children `z7qe.1`, `.3`, and `.5`-`.9`; `z7qe.1` is still real
+  source-cleanup debt even though the production agent persistence path is
+  Postgres-only.
 - **Deliberately deferred**: `cam` cost-accounting review (accepted tail risk —
   it blocks only ICP `6.7` breaker + `6.9` cert), `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -45,8 +49,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 1. `s10mc.6.1` — ICP W1 contracts (heads the ICP chain)
 2. `s10rm` — sender-presence gate + presence-windowed delivery remainder
    (blocks ICP `6.3` and `6.9`)
-3. `z7qe.4` — brand CompanionId (blocks `s10mc.1`/`s10mc.2`)
-4. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
+3. `z7qe.1` — SQLite remnant sweep; still open as source/dependency cleanup,
+   no longer a blocker for the closed `s10mc.2`
+4. `z7qe.3`, `.5`-`.9` — remaining charter-gap children; see their live bead
+   acceptance rather than treating the epic as parked
 5. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
    one activity with the `s10mc.8` live demo)
 6. Operator-only queue: `efc2` psfn-test preview review (committed
@@ -57,10 +63,9 @@ was dependency-wired end to end, and the release path got tracker structure.
 `6.7` USD breaker (← `cam`, deferred) → `6.8` owner config/Garden → `6.9`
 two-real-agent certification.
 
-**MC substrate (parallel once charter items land):** `s10mc.1` (← `z7qe.4`),
-`s10mc.2` flagship cutover (← `z7qe.4`, `z7qe.1`, and restore proof `s10d7` —
-§2d hard gate unchanged), `s10mc.3` per-companion owners, `s10mc.8`/`s10f8`
-live demo.
+**MC substrate:** `s10mc.1` and `s10mc.2` are closed; the old `z7qe.4` and
+`z7qe.1` arrows are historical rather than live blockers. Remaining substrate
+and live-validation scope stays on its own current beads.
 
 **Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
 service-worker stale-shell fix and `8ora` first-class PWA channel are now

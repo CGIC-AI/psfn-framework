@@ -24,7 +24,7 @@ export type ObserverEvalReadonly<T> =
         ? { readonly [Key in keyof T]: ObserverEvalReadonly<T[Key]> }
         : T;
 
-export type ObserverEvalRoutingSource = NonNullable<MessageRoutingMetadata['source']> | 'unspecified';
+export type ObserverEvalRoutingSource = NonNullable<MessageRoutingMetadata['source']> | 'terminal' | 'unspecified';
 
 export interface ObserverEvalTurnIdentity {
   turnId: TurnID;

@@ -23,6 +23,34 @@ export interface AgentLoopPromptCacheHooks {
    * were computed for — stale boundaries are worse than none.
    */
   resolvePromptCacheBoundaries?: (systemPrompt: string) => LLMSystemPromptCacheBoundaries | undefined;
+  /**
+   * Resolves the tool array owned by the current async turn. This must not
+   * fall back to another concurrent turn's mutable Agent state.
+   */
+  resolveTurnTools?: () => readonly AgentTool<any>[] | undefined;
+}
+
+const installedTurnToolResolvers = new WeakMap<
+  Agent,
+  NonNullable<AgentLoopPromptCacheHooks['resolveTurnTools']>
+>();
+
+/**
+ * Resolve the tool snapshot owned by the current async turn for a patched
+ * agent. This is also the supported seam for prompt-loop test doubles: they
+ * must consume the same owner-bound resolver as the production loop instead
+ * of reading mutable Agent state.
+ */
+export function resolveInstalledAgentTurnTools(agent: Agent): readonly AgentTool<any>[] {
+  const resolveTurnTools = installedTurnToolResolvers.get(agent);
+  if (!resolveTurnTools) {
+    throw new Error('Agent does not have an installed turn-tool resolver');
+  }
+  const tools = resolveTurnTools();
+  if (!tools) {
+    throw new Error('Turn-owned tools are unavailable outside their exact async owner');
+  }
+  return [...tools];
 }
 
 type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
@@ -32,7 +60,7 @@ type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
  *
  * `prompt()` and `continue()` both funnel into `runPromptMessages` /
  * `runContinuation`; overriding those two methods swaps the stock agent loop
- * for PSFN's scheduled loop while keeping the public Agent surface
+ * for the companion runtime's scheduled loop while keeping the public Agent surface
  * (steer/followUp queues, abort, waitForIdle, subscribe) intact.
  */
 type PatchedAgent = {
@@ -56,7 +84,7 @@ type PatchedAgent = {
     pendingToolCalls: ReadonlySet<string>;
     errorMessage?: string;
     /**
-     * PSFN extension: index into messages where internal follow-up
+     * Companion-runtime extension: index into messages where internal follow-up
      * continuation begins for this run (null = no internal continuation).
      */
     userFacingBoundaryIndex?: number | null;
@@ -72,6 +100,9 @@ export function installAgentToolSchedulerPatch(
   const target = agent as unknown as PatchedAgent;
   if (target.__psfnToolSchedulerPatched) {
     return;
+  }
+  if (promptCacheHooks?.resolveTurnTools) {
+    installedTurnToolResolvers.set(agent, promptCacheHooks.resolveTurnTools);
   }
 
   async function runScheduledLoop(
@@ -103,11 +134,16 @@ export function installAgentToolSchedulerPatch(
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
+    const initialTurnTools = promptCacheHooks?.resolveTurnTools
+      ? resolveInstalledAgentTurnTools(this as unknown as Agent)
+      : [...this._state.tools];
     const context = {
       systemPrompt: this._state.systemPrompt,
       messages: this._state.messages.slice(),
-      tools: this._state.tools,
-      getTools: () => this._state.tools,
+      tools: [...initialTurnTools],
+      getTools: () => promptCacheHooks?.resolveTurnTools
+        ? [...resolveInstalledAgentTurnTools(this as unknown as Agent)]
+        : [...initialTurnTools],
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
     const config = this.createLoopConfig(options);

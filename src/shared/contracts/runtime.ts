@@ -8,14 +8,20 @@ import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
+  FatigueContinuationEvidence,
   FatiguePolicyChannelSetting,
   FatiguePolicyIntent,
   FatiguePolicyRelationshipClass,
   FatiguePolicyState,
+  FatigueRegulationState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type {
+  IcpConversationCorrelation,
+  IcpInitiationSource,
+} from './icp-autonomy.js';
 import type { PlacePrivacy } from './places-registry.js';
 import type {
   CompanionTouchRegion,
@@ -148,6 +154,8 @@ export interface TurnRecord {
   observability?: import('../../core/turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];
+  /** Same-cluster autonomous-conversation lineage, when this is an ICP turn. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface WyomingShardDelegationHint {
@@ -307,6 +315,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;
+  /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface GeneratedMessageProvenanceMetadata {
@@ -328,6 +338,34 @@ export interface GeneratedMessageProvenanceMetadata {
 export type ReflectionScopeHint =
   | { kind: 'dm'; contactId: string; displayName?: string }
   | { kind: 'group'; roomId: string; roomName?: string };
+
+/** Trusted, process-local ICP continuation intent. Never inferred from peer prose. */
+export const ICP_CONTINUATION_TASK_KINDS = [
+  'work',
+  'research',
+  'problem_solving',
+] as const;
+export type IcpContinuationTaskKind = typeof ICP_CONTINUATION_TASK_KINDS[number];
+
+export function isIcpContinuationTaskKind(
+  value: unknown,
+): value is IcpContinuationTaskKind {
+  return typeof value === 'string'
+    && ICP_CONTINUATION_TASK_KINDS.includes(value as IcpContinuationTaskKind);
+}
+
+/**
+ * Private, scheduler-authored origin for a local autonomy candidate turn.
+ * This never crosses the gateway candidate projection and is never inferred
+ * from candidate motivation or model prose.
+ */
+export interface IcpAutonomyCandidateOrigin {
+  candidateId: string;
+  rootInitiationId: string;
+  source: IcpInitiationSource;
+  provenanceRef: string;
+  continuationTaskKind?: IcpContinuationTaskKind;
+}
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
@@ -384,6 +422,27 @@ export interface MessageRoutingMetadata {
    * leaves the existing DM/internal reflection binding byte-identical.
    */
   reflectionScope?: ReflectionScopeHint;
+  /**
+   * Fully-bound ICP lineage for an ordinary companion-channel turn. The
+   * gateway and target-turn entrypoint validate this before it reaches the
+   * prompt/runtime. It is metadata, never a parallel dispatch path.
+   */
+  icpCorrelation?: IcpConversationCorrelation;
+  /** Durable lineage carried by generated follow-up turns outside a live ICP channel turn. */
+  originIcpRootInitiationId?: string;
+  /**
+   * Internal target-turn trigger: participates in prompt assembly but is not
+   * persisted as partner/system transcript speech. Only valid with a strict
+   * `icpCorrelation` on a companion channel.
+   */
+  privateTurnTrigger?: true;
+  /**
+   * Scheduler-owned structured intent for a private ICP target turn. This is
+   * valid only with `privateTurnTrigger` and a bound ICP correlation.
+   */
+  icpContinuationTaskKind?: IcpContinuationTaskKind;
+  /** Exact private candidate lineage for a non-recursive local autonomy turn. */
+  icpAutonomyCandidate?: IcpAutonomyCandidateOrigin;
   workerExecution?: {
     lane: string;
     profileClass: string;
@@ -484,6 +543,7 @@ export type FatigueBudgetReason =
   | 'machine_intelligence_response'
   | 'overcharge_recent_human_participation'
   | 'overcharge_work_intent_wrapup'
+  | 'overcharge_explicit_peer_invitation'
   | 'peer_not_machine_intelligence'
   | 'triggering_author_not_machine_intelligence';
 
@@ -577,6 +637,20 @@ export interface FatigueRecordedEventMetadata {
   hardState: FatigueBudgetHardState;
 }
 
+export interface FatigueSocialRegulationMetadata {
+  state: FatigueRegulationState;
+  chargeLane: Extract<ChargePolicyRuntimeLane, 'interactive' | 'companion_social'>;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+  marginalChargeUnits: number;
+  closeoutReserveRemainingBefore: number;
+  closeoutReserveRemainingAfterProjected: number;
+  continuationEvidence: FatigueContinuationEvidence[];
+  rootInitiationId?: string;
+}
+
 export interface FatigueEnforcementMetadata {
   schemaVersion: 1;
   decision: FatigueEnforcementDecision;
@@ -598,7 +672,30 @@ export interface FatigueEnforcementMetadata {
   peer: FatigueBudgetPeerSnapshot;
   triggeringAuthor: FatigueBudgetActorSnapshot;
   budget: FatigueEnforcementBudgetMetadata;
+  socialRegulation: FatigueSocialRegulationMetadata;
   recordedEvent?: FatigueRecordedEventMetadata;
+}
+
+/**
+ * Durable write-ahead description of the one fatigue spend owned by a turn.
+ * ICP recovery can replay this operation without re-evaluating policy or
+ * charging the same stable turn twice.
+ */
+export interface FatiguePendingSpendMetadata {
+  schemaVersion: 1;
+  timestampMs: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  amount: number;
+  scope: FatigueBudgetScopeSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  limits: {
+    softLimit: number;
+    hardLimit: number;
+    overchargeLimit: number;
+  };
+  correlation: Partial<CorrelationMetadata>;
 }
 
 export interface FatigueBudgetScopeSnapshot {
@@ -613,6 +710,9 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  turnId?: TurnID;
+  requestId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
   runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
@@ -648,6 +748,7 @@ export interface ResponseMetadata {
     provenanceRefs: string[];
   };
   fatigue?: FatigueEnforcementMetadata;
+  fatiguePendingSpend?: FatiguePendingSpendMetadata;
 }
 
 export interface IntentionalNoReplyMetadata {

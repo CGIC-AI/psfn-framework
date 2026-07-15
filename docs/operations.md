@@ -317,7 +317,12 @@ Privacy boundaries:
 Multi-companion rooms (charter gate, Law 26 / 8.10):
 
 - Peer companions (contacts flagged `isMachineIntelligence`) may share a room with the companion. When one speaks, it is treated as an OBSERVED participant: its turns are attributed in history, it appears in the participant roster, and group-memory extraction weights it (see `groupMemory.autoDetection.includeAiCompanions`). It is never selected as the canonical human for any binding (DM/room scope contact, core-memory participant subject, or contact-continuity fallback). A companion binds normally only in a genuine 1:1 DM with that companion.
-- Companions replying to companions in a live conversational room is a separate, gated capability. It is governed by the FatigueBudgetPort epic (relationship/channel fatigue budgets that bound machine-intelligence-triggered turns and prevent companion-to-companion reply loops). Observation is always supported; autonomous companion-to-companion conversation is bounded by the fatigue budget so a companion cannot loop nonsense at a peer after the salient things are said.
+- Companions replying to companions in a live conversational room is a separate,
+  gated capability. The shipped fatigue, social-continuation, permit, and cost
+  gates bound machine-intelligence-triggered turns and prevent recursive
+  companion-to-companion reply loops. Observation is always supported;
+  autonomous replies and initiation are allowed only while the deterministic
+  policy and recovery-safe permit state remain eligible.
 
 ### Machine-intelligence auto-tagging (E7.3)
 
@@ -339,6 +344,57 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
    - `overcharge` — `enabled`, `reserveResponses` (bounded extra replies past the hard cap), and the recent-human-participation window/minimums. Overcharge fires only when a human recently participated OR the turn carries a work/research intent, so a companion can finish a genuinely useful exchange but cannot self-authorize an endless loop.
 - A human message in the room resets the dynamics: it is free, and recent human participation unlocks the bounded overcharge reserve for subsequent machine-to-machine replies.
 - Per-room fatigue state is readable in Garden via `GET /api/admin/charges`, which returns the fatigue ledger scope summaries and a tuning report. Filter to one room/peer/day with `channelId`, `peerContactId`, `localCompanionId`, and `dayKey` query parameters. The fatigue ledger is a companion-data JSONL file (`fatigue-ledger.jsonl`), scoped per (companion, peer, channel, UTC day) and reset daily.
+
+### Operating same-cluster autonomous initiation
+
+Autonomous initiation is disabled in the shipped seed. Enable it only after the
+fleet identities, canonical machine-intelligence contacts, bilateral trust,
+ordinary companion channels, and fatigue/charge policy are ready:
+
+1. Edit `scheduler.json > icpAutonomy` through the canonical Settings owner-file
+   editor. `enabled`, candidate TTL/retry cadence/attempt limit, permit TTL, and
+   operator availability-lease TTL are strict JSON-owned settings. Unknown or
+   malformed fields fail closed. There is no `.env` equivalent.
+2. Review `charge-policy.json`: `runChargeQuotaByLane.companion_social`,
+   `surfaceCosts.companionSocialContinuation`, `fatigue` social regulation and
+   overcharge reserve, `fatigue.socialRegulation.continuationEvidence`, and
+   `icpCostBreaker` are the charge owners. Structured recent-human,
+   active-work/research, and explicit-peer-invitation evidence can be allowed or
+   denied independently; prose cannot invent continuation evidence.
+3. Confirm the runtime tier grants `external.companion` and review the existing
+   contact trust/block plus `channels.json` authorization. Enablement never
+   bypasses those gates.
+4. Restart the companion agent. Garden's **Autonomy** page reports effective
+   versus on-disk scheduler and charge state and marks restart divergence.
+
+Routine operation:
+
+- Garden **Autonomy** (`GET /api/admin/icp-autonomy`) shows at most 50 recent
+  records in each bounded lifecycle: the local coarse availability lease, local
+  candidates, and local-participant content-free episodes/provenance, permit
+  status without bearer IDs, fatigue aggregates, latest durable cost decisions,
+  and reason/failure counts. Unrelated peer↔peer rows are excluded and do not
+  influence quiet/failure summaries. Empty candidates are reported as healthy
+  quiet, not guessed failure.
+- `POST /api/admin/icp-autonomy/candidates/:candidateId/cancel` accepts only the
+  current local candidate revision. A permitted candidate's issued permit is
+  revoked before the candidate transitions to cancelled. Stale or terminal
+  state conflicts fail closed.
+- `POST /api/admin/icp-autonomy/do-not-disturb` accepts an empty object. It
+  publishes a local operator lease and atomically invalidates outstanding
+  permits involving the local companion.
+- `POST /api/admin/icp-autonomy/emergency-disable` accepts an empty object. It
+  first narrows live source authority, then applies DND/permit invalidation and
+  persists `scheduler.json > icpAutonomy.enabled=false`. Re-enabling is an
+  owner-file edit plus restart; the endpoint cannot enable autonomy.
+- Every successful or denied mutation is recorded as an `autonomy_control`
+  Garden audit entry. Controls never accept a target companion or cluster.
+
+Privacy boundary: the autonomy API and page do not expose private candidate
+motivation, peer-contact IDs, permit bearer IDs, messages, transcripts, model
+prompts, private reasoning, or chain-of-thought. Investigation links go to the
+ordinary Sessions, Charge / Budget, and Models pages, which retain their own
+authorization and redaction contracts.
 
 ## Backups And Integrity
 

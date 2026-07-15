@@ -17,14 +17,18 @@ import type { RelationshipType } from '../../contacts/types.js';
 import {
   createOverchargeFatigueEvaluation,
   makeFatigueDayKey,
+  rebaseFatigueEvaluation,
   type FatigueBudgetEvaluation,
   type FatigueBudgetPort,
 } from './fatigue-budget.js';
+import { assertFatigueEnforcementMetadataInvariants } from './enforcement-invariants.js';
 import {
   evaluateFatiguePolicy,
   type FatiguePolicyChannelType,
   type FatiguePolicyTriggerAuthorKind,
 } from './policy.js';
+import { projectFatigueSocialRegulation } from './social-regulation.js';
+import type { IcpFatigueReservationResult } from './regulation-reservation.js';
 
 export interface FatigueAuthorPolicyContext {
   trustLevel: TrustLevel;
@@ -59,6 +63,7 @@ export interface EvaluateFatigueForTurnInput {
   channelType?: string;
   channelMeta: ChannelMeta;
   taskKind?: string;
+  explicitPeerInvitation?: boolean;
   recentHumanParticipation?: FatigueRecentHumanParticipation;
   timestampMs: number;
   correlation: CorrelationMetadata;
@@ -97,10 +102,11 @@ function resolvePolicyChannelType(input: {
 function resolveFatigueIntent(input: {
   taskKind?: string;
   content: string;
+  structuredOnly?: boolean;
 }): FatiguePolicyIntent {
   const taskKind = input.taskKind?.toLowerCase() ?? '';
   const content = input.content.toLowerCase();
-  if (taskKind.includes('research') || content.includes('research')) {
+  if (taskKind.includes('research') || (!input.structuredOnly && content.includes('research'))) {
     return 'research';
   }
   if (
@@ -111,15 +117,17 @@ function resolveFatigueIntent(input: {
     return 'work';
   }
   if (
-    content.includes('debug')
+    !input.structuredOnly && (
+      content.includes('debug')
     || content.includes('fix')
     || content.includes('problem')
     || content.includes('why')
     || content.includes('how')
+    )
   ) {
     return 'problem_solving';
   }
-  if (content.includes('check in') || content.includes('checking in')) {
+  if (!input.structuredOnly && (content.includes('check in') || content.includes('checking in'))) {
     return 'check_in';
   }
   return 'casual';
@@ -181,16 +189,19 @@ function createMetadata(input: {
   evaluation: FatigueBudgetEvaluation;
   overchargePermitted: boolean;
   overchargeBlockedReasons: string[];
+  socialRegulation: FatigueEnforcementMetadata['socialRegulation'];
 }): FatigueEnforcementMetadata {
   const suppressModel = input.decision === 'suppressed_hard_exhausted';
   const shouldRecordSpend = !suppressModel
     && input.policy.spend.spendsFatigue
     && input.evaluation.amount > 0;
-  return {
+  const metadata: FatigueEnforcementMetadata = {
     schemaVersion: 1,
     decision: input.decision,
     modelDisposition: suppressModel ? 'suppressed' : 'allowed',
-    alertInjected: input.decision === 'wrap_up_charged' || input.decision === 'overcharge_charged',
+    alertInjected: input.decision !== 'suppressed_hard_exhausted'
+      && input.decision !== 'allowed_free'
+      && input.socialRegulation.state !== 'normal',
     shouldRecordSpend,
     spendDecision: input.evaluation.decision,
     spendReason: input.evaluation.reason,
@@ -223,7 +234,13 @@ function createMetadata(input: {
       overchargeRemainingBefore: input.evaluation.stateBefore.remainingOvercharge,
       overchargeRemainingAfterProjected: input.evaluation.stateAfter.remainingOvercharge,
     },
+    socialRegulation: {
+      ...input.socialRegulation,
+      continuationEvidence: [...input.socialRegulation.continuationEvidence],
+    },
   };
+  assertFatigueEnforcementMetadataInvariants(metadata);
+  return metadata;
 }
 
 function resolveRecentHumanParticipation(input: {
@@ -240,10 +257,14 @@ function resolveRecentHumanParticipation(input: {
 
 function selectOverchargeReason(
   policy: ReturnType<typeof evaluateFatiguePolicy>,
-): 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup' {
+): 'overcharge_recent_human_participation'
+  | 'overcharge_work_intent_wrapup'
+  | 'overcharge_explicit_peer_invitation' {
   return policy.overcharge.reasons.includes('recent_human_participation')
     ? 'overcharge_recent_human_participation'
-    : 'overcharge_work_intent_wrapup';
+    : policy.overcharge.reasons.includes('work_intent_wrapup')
+      ? 'overcharge_work_intent_wrapup'
+      : 'overcharge_explicit_peer_invitation';
 }
 
 export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): FatigueTurnDecision {
@@ -285,8 +306,10 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     intent: resolveFatigueIntent({
       taskKind: input.taskKind,
       content: input.message.content,
+      structuredOnly: input.message.routing?.icpCorrelation !== undefined,
     }),
     triggerAuthorKind,
+    explicitPeerInvitation: input.explicitPeerInvitation === true,
   };
   const preliminaryPolicy = evaluateFatiguePolicy({
     ...policyInputBase,
@@ -302,6 +325,18 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
       hardLimit: preliminaryPolicy.hardCap,
       overchargeLimit: preliminaryPolicy.overcharge.inputs.reserveResponses,
     },
+    ...(input.message.routing?.icpCorrelation
+      ? {
+          regulation: {
+            rootInitiationId: input.message.routing.icpCorrelation.rootInitiationId,
+            timestampMs: input.timestampMs,
+            relationshipPressureHalfLifeMs:
+              input.fatiguePolicy.socialRegulation.relationshipPressureHalfLifeMs,
+            relationshipPressureWindowMs:
+              input.fatiguePolicy.socialRegulation.relationshipPressureWindowMs,
+          },
+        }
+      : {}),
   });
   const policy = evaluateFatiguePolicy({
     ...policyInputBase,
@@ -328,6 +363,18 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
       overchargeEligible: policy.overcharge.eligible,
       overchargePermitted: false,
     },
+    ...(input.message.routing?.icpCorrelation
+      ? {
+          regulation: {
+            rootInitiationId: input.message.routing.icpCorrelation.rootInitiationId,
+            timestampMs: input.timestampMs,
+            relationshipPressureHalfLifeMs:
+              input.fatiguePolicy.socialRegulation.relationshipPressureHalfLifeMs,
+            relationshipPressureWindowMs:
+              input.fatiguePolicy.socialRegulation.relationshipPressureWindowMs,
+          },
+        }
+      : {}),
   });
   const reserveAvailable = baseEvaluation.stateBefore.remainingOvercharge >= baseEvaluation.amount
     && baseEvaluation.amount > 0;
@@ -345,12 +392,24 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     hardState: evaluation.stateBefore.hardState,
     overchargePermitted,
   });
+  const socialRegulation = projectFatigueSocialRegulation({
+    config: input.fatiguePolicy,
+    decision,
+    policyBaseState: policy.baseState,
+    intent: policy.intent,
+    ...(input.taskKind ? { taskKind: input.taskKind } : {}),
+    hasRecentHumanParticipation: policy.overcharge.inputs.hasRecentHumanParticipation,
+    explicitPeerInvitation: input.explicitPeerInvitation === true,
+    stateBefore: evaluation.stateBefore,
+    amount: evaluation.amount,
+  });
   const metadata = createMetadata({
     decision,
     policy,
     evaluation,
     overchargePermitted,
     overchargeBlockedReasons,
+    socialRegulation,
   });
   return {
     metadata,
@@ -371,7 +430,10 @@ export function buildFatiguePromptAlert(
     '[Conversation fatigue]',
     `This turn is a machine-intelligence-triggered response in fatigue state ${metadata.policyBaseState}.`,
     `Budget before this reply: spent ${metadata.budget.spentBefore} of ${metadata.budget.allowance}; soft target ${metadata.budget.softLimit}; remaining before this reply ${metadata.budget.remainingBefore}.`,
-    metadata.overchargePermitted
+    `Regulation state: ${metadata.socialRegulation.state}; charge lane: ${metadata.socialRegulation.chargeLane}; relationship pressure: ${metadata.socialRegulation.relationshipPressure.toFixed(2)}.`,
+    metadata.socialRegulation.state === 'final_closeout'
+      ? 'This is the final audited closeout response. Conclude now; the next machine-intelligence continuation will be suppressed before model execution.'
+      : metadata.overchargePermitted
       ? 'The runtime is using a bounded overcharge reserve for this model call so you can author the outward response yourself.'
       : 'The runtime is allowing this model call so you can author the outward response yourself.',
     'Keep the reply bounded and, if it fits the conversation, taper or wrap up in your own voice. Do not quote this internal alert or claim a hard-coded farewell.',
@@ -389,6 +451,10 @@ export function attachRecordedFatigueEvent(
     triggeringAuthor: { ...metadata.triggeringAuthor },
     scope: { ...metadata.scope },
     budget: { ...metadata.budget },
+    socialRegulation: {
+      ...metadata.socialRegulation,
+      continuationEvidence: [...metadata.socialRegulation.continuationEvidence],
+    },
     overchargeBlockedReasons: [...metadata.overchargeBlockedReasons],
     overchargeReasons: [...metadata.overchargeReasons],
     recordedEvent: {
@@ -406,4 +472,238 @@ export function attachRecordedFatigueEvent(
       hardState: event.hardState,
     },
   };
+}
+
+function resolveReconciledPolicyBaseState(input: {
+  config: FatiguePolicyConfig;
+  normalSpentBefore: number;
+  relationshipPressure: number;
+  softLimit: number;
+  hardLimit: number;
+}): FatigueEnforcementMetadata['policyBaseState'] {
+  if (input.normalSpentBefore >= input.hardLimit) return 'hard_exhausted';
+  if (input.hardLimit - input.normalSpentBefore
+    <= input.config.stateThresholds.wrapUpRemainingResponses) {
+    return 'wrap_up_allowed';
+  }
+  if (input.relationshipPressure >= input.softLimit) return 'soft_exhausted';
+  if (input.softLimit - input.relationshipPressure
+    <= input.config.stateThresholds.nearingLimitRemainingResponses) {
+    return 'nearing_limit';
+  }
+  return 'normal';
+}
+
+function resolveReconciledOverchargeReasons(
+  metadata: FatigueEnforcementMetadata,
+): Array<'recent_human_participation' | 'work_intent_wrapup' | 'explicit_peer_invitation'> {
+  return [
+    ...(metadata.socialRegulation.continuationEvidence.includes('recent_human_participation')
+      ? ['recent_human_participation' as const]
+      : []),
+    ...(metadata.socialRegulation.continuationEvidence.includes('active_work_or_research')
+      ? ['work_intent_wrapup' as const]
+      : []),
+    ...(metadata.socialRegulation.continuationEvidence.includes('explicit_peer_invitation')
+      ? ['explicit_peer_invitation' as const]
+      : []),
+  ];
+}
+
+/** Rebuild the complete turn decision from the shared pre-turn snapshot. */
+export function reconcileFatigueWithReservationSnapshot(input: {
+  fatigueDecision: FatigueTurnDecision;
+  reservation: IcpFatigueReservationResult;
+  fatiguePolicy: FatiguePolicyConfig;
+  decision: 'charged' | 'overcharge';
+}): FatigueTurnDecision {
+  if (input.reservation.outcome === 'exhausted') {
+    throw new Error('A reserved fatigue snapshot is required for reconciliation');
+  }
+  const reasons = resolveReconciledOverchargeReasons(input.fatigueDecision.metadata);
+  const reason = input.decision === 'overcharge'
+    ? reasons.includes('recent_human_participation')
+      ? 'overcharge_recent_human_participation' as const
+      : reasons.includes('work_intent_wrapup')
+        ? 'overcharge_work_intent_wrapup' as const
+        : 'overcharge_explicit_peer_invitation' as const
+    : 'machine_intelligence_response' as const;
+  const evaluation = rebaseFatigueEvaluation({
+    evaluation: input.fatigueDecision.evaluation,
+    decision: input.decision,
+    reason,
+    normalSpentBefore: input.reservation.normalSpentBefore,
+    overchargeSpentBefore: input.reservation.overchargeSpentBefore,
+    relationshipPressure: input.reservation.relationshipPressure,
+    rootNormalSpent: input.reservation.rootNormalSpent,
+    rootOverchargeSpent: input.reservation.rootOverchargeSpent,
+    contributingEventCount: input.reservation.contributingReservationCount,
+  });
+  const policyBaseState = resolveReconciledPolicyBaseState({
+    config: input.fatiguePolicy,
+    normalSpentBefore: evaluation.stateBefore.normalSpent,
+    relationshipPressure: input.reservation.relationshipPressure,
+    softLimit: evaluation.stateBefore.softLimit,
+    hardLimit: evaluation.stateBefore.allowance,
+  });
+  if (input.decision === 'charged' && policyBaseState === 'hard_exhausted') {
+    throw new Error('Shared fatigue reservation returned a charged slot after hard exhaustion');
+  }
+  const overchargeEligible = policyBaseState === 'hard_exhausted'
+    && input.fatiguePolicy.overcharge.enabled
+    && reasons.length > 0;
+  if (input.decision === 'overcharge' && !overchargeEligible) {
+    throw new Error('Shared fatigue reservation returned an ineligible overcharge slot');
+  }
+  const overchargeBlockedReasons = overchargeEligible
+    ? []
+    : [
+        ...(!input.fatiguePolicy.overcharge.enabled
+          ? ['overcharge_disabled' as const]
+          : []),
+        ...(policyBaseState !== 'hard_exhausted'
+          ? ['normal_allowance_not_exhausted' as const]
+          : []),
+        ...(reasons.length === 0
+          ? ['no_qualifying_overcharge_trigger' as const]
+          : []),
+      ];
+  const decision: FatigueEnforcementDecision = input.decision === 'overcharge'
+    ? 'overcharge_charged'
+    : policyBaseState === 'soft_exhausted' || policyBaseState === 'wrap_up_allowed'
+      ? 'wrap_up_charged'
+      : 'allowed_charged';
+  const socialRegulation = projectFatigueSocialRegulation({
+    config: input.fatiguePolicy,
+    decision,
+    policyBaseState,
+    intent: input.fatigueDecision.metadata.intent,
+    hasRecentHumanParticipation:
+      input.fatigueDecision.metadata.socialRegulation.continuationEvidence
+        .includes('recent_human_participation'),
+    continuationEvidenceOverride:
+      input.fatigueDecision.metadata.socialRegulation.continuationEvidence,
+    stateBefore: evaluation.stateBefore,
+    amount: evaluation.amount,
+  });
+  const metadata: FatigueEnforcementMetadata = {
+    ...input.fatigueDecision.metadata,
+    decision,
+    modelDisposition: 'allowed',
+    alertInjected: socialRegulation.state !== 'normal',
+    shouldRecordSpend: true,
+    spendDecision: input.decision,
+    spendReason: reason,
+    policyState: overchargeEligible ? 'overcharge_eligible' : policyBaseState,
+    policyBaseState,
+    overchargeEligible,
+    overchargePermitted: input.decision === 'overcharge',
+    overchargeBlockedReasons,
+    overchargeReasons: overchargeEligible ? reasons : [],
+    budget: {
+      spentBefore: evaluation.stateBefore.spent,
+      remainingBefore: evaluation.stateBefore.remainingAllowance,
+      allowance: evaluation.stateBefore.allowance,
+      softLimit: evaluation.stateBefore.softLimit,
+      hardLimit: evaluation.stateBefore.allowance,
+      amount: evaluation.amount,
+      spentAfterProjected: evaluation.stateAfter.spent,
+      remainingAfterProjected: evaluation.stateAfter.remainingAllowance,
+      normalSpentBefore: evaluation.stateBefore.normalSpent,
+      normalSpentAfterProjected: evaluation.stateAfter.normalSpent,
+      overchargeSpentBefore: evaluation.stateBefore.overchargeSpent,
+      overchargeSpentAfterProjected: evaluation.stateAfter.overchargeSpent,
+      overchargeAllowance: evaluation.stateBefore.overchargeAllowance,
+      overchargeRemainingBefore: evaluation.stateBefore.remainingOvercharge,
+      overchargeRemainingAfterProjected: evaluation.stateAfter.remainingOvercharge,
+    },
+    socialRegulation,
+  };
+  assertFatigueEnforcementMetadataInvariants(metadata);
+  return {
+    metadata,
+    evaluation,
+    suppressModel: false,
+    shouldRecordSpend: true,
+  };
+}
+
+/**
+ * Reconcile a locally allowed turn with the shared Postgres concurrency fence.
+ * A losing last-slot racer is converted to the ordinary zero-model suppression
+ * contract, carrying the shared relationship/root snapshot for audit.
+ */
+export function suppressFatigueAfterReservationExhaustion(
+  metadata: FatigueEnforcementMetadata,
+  reservation: IcpFatigueReservationResult,
+  fatiguePolicy: FatiguePolicyConfig,
+): FatigueEnforcementMetadata {
+  if (reservation.outcome !== 'exhausted') {
+    throw new Error('Fatigue reservation reconciliation requires an exhausted snapshot');
+  }
+  const normalSpentBefore = Math.max(
+    metadata.budget.hardLimit,
+    reservation.normalSpentBefore,
+  );
+  const overchargeSpentBefore = reservation.overchargeSpentBefore;
+  const overchargeReasons = resolveReconciledOverchargeReasons(metadata);
+  const overchargeEligible = fatiguePolicy.overcharge.enabled
+    && overchargeReasons.length > 0;
+  const overchargeRemaining = Math.max(
+    0,
+    metadata.budget.overchargeAllowance - overchargeSpentBefore,
+  );
+  const suppressed: FatigueEnforcementMetadata = {
+    ...metadata,
+    decision: 'suppressed_hard_exhausted',
+    modelDisposition: 'suppressed',
+    alertInjected: false,
+    shouldRecordSpend: false,
+    spendDecision: 'charged',
+    spendReason: 'machine_intelligence_response',
+    policyState: overchargeEligible ? 'overcharge_eligible' : 'hard_exhausted',
+    policyBaseState: 'hard_exhausted',
+    overchargeEligible,
+    overchargePermitted: false,
+    overchargeBlockedReasons: overchargeEligible
+      ? ['overcharge_reserve_exhausted']
+      : [
+          ...(!fatiguePolicy.overcharge.enabled
+            ? ['overcharge_disabled' as const]
+            : []),
+          ...(overchargeReasons.length === 0
+            ? ['no_qualifying_overcharge_trigger' as const]
+            : []),
+        ],
+    overchargeReasons: overchargeEligible ? overchargeReasons : [],
+    budget: {
+      ...metadata.budget,
+      spentBefore: normalSpentBefore + overchargeSpentBefore,
+      remainingBefore: 0,
+      amount: 1,
+      spentAfterProjected: normalSpentBefore + overchargeSpentBefore + 1,
+      remainingAfterProjected: 0,
+      normalSpentBefore,
+      normalSpentAfterProjected: normalSpentBefore + 1,
+      overchargeSpentBefore,
+      overchargeSpentAfterProjected: overchargeSpentBefore,
+      overchargeRemainingBefore: overchargeRemaining,
+      overchargeRemainingAfterProjected: overchargeRemaining,
+    },
+    socialRegulation: {
+      ...metadata.socialRegulation,
+      state: 'suppressed',
+      chargeLane: 'interactive',
+      relationshipPressure: reservation.relationshipPressure,
+      rootNormalSpent: reservation.rootNormalSpent,
+      rootOverchargeSpent: reservation.rootOverchargeSpent,
+      contributingEventCount: reservation.contributingReservationCount,
+      marginalChargeUnits: 0,
+      closeoutReserveRemainingBefore: overchargeRemaining,
+      closeoutReserveRemainingAfterProjected: overchargeRemaining,
+      continuationEvidence: [...metadata.socialRegulation.continuationEvidence],
+    },
+  };
+  assertFatigueEnforcementMetadataInvariants(suppressed);
+  return suppressed;
 }

@@ -6,6 +6,15 @@ import {
 import { assertPositiveInteger } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  parseIcpAutonomySchedulerConfig,
+  type IcpAutonomySchedulerConfig,
+} from './icp-autonomy-scheduler-config.js';
+
+export {
+  DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+  type IcpAutonomySchedulerConfig,
+} from './icp-autonomy-scheduler-config.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -598,6 +607,7 @@ export interface SchedulerRuntimeConfig {
   temporalWakeup: TemporalWakeupConfig;
   freeTime: FreeTimeConfig;
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
+  icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
 }
 
@@ -1413,6 +1423,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),
     freeTime: validateFreeTimeConfig(raw.freeTime, sourcePath),
     weightedThoughtOutreach: validateWeightedThoughtOutreachConfig(raw.weightedThoughtOutreach, sourcePath),
+    icpAutonomy: parseIcpAutonomySchedulerConfig(raw.icpAutonomy),
     ...(raw.introspectionAudit === undefined
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),

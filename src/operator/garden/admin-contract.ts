@@ -35,6 +35,7 @@ import type {
   AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
+  AdminIcpAutonomyService,
   AdminMemoryService,
   AdminModelUsageService,
   AdminPromptsService,
@@ -186,6 +187,7 @@ export interface GardenAdminDomainServices {
   concerns?: AdminConcernService | null;
   subsystemHealth?: AdminSubsystemHealthService | null;
   toolConformance?: AdminToolConformanceService | null;
+  icpAutonomy?: AdminIcpAutonomyService | null;
   settings: AdminSettingsService;
   sharedWorkspace?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11 Cognitive Security tab). */

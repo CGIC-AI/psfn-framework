@@ -44,6 +44,39 @@ describe('createFileOutreachOutboxStore', () => {
     }
   });
 
+  it('rehydrates delivered ICP completion by pending source across action identity changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-outreach-outbox-'));
+    const ledgerPath = join(root, 'outreach-outbox.jsonl');
+    try {
+      const store = createFileOutreachOutboxStore(ledgerPath);
+      store.append({
+        actionId: 'first-action',
+        dedupeKey: 'first-dedupe-key',
+        channelId: 'api:test',
+        channelType: 'api',
+        sourceMessageId: 'source-message',
+        phase: 'sent',
+        metadata: {
+          kind: 'icp_candidate_delivery',
+          disposition: 'delivered',
+          pendingFollowUpId: 'pending-source-1',
+          candidateId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          candidateStatus: 'consumed',
+        },
+      });
+
+      const restarted = createFileOutreachOutboxStore(ledgerPath);
+      expect(restarted.getIcpDeliveredCompletion('pending-source-1')).toMatchObject({
+        actionId: 'first-action',
+        dedupeKey: 'first-dedupe-key',
+        phase: 'sent',
+      });
+      expect(restarted.getIcpDeliveredCompletion('unrelated-source')).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('ignores malformed historical lines without creating replay authorization', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-outreach-outbox-'));
     try {

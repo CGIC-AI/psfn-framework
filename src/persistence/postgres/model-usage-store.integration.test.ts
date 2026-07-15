@@ -71,7 +71,7 @@ async function withStore<T>(handler: (store: PostgresModelUsageStore, pool: Pool
     max: 2,
   });
   try {
-    return await handler(new PostgresModelUsageStore(pool), pool);
+    return await handler(new PostgresModelUsageStore(pool, { companionId: 'companion-a' }), pool);
   } finally {
     await pool.end();
   }

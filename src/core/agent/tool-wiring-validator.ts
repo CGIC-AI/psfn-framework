@@ -153,7 +153,11 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   fs: Object.freeze(['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit']),
   fs_read: Object.freeze(['fs.read']),
   fs_list: Object.freeze(['fs.list']),
-  notify: Object.freeze(['discord.send', 'notify.ntfy']),
+  notify: Object.freeze([
+    'discord.send',
+    'notify.ntfy',
+    'companion.initiation.permit.prepare_handoff',
+  ]),
   notify_operator: Object.freeze(['notify.ntfy']),
   repo: Object.freeze([
     'git.status',
@@ -271,6 +275,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'fs.search': 'fsSearch',
   'fs.edit': 'fsEdit',
   'notify.ntfy': 'notifyNtfy',
+  'companion.initiation.permit.prepare_handoff': 'companionPrepareInitiationHandoff',
   'session.hmac.sign': 'sessionHmacSign',
   'session.hmac.verify': 'sessionHmacVerify',
   'confirmation.list': 'listConfirmationQueue',

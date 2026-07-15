@@ -145,6 +145,7 @@ describe('wireIntentionRuntime', () => {
     });
     expect(typeof recentResolved[0]?.resolvedAt).toBe('number');
 
+    const concernCreateSpy = vi.spyOn(runtime.concernStore, 'create');
     await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
@@ -161,7 +162,11 @@ describe('wireIntentionRuntime', () => {
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-1',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
+    expect(concernCreateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    }));
 
     const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',
@@ -178,6 +183,7 @@ describe('wireIntentionRuntime', () => {
       text: 'Follow up on medication: Ping tomorrow morning',
     });
 
+    const enqueueSpy = vi.spyOn(runtime.pendingFollowUpStore, 'enqueue');
     const pendingFollowUpId = await hooks.onIntentionFollowUpDecision({
       decision: {
         type: 'followUp',
@@ -196,8 +202,12 @@ describe('wireIntentionRuntime', () => {
       channelType: 'api',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-3',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(pendingFollowUpId).toBeTruthy();
+    expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    }));
 
     const pending = await runtime.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);

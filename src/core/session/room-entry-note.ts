@@ -15,7 +15,7 @@ import type { AffordanceConfig, PlaceKind } from '../../shared/contracts/places-
 // call the same helper with their own session handle without dragging in
 // SessionManager internals.
 //
-// PRIVACY INVARIANT (psfn-framework-s10rm, presence-windowed delivery): this
+// PRIVACY INVARIANT (bead s10rm, presence-windowed delivery): this
 // note carries PRESENT-TIME state only — room id, surroundings, affordances,
 // and who is here right now. It must NEVER summarize or reference prior
 // conversation: in a PRIVATE room a late joiner's entry note is the first

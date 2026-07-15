@@ -21,9 +21,36 @@ import {
   type DiscordDeliveryCheckpoint,
   type DiscordFailureStage,
 } from './discord-reply-delivery.js';
+import {
+  createIcpTargetChannelInitiator,
+  type IcpDeliveryObservation,
+  type IcpTargetChannelInitiator,
+  type RecordedIcpInitiationTurn,
+} from './icp-target-channel-initiation.js';
+import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
+import {
+  CompanionReplyDeliveryError,
+  createCompanionReplyDeliveryLifecycle,
+} from './companion-reply-delivery-recovery.js';
+import {
+  assertIcpRecoveryStatusBinding,
+  parseIcpRecoveryResponse,
+  type RecordedCompanionSourceMessage,
+} from '../../core/session/icp-delivery-recovery.js';
+import { assertCompanionRecoveryLineage } from './icp-recovery-lineage.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
+const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
+  'source',
+  'authorIsMachineIntelligence',
+  'icpCorrelation',
+  'channelPrivacy',
+  'room',
+]);
 
 interface QueuedDiscordMessage {
   message: SubstrateMessage;
@@ -42,6 +69,70 @@ function buildMessageDedupKey(route: 'handle' | 'discord' | 'companion', message
   return `${route}:${message.channelId}:${messageId}`;
 }
 
+function normalizeTransportTimestamp(message: SubstrateMessage): void {
+  const timestamp = message.timestamp instanceof Date
+    ? new Date(message.timestamp.getTime())
+    : new Date(String(message.timestamp));
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error('Companion transport timestamp is invalid');
+  }
+  message.timestamp = timestamp;
+}
+
+function bindRecordedCompanionSourceEnvelope(
+  message: SubstrateMessage,
+  recorded: RecordedCompanionSourceMessage,
+): void {
+  const incomingCorrelation = parseIcpConversationCorrelation(message.routing?.icpCorrelation);
+  const expectedIsDirectMessage = incomingCorrelation.surface === 'companion_dm';
+  const channelPrivacy = message.routing?.channelPrivacy;
+  const room = message.routing?.room;
+  const routingKeys = Object.keys(message.routing ?? {});
+  if (!recorded.correlation
+    || JSON.stringify(incomingCorrelation) !== JSON.stringify(recorded.correlation)
+    || recorded.channelId !== message.channelId
+    || recorded.sourceMessageId !== message.id
+    || recorded.content !== message.content
+    || recorded.authorId !== message.authorId
+    || recorded.authorName !== message.authorName
+    || message.channelType !== 'companion'
+    || message.isDirectMessage !== expectedIsDirectMessage
+    || message.routing?.source !== 'companion'
+    || message.routing.authorIsMachineIntelligence !== true
+    || routingKeys.some(key => !CANONICAL_COMPANION_ROUTING_KEYS.has(key))) {
+    throw new Error('Companion replay envelope does not match its durable source entry');
+  }
+  const timestamp = new Date(recorded.timestampMs);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error('Recorded companion source timestamp is invalid');
+  }
+  message.content = recorded.content;
+  message.authorId = recorded.authorId;
+  message.authorName = recorded.authorName;
+  message.timestamp = timestamp;
+  delete message.attachments;
+  message.channelType = 'companion';
+  message.isDirectMessage = expectedIsDirectMessage;
+  message.routing = {
+    source: 'companion',
+    authorIsMachineIntelligence: true,
+    icpCorrelation: recorded.correlation,
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+    ...(room ? { room } : {}),
+  };
+}
+
+function bindCompanionRecoveryCorrelation(
+  message: SubstrateMessage,
+  correlation: IcpConversationCorrelation,
+): void {
+  message.routing = {
+    source: 'companion',
+    authorIsMachineIntelligence: true,
+    icpCorrelation: correlation,
+  };
+}
+
 export interface GatewayMessageGateway {
   onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void;
   onDiscordMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
@@ -53,8 +144,36 @@ export interface GatewayMessageGateway {
     channelId: string,
     content: string,
     authorName?: string,
-    replyToMessageId?: string,
-  ): Promise<unknown>;
+    correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
+  ): Promise<{
+    channelId: string;
+    messageId: string;
+    deliveredTo: string[];
+    skippedOffline: string[];
+  }>;
+  companionSendInitiation(input: {
+    channelId: string;
+    content: string;
+    authorName?: string;
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<{
+    channelId: string;
+    messageId: string;
+    deliveredTo: string[];
+    skippedOffline: string[];
+    permitOutcome: 'consumed' | 'replayed';
+  }>;
+  companionConsumeInitiationPermit(input: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    rootInitiationId: string;
+    peerContactId: string;
+  }): Promise<{ outcome: string }>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
@@ -62,10 +181,32 @@ export interface GatewayMessageGateway {
 }
 
 export interface GatewayMessageAgentLoop {
-  handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
+  handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle?: {
+      recoveredResponse?: AgentResponse;
+      sourceAlreadyPersisted?: true;
+      finalizeDelivery(response: AgentResponse): Promise<void>;
+    },
+  ): Promise<AgentResponse>;
   observeMessage(message: SubstrateMessage): Promise<void>;
   /** Resolves when the agent has finished all in-flight work (prompt + steering + follow-ups). */
   waitForIdle(): Promise<void>;
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<RecordedIcpInitiationTurn | null> | RecordedIcpInitiationTurn | null;
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<IcpDeliveryObservation | null>
+    | IcpDeliveryObservation
+    | null;
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<RecordedCompanionSourceMessage | null> | RecordedCompanionSourceMessage | null;
+  recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
 }
 
 export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
@@ -107,7 +248,13 @@ export interface GatewayMessageHandlersDeps {
   companionAuthorName?: string;
 }
 
-export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps): void {
+export interface RegisteredGatewayMessageHandlers {
+  icpTargetChannelInitiator: IcpTargetChannelInitiator;
+}
+
+export function registerGatewayMessageHandlers(
+  deps: GatewayMessageHandlersDeps,
+): RegisteredGatewayMessageHandlers {
   const {
     gateway,
     agentLoop,
@@ -153,10 +300,18 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
   // No conversational message is ever dropped: if the agent is busy we wait
   // for idle and try again, indefinitely and loudly. A wedged agent surfaces
   // as repeated warnings in the journal, never as silent message loss.
-  const promptWhenIdle = async (message: SubstrateMessage): Promise<AgentResponse> => {
+  const promptWhenIdle = async (
+    message: SubstrateMessage,
+    deliveryLifecycle?: {
+      recoveredResponse?: AgentResponse;
+      finalizeDelivery(response: AgentResponse): Promise<void>;
+    },
+  ): Promise<AgentResponse> => {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await agentLoop.handleMessage(message);
+        return deliveryLifecycle
+          ? await agentLoop.handleMessage(message, deliveryLifecycle)
+          : await agentLoop.handleMessage(message);
       } catch (err) {
         if (!(err instanceof Error) || !AGENT_BUSY_PATTERN.test(err.message)) throw err;
         log.warn('Agent busy; holding discord message until in-flight work finishes', {
@@ -629,6 +784,22 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
   const companionPromptQueue: SubstrateMessage[] = [];
   let companionPumpActive = false;
 
+  const buildCompanionReplyDeliveryLifecycle = (
+    message: SubstrateMessage,
+    recoveredResponse?: AgentResponse,
+    previousObservation?: IcpDeliveryObservation | null,
+    sourceAlreadyPersisted = false,
+  ) => createCompanionReplyDeliveryLifecycle({
+    message,
+    ...(recoveredResponse ? { recoveredResponse } : {}),
+    ...(previousObservation !== undefined ? { previousObservation } : {}),
+    ...(sourceAlreadyPersisted ? { sourceAlreadyPersisted: true } : {}),
+    agent: agentLoop,
+    gateway,
+    ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
+    log,
+  });
+
   const pumpCompanionQueue = async (): Promise<void> => {
     if (companionPumpActive) return;
     companionPumpActive = true;
@@ -639,7 +810,11 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         let completed = false;
         let failureReason: CompanionDeliveryFailureReason = 'processing_failed';
         try {
-          const response = await promptWhenIdle(message);
+          const correlatedDeliveryLifecycle = message.routing?.icpCorrelation
+            ? buildCompanionReplyDeliveryLifecycle(message)
+            : undefined;
+          const response = await promptWhenIdle(message, correlatedDeliveryLifecycle);
+          await correlatedDeliveryLifecycle?.markTurnCompleted();
           if (response.attachments?.length) {
             // The companion lane carries text only for now; surface the drop
             // loudly instead of silently losing media.
@@ -648,7 +823,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
               attachmentCount: response.attachments.length,
             });
           }
-          if (response.content.trim()) {
+          if (!correlatedDeliveryLifecycle && response.content.trim()) {
             failureReason = 'reply_delivery_failed';
             await gateway.companionSend(
               message.channelId,
@@ -659,6 +834,9 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           }
           completed = true;
         } catch (err) {
+          if (err instanceof CompanionReplyDeliveryError) {
+            failureReason = 'reply_delivery_failed';
+          }
           const errorText = toErrorMessage(err);
           log.error('Error handling companion message', {
             channelId: message.channelId,
@@ -710,13 +888,14 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     }
   };
 
-  gateway.onCompanionMessage((message: SubstrateMessage) => {
+  gateway.onCompanionMessage(async (message: SubstrateMessage) => {
     const dedupeKey = buildMessageDedupKey('companion', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
     if (dedupeKey) {
       const seenAt = recentCompanionMessages.get(dedupeKey);
-      if ((seenAt && now - seenAt < DUPLICATE_MESSAGE_WINDOW_MS) || inFlightCompanionMessages.has(dedupeKey)) {
+      if ((seenAt && now - seenAt < DUPLICATE_MESSAGE_WINDOW_MS)
+        || inFlightCompanionMessages.has(dedupeKey)) {
         log.warn('Dropping duplicate companion notification message', {
           channelId: message.channelId,
           messageId: message.id,
@@ -729,33 +908,161 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         });
         return;
       }
+      // Own the deterministic envelope before any async durable lookup. A
+      // concurrent arrival must never capture the same stale observation and
+      // independently replay delivery/post-turn work.
       inFlightCompanionMessages.add(dedupeKey);
     }
+    let handedToPump = false;
+    try {
+      let recordedSource: RecordedCompanionSourceMessage | null;
+      try {
+        normalizeTransportTimestamp(message);
+        recordedSource = await agentLoop.findRecordedCompanionSourceMessage(
+          message.channelId,
+          message.id,
+        );
+        if (recordedSource && (recordedSource.correlation || message.routing?.icpCorrelation)) {
+          bindRecordedCompanionSourceEnvelope(message, recordedSource);
+        }
+      } catch (error) {
+        const errorText = toErrorMessage(error);
+        log.error('Failed to read durable companion message dedupe state', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+        safeguardAuditTrail.append('companion.message.durable_dedupe_error', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+        try {
+          await gateway.companionReportFailure({
+            channelId: message.channelId,
+            messageId: message.id,
+            reason: 'processing_failed',
+          });
+        } catch (reportError) {
+          const reportErrorText = toErrorMessage(reportError);
+          log.error('Failed to report durable companion dedupe lookup failure', {
+            channelId: message.channelId,
+            messageId: message.id,
+            error: reportErrorText,
+          });
+          safeguardAuditTrail.append('companion.message.failure_report_error', {
+            channelId: message.channelId,
+            messageId: message.id,
+            reason: 'processing_failed',
+            error: reportErrorText,
+          });
+        }
+        return;
+      }
+      if (recordedSource) {
+        if (message.routing?.icpCorrelation) {
+          const recordedReply = await agentLoop.findRecordedIcpInitiation(message.channelId, message.id);
+          const deliveryObservation = await agentLoop.findIcpDeliveryObservation(
+            message.channelId,
+            message.id,
+          );
+          if (deliveryObservation?.turnCompleted) {
+            // The same source id already completed its ordinary delivery-gated
+            // turn; fall through to the durable duplicate audit below.
+          } else if (recordedReply || deliveryObservation?.recoveryResponse) {
+            const recoveryResponse = deliveryObservation?.recoveryResponse
+              ?? recordedReply?.recoveryResponse;
+            if (!recoveryResponse?.metadata.icpCorrelation) {
+              throw new Error('Durable ICP recovery response is missing correlation');
+            }
+            const parsedRecoveryResponse = parseIcpRecoveryResponse(recoveryResponse, {
+              label: 'Durable companion recovery response',
+              expectedChannelId: message.channelId,
+              expectedSourceMessageId: message.id,
+            });
+            const recoveryCorrelation = parseIcpConversationCorrelation(
+              parsedRecoveryResponse.metadata.icpCorrelation,
+            );
+            const recordedReplyCorrelation = recordedReply
+              ? parseIcpConversationCorrelation(recordedReply.correlation)
+              : null;
+            if (recordedReplyCorrelation
+              && JSON.stringify(recordedReplyCorrelation) !== JSON.stringify(recoveryCorrelation)) {
+              throw new Error('Durable ICP recovery sources disagree on reply lineage');
+            }
+            if (!recordedSource.correlation) {
+              throw new Error('Durable companion source is missing ICP correlation');
+            }
+            assertCompanionRecoveryLineage(
+              recordedSource.correlation,
+              recoveryCorrelation,
+              message.id,
+            );
+            assertIcpRecoveryStatusBinding(
+              deliveryObservation?.status,
+              parsedRecoveryResponse,
+              'Durable ICP recovery',
+            );
+            bindCompanionRecoveryCorrelation(
+              message,
+              recoveryCorrelation,
+            );
+            const lifecycle = buildCompanionReplyDeliveryLifecycle(
+              message,
+              parsedRecoveryResponse,
+              deliveryObservation,
+            );
+            await promptWhenIdle(message, lifecycle);
+            await lifecycle.markTurnCompleted();
+            return;
+          } else {
+            const lifecycle = buildCompanionReplyDeliveryLifecycle(
+              message,
+              undefined,
+              deliveryObservation,
+              true,
+            );
+            await promptWhenIdle(message, lifecycle);
+            await lifecycle.markTurnCompleted();
+            return;
+          }
+        }
+        log.warn('Dropping restart-replayed companion notification already present in L0', {
+          channelId: message.channelId,
+          messageId: message.id,
+        });
+        safeguardAuditTrail.append('gateway.message.duplicate', {
+          route: 'companion',
+          channelId: message.channelId,
+          messageId: message.id,
+          disposition: 'durable',
+        });
+        return;
+      }
 
-    // Deserialize Date if it came as string (gateway serializes for transport).
-    if (typeof message.timestamp === 'string') {
-      message.timestamp = new Date(message.timestamp);
-    }
-
-    log.info(`Companion message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
-      channelId: message.channelId,
-      authorId: message.authorId,
-    });
-    safeguardAuditTrail.append('companion.message.received', {
-      channelId: message.channelId,
-      messageId: message.id,
-      authorId: message.authorId,
-    });
-
-    trackSessionActivity(message);
-    companionPromptQueue.push(message);
-    void pumpCompanionQueue().catch((err: unknown) => {
-      log.error('Companion message pump failed', {
+      log.info(`Companion message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
+        channelId: message.channelId,
+        authorId: message.authorId,
+      });
+      safeguardAuditTrail.append('companion.message.received', {
         channelId: message.channelId,
         messageId: message.id,
-        error: toErrorMessage(err),
+        authorId: message.authorId,
       });
-    });
+
+      trackSessionActivity(message);
+      companionPromptQueue.push(message);
+      handedToPump = true;
+      void pumpCompanionQueue().catch((err: unknown) => {
+        log.error('Companion message pump failed', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: toErrorMessage(err),
+        });
+      });
+    } finally {
+      if (dedupeKey && !handedToPump) inFlightCompanionMessages.delete(dedupeKey);
+    }
   });
 
   gateway.onCompanionDeliveryFailure(async (notification) => {
@@ -792,4 +1099,16 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       });
     }
   });
+
+  return {
+    icpTargetChannelInitiator: createIcpTargetChannelInitiator({
+      localCompanionId: resolveCompanionIdFromConfig(config),
+      agent: agentLoop,
+      gateway: {
+        sendInitiation: (input) => gateway.companionSendInitiation(input),
+        consumeInitiationPermit: (input) => gateway.companionConsumeInitiationPermit(input),
+      },
+      ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
+    }),
+  };
 }

@@ -26,7 +26,7 @@ const KNOWN_PROVIDER_TYPES = new Set<CanonicalProviderType>([
 ]);
 
 /**
- * OpenRouter server-tools web backend selection (bead psfn-framework-htm9.10).
+ * OpenRouter server-tools web backend selection (bead htm9.10).
  * Sourced from the enabled openrouter provider's `metadata.webTools`. When
  * `enabled` is true the gateway routes web search/fetch through OpenRouter's
  * built-in server tools instead of the self-hosted crawler lane.

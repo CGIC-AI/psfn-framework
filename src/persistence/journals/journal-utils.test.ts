@@ -27,6 +27,7 @@ import {
   readJournalFirstEntry,
   readJournalTailEntries,
   resolveJournalIntegrityChainCandidates,
+  scanJournalLinesBackward,
   scanJournalFileMetadata,
   signJournalEntry,
   verifyJournalEntryIntegrity,
@@ -270,6 +271,33 @@ describe('journal utils', () => {
     expect(tail.truncated).toBe(true);
     expect(tail.entries.map(entry => entry.id)).toEqual([2, 3, 4, 5]);
     expect(tail.entries.filter(entry => entry.type === 'message').map(entry => entry.id)).toEqual([3, 5]);
+  });
+
+  it.each([
+    ['2-byte', 'é', 1],
+    ['3-byte', '€', 1],
+    ['3-byte', '€', 2],
+    ['4-byte', '🦊', 1],
+    ['4-byte', '🦊', 2],
+    ['4-byte', '🦊', 3],
+  ])('preserves %s UTF-8 split after byte %i in a backward scan', (_label, character, split) => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
+    dirs.push(dir);
+    const filePath = join(dir, 'utf8-boundary.jsonl');
+    const chunkBytes = 64 * 1024;
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    const prefix = 'prefix:';
+    const suffixLength = chunkBytes - characterBytes + split - 1;
+    const expected = `${prefix}${character}${'x'.repeat(suffixLength)}`;
+    writeFileSync(filePath, `${expected}\n`, 'utf8');
+
+    const lines: string[] = [];
+    scanJournalLinesBackward(filePath, (line) => {
+      if (line.length > 0) lines.push(line);
+    });
+
+    expect(lines).toEqual([expected]);
+    expect(lines[0]).not.toContain('\ufffd');
   });
 
   it('writes and clears quarantine sidecar files', () => {

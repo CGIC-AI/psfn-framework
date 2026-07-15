@@ -6,6 +6,12 @@ import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
 } from '../../../system/capabilities/requirements.js';
+import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
+import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
+import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { createDefaultExtendedToolAutoloadPolicy } from '../extended-tool-autoload-policy.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -19,7 +25,11 @@ function makeTool(name: string, execute = vi.fn(async () => ({
   } as AgentTool<any>;
 }
 
-function createFacade(taskKind: string | null = null) {
+function createFacade(
+  taskKind: string | null = null,
+  grantedTokens: readonly string[] = ['external.companion'],
+  configOverrides: Partial<SubstrateConfig> = {},
+) {
   // pi-agent-core 0.73 replaced Agent.setTools() with assignment to
   // agent.state.tools; the mock records each assignment via setTools so the
   // existing call-style assertions keep working.
@@ -44,9 +54,13 @@ function createFacade(taskKind: string | null = null) {
     purpose: 'agent.turn',
   };
   const facade = new ToolRuntimeFacade({
-    config: {} as never,
+    config: configOverrides as SubstrateConfig,
     agent: agent as never,
-    resolveCapabilityAccess: () => ({}) as never,
+    resolveCapabilityAccess: () => ({
+      getTier: () => grantedTokens.includes('external.companion') ? 'autonomous' : 'nursery',
+      getGrantedTokens: () => new Set(grantedTokens),
+      has: (token: string) => grantedTokens.includes(token),
+    }) as never,
     withCapabilityGates: tools => tools,
     withCorrelationPurpose: (correlation, purpose) => ({ ...correlation, purpose }),
     withAdaptiveCorrelation: (correlation, purpose) => ({
@@ -70,10 +84,536 @@ function createFacade(taskKind: string | null = null) {
     agent,
     emitTelemetry,
     correlation: activeTurnCorrelation,
+    config: configOverrides,
   };
 }
 
+function makeCandidateMessage() {
+  const nowMs = Date.now();
+  const candidate: IcpInitiationCandidate = {
+    candidateId: '11111111-1111-4111-8111-111111111111',
+    rootInitiationId: '22222222-2222-4222-8222-222222222222',
+    localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    peerContactId: 'peer-contact-b',
+    peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    preferredChannel: 'dm',
+    source: 'intention',
+    provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+    reasonSummary: 'Continue the approved private research task.',
+    continuationTaskKind: 'research',
+    createdAtMs: nowMs - 1_000,
+    expiresAtMs: nowMs + 60_000,
+    status: 'permitted',
+    revision: 2,
+  };
+  const permit: IcpInitiationPermit = {
+    permitId: '44444444-4444-4444-8444-444444444444',
+    candidateId: candidate.candidateId,
+    conversationId: '55555555-5555-4555-8555-555555555555',
+    senderCompanionId: candidate.localCompanionId,
+    recipientCompanionId: candidate.peerCompanionId,
+    channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+    provenanceRef: candidate.provenanceRef,
+    issuedAtMs: nowMs - 500,
+    expiresAtMs: nowMs + 60_000,
+    status: 'issued',
+    revision: 1,
+  };
+  return createIcpAutonomyCandidateSchedulerMessage({ candidate, permit });
+}
+
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('isolates candidate notify from an overlapping ordinary turn without an agent-global grant', async () => {
+    const { facade, agent } = createFacade();
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify'),
+      'external.companion',
+    ), 'extended');
+    facade.registerTool(makeTool('ordinary_core'), 'core');
+    const candidateMessage = makeCandidateMessage();
+    const ordinaryMessage = {
+      id: 'discord-message-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      authorId: 'operator-1',
+      authorName: 'Operator',
+      content: 'ordinary overlapping turn',
+      timestamp: new Date(),
+    } as never;
+    let releaseCandidate!: () => void;
+    let candidateEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { candidateEntered = resolve; });
+    const release = new Promise<void>((resolve) => { releaseCandidate = resolve; });
+
+    const candidateRun = facade.runWithIcpAutonomyCandidateNotifyScope(candidateMessage, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        candidateMessage,
+        'research',
+        'background',
+        {
+          turnId: 'turn-candidate',
+          requestId: 'request-candidate',
+          channelId: candidateMessage.channelId,
+          callType: 'background',
+          purpose: 'agent.turn',
+        },
+        { intent: 'ops', skipped: [] },
+      );
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).toContain('notify');
+      candidateEntered();
+      await release;
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).toContain('notify');
+    });
+    await entered;
+
+    await facade.runWithTurnToolContext(ordinaryMessage, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        ordinaryMessage,
+        undefined,
+        'chat',
+        {
+          turnId: 'turn-ordinary',
+          requestId: 'request-ordinary',
+          channelId: ordinaryMessage.channelId,
+          callType: 'chat',
+          purpose: 'agent.turn',
+        },
+        { intent: null, skipped: [] },
+      );
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+      expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+        expect.objectContaining({ toolName: 'notify' }),
+      );
+    });
+
+    expect(agent.setTools).not.toHaveBeenCalled();
+    releaseCandidate();
+    await candidateRun;
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+      expect.objectContaining({ toolName: 'notify' }),
+    );
+  });
+
+  it('rechecks the exact candidate turn request context when notify executes', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'queued' }], details: {} }));
+    const grantedTokens = ['external.companion'];
+    const { facade } = createFacade(null, grantedTokens);
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify', execute),
+      'external.companion',
+    ), 'extended');
+    const message = makeCandidateMessage();
+    await facade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      const correlation = {
+        turnId: 'turn-candidate',
+        requestId: 'request-candidate',
+        channelId: message.channelId,
+        callType: 'background' as const,
+        purpose: 'agent.turn',
+      };
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        'research',
+        'background',
+        correlation,
+        { intent: 'ops', skipped: [] },
+      );
+      const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
+      const params = {
+        action: 'send',
+        target_kind: 'companion',
+        contact_id: 'peer-contact-b',
+        initiation_permit: '44444444-4444-4444-8444-444444444444',
+      };
+
+      const denied = await runWithRequestContext({
+        ...correlation,
+        requestId: 'request-forged',
+      }, () => notify.execute('call-forged', params));
+      expect(denied).toMatchObject({ details: { isError: true } });
+      expect(execute).not.toHaveBeenCalled();
+
+      await runWithRequestContext(correlation, () => notify.execute('call-exact', params));
+      expect(execute).toHaveBeenCalledOnce();
+
+      grantedTokens.length = 0;
+      const revoked = await runWithRequestContext(
+        correlation,
+        () => notify.execute('call-revoked', params),
+      );
+      expect(revoked).toMatchObject({ details: { isError: true } });
+      expect(execute).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('keeps catalog, tool_search, toolset describe, and direct calls inside the companion lane', async () => {
+    const externalDispatch = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'external dispatched' }],
+      details: {},
+    }));
+    const { facade } = createFacade(null, [
+      'external.companion',
+      'external.discord',
+      'external.email',
+      'external.web',
+    ]);
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify', externalDispatch),
+      params => params.target_kind === 'companion' ? 'external.companion' : 'external.web',
+    ), 'extended');
+    const message = makeCandidateMessage();
+
+    await facade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      const correlation = {
+        turnId: 'turn-candidate-catalog',
+        requestId: 'request-candidate-catalog',
+        channelId: message.channelId,
+        callType: 'background' as const,
+        purpose: 'agent.turn',
+      };
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        'research',
+        'background',
+        correlation,
+        { intent: 'ops', skipped: [] },
+      );
+
+      const catalogNotify = facade.getToolCatalog().extended.find(tool => tool.name === 'notify')!;
+      expect(Object.keys((catalogNotify.parameters as any).properties).sort()).toEqual([
+        'action',
+        'contact_id',
+        'initiation_permit',
+        'target_kind',
+      ]);
+      expect(catalogNotify.description).not.toContain('operator brief');
+
+      const searchResult = await facade.createToolSearchTool().execute(
+        'call-search-notify',
+        { query: 'notify' },
+      );
+      expect(JSON.stringify(searchResult)).toContain('Permit-governed companion outreach');
+      expect(JSON.stringify(searchResult)).not.toContain('operator brief');
+
+      const describeResult = await facade.createToolsetTool().execute(
+        'call-describe-notify',
+        { action: 'describe', tool: 'notify' },
+      );
+      const described = JSON.stringify(describeResult);
+      expect(described).toContain('initiation_permit');
+      expect(described).not.toContain('approval_request');
+      expect(described).not.toContain('delivery_target');
+
+      const activeNotify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
+      for (const params of [
+        {
+          action: 'send',
+          target_kind: 'external',
+          message: 'escape',
+          delivery_channel: 'discord',
+          delivery_target: 'operator-channel',
+        },
+        { action: 'brief', message: 'escape' },
+        {
+          action: 'approval_request',
+          approval_id: 'approval-1',
+          approval_method: 'runtime.restart',
+          approval_action: 'restart',
+          approval_scope: 'system',
+          approval_reason: 'escape',
+        },
+      ]) {
+        const result = await runWithRequestContext(
+          correlation,
+          () => activeNotify.execute('call-candidate-escape', params),
+        );
+        expect(result).toMatchObject({ details: { isError: true } });
+      }
+      expect(externalDispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('exposes exactly candidate notify and blocks loaded, promoted, builtin, and toolset escape paths', async () => {
+    const notifyDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'notify sent' }], details: {} }));
+    const webDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'web sent' }], details: {} }));
+    const discordDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'discord sent' }], details: {} }));
+    const emailDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'email sent' }], details: {} }));
+    const builtinExecute = vi.fn(async () => ({ content: [{ type: 'text', text: 'builtin ran' }], details: {} }));
+    const persistPromotedExtendedTools = vi.fn();
+    const config: Partial<SubstrateConfig> = {
+      promotedExtendedTools: ['discord_send'],
+      runtimeHooks: { persistPromotedExtendedTools } as never,
+    };
+    const { facade, agent } = createFacade(null, [
+      'external.companion',
+      'external.discord',
+      'external.email',
+      'external.web',
+    ], config);
+    const toolset = facade.createToolsetTool();
+    const builtin = withCapabilityRequirement(makeTool('builtin_plugin', builtinExecute), NO_CAPABILITY_REQUIREMENT);
+    const notify = withCapabilityRequirement(makeTool('notify', notifyDispatch), 'external.companion');
+    const externalWeb = withCapabilityRequirement(makeTool('external_web', webDispatch), 'external.web');
+    const discord = withCapabilityRequirement(makeTool('discord_send', discordDispatch), 'external.discord');
+    const email = withCapabilityRequirement(makeTool('email_send', emailDispatch), 'external.email');
+    facade.registerTool(toolset, 'core');
+    facade.registerTool(builtin, 'core');
+    facade.registerTool(notify, 'extended');
+    facade.registerTool(externalWeb, 'extended');
+    facade.registerTool(discord, 'extended');
+    facade.registerTool(email, 'extended');
+    facade.activateExtendedTools(['external_web']);
+
+    const captured = Object.fromEntries([
+      ...facade.getToolCatalog().core,
+      ...facade.getToolCatalog().extended,
+    ].map(tool => [tool.name, tool] as const));
+    const before = {
+      promoted: [...facade.getPromotedExtendedTools()],
+      loaded: [...facade.getLoadedExtendedTools().entries()],
+      agentTools: (agent.state.tools as Array<{ name: string }>).map(tool => tool.name),
+      lastSnapshot: facade.getAdaptiveToolRuntimeState().lastSnapshot,
+    };
+    const message = makeCandidateMessage();
+    const correlation = {
+      turnId: 'turn-candidate-exact-surface',
+      requestId: 'request-candidate-exact-surface',
+      channelId: message.channelId,
+      callType: 'background' as const,
+      purpose: 'agent.turn',
+    };
+
+    await facade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        'research',
+        'background',
+        correlation,
+        { intent: 'ops', skipped: [] },
+      );
+
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
+      expect([
+        ...facade.getToolCatalog().core,
+        ...facade.getToolCatalog().extended,
+      ].map(tool => tool.name)).toEqual(['notify']);
+      expect(facade.getToolCatalogSnapshot().tools.map(tool => tool.name)).toEqual(['notify']);
+      expect(facade.getAdaptiveToolRuntimeState()).toMatchObject({
+        coreTools: [],
+        extendedTools: ['notify'],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        loadedExtendedTools: [expect.objectContaining({ toolName: 'notify', source: 'autoload' })],
+        activeTools: [{ toolName: 'notify', source: 'autoload' }],
+      });
+
+      const search = await facade.createToolSearchTool().execute('candidate-search', { query: 'external notify' });
+      expect(JSON.stringify(search)).toContain('notify');
+      expect(JSON.stringify(search)).not.toMatch(/external_web|discord_send|email_send|builtin_plugin/);
+      const describeNotify = await facade.createToolsetTool().execute(
+        'candidate-describe-notify',
+        { action: 'describe', tool: 'notify' },
+      );
+      expect(JSON.stringify(describeNotify)).toContain('initiation_permit');
+      const describeWeb = await facade.createToolsetTool().execute(
+        'candidate-describe-web',
+        { action: 'describe', tool: 'external_web' },
+      );
+      expect(JSON.stringify(describeWeb)).not.toContain('external_web description');
+
+      const manipulatedToolset = facade.createToolsetTool();
+      for (const params of [
+        { action: 'activate', tools: ['external_web'] },
+        { action: 'activate', tools: ['notify'] },
+        { action: 'pin', tool: 'email_send' },
+        { action: 'unpin', tool: 'discord_send' },
+        { action: 'deactivate', tool: 'external_web' },
+      ]) {
+        const result = await manipulatedToolset.execute('candidate-toolset-escape', params);
+        expect(result).toMatchObject({ details: { isError: true } });
+      }
+      await expect(captured.toolset!.execute(
+        'candidate-captured-toolset-escape',
+        { action: 'activate', tools: ['external_web'] },
+      )).resolves.toMatchObject({ details: { isError: true } });
+      expect(facade.activateExtendedTools(['external_web'])).toMatchObject({
+        activatedTools: [],
+        missingTools: ['external_web'],
+      });
+      expect(facade.addPromotedExtendedTool('email_send')).toMatchObject({
+        ok: false,
+        changed: false,
+        errorCode: 'capability_denied',
+      });
+      expect(facade.setPromotedExtendedTools(['email_send'])).toEqual([]);
+      expect(facade.persistPromotedExtendedTools(['email_send']))
+        .toContain('cannot mutate or widen');
+
+      for (const [name, params] of [
+        ['builtin_plugin', {}],
+        ['external_web', { action: 'dispatch' }],
+        ['discord_send', { action: 'send' }],
+        ['email_send', { action: 'send' }],
+        ['notify', {
+          action: 'send',
+          target_kind: 'companion',
+          contact_id: 'peer-contact-b',
+          initiation_permit: '44444444-4444-4444-8444-444444444444',
+        }],
+      ] as const) {
+        const result = await runWithRequestContext(
+          correlation,
+          () => captured[name]!.execute(`candidate-direct-${name}`, params),
+        );
+        expect(result).toMatchObject({ details: { isError: true } });
+      }
+    });
+
+    expect(notifyDispatch).not.toHaveBeenCalled();
+    expect(webDispatch).not.toHaveBeenCalled();
+    expect(discordDispatch).not.toHaveBeenCalled();
+    expect(emailDispatch).not.toHaveBeenCalled();
+    expect(builtinExecute).not.toHaveBeenCalled();
+    expect(persistPromotedExtendedTools).not.toHaveBeenCalled();
+    expect({
+      promoted: [...facade.getPromotedExtendedTools()],
+      loaded: [...facade.getLoadedExtendedTools().entries()],
+      agentTools: (agent.state.tools as Array<{ name: string }>).map(tool => tool.name),
+      lastSnapshot: facade.getAdaptiveToolRuntimeState().lastSnapshot,
+    }).toEqual(before);
+    expect(facade.getLoadedExtendedTools().has('notify')).toBe(false);
+    expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+  });
+
+  it('refuses trusted turn-scoped activation when live capability policy revokes the tool', async () => {
+    const { facade } = createFacade(null, []);
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify'),
+      'external.companion',
+    ), 'extended');
+
+    await expect(facade.runWithIcpAutonomyCandidateNotifyScope(
+      makeCandidateMessage(),
+      async () => undefined,
+    )).rejects.toThrow('not capability authorized');
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+      expect.objectContaining({ toolName: 'notify' }),
+    );
+  });
+
+  it('revalidates live overlay policy at execution and clears cancelled scopes', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'queued' }], details: {} }));
+    const { facade } = createFacade();
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify', execute),
+      'external.companion',
+    ), 'extended');
+    const message = makeCandidateMessage();
+    const correlation = {
+      turnId: 'turn-live-overlay',
+      requestId: 'request-live-overlay',
+      channelId: message.channelId,
+      callType: 'background' as const,
+      purpose: 'agent.turn',
+    };
+
+    await expect(facade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        'research',
+        'background',
+        correlation,
+        { intent: 'ops', skipped: [] },
+      );
+      const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
+      const defaultPolicy = createDefaultExtendedToolAutoloadPolicy();
+      facade.setExtendedToolAutoloadPolicy({
+        ...defaultPolicy,
+        classifyToolForTurn: toolName => toolName === 'notify'
+          ? 'background'
+          : defaultPolicy.classifyToolForTurn(toolName),
+      });
+      const result = await runWithRequestContext(correlation, () => notify.execute(
+        'call-overlay-revoked',
+        {
+          action: 'send',
+          target_kind: 'companion',
+          contact_id: 'peer-contact-b',
+          initiation_permit: '44444444-4444-4444-8444-444444444444',
+        },
+      ));
+      expect(result).toMatchObject({ details: { isError: true } });
+      expect(execute).not.toHaveBeenCalled();
+      throw new DOMException('candidate cancelled', 'AbortError');
+    })).rejects.toThrow('candidate cancelled');
+
+    expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+      expect.objectContaining({ toolName: 'notify' }),
+    );
+  });
+
+  it('rejects candidate notify execution inherited by detached work after scope cleanup', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'queued' }], details: {} }));
+    const { facade } = createFacade();
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify', execute),
+      'external.companion',
+    ), 'extended');
+    const message = makeCandidateMessage();
+    const correlation = {
+      turnId: 'turn-detached-candidate-notify',
+      requestId: 'request-detached-candidate-notify',
+      channelId: message.channelId,
+      callType: 'background' as const,
+      purpose: 'agent.turn',
+    };
+    let releaseDetached!: () => void;
+    const detachedRelease = new Promise<void>((resolve) => {
+      releaseDetached = resolve;
+    });
+    let detachedResult!: Promise<unknown>;
+
+    await facade.runWithIcpAutonomyCandidateNotifyScope(message, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        'research',
+        'background',
+        correlation,
+        { intent: 'ops', skipped: [] },
+      );
+      const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
+      detachedResult = (async () => {
+        await detachedRelease;
+        const result = await runWithRequestContext(correlation, () => notify.execute(
+          'call-detached-candidate-notify',
+          {
+            action: 'send',
+            target_kind: 'companion',
+            contact_id: 'peer-contact-b',
+            initiation_permit: '44444444-4444-4444-8444-444444444444',
+          },
+        ));
+        return {
+          activeToolNames: facade.getActiveTurnTools().map(tool => tool.name),
+          catalogToolNames: [
+            ...facade.getToolCatalog().core,
+            ...facade.getToolCatalog().extended,
+          ].map(tool => tool.name),
+          result,
+        };
+      })();
+    });
+
+    releaseDetached();
+    await expect(detachedResult).resolves.toMatchObject({
+      activeToolNames: [],
+      catalogToolNames: [],
+      result: { details: { isError: true } },
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('fails startup validation for an unclassified executable tool', () => {
     const { facade } = createFacade(null);
     facade.registerTool(makeTool('unclassified_plugin_tool'), 'extended');

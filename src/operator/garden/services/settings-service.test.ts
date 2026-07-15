@@ -796,6 +796,7 @@ describe('AdminSettingsDataService', () => {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 20,
+        companion_social: 12,
         background: 8,
         maintenance: 0,
         subagent: 5,
@@ -815,6 +816,7 @@ describe('AdminSettingsDataService', () => {
         shardLaunch: 7,
         externalModelConsult: 1,
         moaRoundBase: 1,
+        companionSocialContinuation: 1,
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -823,6 +825,7 @@ describe('AdminSettingsDataService', () => {
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+        companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
       },
       moa: {
         perRoundMultiplierByReferenceModelClass: {
@@ -842,6 +845,7 @@ describe('AdminSettingsDataService', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      icpCostBreaker: { enabled: false as const },
       fatigue: makeTestFatiguePolicyConfig(),
     };
 
@@ -853,7 +857,7 @@ describe('AdminSettingsDataService', () => {
     });
     expect(JSON.parse(service.getSubConfigJson('charge-policy') ?? '{}')).toEqual(payload);
     expect(loadChargePolicyConfig(root)).toEqual(payload);
-    expect(config.chargePolicy).toEqual(payload);
+    expect(config.chargePolicy).not.toEqual(payload);
     expect(await service.getSettingsData()).toEqual(expect.objectContaining({
       editors: expect.objectContaining({
         chargePolicy: payload,
@@ -899,6 +903,46 @@ describe('AdminSettingsDataService', () => {
       effectiveChargeQuotaByLane: null,
       onDiskChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane,
       restartRequired: false,
+    });
+  });
+
+  it('reports canonical effective, on-disk, and restart state for ICP owner settings', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const effectiveSchedulerConfig = loadSchedulerConfig(root);
+    config.chargePolicy = loadChargePolicyConfig(root);
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: createOwnerFileConfigStore({
+        dataDir: config.dataDir,
+        defaultContextWindow: config.defaultContextWindow,
+      }),
+      effectiveSchedulerConfig,
+    });
+    const editedScheduler = {
+      ...effectiveSchedulerConfig,
+      icpAutonomy: {
+        ...effectiveSchedulerConfig.icpAutonomy,
+        enabled: true,
+      },
+    };
+
+    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler)).ok).toBe(true);
+    const data = await service.getSettingsData();
+
+    expect(data.effectiveIcpAutonomy.scheduler).toMatchObject({
+      ownerFile: 'scheduler.json',
+      effectiveValue: { enabled: false },
+      onDiskValue: { enabled: true },
+      restartRequired: true,
+    });
+    expect(data.effectiveIcpAutonomy.chargePolicy).toMatchObject({
+      ownerFile: 'charge-policy.json',
+      restartRequired: false,
+      effectiveValue: {
+        companionSocialQuota: 12,
+        companionSocialContinuationCost: 1,
+      },
     });
   });
 

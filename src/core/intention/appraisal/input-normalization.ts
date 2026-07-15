@@ -2,6 +2,7 @@ import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { cloneEmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import { cloneInternalState, type InternalState } from '../../self-model/state.js';
+import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { normalizeConcernStatus } from '../concerns.js';
 import type {
   ActiveCareReminderSnapshot,
@@ -346,6 +347,9 @@ export function normalizeInput(
   },
 ): NormalizedIntentionAppraisalInput {
   const sessionId = normalizeSessionId(input.sessionId);
+  const icpCorrelation = input.icpCorrelation === undefined
+    ? null
+    : parseIcpConversationCorrelation(input.icpCorrelation);
   const internalState = normalizeInternalState(input.internalState);
   const currentEmotion = internalState
     ? emotionSnapshotFromInternalState(internalState)
@@ -386,6 +390,7 @@ export function normalizeInput(
 
   return {
     sessionId,
+    icpCorrelation,
     internalState,
     currentEmotion,
     currentEmotionTelemetry,

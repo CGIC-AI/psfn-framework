@@ -263,6 +263,7 @@ export async function schedulePostTurnWork(input: {
     turnMessages,
     turnId,
     completedAt,
+    ...(taskKind ? { taskKind } : {}),
     contextManifest: context.manifest,
     ...(canonicalContactKey ? { canonicalContactKey } : {}),
   });
@@ -294,8 +295,7 @@ export async function schedulePostTurnWork(input: {
         }
       : {}),
   });
-  runtime.sessionManager.recordTurn(
-    runtime.buildTurnRecord({
+  const turnRecord = runtime.buildTurnRecord({
       message,
       turnId,
       requestId,
@@ -321,8 +321,7 @@ export async function schedulePostTurnWork(input: {
         ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
       },
       internalStateSnapshotRef,
-    }),
-  );
+    });
 
   await runtime.eventBus.emit('agent.turn.end', {
     message,
@@ -402,6 +401,7 @@ export async function schedulePostTurnWork(input: {
         // first, then the static satellite binding. Absent means no location
         // tag (fail-closed).
         resolveMessagePlaceId(message),
+        message.routing?.icpCorrelation,
       ),
       onError: (error) => {
         log.error('Memory extraction error', { error: String(error) });
@@ -418,6 +418,9 @@ export async function schedulePostTurnWork(input: {
       turnId,
       completedAt,
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Intention post-turn hook dispatch error', {
@@ -438,6 +441,9 @@ export async function schedulePostTurnWork(input: {
       internalState,
       templateVariables,
       conversationScope,
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Emotion appraisal error', {
@@ -458,6 +464,9 @@ export async function schedulePostTurnWork(input: {
       userId: continuitySubjectKey,
       compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
       turnBudgetCharacteristics,
+      ...(message.routing?.icpCorrelation
+        ? { icpCorrelation: message.routing.icpCorrelation }
+        : {}),
     }),
     onError: (error) => {
       log.error('Auto-compaction dispatch error', {
@@ -474,4 +483,8 @@ export async function schedulePostTurnWork(input: {
     work: postTurnBackgroundWork,
     correlation: turnCorrelationBase,
   });
+  // This is the durable completion marker for post-turn scheduling. Keep it
+  // last: a recovery may skip this whole scheduler only after every awaited
+  // effect ran and every background task was handed to the runtime owner.
+  runtime.sessionManager.recordTurn(turnRecord);
 }

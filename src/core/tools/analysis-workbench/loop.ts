@@ -42,6 +42,7 @@ import {
   resolveCorrelationMetadata,
   type ResolvedCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
+import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -464,13 +465,26 @@ function buildAnalysisCorrelation(
   originStage: string,
   requestSuffix: string,
 ): CorrelationMetadata {
+  const requestId = `${metadata.requestId}:${requestSuffix}`;
   return {
     ...metadata,
-    requestId: `${metadata.requestId}:${requestSuffix}`,
-    callType: metadata.originType,
+    requestId,
+    callType: 'tool',
     purpose: originStage,
-    originType: metadata.originType,
+    originType: 'tool',
     originStage,
+    ...(metadata.icpCorrelation
+      ? {
+          icpCorrelation: deriveChildIcpConversationCostCorrelation(
+            metadata.icpCorrelation,
+            {
+              requestId,
+              costPurpose: 'tool',
+              costOriginStage: metadata.icpCorrelation.costOriginStage,
+            },
+          ),
+        }
+      : {}),
   };
 }
 
@@ -479,14 +493,27 @@ function buildNestedAnalysisRequestMetadata(
   childId: number,
 ): Partial<LLMRequestMetadata> {
   const suffix = `nested-analysis-${childId}`;
+  const requestId = `${metadata.requestId}:${suffix}`;
   const { callType: _callType, purpose: _purpose, ...requestMetadata } = metadata;
   return {
     ...requestMetadata,
-    requestId: `${metadata.requestId}:${suffix}`,
+    requestId,
     toolName: metadata.toolName ?? 'analysis_workbench',
     ...(metadata.toolCallId ? { toolCallId: `${metadata.toolCallId}:${suffix}` } : {}),
-    originType: metadata.originType,
+    originType: 'tool',
     originStage: 'repl.analysis_workbench.subcall',
+    ...(metadata.icpCorrelation
+      ? {
+          icpCorrelation: deriveChildIcpConversationCostCorrelation(
+            metadata.icpCorrelation,
+            {
+              requestId,
+              costPurpose: 'tool',
+              costOriginStage: metadata.icpCorrelation.costOriginStage,
+            },
+          ),
+        }
+      : {}),
   };
 }
 
@@ -604,23 +631,34 @@ export async function runRLMLoop(
       originStage,
       `sandbox-${purpose}-${Date.now()}`,
     );
+    const requestId = normalizeMetadataValue(incomingCorrelation?.requestId)
+      ?? correlationBase.requestId;
     const correlatedContext: LLMContext = {
       ...context,
       correlation: {
         ...correlationBase,
         ...(incomingCorrelation ?? {}),
-        callType: incomingCorrelation?.callType
-          ?? incomingCorrelation?.originType
-          ?? correlationBase.callType,
+        requestId,
+        callType: 'tool',
         purpose: incomingCorrelation?.purpose
           ?? incomingCorrelation?.originStage
           ?? correlationBase.purpose,
-        originType: incomingCorrelation?.originType
-          ?? incomingCorrelation?.callType
-          ?? correlationBase.originType,
+        originType: 'tool',
         originStage: incomingCorrelation?.originStage
           ?? incomingCorrelation?.purpose
           ?? correlationBase.originStage,
+        ...(requestMetadata.icpCorrelation
+          ? {
+              icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                requestMetadata.icpCorrelation,
+                {
+                  requestId,
+                  costPurpose: 'tool',
+                  costOriginStage: requestMetadata.icpCorrelation.costOriginStage,
+                },
+              ),
+            }
+          : {}),
       },
     };
     const response = await llmProvider.complete(correlatedContext, purpose);

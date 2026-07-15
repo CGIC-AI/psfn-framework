@@ -10,6 +10,7 @@ import type {
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { ActiveConcernStatus } from '../concerns.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 export const DEFAULT_APPRAISAL_FREQUENCY = 3;
 export const DEFAULT_EMOTIONAL_SHIFT_THRESHOLD = 0.35;
@@ -139,6 +140,8 @@ export interface IntentionActionDecision {
 
 export interface IntentionAppraisalInput {
   sessionId: string;
+  /** Typed parent conversation lineage for post-turn appraisal model spend. */
+  icpCorrelation?: IcpConversationCorrelation;
   internalState?: InternalState | null;
   currentEmotion?: EmotionStateSnapshot | null;
   recentMessages: readonly IntentionAppraisalMessage[];
@@ -174,6 +177,7 @@ export interface IntentionFollowUpActionPayload {
   authorName: string;
   content: string;
   pendingFollowUpId?: string;
+  originIcpRootInitiationId?: string;
 }
 
 export interface IntentionOutboundMessageActionPayload {
@@ -184,6 +188,8 @@ export interface IntentionOutboundMessageActionPayload {
   pendingFollowUpId?: string;
   concernIds?: string[];
   requiresActiveConcern?: boolean;
+  /** Preserve an originating ICP root so peer-derived intentions cannot recurse. */
+  originIcpRootInitiationId?: string;
 }
 
 export interface IntentionReminderActionPayload {
@@ -191,7 +197,7 @@ export interface IntentionReminderActionPayload {
 }
 
 export interface IntentionDecisionActionContext {
-  message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType'>;
+  message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType' | 'routing'>;
   fallbackAuthorId?: string;
   fallbackAuthorName?: string;
 }
@@ -210,6 +216,7 @@ export interface SessionAppraisalState {
 
 export interface NormalizedIntentionAppraisalInput {
   sessionId: string;
+  icpCorrelation: IcpConversationCorrelation | null;
   internalState: InternalState | null;
   currentEmotion: EmotionStateSnapshot | null;
   currentEmotionTelemetry: EmotionTelemetryValidation | null;

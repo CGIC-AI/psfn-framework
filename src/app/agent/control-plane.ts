@@ -25,6 +25,22 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ApiServer } from '../../channels/api/server.js';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
+import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../../core/icp/candidate-scheduler-origin.js';
+import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import {
+  isDeferredCompanionOutreachExecutionAuthorized,
+  registerDeferredCompanionOutreachRuntime,
+  resolveCompanionOutreachOriginActivationSource,
+  type DeferredCompanionOutreachAuthorizationRuntime,
+} from '../../core/tools/notify-companion-handoff.js';
+import {
+  createIcpAutonomyCandidateDispatcher,
+  type IcpAutonomyCandidateDispatcher,
+} from './icp-autonomy-candidate-dispatcher.js';
+import { registerIcpInitiationCandidatePostTurnRuntime } from '../../core/tools/notify-companion-candidate.js';
+import type { IcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -33,6 +49,8 @@ export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
   adminTransport?: Lifecycle;
   appCache?: { close?: () => Promise<void> };
+  fatigueRegulationReservations?: { close: () => Promise<void> };
+  chargeLedger?: Pick<RunChargeLedger, 'close'>;
   sessionTailCache?: { close?: () => Promise<void> } | null;
 }
 
@@ -45,7 +63,7 @@ export interface BuildAgentControlPlaneOptions {
   unregisterGatewayDisconnect: () => void;
   stopDebugObserver: () => void;
   writeGracefulShutdownMarkers: () => void;
-  closeDatabase: () => void;
+  closeDatabase: () => Promise<void> | void;
   scheduler: Scheduler;
   moduleLoader: ModuleLoader;
   memoryExtractor: MemoryExtractor;
@@ -56,11 +74,15 @@ export interface BuildAgentControlPlaneOptions {
   capabilityRuntime: CapabilityRuntime;
   lifecycleRuntimeContract: RuntimeModeContract;
   shutdownTargets: AgentControlPlaneShutdownTargets;
+  postTurnActions: PostTurnActionRuntime;
+  icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
+  icpInitiationSourceRuntime?: IcpInitiationSourceRuntime;
 }
 
 export interface AgentControlPlaneRuntime {
   lifecycleNotifier: LifecycleNotifier;
   stopFn: () => Promise<void>;
+  icpAutonomyCandidateDispatcher?: IcpAutonomyCandidateDispatcher;
 }
 
 export function buildAgentControlPlane(
@@ -86,8 +108,52 @@ export function buildAgentControlPlane(
     capabilityRuntime,
     lifecycleRuntimeContract,
     shutdownTargets,
+    postTurnActions,
+    icpAutonomyRuntime,
+    icpInitiationSourceRuntime,
   } = options;
   let stopPromise: Promise<void> | null = null;
+  const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+    hasExternalCompanionCapability: () => capabilityRuntime.has('external.companion'),
+    isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
+      tool => tool.name === 'notify',
+    ),
+    isNotifyOverlayEligible: () => agentLoop.getExtendedToolTurnClass('notify') === 'overlay',
+    getNotifyActivationSource: () => {
+      const active = agentLoop.getAdaptiveToolRuntimeState().activeTools.find(
+        tool => tool.toolName === 'notify',
+      );
+      return active && active.source !== 'core' ? active.source : null;
+    },
+  };
+  const unregisterDeferredCompanionOutreach = icpAutonomyRuntime
+    ? registerDeferredCompanionOutreachRuntime({
+        agentLoop,
+        postTurnActions,
+        runtime: icpAutonomyRuntime,
+        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+      })
+    : () => undefined;
+  const unregisterIcpInitiationCandidates = icpInitiationSourceRuntime
+    ? registerIcpInitiationCandidatePostTurnRuntime({
+        agentLoop,
+        postTurnActions,
+        runtime: icpInitiationSourceRuntime,
+        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+      })
+    : () => undefined;
 
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
@@ -111,6 +177,8 @@ export function buildAgentControlPlane(
         DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
       );
       await runShutdownSequence([
+        { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
+        { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
         { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
         { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
         { step: 'stop debug observer', action: () => stopDebugObserver() },
@@ -132,6 +200,8 @@ export function buildAgentControlPlane(
         { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
         { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
         { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+        { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
+        { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
         { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
         { step: 'destroy gateway client', action: () => gateway.destroy() },
         { step: 'close database', action: () => closeDatabase() },
@@ -178,7 +248,34 @@ export function buildAgentControlPlane(
     defaultBudgetChannel: 'discord',
   }), {
     gatewayMode: true,
+    ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
+    companionCandidateEnabled: icpInitiationSourceRuntime !== undefined,
+    isCompanionCandidateAuthorized: () => (
+      resolveCompanionOutreachOriginActivationSource(
+        deferredCompanionOutreachAuthorizationRuntime,
+      ) !== null
+    ),
   }), 'extended');
 
-  return { lifecycleNotifier, stopFn };
+  const icpAutonomyCandidateDispatcher = icpAutonomyRuntime
+    ? createIcpAutonomyCandidateDispatcher({
+        runCandidateTurn: async message => {
+          if (!resolveIcpAutonomyCandidateSchedulerOrigin(message)) {
+            throw new Error('ICP candidate dispatcher lost its validated internal origin');
+          }
+          if (!deferredCompanionOutreachAuthorizationRuntime.hasExternalCompanionCapability()
+            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyToolRegistered()
+            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyOverlayEligible()) {
+            throw new Error('ICP candidate notify turn activation is no longer authorized');
+          }
+          return await agentLoop.handleIcpAutonomyCandidateTurn(message);
+        },
+      })
+    : undefined;
+
+  return {
+    lifecycleNotifier,
+    stopFn,
+    ...(icpAutonomyCandidateDispatcher ? { icpAutonomyCandidateDispatcher } : {}),
+  };
 }

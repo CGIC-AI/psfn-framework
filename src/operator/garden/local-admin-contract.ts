@@ -122,6 +122,10 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
 import {
   AdminSharedWorkspaceService,
   type SharedWorkspaceCredentials,
@@ -169,8 +173,14 @@ export interface InProcessGardenAdminContractOptions {
    * enrollment routes are simply not mounted. Biometrics never enter core.
    */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
+  /** Shared runtime charge ledger; supplying it avoids duplicate event subscribers. */
+  chargeLedger?: RunChargeLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
+  effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpAdminProjectionStore?: IcpAdminProjectionStore | null;
+  icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
   /** Distinct authenticated principals for governed shared-workspace writes. */
   sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
 }
@@ -200,7 +210,8 @@ export function createInProcessGardenAdminContract(
     resolveReflectionJournalPath(companionDataDir),
   );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
-  const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const chargeLedger = options.chargeLedger
+    ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditOpaqueIdKeyring = createSessionHmacBoundaryService({
@@ -270,7 +281,21 @@ export function createInProcessGardenAdminContract(
     config: options.config,
     configStore,
     ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
+    ...(options.effectiveSchedulerConfig
+      ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }
+      : {}),
   });
+  const icpAutonomy = options.icpRuntimeEnablement && options.effectiveSchedulerConfig
+    ? new AdminIcpAutonomyDataService({
+      localCompanionId: options.config.companionId,
+      candidateStore: options.icpInitiationCandidateStore ?? null,
+      projectionStore: options.icpAdminProjectionStore ?? null,
+      runtimeEnablement: options.icpRuntimeEnablement,
+      settingsService,
+      operatorLeaseTtlMs:
+        options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+    })
+    : null;
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──
   // Reads the same companion-data quarantine file the gateway/agent screening
@@ -498,6 +523,7 @@ export function createInProcessGardenAdminContract(
     scheduler: schedulerService,
     subsystemHealth,
     toolConformance,
+    icpAutonomy,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,

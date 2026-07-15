@@ -5,10 +5,25 @@ import type {
   FatigueBudgetEvent,
   FatigueBudgetHardState,
   FatigueBudgetPeerSnapshot,
+  FatiguePendingSpendMetadata,
   FatigueBudgetReason,
   FatigueBudgetSoftState,
   RunChargeLineage,
 } from '../../../shared/contracts/runtime.js';
+import { isRecord } from '../../../shared/utils/types.js';
+import { resolveFatigueSpendUnit } from './enforcement-invariants.js';
+
+const FATIGUE_DECISIONS = new Set(['charged', 'free', 'overcharge']);
+const FATIGUE_REASONS = new Set([
+  'machine_intelligence_response',
+  'overcharge_recent_human_participation',
+  'overcharge_work_intent_wrapup',
+  'overcharge_explicit_peer_invitation',
+  'peer_not_machine_intelligence',
+  'triggering_author_not_machine_intelligence',
+]);
+const FATIGUE_ACTOR_ROLES = new Set(['human', 'machine_intelligence', 'system', 'unknown']);
+const FATIGUE_DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
 export interface FatigueBudgetScope {
   localCompanionId: string;
@@ -23,6 +38,23 @@ export interface FatigueBudgetLimits {
   overchargeLimit?: number;
 }
 
+export interface FatigueBudgetRegulationInput {
+  rootInitiationId: string;
+  timestampMs: number;
+  relationshipPressureHalfLifeMs: number;
+  relationshipPressureWindowMs: number;
+}
+
+export interface FatigueBudgetRegulationState {
+  rootInitiationId: string;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+  oldestContributingEventAtMs?: number;
+  latestContributingEventAtMs?: number;
+}
+
 export interface FatigueBudgetState {
   scope: FatigueBudgetScope;
   spent: number;
@@ -35,6 +67,7 @@ export interface FatigueBudgetState {
   remainingOvercharge: number;
   softState: FatigueBudgetSoftState;
   hardState: FatigueBudgetHardState;
+  regulation?: FatigueBudgetRegulationState;
   lastEvent?: FatigueBudgetEvent;
 }
 
@@ -48,6 +81,7 @@ export interface FatigueBudgetEvaluationInput {
   correlation?: Partial<CorrelationMetadata>;
   lineage?: RunChargeLineage;
   details?: Record<string, unknown>;
+  regulation?: FatigueBudgetRegulationInput;
 }
 
 export interface FatigueBudgetRecordInput {
@@ -70,6 +104,7 @@ export interface FatigueBudgetEvaluation {
   correlation?: Partial<CorrelationMetadata>;
   lineage?: RunChargeLineage;
   details?: Record<string, unknown>;
+  regulation?: FatigueBudgetRegulationInput;
 }
 
 export interface FatigueBudgetEventQuery {
@@ -78,6 +113,8 @@ export interface FatigueBudgetEventQuery {
   channelId?: string;
   dayKey?: string;
   decision?: FatigueBudgetDecision;
+  sinceMs?: number;
+  untilMs?: number;
   limit?: number;
 }
 
@@ -90,10 +127,15 @@ export interface FatigueBudgetPort {
   readState(scope: Omit<FatigueBudgetScope, 'dayKey'> & {
     dayKey?: string;
     limits: FatigueBudgetLimits;
+    regulation?: FatigueBudgetRegulationInput;
   }): FatigueBudgetState;
   evaluate(input: FatigueBudgetEvaluationInput): FatigueBudgetEvaluation;
   recordFinalDecision(
     evaluation: FatigueBudgetEvaluation,
+    input?: FatigueBudgetRecordInput,
+  ): FatigueBudgetEvent;
+  recordPendingSpend(
+    pending: FatiguePendingSpendMetadata,
     input?: FatigueBudgetRecordInput,
   ): FatigueBudgetEvent;
 }
@@ -173,6 +215,7 @@ function createState(input: {
   normalSpent: number;
   overchargeSpent?: number;
   limits: FatigueBudgetLimits;
+  regulation?: FatigueBudgetRegulationState;
   lastEvent?: FatigueBudgetEvent;
 }): FatigueBudgetState {
   const allowance = input.limits.hardLimit;
@@ -197,21 +240,78 @@ function createState(input: {
     remainingOvercharge: Math.max(0, overchargeAllowance - overchargeSpent),
     softState,
     hardState,
+    ...(input.regulation ? { regulation: { ...input.regulation } } : {}),
     ...(input.lastEvent ? { lastEvent: cloneEvent(input.lastEvent) } : {}),
   };
 }
 
-function resolveDecision(input: {
-  peer: FatigueBudgetPeerSnapshot;
-  triggeringAuthor: FatigueBudgetActorSnapshot;
-}): { decision: FatigueBudgetDecision; reason: FatigueBudgetReason; amount: number } {
-  if (input.peer.isMachineIntelligence !== true) {
-    return { decision: 'free', reason: 'peer_not_machine_intelligence', amount: 0 };
+function normalizeRegulation(
+  value: FatigueBudgetRegulationInput,
+): FatigueBudgetRegulationInput {
+  const rootInitiationId = normalizeRequiredString(value.rootInitiationId, 'rootInitiationId');
+  if (!Number.isSafeInteger(value.timestampMs) || value.timestampMs < 0) {
+    throw new Error('Fatigue budget regulation timestampMs must be a non-negative safe integer');
   }
-  if (input.triggeringAuthor.isMachineIntelligence !== true) {
-    return { decision: 'free', reason: 'triggering_author_not_machine_intelligence', amount: 0 };
+  if (!Number.isSafeInteger(value.relationshipPressureHalfLifeMs)
+    || value.relationshipPressureHalfLifeMs < 1) {
+    throw new Error('Fatigue budget regulation relationshipPressureHalfLifeMs must be a positive safe integer');
   }
-  return { decision: 'charged', reason: 'machine_intelligence_response', amount: 1 };
+  if (!Number.isSafeInteger(value.relationshipPressureWindowMs)
+    || value.relationshipPressureWindowMs < value.relationshipPressureHalfLifeMs) {
+    throw new Error('Fatigue budget regulation relationshipPressureWindowMs must be at least one half-life');
+  }
+  return {
+    rootInitiationId,
+    timestampMs: value.timestampMs,
+    relationshipPressureHalfLifeMs: value.relationshipPressureHalfLifeMs,
+    relationshipPressureWindowMs: value.relationshipPressureWindowMs,
+  };
+}
+
+function resolveRegulatedState(input: {
+  events: FatigueBudgetEvent[];
+  regulation: FatigueBudgetRegulationInput;
+}): {
+  normalSpent: number;
+  overchargeSpent: number;
+  regulation: FatigueBudgetRegulationState;
+  lastEvent?: FatigueBudgetEvent;
+} {
+  const rootEvents = input.events.filter(event => (
+    event.icpCorrelation?.rootInitiationId === input.regulation.rootInitiationId
+  ));
+  const chargedEvents = input.events.filter(event => event.decision === 'charged');
+  const relationshipPressure = chargedEvents.reduce((total, event) => {
+    const ageMs = Math.max(0, input.regulation.timestampMs - event.timestampMs);
+    return total + event.amount * (2 ** (-ageMs / input.regulation.relationshipPressureHalfLifeMs));
+  }, 0);
+  const rootNormalSpent = rootEvents
+    .filter(event => event.decision === 'charged')
+    .reduce((total, event) => total + event.amount, 0);
+  const rootOverchargeSpent = rootEvents
+    .filter(event => event.decision === 'overcharge')
+    .reduce((total, event) => total + event.amount, 0);
+  const sorted = [...input.events].sort((left, right) => left.timestampMs - right.timestampMs);
+  const oldest = sorted.at(0);
+  const latest = sorted.at(-1);
+  const regulation: FatigueBudgetRegulationState = {
+    rootInitiationId: input.regulation.rootInitiationId,
+    relationshipPressure,
+    rootNormalSpent,
+    rootOverchargeSpent,
+    contributingEventCount: input.events.length,
+    ...(oldest ? { oldestContributingEventAtMs: oldest.timestampMs } : {}),
+    ...(latest ? { latestContributingEventAtMs: latest.timestampMs } : {}),
+  };
+  return {
+    // A causal root never replenishes while channel hopping or recursively
+    // opening another episode. Independent roots inherit decaying recent
+    // relationship pressure instead of a UTC-day reset.
+    normalSpent: Math.max(rootNormalSpent, Math.ceil(relationshipPressure)),
+    overchargeSpent: rootOverchargeSpent,
+    regulation,
+    ...(latest ? { lastEvent: latest } : {}),
+  };
 }
 
 function cloneScope(scope: FatigueBudgetScope): FatigueBudgetScope {
@@ -226,6 +326,108 @@ function sanitizeCorrelationMetadata(
   return safeCorrelation;
 }
 
+function assertOptionalString(value: unknown, label: string): void {
+  if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+    throw new Error(`Pending fatigue spend ${label} must be a non-empty string`);
+  }
+}
+
+function assertRequiredString(value: unknown, label: string): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Pending fatigue spend ${label} must be a non-empty string`);
+  }
+}
+
+function assertActorSnapshot(value: unknown, label: string): void {
+  if (!isRecord(value)
+    || typeof value.role !== 'string'
+    || !FATIGUE_ACTOR_ROLES.has(value.role)
+    || (value.isMachineIntelligence !== undefined
+      && typeof value.isMachineIntelligence !== 'boolean')) {
+    throw new Error(`Pending fatigue spend ${label} is malformed`);
+  }
+  assertOptionalString(value.contactId, `${label}.contactId`);
+  assertOptionalString(value.channelAuthorId, `${label}.channelAuthorId`);
+  assertOptionalString(value.displayName, `${label}.displayName`);
+}
+
+function assertPendingSpend(pending: FatiguePendingSpendMetadata): void {
+  const value: unknown = pending;
+  if (!isRecord(value)
+    || value.schemaVersion !== 1
+    || typeof value.timestampMs !== 'number'
+    || !Number.isFinite(value.timestampMs)
+    || value.timestampMs < 0
+    || typeof value.amount !== 'number'
+    || !Number.isFinite(value.amount)
+    || value.amount < 0
+    || typeof value.decision !== 'string'
+    || !FATIGUE_DECISIONS.has(value.decision)
+    || typeof value.reason !== 'string'
+    || !FATIGUE_REASONS.has(value.reason)
+    || !isRecord(value.scope)
+    || !isRecord(value.peer)
+    || !isRecord(value.limits)
+    || !isRecord(value.correlation)
+    || typeof value.limits.softLimit !== 'number'
+    || typeof value.limits.hardLimit !== 'number'
+    || typeof value.limits.overchargeLimit !== 'number') {
+    throw new Error('Pending fatigue spend is malformed');
+  }
+  for (const [key, label] of [
+    ['localCompanionId', 'scope.localCompanionId'],
+    ['peerContactId', 'scope.peerContactId'],
+    ['channelId', 'scope.channelId'],
+    ['dayKey', 'scope.dayKey'],
+  ] as const) {
+    assertRequiredString(value.scope[key], label);
+  }
+  if (typeof value.scope.dayKey !== 'string'
+    || !FATIGUE_DAY_KEY_PATTERN.test(value.scope.dayKey)
+    || value.scope.dayKey !== makeFatigueDayKey(value.timestampMs)) {
+    throw new Error('Pending fatigue spend scope.dayKey does not match timestampMs');
+  }
+  if (typeof value.peer.contactId !== 'string'
+    || value.peer.contactId !== value.scope.peerContactId) {
+    throw new Error('Pending fatigue spend peer does not match its scope');
+  }
+  assertOptionalString(value.peer.channelAuthorId, 'peer.channelAuthorId');
+  assertOptionalString(value.peer.displayName, 'peer.displayName');
+  if (value.peer.isMachineIntelligence !== undefined
+    && typeof value.peer.isMachineIntelligence !== 'boolean') {
+    throw new Error('Pending fatigue spend peer.isMachineIntelligence must be boolean');
+  }
+  assertActorSnapshot(value.triggeringAuthor, 'triggeringAuthor');
+  normalizeLimits({
+    softLimit: value.limits.softLimit,
+    hardLimit: value.limits.hardLimit,
+    overchargeLimit: value.limits.overchargeLimit,
+  });
+  if (typeof value.correlation.turnId !== 'string' || !value.correlation.turnId.trim()) {
+    throw new Error('Pending fatigue spend requires a stable correlation.turnId');
+  }
+  if (value.correlation.channelId !== undefined
+    && value.correlation.channelId !== value.scope.channelId) {
+    throw new Error('Pending fatigue spend correlation channel does not match its scope');
+  }
+  if ((value.decision === 'free' && value.amount !== 0)
+    || (value.decision !== 'free' && value.amount <= 0)) {
+    throw new Error('Pending fatigue spend amount does not match its decision');
+  }
+  const validDecisionReason = (value.decision === 'charged'
+      && value.reason === 'machine_intelligence_response')
+    || (value.decision === 'overcharge'
+      && (value.reason === 'overcharge_recent_human_participation'
+        || value.reason === 'overcharge_work_intent_wrapup'
+        || value.reason === 'overcharge_explicit_peer_invitation'))
+    || (value.decision === 'free'
+      && (value.reason === 'peer_not_machine_intelligence'
+        || value.reason === 'triggering_author_not_machine_intelligence'));
+  if (!validDecisionReason) {
+    throw new Error('Pending fatigue spend reason does not match its decision');
+  }
+}
+
 export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
   constructor(
     private readonly history: FatigueBudgetHistoryPort,
@@ -235,6 +437,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
   readState(input: Omit<FatigueBudgetScope, 'dayKey'> & {
     dayKey?: string;
     limits: FatigueBudgetLimits;
+    regulation?: FatigueBudgetRegulationInput;
   }): FatigueBudgetState {
     const limits = normalizeLimits(input.limits);
     const scope = {
@@ -243,12 +446,27 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       channelId: normalizeRequiredString(input.channelId, 'channelId'),
       dayKey: input.dayKey?.trim() || makeFatigueDayKey(this.options.now?.() ?? Date.now()),
     };
-    const events = this.history.listFatigueEvents({
-      localCompanionId: scope.localCompanionId,
-      peerContactId: scope.peerContactId,
-      channelId: scope.channelId,
-      dayKey: scope.dayKey,
-    });
+    const regulation = input.regulation ? normalizeRegulation(input.regulation) : undefined;
+    const events = this.history.listFatigueEvents(regulation
+      ? {
+          localCompanionId: scope.localCompanionId,
+          peerContactId: scope.peerContactId,
+          sinceMs: Math.max(0, regulation.timestampMs - regulation.relationshipPressureWindowMs),
+          untilMs: regulation.timestampMs,
+        }
+      : {
+          localCompanionId: scope.localCompanionId,
+          peerContactId: scope.peerContactId,
+          channelId: scope.channelId,
+          dayKey: scope.dayKey,
+        });
+    if (regulation) {
+      return createState({
+        scope,
+        limits,
+        ...resolveRegulatedState({ events, regulation }),
+      });
+    }
     const normalSpent = events
       .filter(event => event.decision === 'charged')
       .reduce((total, event) => total + event.amount, 0);
@@ -272,13 +490,15 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       channelId: input.channelId,
       dayKey,
       limits,
+      ...(input.regulation ? { regulation: input.regulation } : {}),
     });
-    const decision = resolveDecision({ peer, triggeringAuthor });
+    const decision = resolveFatigueSpendUnit({ peer, triggeringAuthor });
     const stateAfter = createState({
       scope: cloneScope(stateBefore.scope),
       normalSpent: stateBefore.normalSpent + decision.amount,
       overchargeSpent: stateBefore.overchargeSpent,
       limits,
+      ...(stateBefore.regulation ? { regulation: stateBefore.regulation } : {}),
       lastEvent: stateBefore.lastEvent,
     });
 
@@ -296,6 +516,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       ...(input.correlation ? { correlation: { ...input.correlation } } : {}),
       ...(input.lineage ? { lineage: { ...input.lineage } } : {}),
       ...(input.details ? { details: { ...input.details } } : {}),
+      ...(input.regulation ? { regulation: normalizeRegulation(input.regulation) } : {}),
     };
   }
 
@@ -303,6 +524,28 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
     evaluation: FatigueBudgetEvaluation,
     input: FatigueBudgetRecordInput = {},
   ): FatigueBudgetEvent {
+    const correlation = sanitizeCorrelationMetadata({
+      ...(evaluation.correlation ?? {}),
+      ...(input.correlation ?? {}),
+    });
+    const existing = correlation.turnId
+      ? this.history.listFatigueEvents({
+          localCompanionId: evaluation.scope.localCompanionId,
+          peerContactId: evaluation.scope.peerContactId,
+          ...(evaluation.regulation ? {} : {
+            channelId: evaluation.scope.channelId,
+            dayKey: evaluation.scope.dayKey,
+          }),
+        }).find(event => event.turnId === correlation.turnId)
+      : undefined;
+    if (existing) {
+      if (existing.decision !== evaluation.decision
+        || existing.reason !== evaluation.reason
+        || existing.amount !== evaluation.amount) {
+        throw new Error(`Fatigue spend replay mismatch for turn ${correlation.turnId}`);
+      }
+      return cloneEvent(existing);
+    }
     const currentState = this.readState({
       localCompanionId: evaluation.scope.localCompanionId,
       peerContactId: evaluation.scope.peerContactId,
@@ -313,6 +556,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
         hardLimit: evaluation.stateAfter.allowance,
         overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
+      ...(evaluation.regulation ? { regulation: evaluation.regulation } : {}),
     });
     const recordedStateAfter = createState({
       scope: cloneScope(currentState.scope),
@@ -323,11 +567,8 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
         hardLimit: evaluation.stateAfter.allowance,
         overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
+      ...(currentState.regulation ? { regulation: currentState.regulation } : {}),
       lastEvent: currentState.lastEvent,
-    });
-    const correlation = sanitizeCorrelationMetadata({
-      ...(evaluation.correlation ?? {}),
-      ...(input.correlation ?? {}),
     });
     const details = {
       ...(evaluation.details ?? {}),
@@ -362,11 +603,47 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
     this.history.recordFatigueEvent(event);
     return cloneEvent(event);
   }
+
+  recordPendingSpend(
+    pending: FatiguePendingSpendMetadata,
+    input: FatigueBudgetRecordInput = {},
+  ): FatigueBudgetEvent {
+    assertPendingSpend(pending);
+    const stateBefore = this.readState({
+      ...pending.scope,
+      limits: pending.limits,
+    });
+    const stateAfter = createState({
+      scope: cloneScope(stateBefore.scope),
+      normalSpent: stateBefore.normalSpent + (pending.decision === 'charged' ? pending.amount : 0),
+      overchargeSpent: stateBefore.overchargeSpent + (pending.decision === 'overcharge' ? pending.amount : 0),
+      limits: pending.limits,
+      lastEvent: stateBefore.lastEvent,
+    });
+    return this.recordFinalDecision({
+      scope: cloneScope(pending.scope),
+      timestampMs: pending.timestampMs,
+      dayKey: pending.scope.dayKey,
+      decision: pending.decision,
+      reason: pending.reason,
+      amount: pending.amount,
+      stateBefore,
+      stateAfter,
+      triggeringAuthor: { ...pending.triggeringAuthor },
+      peer: { ...pending.peer },
+      correlation: { ...pending.correlation },
+    }, input);
+  }
 }
 
 export function createOverchargeFatigueEvaluation(
   evaluation: FatigueBudgetEvaluation,
-  reason: Extract<FatigueBudgetReason, 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup'>,
+  reason: Extract<
+    FatigueBudgetReason,
+    | 'overcharge_recent_human_participation'
+    | 'overcharge_work_intent_wrapup'
+    | 'overcharge_explicit_peer_invitation'
+  >,
 ): FatigueBudgetEvaluation {
   const amount = evaluation.amount > 0 ? evaluation.amount : 0;
   return {
@@ -387,6 +664,9 @@ export function createOverchargeFatigueEvaluation(
         hardLimit: evaluation.stateBefore.allowance,
         overchargeLimit: evaluation.stateBefore.overchargeAllowance,
       },
+      ...(evaluation.stateBefore.regulation
+        ? { regulation: evaluation.stateBefore.regulation }
+        : {}),
       lastEvent: evaluation.stateBefore.lastEvent,
     }),
     ...(evaluation.details ? {
@@ -401,5 +681,84 @@ export function createOverchargeFatigueEvaluation(
         overchargePermitted: true,
       },
     }),
+  };
+}
+
+/**
+ * Rebase a local evaluation onto the pre-turn snapshot serialized by the
+ * shared reservation store. This is pure policy-state reconciliation: the
+ * durable store supplies counts, while the existing evaluation retains the
+ * trusted actor, scope, limits, intent, and correlation inputs.
+ */
+export function rebaseFatigueEvaluation(input: {
+  evaluation: FatigueBudgetEvaluation;
+  decision: Extract<FatigueBudgetDecision, 'charged' | 'overcharge'>;
+  reason: Extract<
+    FatigueBudgetReason,
+    | 'machine_intelligence_response'
+    | 'overcharge_recent_human_participation'
+    | 'overcharge_work_intent_wrapup'
+    | 'overcharge_explicit_peer_invitation'
+  >;
+  normalSpentBefore: number;
+  overchargeSpentBefore: number;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+}): FatigueBudgetEvaluation {
+  const evaluation = input.evaluation;
+  const limits = {
+    softLimit: evaluation.stateBefore.softLimit,
+    hardLimit: evaluation.stateBefore.allowance,
+    overchargeLimit: evaluation.stateBefore.overchargeAllowance,
+  };
+  const regulation = evaluation.stateBefore.regulation
+    ? {
+        ...evaluation.stateBefore.regulation,
+        relationshipPressure: input.relationshipPressure,
+        rootNormalSpent: input.rootNormalSpent,
+        rootOverchargeSpent: input.rootOverchargeSpent,
+        contributingEventCount: input.contributingEventCount,
+      }
+    : undefined;
+  const stateBefore = createState({
+    scope: cloneScope(evaluation.scope),
+    normalSpent: input.normalSpentBefore,
+    overchargeSpent: input.overchargeSpentBefore,
+    limits,
+    ...(regulation ? { regulation } : {}),
+    lastEvent: evaluation.stateBefore.lastEvent,
+  });
+  const stateAfter = createState({
+    scope: cloneScope(evaluation.scope),
+    normalSpent: input.normalSpentBefore
+      + (input.decision === 'charged' ? evaluation.amount : 0),
+    overchargeSpent: input.overchargeSpentBefore
+      + (input.decision === 'overcharge' ? evaluation.amount : 0),
+    limits,
+    ...(regulation ? { regulation } : {}),
+    lastEvent: evaluation.stateBefore.lastEvent,
+  });
+  return {
+    ...evaluation,
+    decision: input.decision,
+    reason: input.reason,
+    stateBefore,
+    stateAfter,
+    ...(evaluation.details
+      ? {
+          details: {
+            ...evaluation.details,
+            authoritativeReservationSnapshot: true,
+            overchargePermitted: input.decision === 'overcharge',
+          },
+        }
+      : {
+          details: {
+            authoritativeReservationSnapshot: true,
+            overchargePermitted: input.decision === 'overcharge',
+          },
+        }),
   };
 }

@@ -31,6 +31,7 @@ export const navGroups: NavGroup[] = [
     { id: 'satellites', path: '/satellites', defaultLabel: 'Satellites', icon: '\u{1F6F0}\u{FE0F}' },
     { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
     { id: 'action-pipe', path: '/action-pipe', defaultLabel: 'Action Pipe', icon: '\u{1F39B}\u{FE0F}' },
+    { id: 'autonomy', path: '/autonomy', defaultLabel: 'Autonomy', icon: '\u{1F331}' },
   ]),
   navGroup('memory', 'Memory & Identity', [
     { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },

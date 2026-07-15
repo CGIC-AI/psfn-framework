@@ -127,6 +127,7 @@ export interface SessionMessageRecordOptions {
   turnId?: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  actorKind?: import('./turn-provenance.js').SessionActorKind;
   replyToMessageId?: string;
   metadata?: string;
   roleEnvelopePreview?: SessionRoleEnvelopePreview;

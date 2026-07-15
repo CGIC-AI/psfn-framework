@@ -1,5 +1,5 @@
 // ── Companion-room implementation of the room content window port ──
-// (psfn-framework-s10rm, presence-windowed private-room delivery)
+// (bead s10rm, presence-windowed private-room delivery)
 //
 // Maps a resolved session channel id to a servable content window:
 //

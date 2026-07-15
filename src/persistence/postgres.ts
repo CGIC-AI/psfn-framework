@@ -38,6 +38,7 @@ export function assertValidPostgresSchemaName(schema: string): string {
 export interface PostgresConnectionOptions {
   applicationName?: string;
   allowExitOnIdle?: boolean;
+  connectionTimeoutMillis?: number;
   max?: number;
   /**
    * Optional companion/world schema. When provided it is strictly validated and
@@ -62,6 +63,9 @@ export function createPostgresPool(
     connectionString,
     application_name: options.applicationName ?? 'psfn-framework',
     allowExitOnIdle: options.allowExitOnIdle ?? true,
+    ...(options.connectionTimeoutMillis !== undefined
+      ? { connectionTimeoutMillis: options.connectionTimeoutMillis }
+      : {}),
     ...(options.max !== undefined ? { max: options.max } : {}),
   };
   if (options.schema !== undefined) {

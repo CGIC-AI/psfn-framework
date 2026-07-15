@@ -2611,7 +2611,13 @@ describe('SessionManager', () => {
         purpose: 'session.compaction.summary',
         originType: 'summary',
         originStage: 'session.compaction.summary',
+        icpCorrelation: expect.objectContaining({
+          rootInitiationId: '99999999-9999-4999-8999-999999999999',
+          costPurpose: 'summary',
+          costOriginStage: 'post_turn',
+        }),
       });
+      expect(context.correlation?.icpCorrelation?.requestId).toBe(context.correlation?.requestId);
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',
@@ -2639,7 +2645,26 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
     }
 
-    await runScheduledCompaction(mgr, mockLLM, { userId: 'contact-canonical-1' });
+    await runScheduledCompaction(mgr, mockLLM, {
+      userId: 'contact-canonical-1',
+      icpCorrelation: {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        rootInitiationId: '99999999-9999-4999-8999-999999999999',
+        initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        peerContactId: 'contact-nova',
+        channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+        messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+        requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+        chargeLane: 'companion_social',
+        surface: 'companion_dm',
+        costPurpose: 'conversation_turn',
+        costOriginStage: 'initiation',
+        fatigueDecision: 'not_evaluated',
+      },
+    });
 
     expect(preCompactionFlush).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(['flush', 'summary']);

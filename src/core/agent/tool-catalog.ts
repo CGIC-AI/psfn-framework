@@ -77,9 +77,19 @@ function extractStringLiterals(schema: unknown): string[] {
 
 function extractActionNames(parameters: unknown): string[] {
   if (!isRecord(parameters)) return [];
+  const actionNames: string[] = [];
   const properties = parameters.properties;
-  if (!isRecord(properties)) return [];
-  return extractStringLiterals(properties.action);
+  if (isRecord(properties)) {
+    actionNames.push(...extractStringLiterals(properties.action));
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const entries = parameters[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      actionNames.push(...extractActionNames(entry));
+    }
+  }
+  return uniqueStrings(actionNames);
 }
 
 export function extractRequiredParameterNames(parameters: unknown): string[] {
@@ -101,7 +111,14 @@ function cloneConcurrencyMeta(
 
 function resolveActionDescriptions(tool: AgentTool<any>): RuntimeToolActionDescription[] {
   const canonical = getCanonicalToolSurface(tool.name);
-  const actionNames = uniqueStrings(canonical?.actions ?? extractActionNames(tool.parameters));
+  const schemaActions = extractActionNames(tool.parameters);
+  const schemaActionSet = new Set(schemaActions);
+  const canonicalActions = canonical?.actions ?? [];
+  const actionNames = uniqueStrings(canonicalActions.length > 0
+    ? (schemaActions.length > 0
+        ? canonicalActions.filter(action => schemaActionSet.has(action))
+        : canonicalActions)
+    : schemaActions);
   return actionNames.map(action => ({
     name: action,
     requiredCapabilities: resolveToolRequiredCapabilities(tool, { action }),

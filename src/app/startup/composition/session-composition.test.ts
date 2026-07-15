@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
+import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import { composeMemoryStoreAsync, composeSessionRuntimeAsync } from './composition.js';
 
 const postgresStoreMocks = vi.hoisted(() => ({
@@ -56,6 +57,31 @@ describe('session runtime composition transcript projection wiring', () => {
     }
     dirs.length = 0;
     postgresStoreMocks.createPostgresMemoryStore.mockClear();
+    vi.mocked(createDefaultPostgresSessionAdapters).mockClear();
+  });
+
+  it('pins the transcript projection to the configured companion schema', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-schema-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await composeSessionRuntimeAsync({
+      config: {
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+        postgresSchema: 'companion_alpha',
+      } as any,
+    });
+
+    expect(createDefaultPostgresSessionAdapters).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn_test',
+      expect.objectContaining({
+        sessionsDir: resolveSessionsDir(companionDataDir),
+        schema: 'companion_alpha',
+      }),
+    );
   });
 
   it('does not create the legacy sqlite search projection in postgres composition', async () => {

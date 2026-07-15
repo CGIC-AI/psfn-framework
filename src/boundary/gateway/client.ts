@@ -135,8 +135,32 @@ import type {
   HomeAssistantCallServiceParams,
   HomeAssistantCallServiceResult,
   ImageGenerationRpcResult,
+  IcpAvailabilityPublishParams,
+  IcpAvailabilityClearParams,
+  IcpPeerAvailabilityReadParams,
+  IcpInitiationPreflightParams,
+  IcpInitiationPermitIssueParams,
+  IcpInitiationHandoffPrepareParams,
+  IcpPermitConsumeParams,
+  IcpPermitConsumeResult,
+  IcpPermitRevokeParams,
+  IcpPermitRevokeResult,
+  IcpPermitInvalidateSelfParams,
   GatewayCorrelationParams,
 } from './protocol.js';
+import type {
+  IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
+  IcpInitiationPermitIssueResult,
+  IcpOwnAvailabilityReadParams,
+  IcpOwnAvailabilityResult,
+  IcpPeerAvailabilityResult,
+} from './icp-autonomy-contract.js';
+import {
+  deriveIcpTransportMessageId,
+  type IcpAvailabilityLease,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import { GatewayErrors } from './protocol.js';
 import {
   SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES,
@@ -145,6 +169,9 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
+import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
+import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
+import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 import {
@@ -229,11 +256,33 @@ function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEve
   }
 }
 
+function icpConversationCostBreakerErrorFromRpc(
+  error: unknown,
+): IcpConversationCostBreakerError | undefined {
+  if (
+    !(error instanceof JSONRPCErrorException)
+    || error.code !== GatewayErrors.ICP_CONVERSATION_COST_BLOCKED
+  ) {
+    return undefined;
+  }
+  try {
+    const event = parseIcpConversationCostBreakerEvent(error.data);
+    return event.outcome === 'blocked'
+      ? new IcpConversationCostBreakerError({ ...event, outcome: 'blocked' })
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function buildOutboundUsageCorrelation(
   companionId: string | undefined,
   correlation: Partial<CorrelationMetadata> | undefined,
 ): GatewayCorrelationParams {
-  const declaredCompanionId = correlation?.companionId?.trim();
+  const resolvedCorrelation = correlation?.icpCorrelation
+    ? resolveCorrelationMetadata(correlation, undefined, 'background')
+    : correlation;
+  const declaredCompanionId = resolvedCorrelation?.companionId?.trim();
   if (companionId && declaredCompanionId && declaredCompanionId !== companionId) {
     throw new Error(
       `Gateway usage correlation companionId ${JSON.stringify(declaredCompanionId)} does not match `
@@ -241,6 +290,9 @@ function buildOutboundUsageCorrelation(
     );
   }
   const charge = getRunChargeSnapshot();
+  const canonicalIcpChargeLane = resolvedCorrelation?.icpCorrelation
+    ? resolvedCorrelation.chargeLane
+    : undefined;
   // #49: companion_private work (e.g. blinded introspection audits) must not
   // carry re-identifying turn/request/channel/tool linkage to the gateway. The
   // visibility flag still rides along so downstream telemetry stays filtered.
@@ -248,43 +300,46 @@ function buildOutboundUsageCorrelation(
   return {
     ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
     ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
-    ...(!companionPrivate && correlation?.turnId ? { turnId: correlation.turnId } : {}),
-    ...(!companionPrivate && correlation?.requestId ? { requestId: correlation.requestId } : {}),
-    ...(!companionPrivate && correlation?.channelId ? { channelId: correlation.channelId } : {}),
-    ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
-    ...(correlation?.callType ? { callType: correlation.callType } : {}),
-    ...(correlation?.originType ? { originType: correlation.originType } : {}),
-    ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
-    ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
-    ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
-    ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.turnId ? { turnId: resolvedCorrelation.turnId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.requestId ? { requestId: resolvedCorrelation.requestId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.channelId ? { channelId: resolvedCorrelation.channelId } : {}),
+    ...(resolvedCorrelation?.channelType ? { channelType: resolvedCorrelation.channelType } : {}),
+    ...(resolvedCorrelation?.callType ? { callType: resolvedCorrelation.callType } : {}),
+    ...(resolvedCorrelation?.originType ? { originType: resolvedCorrelation.originType } : {}),
+    ...(resolvedCorrelation?.originStage ? { originStage: resolvedCorrelation.originStage } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.toolName ? { toolName: resolvedCorrelation.toolName } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.toolCallId ? { toolCallId: resolvedCorrelation.toolCallId } : {}),
+    ...(resolvedCorrelation?.purpose ? { purpose: resolvedCorrelation.purpose } : {}),
     ...(companionPrivate ? { telemetryVisibility: 'companion_private' as const } : {}),
-    ...(correlation?.service ? { service: correlation.service } : {}),
-    ...(correlation?.process ? { process: correlation.process } : {}),
-    ...(charge?.lane ? { chargeLane: charge.lane } : (correlation?.chargeLane
-      ? { chargeLane: correlation.chargeLane }
-      : {})),
+    ...(resolvedCorrelation?.service ? { service: resolvedCorrelation.service } : {}),
+    ...(resolvedCorrelation?.process ? { process: resolvedCorrelation.process } : {}),
+    ...(canonicalIcpChargeLane
+      ? { chargeLane: canonicalIcpChargeLane }
+      : (charge?.lane ? { chargeLane: charge.lane } : (resolvedCorrelation?.chargeLane
+        ? { chargeLane: resolvedCorrelation.chargeLane }
+        : {}))),
     ...(charge?.surface
       ? { chargeSurface: charge.surface }
-      : (correlation?.chargeSurface ? { chargeSurface: correlation.chargeSurface } : {})),
+      : (resolvedCorrelation?.chargeSurface ? { chargeSurface: resolvedCorrelation.chargeSurface } : {})),
     ...(charge?.chargeEventId
       ? { chargeEventId: charge.chargeEventId }
-      : (correlation?.chargeEventId ? { chargeEventId: correlation.chargeEventId } : {})),
+      : (resolvedCorrelation?.chargeEventId ? { chargeEventId: resolvedCorrelation.chargeEventId } : {})),
     ...(charge?.lineage.runId
       ? { chargeRunId: charge.lineage.runId }
-      : (correlation?.chargeRunId ? { chargeRunId: correlation.chargeRunId } : {})),
+      : (resolvedCorrelation?.chargeRunId ? { chargeRunId: resolvedCorrelation.chargeRunId } : {})),
     ...(charge?.lineage.rootRunId
       ? { chargeRootRunId: charge.lineage.rootRunId }
-      : (correlation?.chargeRootRunId ? { chargeRootRunId: correlation.chargeRootRunId } : {})),
+      : (resolvedCorrelation?.chargeRootRunId ? { chargeRootRunId: resolvedCorrelation.chargeRootRunId } : {})),
     ...(charge?.lineage.parentRunId
       ? { chargeParentRunId: charge.lineage.parentRunId }
-      : (correlation?.chargeParentRunId ? { chargeParentRunId: correlation.chargeParentRunId } : {})),
-    ...(correlation?.shardId ? { shardId: correlation.shardId } : {}),
-    ...(correlation?.subagentId ? { subagentId: correlation.subagentId } : {}),
-    ...(correlation?.conversationId ? { conversationId: correlation.conversationId } : {}),
-    ...(correlation?.rootInitiationId ? { rootInitiationId: correlation.rootInitiationId } : {}),
-    ...(correlation?.workloadType ? { workloadType: correlation.workloadType } : {}),
-    ...(correlation?.workloadId ? { workloadId: correlation.workloadId } : {}),
+      : (resolvedCorrelation?.chargeParentRunId ? { chargeParentRunId: resolvedCorrelation.chargeParentRunId } : {})),
+    ...(resolvedCorrelation?.shardId ? { shardId: resolvedCorrelation.shardId } : {}),
+    ...(resolvedCorrelation?.subagentId ? { subagentId: resolvedCorrelation.subagentId } : {}),
+    ...(resolvedCorrelation?.conversationId ? { conversationId: resolvedCorrelation.conversationId } : {}),
+    ...(resolvedCorrelation?.rootInitiationId ? { rootInitiationId: resolvedCorrelation.rootInitiationId } : {}),
+    ...(resolvedCorrelation?.workloadType ? { workloadType: resolvedCorrelation.workloadType } : {}),
+    ...(resolvedCorrelation?.workloadId ? { workloadId: resolvedCorrelation.workloadId } : {}),
+    ...(resolvedCorrelation?.icpCorrelation ? { icpCorrelation: resolvedCorrelation.icpCorrelation } : {}),
   };
 }
 
@@ -308,7 +363,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
-  private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
+  private notificationHandlers = new Map<
+    string,
+    Array<(params: unknown) => void | Promise<void>>
+  >();
   private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
   private chunkHandlers = new Map<string, (text: string) => void>();
   private requestCounter = 0;
@@ -461,7 +519,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
-    const requestId = context.correlation?.requestId?.trim() || `req-${++this.requestCounter}`;
+    const requestId = context.correlation?.requestId?.trim()
+      || context.correlation?.icpCorrelation?.requestId.trim()
+      || `req-${++this.requestCounter}`;
     const callType = context.correlation?.callType
       ?? context.correlation?.originType
       ?? 'chat';
@@ -523,6 +583,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
+      if (icpCostBlock) {
+        callbacks?.onError?.(icpCostBlock);
+        throw icpCostBlock;
+      }
       const budgetBlock = modelBudgetBlockedEventFromError(error);
       if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       const err = error instanceof Error ? error : new Error(String(error));
@@ -576,10 +641,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
+        ...(context.accounting ? { accounting: context.accounting } : {}),
       },
         options.signal,
       );
     } catch (error) {
+      const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
+      if (icpCostBlock) throw icpCostBlock;
       const budgetBlock = modelBudgetBlockedEventFromError(error);
       if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
       throw error;
@@ -666,15 +734,50 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     channelId: string,
     content: string,
     authorName?: string,
-    replyToMessageId?: string,
+    correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
   ): Promise<CompanionMessageSendResult> {
+    const correlation = typeof correlationOrReplyToMessageId === 'object'
+      ? correlationOrReplyToMessageId
+      : undefined;
+    const replyToMessageId = typeof correlationOrReplyToMessageId === 'string'
+      ? correlationOrReplyToMessageId
+      : correlation?.messageId;
+    const messageId = correlation ? deriveIcpTransportMessageId(correlation) : undefined;
     return await this.rpcInstance.request('companion.message.send', {
       channelId,
       content,
       ...(authorName ? { authorName } : {}),
+      ...(correlation ? { correlation } : {}),
+      ...(messageId ? { messageId } : {}),
       ...(replyToMessageId ? { replyToMessageId } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
+  }
+
+  /** Permit-bound first message through the same ordinary companion lane. */
+  async companionSendInitiation(input: {
+    channelId: string;
+    content: string;
+    authorName?: string;
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' }> {
+    const messageId = deriveIcpTransportMessageId(input.correlation);
+    return await this.rpcInstance.request('companion.message.send', {
+      channelId: input.channelId,
+      content: input.content,
+      ...(input.authorName ? { authorName: input.authorName } : {}),
+      initiation: {
+        permitId: input.permitId,
+        conversationId: input.conversationId,
+        recipientCompanionId: input.recipientCompanionId,
+        correlation: input.correlation,
+      },
+      messageId,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' };
   }
 
   /** Report a failed inbound companion turn without creating a reply turn. */
@@ -685,6 +788,98 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageFailureReportResult;
+  }
+
+  // ── ICP autonomy control plane (s10mc.6.2) ──
+
+  async companionPublishAvailability(
+    params: Omit<IcpAvailabilityPublishParams, 'companionId'>,
+  ): Promise<IcpAvailabilityLease> {
+    return await this.rpcInstance.request('companion.availability.publish', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpAvailabilityLease;
+  }
+
+  async companionClearAvailability(
+    params: Omit<IcpAvailabilityClearParams, 'companionId'>,
+  ): Promise<{ cleared: boolean }> {
+    return await this.rpcInstance.request('companion.availability.clear', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as { cleared: boolean };
+  }
+
+  async companionReadPeerAvailability(
+    params: Omit<IcpPeerAvailabilityReadParams, 'companionId'>,
+  ): Promise<IcpPeerAvailabilityResult> {
+    return await this.rpcInstance.request('companion.availability.read_peer', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPeerAvailabilityResult;
+  }
+
+  async companionReadOwnAvailability(): Promise<IcpOwnAvailabilityResult> {
+    const params: IcpOwnAvailabilityReadParams = {
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    };
+    return await this.rpcInstance.request('companion.availability.read_self', params) as
+      IcpOwnAvailabilityResult;
+  }
+
+  async companionInitiationPreflight(
+    params: Omit<IcpInitiationPreflightParams, 'companionId'>,
+  ): Promise<IcpInitiationGateDecision> {
+    return await this.rpcInstance.request('companion.initiation.preflight', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationGateDecision;
+  }
+
+  async companionIssueInitiationPermit(
+    params: Omit<IcpInitiationPermitIssueParams, 'companionId'>,
+  ): Promise<IcpInitiationPermitIssueResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.issue', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationPermitIssueResult;
+  }
+
+  async companionPrepareInitiationHandoff(
+    params: Omit<IcpInitiationHandoffPrepareParams, 'companionId'>,
+  ): Promise<IcpInitiationHandoffPrepareResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.prepare_handoff', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationHandoffPrepareResult;
+  }
+
+  async companionConsumeInitiationPermit(
+    params: Omit<IcpPermitConsumeParams, 'companionId'>,
+  ): Promise<IcpPermitConsumeResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.consume', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPermitConsumeResult;
+  }
+
+  async companionRevokeInitiationPermit(
+    params: Omit<IcpPermitRevokeParams, 'companionId'>,
+  ): Promise<IcpPermitRevokeResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.revoke', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPermitRevokeResult;
+  }
+
+  /** Fence and revoke pending permits while linearizing a companion contact block. */
+  async invalidatePendingInitiationPermitsForBlock(
+    params: Omit<IcpPermitInvalidateSelfParams, 'companionId'> = { reasonCode: 'peer_blocked' },
+  ): Promise<{ revokedCount: number }> {
+    return await this.rpcInstance.request('companion.initiation.permit.invalidate_for_self', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as { revokedCount: number };
   }
 
   // ── Web fetch ──
@@ -1082,10 +1277,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   }
 
   /** Inbound peer-companion messages (gateway `companion.message` lane, W6). */
-  onCompanionMessage(handler: (message: SubstrateMessage) => void): () => void {
+  onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): () => void {
     return this.onNotification('companion.message', (params) => {
       const notification = params as CompanionMessageNotification;
-      handler(notification.message);
+      return handler(notification.message);
     });
   }
 
@@ -1145,7 +1340,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
-  private onNotification(method: string, handler: (params: unknown) => void): () => void {
+  private onNotification(
+    method: string,
+    handler: (params: unknown) => void | Promise<void>,
+  ): () => void {
     const handlers = this.notificationHandlers.get(method) ?? [];
     handlers.push(handler);
     this.notificationHandlers.set(method, handlers);
@@ -1534,7 +1732,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     if (handlers) {
       for (const handler of handlers) {
         try {
-          handler(params);
+          const lifecycle = handler(params);
+          if (lifecycle) {
+            void lifecycle.catch((err: unknown) => {
+              log.error(`Async notification handler error for ${method}`, {
+                error: String(err),
+              });
+            });
+          }
         } catch (err) {
           log.error(`Notification handler error for ${method}`, { error: String(err) });
         }

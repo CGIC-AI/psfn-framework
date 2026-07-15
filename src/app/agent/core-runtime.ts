@@ -68,6 +68,8 @@ import {
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { IcpFatigueRegulationReservationPort } from '../../core/agent/fatigue/regulation-reservation.js';
+import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
   createActiveMemoryRefreshFailureAlertHandler,
@@ -108,6 +110,11 @@ import { createPerceptionNoteDeliverer } from '../../core/agent/perception/prese
 import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
+import {
+  createAgentFacingIcpAutonomyRuntime,
+  type AgentFacingIcpAutonomyRuntime,
+} from '../../core/icp/agent-facing-autonomy.js';
+import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -169,7 +176,9 @@ export interface AgentCoreRuntime {
   sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
+  icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -192,6 +201,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionProviders,
   } = options;
   const contactTrackingGate = options.contactTrackingGate ?? null;
+  const icpAutonomyRuntime = config.multiCompanion === true && options.contactStore
+    ? createAgentFacingIcpAutonomyRuntime({
+        contactStore: options.contactStore,
+        gateway,
+        command: icpTargetChannelInitiationCommand,
+      })
+    : undefined;
   const episodicStore = options.episodicStore ?? (() => {
     throw new Error('PostgreSQL core runtime requires an injected episodic store');
   })();
@@ -217,6 +233,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
+  const fatigueRegulationReservations = config.multiCompanion === true
+    ? await PostgresIcpFatigueRegulationReservationStore.connect(postgresDatabaseUrl)
+    : null;
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
@@ -272,6 +291,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       }),
     },
     fatigueBudget: fatigueRuntime.fatigueBudget,
+    ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     emotionRuntime,
     observerEvalSidecar,
     appCache,
@@ -342,6 +362,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       getModelUsageQuery,
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
+    ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
@@ -353,7 +374,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,
     searchQueryJson: createWebSearchQueryJson(llmProvider),
-    // Explicit backend selection (bead psfn-framework-htm9.10): when OpenRouter
+    // Explicit backend selection (bead htm9.10): when OpenRouter
     // web tools are configured, the search action uses the gateway web.search
     // server-tool path instead of the local-crawler LLM planner.
     backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',
@@ -416,6 +437,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     blockList: new ContactBlockListStore(
       resolveContactBlockListPath(pathSnapshot.companionDataDir),
     ),
+    ...(config.multiCompanion === true ? { permitInvalidation: gateway } : {}),
+    ...(icpAutonomyRuntime ? { peerAvailability: icpAutonomyRuntime } : {}),
     getIntakeSinkGate: () => intakeSinkGate,
     ...(primaryTelegramUserId
       ? {
@@ -563,6 +586,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
+    ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
+    ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
   };
 }

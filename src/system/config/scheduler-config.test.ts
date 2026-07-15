@@ -10,6 +10,7 @@ import {
   SCHEDULER_SEED_FILE_NAME,
 } from './scheduler-config.js';
 import { assertPositiveInteger } from './validators.js';
+import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -85,6 +86,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       coPresenceWindowMinutes: 720,
       scanMemoryLimit: 250,
     },
+    icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   };
 }
 

@@ -5,7 +5,10 @@ import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/m
 import { GatewayClient } from './client.js';
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const TEST_COMPANION_ID = createCompanionId('companion');
@@ -309,6 +312,107 @@ describe('GatewayClient streaming', () => {
         retryOwner: 'caller',
       },
     });
+
+    void client.complete({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'summarize' }],
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    }, 'summary');
+    const completionReq = conn.sent[1] as { params: Record<string, unknown> };
+    expect(completionReq.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('preserves canonical ICP attribution on gateway model requests', () => {
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+
+    void client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      correlation: {
+        callType: 'tool',
+        purpose: 'tool.continuation',
+        icpCorrelation,
+      },
+    });
+
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request).toMatchObject({
+      method: 'llm.chat',
+      params: {
+        companionId: icpCorrelation.localCompanionId,
+        conversationId: icpCorrelation.conversationId,
+        rootInitiationId: icpCorrelation.rootInitiationId,
+        icpCorrelation,
+      },
+    });
+  });
+
+  it('does not overwrite the canonical ICP charge lane with the active behavioral run lane', async () => {
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+
+    await runWithChargeContext({
+      chargePolicy: makeTestChargePolicyConfig(),
+      lane: 'interactive',
+      runId: 'interactive-icp-turn',
+    }, async () => {
+      void client.stream({
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        correlation: {
+          callType: 'tool',
+          purpose: 'tool.continuation',
+          icpCorrelation,
+        },
+      });
+
+      const request = conn.sent[0] as { params: Record<string, unknown> };
+      expect(request.params).toMatchObject({
+        chargeLane: 'companion_social',
+        icpCorrelation,
+      });
+    });
   });
 
   it('cleans up chunk handler after stream error', async () => {
@@ -382,6 +486,99 @@ describe('GatewayClient streaming', () => {
 
     await expect(streamPromise).rejects.toThrow('budget blocked');
     expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
+  });
+
+  it('decodes a strict ICP cost block without accepting partner-identifying extensions', async () => {
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      outcome: 'blocked',
+      reason: 'hard_limit_exceeded',
+      logicalCallId: 'logical-1',
+      attempt: 1,
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      provider: 'openrouter',
+      model: 'test/model',
+      routingPurpose: 'chat',
+      projectedRequestCostUsd: 0.5,
+      replayed: false,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'cost blocked',
+        data: event,
+      },
+    });
+    await expect(streamPromise).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event,
+    });
+
+    const malformedPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked again' }],
+    });
+    const malformedRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      id: malformedRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque malformed block',
+        data: { ...event, peerContactId: 'must-not-cross' },
+      },
+    });
+    await expect(malformedPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
+
+    const mismatchedProjectionPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked with mismatched projection' }],
+    });
+    const mismatchedProjectionRequest = conn.sent[2] as { id: number };
+    conn._emit({
+      id: mismatchedProjectionRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque mismatched projection block',
+        data: {
+          ...event,
+          projection: {
+            conversationId: '55555555-5555-4555-8555-555555555555',
+            rootInitiationId: event.rootInitiationId,
+            actualCostUsd: 0.5,
+            pendingProjectedCostUsd: 0,
+            projectedTotalCostUsd: 0.5,
+            warningThresholdUsd: 0.4,
+            hardLimitUsd: 0.5,
+            remainingToHardLimitUsd: 0,
+            actualAttemptCount: 1,
+            unknownCostAttemptCount: 0,
+            pendingReservationCount: 0,
+            staleReservationCount: 0,
+            settledReservationCount: 1,
+            attributedCompanionCount: 1,
+            enforcementState: 'hard_stop',
+          },
+        },
+      },
+    });
+    await expect(mismatchedProjectionPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
   });
 
   it.each([
@@ -1096,6 +1293,34 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect((messages[0] as any).content).toBe('test notification');
   });
 
+  it('owns rejected async companion notification handlers without an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      client.onCompanionMessage(async () => {
+        throw new Error('durable dedupe lookup failed');
+      });
+
+      conn._emit({
+        method: 'companion.message',
+        params: {
+          message: {
+            id: 'companion-async-rejection',
+            channelId: 'companion-dm:comp-a:comp-b',
+            content: 'test notification',
+          },
+        },
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('accepts only coarse Garden queue-change notifications', () => {
     const queues: string[] = [];
     client.onGardenQueueChanged((queue) => queues.push(queue));
@@ -1132,6 +1357,53 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
       reportingCompanionId: 'comp-b',
       reason: 'processing_failed',
     })]);
+  });
+
+  it('stamps correlated companion retries with a deterministic transport message id', async () => {
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'companion-initiation-source',
+      requestId: 'companion-initiation-source',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+    const sendPromise = client.companionSend(
+      correlation.channelId,
+      'durable reply',
+      'Selene',
+      correlation,
+    );
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(request).toMatchObject({
+      method: 'companion.message.send',
+      params: {
+        messageId: `companion-reply-${correlation.localCompanionId}-${correlation.turnId}`,
+        correlation,
+        replyToMessageId: correlation.messageId,
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        channelId: correlation.channelId,
+        messageId: request.params.messageId,
+        deliveredTo: [correlation.peerCompanionId],
+        skippedOffline: [],
+      },
+    });
+    await expect(sendPromise).resolves.toMatchObject({ messageId: request.params.messageId });
   });
 
   it('sends structured companion failure reports through the gateway RPC', async () => {

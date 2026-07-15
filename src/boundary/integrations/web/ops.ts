@@ -1,6 +1,6 @@
 import type { WebFetchLane } from '../../gateway/protocol.js';
 
-/** Result of a gateway web search (bead psfn-framework-htm9.10). */
+/** Result of a gateway web search (bead htm9.10). */
 export interface WebSearchOperationResult {
   /** Sanitized, tagged search content ready to hand to the model. */
   content: string;

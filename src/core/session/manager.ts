@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
@@ -51,6 +51,7 @@ import {
   shouldPersistSessionChannel,
   createCompactionBoundaryStore,
 } from './manager/compaction-boundary-store.js';
+import { createIcpDeliveryProjectionStore } from './manager/icp-delivery-projection-store.js';
 import { createSessionTailReadStore } from './manager/session-tail-read-store.js';
 import {
   collectRecentEntriesWithinTokenBudget,
@@ -75,7 +76,23 @@ import {
   buildSessionMetadataWithTurn,
   buildSessionMetadataWithRoleEnvelopePreview,
   resolveSessionEntryRoleEnvelopePreview,
+  resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
+import {
+  parseSessionIcpCorrelation,
+  parseSessionIcpRecoveryResponse,
+} from './icp-correlation-metadata.js';
+import {
+  isIcpDeliveryObservationCandidate,
+  parseIcpDeliveryObservation,
+  serializeIcpDeliveryObservation,
+  type IcpDeliveryObservation,
+  type RecordedCompanionSourceMessage,
+} from './icp-delivery-recovery.js';
+import {
+  deriveIcpTransportMessageId,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -187,11 +204,13 @@ export interface AutoCompactionBetweenTurnsParams {
   channelMeta?: ChannelMeta;
   compactionPromptText?: string;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export class SessionManager {
   private store: SessionStore;
   private transcriptSearch: TranscriptSearchPort;
+  private deliveryProjectionStore: SessionStore;
   private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
@@ -204,7 +223,7 @@ export class SessionManager {
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   /**
-   * Presence-windowed room content gate (psfn-framework-s10rm). Null (the
+   * Presence-windowed room content gate (bead s10rm). Null (the
    * default) means every channel is unwindowed — byte-identical behavior.
    */
   private roomContentWindowPort: RoomContentWindowPort | null = null;
@@ -247,7 +266,8 @@ export class SessionManager {
   ) {
     this.store = store;
     this.transcriptSearch = transcriptSearch ?? store;
-    this.compactionBoundaryStore = createCompactionBoundaryStore(store);
+    this.deliveryProjectionStore = createIcpDeliveryProjectionStore(store);
+    this.compactionBoundaryStore = createCompactionBoundaryStore(this.deliveryProjectionStore);
     this.config = config;
     this.eventBus = eventBus ?? null;
     this.promptRegistry = promptRegistry ?? null;
@@ -494,6 +514,7 @@ export class SessionManager {
         sourceMessageId: options.sourceMessageId,
         replyToMessageId: options.replyToMessageId,
         role: 'user',
+        actorKind: options.actorKind ?? 'unknown',
       })
       : options.metadata;
     const previewMetadata = options.roleEnvelopePreview
@@ -638,6 +659,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'assistant',
+        actorKind: 'machine_intelligence',
       })
       : options.metadata;
     const metadata = options.roleEnvelopePreview
@@ -723,6 +745,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'system',
+        actorKind: 'system',
       })
       : options.metadata;
     const metadata = options.roleEnvelopePreview
@@ -791,7 +814,7 @@ export class SessionManager {
           tokenBudget: historyBudget.tokenBudget,
           turnBudgetCharacteristics: params.turnBudgetCharacteristics,
         }).entries;
-        // Presence-window gate (psfn-framework-s10rm): a compaction summary is
+        // Presence-window gate (bead s10rm): a compaction summary is
         // itself a served surface — never let it summarize pre-window room
         // content, or the summary would smuggle it back into context.
         const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
@@ -832,6 +855,7 @@ export class SessionManager {
           llmProvider: params.llmProvider,
           store: this.compactionBoundaryStore,
           config: this.config,
+          ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
           eventBus: this.eventBus,
           promptRegistry: this.promptRegistry,
           preCompactionExtractionHandler: this.preCompactionExtractionHandler,
@@ -875,6 +899,7 @@ export class SessionManager {
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
         role: 'tool',
+        actorKind: 'system',
       })
       : options.metadata;
     const envelopeMetadata = options.roleEnvelopePreview
@@ -931,6 +956,13 @@ export class SessionManager {
 
   recordTurn(record: TurnRecord): void {
     this.store.appendTurnRecord(record);
+  }
+
+  hasRecordedTurn(channelId: string, turnId: string): boolean {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    // Recovery markers must not age out behind an arbitrary recent-turn cap:
+    // an old lost acknowledgement can replay after any number of newer turns.
+    return this.store.findTurnRecord(resolvedChannelId, turnId)?.status === 'completed';
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
@@ -1227,6 +1259,102 @@ export class SessionManager {
     return this.store.getRecent(resolvedChannelId, limit);
   }
 
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): { content: string; correlation: IcpConversationCorrelation; recoveryResponse: AgentResponse } | null {
+    const entries = this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => entry.role === 'assistant'
+        && resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId,
+      1,
+    );
+    for (const entry of entries) {
+      if (entry.role !== 'assistant') continue;
+      const turn = resolveSessionEntryTurnContext(entry);
+      if (turn.sourceMessageId !== sourceMessageId) continue;
+      const correlation = parseSessionIcpCorrelation(entry.metadata);
+      if (!correlation) {
+        throw new Error('Recorded ICP initiation assistant entry is missing correlation metadata');
+      }
+      const recoveryResponse = parseSessionIcpRecoveryResponse(entry.metadata);
+      if (!recoveryResponse) {
+        throw new Error('Recorded ICP initiation assistant entry is missing recovery response metadata');
+      }
+      return { content: entry.content, correlation, recoveryResponse };
+    }
+    return null;
+  }
+
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): IcpDeliveryObservation | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const entries = this.store.findLatestEntries(
+      resolvedChannelId,
+      entry => entry.role === 'system'
+        && isIcpDeliveryObservationCandidate(entry.content, sourceMessageId),
+      1,
+    );
+    for (const entry of entries) {
+      return parseIcpDeliveryObservation(entry.content, {
+        channelId: resolvedChannelId,
+        sourceMessageId,
+      });
+    }
+    return null;
+  }
+
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): RecordedCompanionSourceMessage | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const entries = this.store.findLatestEntries(
+      resolvedChannelId,
+      (entry) => {
+        if (entry.role !== 'user' && entry.role !== 'system') return false;
+        if (!entry.metadata?.includes(sourceMessageId)) return false;
+        return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
+      },
+      1,
+    );
+    const entry = entries.at(0);
+    if (!entry) return null;
+    if (typeof entry.authorId !== 'string' || !entry.authorId.trim()
+      || typeof entry.authorName !== 'string' || !entry.authorName.trim()
+      || !Number.isFinite(entry.timestamp) || entry.timestamp <= 0) {
+      throw new Error('Recorded companion source envelope is malformed');
+    }
+    const correlation = parseSessionIcpCorrelation(entry.metadata);
+    if (correlation && (correlation.channelId !== resolvedChannelId
+      || deriveIcpTransportMessageId(correlation) !== sourceMessageId)) {
+      throw new Error('Recorded companion source envelope has mismatched ICP lineage');
+    }
+    return {
+      channelId: resolvedChannelId,
+      sourceMessageId,
+      content: entry.content,
+      authorId: entry.authorId.trim(),
+      authorName: entry.authorName.trim(),
+      timestampMs: entry.timestamp,
+      ...(correlation ? { correlation } : {}),
+    };
+  }
+
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
+    return this.findRecordedCompanionSourceMessage(channelId, sourceMessageId) !== null;
+  }
+
+  recordIcpDeliveryObservation(observation: IcpDeliveryObservation): void {
+    this.appendSystemNote(
+      observation.channelId,
+      serializeIcpDeliveryObservation(observation),
+      'icp_delivery',
+    );
+  }
+
   setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {
     this.preCompactionExtractionHandler = handler;
   }
@@ -1236,7 +1364,7 @@ export class SessionManager {
   }
 
   /**
-   * Wire the presence-windowed room content gate (psfn-framework-s10rm).
+   * Wire the presence-windowed room content gate (bead s10rm).
    * Composition sets this only in multi-companion mode; unset, every channel
    * serves full history exactly as before.
    */
@@ -1473,13 +1601,13 @@ export class SessionManager {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (limit !== undefined) {
-      return this.store.getRecent(resolvedChannelId, limit)
+      return this.deliveryProjectionStore.getRecent(resolvedChannelId, limit)
         .filter(entry => !isNonConversationalSessionEntry(entry));
     }
 
     const historyBudget = resolveSessionHistoryBudget(this.config);
     return collectRecentEntriesWithinTokenBudget({
-      store: this.store,
+      store: this.deliveryProjectionStore,
       channelId: resolvedChannelId,
       estimatedCount: historyBudget.estimatedCount,
       tokenBudget: historyBudget.tokenBudget,

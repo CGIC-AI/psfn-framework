@@ -25,6 +25,7 @@ function getDefaultSeedPolicy() {
     schemaVersion: 1,
     runChargeQuotaByLane: {
       interactive: 24,
+      companion_social: 12,
       background: 16,
       maintenance: 0,
       subagent: 6,
@@ -44,6 +45,7 @@ function getDefaultSeedPolicy() {
       shardLaunch: 8,
       externalModelConsult: 1,
       moaRoundBase: 1,
+      companionSocialContinuation: 1,
     },
     surfaceRationales: {
       paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -52,6 +54,7 @@ function getDefaultSeedPolicy() {
       shardLaunch: 'Launching a shard consumes worker coordination overhead.',
       externalModelConsult: 'Consulting an external model uses a paid API boundary.',
       moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+      companionSocialContinuation: 'After the soft allowance, each autonomous companion continuation spends marginal social charge.',
     },
     moa: {
       perRoundMultiplierByReferenceModelClass: {
@@ -70,6 +73,9 @@ function getDefaultSeedPolicy() {
     referenceModelClassPricingRationales: {
       cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
       premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
+    },
+    icpCostBreaker: {
+      enabled: false,
     },
     fatigue: makeTestFatiguePolicyConfig(),
   };
@@ -208,6 +214,124 @@ describe('charge policy config', () => {
         seed.fatigue.channelSettingLimits.busy_human_group.maxHardCap,
       );
       expect(seed.fatigue.overcharge.reserveResponses).toBe(2);
+      expect(seed.icpCostBreaker).toEqual({ enabled: false });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts an explicitly enabled ICP breaker with a fully reserved warning band', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-icp-cost-breaker-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+
+    try {
+      const saved = saveChargePolicyConfig(dataDir, {
+        ...getDefaultSeedPolicy(),
+        icpCostBreaker: {
+          enabled: true,
+          warningThresholdUsd: 0.42,
+          hardLimitUsd: 0.5,
+          finalCloseoutReserveUsd: 0.08,
+          pendingReservationStaleAfterMs: 900_000,
+          includedCostPurposes: {
+            conversation_turn: true,
+            tool: true,
+            summary: true,
+            extraction: true,
+            sidecar: true,
+          },
+        },
+      });
+
+      expect(saved.icpCostBreaker).toEqual({
+        enabled: true,
+        warningThresholdUsd: 0.42,
+        hardLimitUsd: 0.5,
+        finalCloseoutReserveUsd: 0.08,
+        pendingReservationStaleAfterMs: 900_000,
+        includedCostPurposes: {
+          conversation_turn: true,
+          tool: true,
+          summary: true,
+          extraction: true,
+          sidecar: true,
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing thresholds', { enabled: true }],
+    ['unknown field', { enabled: false, hardLimitUsd: 1 }],
+    ['warning reserve gap', {
+      enabled: true,
+      warningThresholdUsd: 0.4,
+      hardLimitUsd: 0.6,
+      finalCloseoutReserveUsd: 0.1,
+      pendingReservationStaleAfterMs: 900_000,
+      includedCostPurposes: {
+        conversation_turn: true,
+        tool: true,
+        summary: true,
+        extraction: true,
+        sidecar: true,
+      },
+    }],
+    ['direct turn excluded', {
+      enabled: true,
+      warningThresholdUsd: 0.4,
+      hardLimitUsd: 0.5,
+      finalCloseoutReserveUsd: 0.1,
+      pendingReservationStaleAfterMs: 900_000,
+      includedCostPurposes: {
+        conversation_turn: false,
+        tool: true,
+        summary: true,
+        extraction: true,
+        sidecar: true,
+      },
+    }],
+  ])('fails closed on malformed ICP cost-breaker policy: %s', (_label, icpCostBreaker) => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-invalid-icp-cost-breaker-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    try {
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...getDefaultSeedPolicy(),
+        icpCostBreaker,
+      })).toThrow(/Invalid charge policy/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when social fatigue charge disagrees with the canonical surface cost', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-social-cost-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'seed');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+
+    try {
+      const policy = getDefaultSeedPolicy();
+      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), policy);
+      writeJson(join(dataDir, CHARGE_POLICY_FILE_NAME), {
+        ...policy,
+        fatigue: {
+          ...policy.fatigue,
+          socialRegulation: {
+            ...policy.fatigue.socialRegulation,
+            marginalChargeUnits: 2,
+          },
+        },
+      });
+
+      expect(() => loadChargePolicyConfig(dataDir, { seedDir })).toThrow(
+        'fatigue.socialRegulation.marginalChargeUnits must equal surfaceCosts.companionSocialContinuation',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -224,6 +348,7 @@ describe('charge policy config', () => {
         ...defaultSeed,
         runChargeQuotaByLane: {
           interactive: 18,
+          companion_social: 9,
           background: 6,
           maintenance: 0,
           subagent: 4,
@@ -385,6 +510,39 @@ describe('charge policy config', () => {
           },
         },
       })).toThrow('fatigue.overcharge.reserveResponses must be <= 10');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            conversationMaturingRatio: 1,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation.conversationMaturingRatio must be > 0 and < 1');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            relationshipPressureWindowMs: 1,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation.relationshipPressureWindowMs must be >=');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            dailyMessageQuota: 8,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation contains unknown keys: dailyMessageQuota');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

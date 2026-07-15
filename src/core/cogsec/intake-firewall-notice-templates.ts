@@ -1,5 +1,5 @@
 /**
- * Intake-firewall companion soft-notice wording contract (psfn-framework-htm9.12).
+ * Intake-firewall companion soft-notice wording contract (bead htm9.12).
  *
  * WHY THIS FILE EXISTS
  * --------------------

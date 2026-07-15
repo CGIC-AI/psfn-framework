@@ -19,6 +19,7 @@
 //   taken down by a bad hot edit; the failure is always visible.
 
 import * as fs from 'node:fs';
+import { isRecord } from '../../../../shared/utils/types.js';
 import {
   isIntakeRiskLabel,
   INTAKE_RISK_LABELS,

@@ -57,6 +57,24 @@ import type {
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 import type { NotificationSenderMetadata } from './notification-sender.js';
+import type {
+  IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
+  IcpInitiationPermitIssueInput,
+  IcpInitiationPermitIssueResult,
+  IcpInitiationPreflightInput,
+  IcpOwnAvailabilityReadParams,
+  IcpOwnAvailabilityResult,
+  IcpPermitConsumeResult,
+  IcpPeerAvailabilityResult,
+} from './icp-autonomy-contract.js';
+export type { IcpPermitConsumeResult } from './icp-autonomy-contract.js';
+import type {
+  IcpAvailabilityLease,
+  IcpAvailabilityState,
+  IcpAutonomyReasonCode,
+  IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -93,6 +111,8 @@ export interface GatewayCorrelationParams {
   rootInitiationId?: string;
   workloadType?: string;
   workloadId?: string;
+  /** Validated, content-free ICP episode and cost classification. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface LLMChatParams extends GatewayCorrelationParams {
@@ -135,6 +155,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   topK?: number;
   repetitionPenalty?: number;
   frequencyPenalty?: number;
+  accounting?: LLMCallAccountingContext;
 }
 
 export interface LLMEmbedParams extends GatewayCorrelationParams {
@@ -682,6 +703,21 @@ export interface CompanionMessageSendParams {
   authorName?: string;
   /** Client-stamped companion identity; verified against the connection binding. */
   companionId?: string;
+  /** Deterministic and gateway-verified for every correlated ICP send. */
+  messageId?: string;
+  /**
+   * Optional autonomous-initiation binding. This still uses the ordinary
+   * companion.message.send lane; the gateway consumes the permit before
+   * routing and mints a stable message id for replay-safe recipient handling.
+   */
+  initiation?: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  };
+  /** Episode-bound lineage for a non-initial autonomous conversation reply. */
+  correlation?: IcpConversationCorrelation;
   /**
    * Gateway-issued inbound message id this send directly answers. For room
    * messages, the gateway may use the matching delivery receipt as a
@@ -696,6 +732,7 @@ export interface CompanionMessageSendResult {
   deliveredTo: string[];
   /** Room recipients present at the place but without a live agent connection. */
   skippedOffline: string[];
+  permitOutcome?: 'consumed' | 'replayed';
 }
 
 export type CompanionDeliveryFailureReason = 'processing_failed' | 'reply_delivery_failed';
@@ -731,6 +768,66 @@ export interface CompanionMessageNotification {
   message: SubstrateMessage;
 }
 
+// ── ICP autonomy control plane (sprint 10, s10mc.6.2) ──
+
+export interface IcpAvailabilityPublishParams {
+  state: IcpAvailabilityState;
+  expiresAtMs: number;
+  revision: number;
+  companionId?: string;
+}
+
+export interface IcpAvailabilityClearParams {
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPeerAvailabilityReadParams {
+  peerCompanionId: string;
+  companionId?: string;
+}
+
+export interface IcpInitiationHandoffPrepareParams {
+  permitId: string;
+  peerContactId: string;
+  companionId?: string;
+}
+
+export type IcpInitiationPreflightParams = IcpInitiationPreflightInput & {
+  companionId?: string;
+};
+
+export type IcpInitiationPermitIssueParams = IcpInitiationPermitIssueInput & {
+  companionId?: string;
+};
+
+export interface IcpPermitConsumeParams {
+  permitId: string;
+  conversationId: string;
+  recipientCompanionId: string;
+  channelId: string;
+  rootInitiationId: string;
+  peerContactId: string;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeParams {
+  permitId: string;
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeResult {
+  status: 'revoked';
+  revision: number;
+  reasonCode: IcpAutonomyReasonCode;
+}
+
+export interface IcpPermitInvalidateSelfParams {
+  reasonCode: 'peer_blocked';
+  companionId?: string;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -744,6 +841,16 @@ export interface GatewayMethods {
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
+  'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
+  'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
+  'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
+  'companion.availability.read_self': [IcpOwnAvailabilityReadParams, IcpOwnAvailabilityResult];
+  'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];
+  'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
+  'companion.initiation.permit.prepare_handoff': [IcpInitiationHandoffPrepareParams, IcpInitiationHandoffPrepareResult];
+  'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
+  'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
+  'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
@@ -907,4 +1014,5 @@ export const GatewayErrors = {
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
   MODEL_BUDGET_BLOCKED: -32015,
+  ICP_CONVERSATION_COST_BLOCKED: -32016,
 } as const;

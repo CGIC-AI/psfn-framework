@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-// CLI for the places→shared-world wiki publication (psfn-framework-vinz.4).
+// CLI for the places→shared-world wiki publication (bead vinz.4).
 // Generates/refreshes browsable shared-world wiki pages from places.json — one
 // site-overview page plus one page per place, scope `shared_world:<siteId>`.
 // Idempotent: re-running with an unchanged registry is a no-op. Shared-world

@@ -4,6 +4,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { deriveChildIcpConversationCostCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 export interface FocusSessionManager {
   getActiveContextSession(): string | null;
@@ -213,6 +214,11 @@ export async function executeCompleteFocusAction(
   const transcript = formatFocusTranscript(focusContext.entries);
   const evidenceText = formatFocusEvidence(focusContext.evidence);
   const requestContext = getRequestContext();
+  const focusCompletionRequestId = requestContext?.icpCorrelation
+    ? `${requestContext.icpCorrelation.requestId}:focus_complete`
+    : requestContext?.requestId
+      ? `${requestContext.requestId}:focus_complete`
+      : undefined;
   const systemPrompt = [
     'You distill investigative work into durable operator knowledge.',
     'Return plain text only (no markdown code fences).',
@@ -238,14 +244,26 @@ export async function executeCompleteFocusAction(
         messages: [{ role: 'user', content: input }],
         correlation: {
           ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-          ...(requestContext?.requestId ? { requestId: `${requestContext.requestId}:focus_complete` } : {}),
+          ...(focusCompletionRequestId ? { requestId: focusCompletionRequestId } : {}),
           ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
-          callType: 'summary',
+          callType: 'tool',
           purpose: 'focus.complete.summary',
-          originType: 'summary',
+          originType: 'tool',
           originStage: 'focus.complete.summary',
           ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
           ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+          ...(requestContext?.icpCorrelation && focusCompletionRequestId
+            ? {
+                icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                  requestContext.icpCorrelation,
+                  {
+                    requestId: focusCompletionRequestId,
+                    costPurpose: 'tool',
+                    costOriginStage: requestContext.icpCorrelation.costOriginStage,
+                  },
+                ),
+              }
+            : {}),
         },
       },
       'context',

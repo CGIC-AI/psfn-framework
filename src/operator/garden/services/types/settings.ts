@@ -73,6 +73,28 @@ export interface EffectiveChargeQuotaState {
   restartRequired: boolean;
 }
 
+export interface IcpAutonomyChargeOwnerProjection {
+  companionSocialQuota: number;
+  companionSocialContinuationCost: number;
+  fatigue: ChargePolicyConfig['fatigue'];
+  costBreaker: ChargePolicyConfig['icpCostBreaker'];
+}
+
+export interface EffectiveIcpAutonomySettingsState {
+  scheduler: {
+    ownerFile: 'scheduler.json';
+    effectiveValue: SchedulerRuntimeConfig['icpAutonomy'] | null;
+    onDiskValue: SchedulerRuntimeConfig['icpAutonomy'];
+    restartRequired: boolean;
+  };
+  chargePolicy: {
+    ownerFile: 'charge-policy.json';
+    effectiveValue: IcpAutonomyChargeOwnerProjection | null;
+    onDiskValue: IcpAutonomyChargeOwnerProjection;
+    restartRequired: boolean;
+  };
+}
+
 export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
@@ -80,6 +102,7 @@ export interface AdminSettingsData {
   voiceProviders: AdminVoiceProviderData;
   status: AdminSettingsStatus;
   effectiveChargeQuota: EffectiveChargeQuotaState;
+  effectiveIcpAutonomy: EffectiveIcpAutonomySettingsState;
   workspaceLayout?: {
     mode: 'single' | 'fleet';
     personalWorkspacePath: string | null;

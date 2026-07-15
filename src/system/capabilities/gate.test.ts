@@ -217,6 +217,7 @@ describe('capability tool gating', () => {
 
   it('resolves canonical action-aware requirements for consolidated tool domains', () => {
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'lookup', contactId: 'contact-1' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'search', query: 'peer' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('memory').tool, { action: 'timeline' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'note', contactId: 'contact-1' })).toEqual(['identity.write.runtime']);
     expect(resolveToolRequiredCapabilities(createTool('generate_image').tool, { action: 'generate' })).toEqual([]);
@@ -226,6 +227,32 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('web_fetch').tool, {})).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('settings_get').tool, {})).toEqual(['internal.read']);
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, {})).toEqual(['internal.read']);
+    expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_list_peers' })).toEqual(['internal.read']);
+    expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_publish' })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send',
+      target_kind: 'companion',
+    })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'consider',
+      target_kind: 'companion',
+    })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send',
+      target_kind: 'external',
+      delivery_channel: 'discord',
+    })).toEqual(['external.discord']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send',
+      target_kind: 'external',
+      delivery_channel: 'email',
+    })).toEqual(['external.email']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'brief',
+    })).toEqual(['external.web']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'approval_request',
+    })).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('response_control').tool, { action: 'no_reply' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
@@ -237,6 +264,50 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'search' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'write' })).toEqual(['memory.write']);
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'append' })).toEqual(['memory.write']);
+  });
+
+  it('denies apprentice companion consideration before tool execution', async () => {
+    const notify = createTool('notify');
+    const gated = gateToolWithCapabilities(
+      notify.tool,
+      () => accessForTier('apprentice'),
+    );
+
+    const denied = await gated.execute('consider-companion', {
+      action: 'consider',
+      target_kind: 'companion',
+    });
+
+    expect(notify.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain('external.companion');
+  });
+
+  it('grants companion egress only to autonomous and explicit custom tiers', () => {
+    expect(resolveTierCapabilityTokens('nursery')).not.toContain('external.companion');
+    expect(resolveTierCapabilityTokens('apprentice')).not.toContain('external.companion');
+    expect(resolveTierCapabilityTokens('autonomous')).toContain('external.companion');
+    expect(resolveTierCapabilityTokens('custom', ['external.companion']))
+      .toContain('external.companion');
+  });
+
+  it.each([
+    ['Discord send', { action: 'send', target_kind: 'external', delivery_channel: 'discord' }, 'external.discord'],
+    ['email send', { action: 'send', target_kind: 'external', delivery_channel: 'email' }, 'external.email'],
+    ['operator brief', { action: 'brief' }, 'external.web'],
+    ['approval request', { action: 'approval_request' }, 'external.web'],
+  ])('does not let external.companion authorize notify %s', async (_label, params, missingToken) => {
+    const notify = createTool('notify');
+    const gated = gateToolWithCapabilities(
+      notify.tool,
+      () => accessForTier('custom', ['external.companion']),
+    );
+
+    const denied = await gated.execute('notify-lane-escape', params);
+
+    expect(notify.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain(missingToken);
   });
 
   it('fails closed when an executable tool has no capability policy', () => {

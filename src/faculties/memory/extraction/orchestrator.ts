@@ -6,6 +6,10 @@ import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import {
+  deriveChildIcpConversationCostCorrelation,
+  type IcpConversationCorrelation,
+} from '../../../shared/contracts/icp-autonomy.js';
+import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
@@ -223,6 +227,7 @@ export interface ExtractionRunOptions {
 	  turnId?: TurnID;
 	  sourceSessionId?: string;
 	  recoveredEntries?: SessionEntry[];
+  icpCorrelation?: IcpConversationCorrelation;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
@@ -399,6 +404,18 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               channelId: options.channelId,
               callType: 'memory',
               purpose: 'memory.extraction',
+              ...(options.icpCorrelation
+                ? {
+                    icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                      options.icpCorrelation,
+                      {
+                        requestId: chunkRequestId,
+                        costPurpose: 'extraction',
+                        costOriginStage: 'post_turn',
+                      },
+                    ),
+                  }
+                : {}),
             },
           },
           'extraction',

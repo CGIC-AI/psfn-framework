@@ -1,4 +1,4 @@
-// ── Memory location tagging (S10, psfn-framework-vinz.16) ──
+// ── Memory location tagging (S10, bead vinz.16) ──
 // Tags-based location provenance for memories formed on a placed satellite turn.
 // A memory formed while a turn carried a resolved `placeId` (see
 // `SatelliteRoutingMetadata.placeId`) gains a `location:<placeId>` entry in its

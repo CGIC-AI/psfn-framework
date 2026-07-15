@@ -33,6 +33,7 @@ import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accou
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
@@ -46,14 +47,39 @@ async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T
         error.event,
       );
     }
+    if (error instanceof IcpConversationCostBreakerError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        error.event,
+      );
+    }
     throw error;
   }
+}
+
+async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
+  params: P,
+  runtime: GatewayMethodRuntime,
+): Promise<P> {
+  if (!params.icpCorrelation) return params;
+  if (!runtime.authorizeIcpConversationCorrelation) {
+    throw new JSONRPCErrorException(
+      'ICP conversation cost correlation authorization is unavailable',
+      GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+    );
+  }
+  return {
+    ...params,
+    icpCorrelation: await runtime.authorizeIcpConversationCorrelation(params.icpCorrelation),
+  };
 }
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
@@ -131,9 +157,11 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
       const modelHint = extractModelHintFromParams(params);
+      const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
         ...params,
         turnId: params.turnId,
@@ -156,6 +184,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             messages: params.messages,
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
+            ...(accounting ? { accounting } : {}),
             correlation,
           },
           params.purpose,

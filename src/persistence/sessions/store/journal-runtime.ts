@@ -459,6 +459,64 @@ export class SessionJournalRuntime {
     return messages.slice(-limit);
   }
 
+  findLatestEntries(
+    archive: SessionArchiveHandle,
+    predicate: (entry: SessionEntry) => boolean,
+    limit: number,
+  ): SessionEntry[] | null {
+    const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+      limit,
+      matches: (entry) => {
+        const message = journalToSessionEntry(entry);
+        return message !== null && predicate(message);
+      },
+    });
+    if (result.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(archive.channelId, archive, result.quarantined.length, result.matches.length);
+    }
+    const found: SessionEntry[] = [];
+    for (const match of result.matches) {
+      const normalized = this.verifyAndNormalizeEntry(match.entry, [match.previousHmac]);
+      if (!normalized.verified) return null;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message && predicate(message)) found.push(message);
+    }
+    return found;
+  }
+
+  findEntriesInRange(
+    archive: SessionArchiveHandle,
+    startId: number,
+    endId: number,
+  ): SessionEntry[] | null {
+    const limit = Math.max(0, endId - startId + 1);
+    if (limit <= 0) return [];
+    const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+      limit,
+      stopAfter: entry => entry.id < startId,
+      matches: (entry) => {
+        const message = journalToSessionEntry(entry);
+        return message !== null && message.id >= startId && message.id <= endId;
+      },
+    });
+    if (result.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        result.quarantined.length,
+        result.matches.length,
+      );
+    }
+    const found: SessionEntry[] = [];
+    for (const match of result.matches) {
+      const normalized = this.verifyAndNormalizeEntry(match.entry, [match.previousHmac]);
+      if (!normalized.verified) return null;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message && message.id >= startId && message.id <= endId) found.push(message);
+    }
+    return found.sort((left, right) => left.id - right.id);
+  }
+
   readEntriesBefore(
     archive: SessionArchiveHandle,
     beforeId: number,

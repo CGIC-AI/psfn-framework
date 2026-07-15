@@ -13,7 +13,12 @@ import type {
   SatelliteRegistryConfig,
   SatelliteTelemetryAuthContext,
 } from '../../shared/contracts/satellite-registry.js';
-import { validateSatelliteApiKeys, type ApiAuthPrincipal } from '../backplane/http/auth.js';
+import {
+  hasBearerToken,
+  hasCookieValue,
+  validateSatelliteApiKeys,
+  type ApiAuthPrincipal,
+} from '../backplane/http/auth.js';
 import {
   deriveClientCertIdentity,
   parseTrustedProxyClientCertToken,
@@ -94,6 +99,7 @@ import {
 } from './server/companion-relay-routes.js';
 import { handleCompanionTouchStimulus } from './server/companion-touch-stimulus-route.js';
 import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
+import { isRfc4122Uuid } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -104,6 +110,11 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.status',
   'external.telemetry.incident',
 ]);
+const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^/]+)\/cancel$/u;
+
+export interface IcpAutonomyOperatorPort {
+  cancelForCompanion(companionId: string): Promise<number>;
+}
 
 const telemetryIngestSchema = Type.Object({
   source: Type.String({ minLength: 1, maxLength: 128 }),
@@ -398,6 +409,8 @@ export interface ApiServerConfig {
    * `/v1/companion/*` routes fail closed with 503.
    */
   companionRelay?: CompanionRelayHttpDeps;
+  /** ADMIN_TOKEN-only lifecycle surface for cancelling outstanding ICP permits. */
+  icpAutonomyOperator?: IcpAutonomyOperatorPort;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -441,6 +454,7 @@ export class ApiServer implements ChannelAdapterPort {
   private chatCompletions: ApiChatCompletionsHandler;
   private satelliteRegistry?: SatelliteRegistryConfig;
   private companionRelay?: CompanionRelayHttpDeps;
+  private icpAutonomyOperator?: IcpAutonomyOperatorPort;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -470,6 +484,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.healthChecks = config.healthChecks ?? {};
     this.satelliteRegistry = config.satelliteRegistry;
     this.companionRelay = config.companionRelay;
+    this.icpAutonomyOperator = config.icpAutonomyOperator;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -582,6 +597,13 @@ export class ApiServer implements ChannelAdapterPort {
     const path = url.pathname;
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const companionRoute = matchCompanionRelayRoute(req.method, path);
+    const icpOperatorCancelMatch = req.method === 'POST'
+      ? ICP_OPERATOR_CANCEL_PATH.exec(path)
+      : null;
+    if (icpOperatorCancelMatch) {
+      this.handleIcpOperatorCancel(req, res, icpOperatorCancelMatch[1]);
+      return;
+    }
     const principal = resolveApiServerRequestPrincipal(req, res, {
       apiKey: this.apiKey,
       adminToken: this.adminToken,
@@ -628,6 +650,39 @@ export class ApiServer implements ChannelAdapterPort {
       }
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
+  }
+
+  private handleIcpOperatorCancel(
+    req: IncomingMessage,
+    res: ServerResponse,
+    companionId: string,
+  ): void {
+    if (!this.adminToken) {
+      sendApiError(res, 503, 'admin_auth_not_configured', 'ADMIN_TOKEN is required for ICP operator cancellation');
+      return;
+    }
+    const authenticated = hasBearerToken(req, this.adminToken)
+      || hasCookieValue(req, 'psfn_token', this.adminToken);
+    if (!authenticated) {
+      sendApiError(res, 403, 'admin_token_required', 'This endpoint requires ADMIN_TOKEN authentication');
+      return;
+    }
+    if (!isRfc4122Uuid(companionId)) {
+      sendApiError(res, 400, 'invalid_companion_id', 'companionId must be a lowercase RFC-4122 UUID');
+      return;
+    }
+    if (!this.icpAutonomyOperator) {
+      sendApiError(res, 503, 'icp_autonomy_not_configured', 'ICP autonomy lifecycle control is not configured');
+      return;
+    }
+    void this.icpAutonomyOperator.cancelForCompanion(companionId)
+      .then(revokedCount => sendJson(res, 200, { companionId, revokedCount }))
+      .catch((error) => {
+        log.error('ICP operator cancellation failed', { error: toErrorMessage(error) });
+        if (canWriteResponse(res)) {
+          sendApiError(res, 500, 'internal_error', 'ICP operator cancellation failed');
+        }
+      });
   }
 
   private handleCompanionRelayRoute(

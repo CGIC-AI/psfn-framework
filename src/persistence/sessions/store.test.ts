@@ -600,7 +600,7 @@ describe('SessionStore', () => {
     ]);
   });
 
-  it('applies logical-session tombstones to routed physical-source records after disk reload', () => {
+  it('applies logical-session tombstones to routed physical-source records after disk reload', async () => {
     const sourceChannelId = 'discord:public-room';
     const logicalSessionId = 'session:logical-after-reset';
     const redactedTurnId = createTurnId(1_700_000_000_000);
@@ -641,7 +641,7 @@ describe('SessionStore', () => {
       .toEqual([logicalSessionId, logicalSessionId]);
     expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
       .toBe(true);
-    store.redactTurn(logicalSessionId, redactedTurnId, {
+    await store.redactTurn(logicalSessionId, redactedTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
@@ -670,6 +670,7 @@ describe('SessionStore', () => {
           requestedLimits.push(limit);
           return basePort.readRecentTurnRecords(channel, limit);
         },
+        findTurnRecord: (channel, turnId) => basePort.findTurnRecord(channel, turnId),
       },
     });
 
@@ -1389,6 +1390,68 @@ describe('SessionStore', () => {
     };
     expect(index.channels[channelId].messageCount).toBe(1500);
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
+  });
+
+  it('reads a bounded entry-id range without fully loading a large channel', () => {
+    const channelId = 'api:bounded-range';
+    appendSessionMessages(store, channelId, 1_500);
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const matchingReadSpy = vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+    matchingReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 10, 12).map(entry => entry.id)).toEqual([
+      10,
+      11,
+      12,
+    ]);
+    expect(matchingReadSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('stops a bounded range scan below the requested IDs when the range contains a marker', () => {
+    const channelId = 'api:bounded-range-marker';
+    appendSessionMessages(store, channelId, 1_490);
+    store.insertExtractionMarker(channelId, 1_490);
+    appendSessionMessages(store, channelId, 9, 'Tail');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const originalRead = archivePort.readJournalMatchingEntriesBackward.bind(archivePort);
+    const visitedIds = new Set<number>();
+    vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward').mockImplementation((archive, options) => (
+      originalRead(archive, {
+        ...options,
+        matches: (entry) => {
+          visitedIds.add(entry.id);
+          return options.matches(entry);
+        },
+        stopAfter: (entry) => {
+          visitedIds.add(entry.id);
+          return options.stopAfter?.(entry) ?? false;
+        },
+      })
+    ));
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 1_490, 1_500).map(entry => entry.id)).toEqual([
+      1_490,
+      1_492,
+      1_493,
+      1_494,
+      1_495,
+      1_496,
+      1_497,
+      1_498,
+      1_499,
+      1_500,
+    ]);
+    expect(Math.min(...visitedIds)).toBe(1_489);
+    expect(visitedIds.size).toBeLessThanOrEqual(12);
+    expect(fullReadSpy).not.toHaveBeenCalled();
   });
 
   it('reads entries before a cursor without loading the complete journal', () => {

@@ -106,7 +106,8 @@ export type AdminAuditActionType =
   | 'settings_change'
   | 'confirmation'
   | 'charge_decision'
-  | 'gateway_policy';
+  | 'gateway_policy'
+  | 'autonomy_control';
 export type AdminAuditDecision = 'allowed' | 'denied' | 'needs_approval';
 export type AdminAuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
 export type AdminAuditActor = 'operator' | 'companion';

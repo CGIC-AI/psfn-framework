@@ -686,7 +686,7 @@ export async function fetchWithValidatedRedirectChain(
   }
 }
 
-// ── Cognition intake firewall wiring (bead psfn-framework-htm9.2) ──
+// ── Cognition intake firewall wiring (bead htm9.2) ──
 // Web content is screened AFTER sanitizeWebContent (regex strip stays as a
 // first pass) and BEFORE returning to the agent. Shadow mode records the
 // envelope decision in the gateway audit journal without altering content;
@@ -741,7 +741,7 @@ async function screenWebContent(
   };
 }
 
-// ── Web backend selection (bead psfn-framework-htm9.10) ──
+// ── Web backend selection (bead htm9.10) ──
 // Explicit config selects the backend (providers.json openrouter.metadata.webTools);
 // there is no silent fallback. Absent config preserves the self-hosted direct/
 // crawler path so existing deployments and tests are unchanged.
@@ -1016,7 +1016,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     approvalScope: (p: WebRequestBinaryParams) => `${describeLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
   },
   {
-    // Web search via OpenRouter's web_search server tool (bead psfn-framework-htm9.10).
+    // Web search via OpenRouter's web_search server tool (bead htm9.10).
     // Only available when the OpenRouter web backend is explicitly configured;
     // self-hosted deployments keep discovery in the agent-side search planner
     // (no silent fallback here — this method fails closed).

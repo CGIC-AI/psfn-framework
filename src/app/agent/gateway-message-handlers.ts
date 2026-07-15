@@ -1,4 +1,5 @@
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
@@ -41,6 +42,10 @@ import {
   type RecordedCompanionSourceMessage,
 } from '../../core/session/icp-delivery-recovery.js';
 import { assertCompanionRecoveryLineage } from './icp-recovery-lineage.js';
+import {
+  emitTurnPerformance,
+  monotonicEpochNowMs,
+} from '../../shared/telemetry/turn-performance.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -55,6 +60,7 @@ const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
 interface QueuedDiscordMessage {
   message: SubstrateMessage;
   dedupeKey: string | null;
+  enqueuedMonotonicAtMs: number;
   retryDelivery?: DiscordDeliveryCheckpoint;
 }
 
@@ -226,6 +232,7 @@ export interface GatewayMessageLogger {
 }
 
 export interface GatewayMessageHandlersDeps {
+  eventBus: EventBus;
   gateway: GatewayMessageGateway;
   agentLoop: GatewayMessageAgentLoop;
   shardManager: GatewayMessageShardManager;
@@ -246,6 +253,8 @@ export interface GatewayMessageHandlersDeps {
    * Identity is always the gateway-verified companionId; this is cosmetic.
    */
   companionAuthorName?: string;
+  /** Deterministic clock seam for queue-wait contract tests. */
+  nowMonotonicMs?: () => number;
 }
 
 export interface RegisteredGatewayMessageHandlers {
@@ -267,7 +276,10 @@ export function registerGatewayMessageHandlers(
     observedGroupMemoryScheduler,
     outboundReplyGuard,
     companionAuthorName,
+    eventBus,
   } = deps;
+  const nowMonotonicMs = deps.nowMonotonicMs ?? monotonicEpochNowMs;
+  const companionId = resolveCompanionIdFromConfig(config);
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
   const recentHandleResponses = new Map<string, RecentHandleMessageResult>();
@@ -372,6 +384,24 @@ export function registerGatewayMessageHandlers(
         const entries = takeNextDiscordBundle();
         if (entries.length === 0) break;
         const message = bundleDiscordMessages(entries);
+        const dequeuedMonotonicAtMs = nowMonotonicMs();
+        for (const entry of entries) {
+          void emitTurnPerformance(eventBus, {
+            traceId: entry.message.id,
+            turnId: entry.message.id,
+            requestId: entry.message.id,
+            companionId,
+            channelId: entry.message.channelId,
+            channelType: entry.message.channelType,
+            stage: 'channel_queue_wait',
+            monotonicAtMs: dequeuedMonotonicAtMs,
+            durationMs: Math.max(0, dequeuedMonotonicAtMs - entry.enqueuedMonotonicAtMs),
+            queueDepth: discordPromptQueue.length,
+          }).catch(error => log.warn('Discord queue performance telemetry emit failed', {
+            messageId: entry.message.id,
+            error: toErrorMessage(error),
+          }));
+        }
         if (entries.length > 1) {
           const messageIds = entries.map((entry) => entry.message.id);
           log.info('Bundling discord messages that arrived during an in-flight turn', {
@@ -761,7 +791,26 @@ export function registerGatewayMessageHandlers(
     }
 
     trackSessionActivity(message);
-    discordPromptQueue.push({ message, dedupeKey, ...(retryDelivery ? { retryDelivery } : {}) });
+    const enqueuedMonotonicAtMs = nowMonotonicMs();
+    void emitTurnPerformance(eventBus, {
+      traceId: message.id,
+      turnId: message.id,
+      requestId: message.id,
+      companionId,
+      channelId: message.channelId,
+      channelType: message.channelType,
+      stage: 'transport_received',
+      monotonicAtMs: enqueuedMonotonicAtMs,
+    }).catch(error => log.warn('Discord transport performance telemetry emit failed', {
+      messageId: message.id,
+      error: toErrorMessage(error),
+    }));
+    discordPromptQueue.push({
+      message,
+      dedupeKey,
+      enqueuedMonotonicAtMs,
+      ...(retryDelivery ? { retryDelivery } : {}),
+    });
     // The pump owns reply delivery, error reporting, and dedupe bookkeeping
     // for everything queued. Notification receipt must not await backend turn
     // work such as memory retrieval or model generation.

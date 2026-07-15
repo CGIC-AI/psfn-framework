@@ -926,9 +926,23 @@ export interface LLMUsageDetails {
   raw?: Record<string, unknown>;
 }
 
+export type LLMStreamOutputKind = 'text' | 'thinking' | 'tool';
+
+/**
+ * Content-free observation captured when the provider stream yields its first
+ * substantive output. A terminal completion without a streamed text,
+ * thinking, or tool event does not satisfy this contract.
+ */
+export interface LLMStreamFirstOutputObservation {
+  kind: LLMStreamOutputKind;
+  monotonicAtMs: number;
+  timestampMs: number;
+}
+
 export interface StreamCallbacks {
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
+  onFirstOutput?: (observation: LLMStreamFirstOutputObservation) => void;
   onDone?: (response: LLMResponse) => void;
   onError?: (error: Error) => void;
 }

@@ -86,6 +86,7 @@ import type {
 } from '../../shared/telemetry/model-usage.js';
 import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
+import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
 import {
   type CircuitBreakerTransition,
   SlidingWindowCircuitBreaker,
@@ -1037,8 +1038,15 @@ export class LLMClient {
               promptCaching?.engaged === true,
             );
             let attemptFirstTokenAtMs: number | undefined;
-            const markFirstToken = (): void => {
-              attemptFirstTokenAtMs ??= Date.now();
+            const markFirstOutput = (kind: 'text' | 'thinking' | 'tool'): void => {
+              if (attemptFirstTokenAtMs !== undefined) return;
+              const timestampMs = Date.now();
+              attemptFirstTokenAtMs = timestampMs;
+              callbacks?.onFirstOutput?.({
+                kind,
+                monotonicAtMs: monotonicEpochNowMs(),
+                timestampMs,
+              });
             };
             const eventStream = streamSimple(
               model,
@@ -1066,7 +1074,7 @@ export class LLMClient {
               for await (const event of eventStream) {
                 switch (event.type) {
                   case 'text_delta':
-                    markFirstToken();
+                    if (event.delta.length > 0) markFirstOutput('text');
                     sawTextDelta = true;
                     content += event.delta;
                     assertNoProviderResponsePrefixArtifact(content, candidateTarget);
@@ -1084,21 +1092,22 @@ export class LLMClient {
                     break;
 
                   case 'thinking_delta':
-                    markFirstToken();
+                    if (event.delta.length > 0) markFirstOutput('thinking');
                     emittedData = true;
                     reasoning += event.delta;
                     break;
 
                   case 'toolcall_delta': {
                     const fragment = (event as { delta?: unknown }).delta;
-                    if (typeof fragment === 'string') {
+                    if (typeof fragment === 'string' && fragment.length > 0) {
+                      markFirstOutput('tool');
                       toolArgumentFragmentBytes += fragment.length;
                     }
                     break;
                   }
 
                   case 'toolcall_end':
-                    markFirstToken();
+                    markFirstOutput('tool');
                     emittedData = true;
                     toolCalls.push({
                       id: event.toolCall.id,
@@ -1109,7 +1118,6 @@ export class LLMClient {
                     break;
 
                   case 'done': {
-                    markFirstToken();
                     providerCompleted = true;
                     rawUsageEvidence = event.message.usage;
                     const contentBlocks = event.message.content as unknown[];

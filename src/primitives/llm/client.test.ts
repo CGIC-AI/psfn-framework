@@ -854,6 +854,7 @@ describe('LLMClient provider observability', () => {
 
   it('attaches provider observability and reasoning to streaming responses', async () => {
     const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
     mocks.streamSimple.mockImplementation(async function* () {
       yield { type: 'thinking_delta', delta: 'trace' };
       yield { type: 'text_delta', delta: 'hello' };
@@ -871,7 +872,7 @@ describe('LLMClient provider observability', () => {
     const response = await client.stream({
       systemPrompt: 'System prompt',
       messages: [{ role: 'user', content: 'Hi' }],
-    });
+    }, { onFirstOutput });
 
     expect(response.reasoning).toBe('trace');
     expect(response.providerObservability).toMatchObject({
@@ -886,6 +887,36 @@ describe('LLMClient provider observability', () => {
         { role: 'user', source: 'message', content: 'Hi' },
       ],
     });
+    expect(onFirstOutput).toHaveBeenCalledTimes(1);
+    expect(onFirstOutput).toHaveBeenCalledWith({
+      kind: 'thinking',
+      monotonicAtMs: expect.any(Number),
+      timestampMs: expect.any(Number),
+    });
+  });
+
+  it('does not fabricate first output from a terminal-only completion event', async () => {
+    const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 7 },
+          content: [{ type: 'text', text: 'terminal content' }],
+        },
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Hi' }],
+    }, { onFirstOutput });
+
+    expect(response.content).toBe('terminal content');
+    expect(onFirstOutput).not.toHaveBeenCalled();
   });
 
   it('attaches provider observability and reasoning to completion responses', async () => {
@@ -1041,6 +1072,7 @@ describe('LLMClient provider observability', () => {
 
   it('prefers final done-message tool call arguments over streamed toolcall_end payloads', async () => {
     const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
     mocks.streamSimple.mockImplementation(async function* () {
       yield {
         type: 'toolcall_end',
@@ -1077,7 +1109,7 @@ describe('LLMClient provider observability', () => {
     const response = await client.stream({
       systemPrompt: 'System prompt',
       messages: [{ role: 'user', content: 'Store the secret' }],
-    });
+    }, { onFirstOutput });
 
     expect(response.toolCalls).toEqual([
       {
@@ -1090,6 +1122,11 @@ describe('LLMClient provider observability', () => {
         },
       },
     ]);
+    expect(onFirstOutput).toHaveBeenCalledWith({
+      kind: 'tool',
+      monotonicAtMs: expect.any(Number),
+      timestampMs: expect.any(Number),
+    });
   });
 
   it('drops duplicate streamed tool calls when the final done message contains only one tool call', async () => {

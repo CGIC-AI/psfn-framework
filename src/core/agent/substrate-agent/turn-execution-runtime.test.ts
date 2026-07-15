@@ -3457,6 +3457,20 @@ describe('handleMessageForTurn compaction scheduling', () => {
       awaitPostTurnDrain,
       resolveAuthorContext,
     });
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+      const timestampMs = Date.now();
+      await eventBus.emit('agent.provider.first_output', {
+        requestId: 'msg-post-turn-drain-wait',
+        channelId: 'ch1',
+        kind: 'text',
+        monotonicAtMs: timestampMs,
+        timestampMs,
+        provider: 'test',
+        model: 'test-model',
+      });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
+    });
 
     const responsePromise = handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'));
     await flushAsyncWork();
@@ -3493,7 +3507,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
       expect.objectContaining({ stage: 'context_assembly', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'prompt_assembly', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'provider_request', model: 'test-model', provider: 'test' }),
-      expect.objectContaining({ stage: 'provider_first_token', durationMs: expect.any(Number) }),
+      expect.objectContaining({
+        stage: 'provider_first_token',
+        providerOutputKind: 'text',
+        durationMs: expect.any(Number),
+      }),
       expect.objectContaining({ stage: 'turn_complete', toolUse: false, cacheState: 'miss' }),
     ]));
   });

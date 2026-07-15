@@ -107,6 +107,7 @@ import type {
   CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
+  TurnPerformanceIngestResult,
   VoiceHandleMessageResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
@@ -185,6 +186,10 @@ import {
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
 import { parseGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
+import {
+  parseTurnPerformanceEvent,
+  type TurnPerformanceEvent,
+} from '../../shared/telemetry/turn-performance.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -372,6 +377,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   >();
   private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
   private chunkHandlers = new Map<string, (text: string) => void>();
+  private firstOutputHandlers = new Map<
+    string,
+    NonNullable<StreamCallbacks['onFirstOutput']>
+  >();
   private requestCounter = 0;
   private reverseMethodsRegistered = false;
   private handleMessageHandler: ((message: SubstrateMessage) => Promise<AgentResponse>) | null = null;
@@ -379,6 +388,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
+  private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
@@ -455,6 +465,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         const method = msg.method as string;
         if (method === 'llm.chunk') {
           this.handleChunkNotification(msg.params);
+          return;
+        }
+        if (method === 'llm.first_output') {
+          this.handleFirstOutputNotification(msg.params);
           return;
         }
         // Other notifications (discord.message) use our handler system
@@ -548,6 +562,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     if (callbacks?.onText) {
       this.chunkHandlers.set(requestId, callbacks.onText);
     }
+    if (callbacks?.onFirstOutput) {
+      this.firstOutputHandlers.set(requestId, callbacks.onFirstOutput);
+    }
 
     try {
       const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
@@ -562,7 +579,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
         ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
-        stream: !!callbacks?.onText,
+        stream: Boolean(callbacks?.onText || callbacks?.onFirstOutput),
         ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
         ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
         ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
@@ -618,6 +635,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw err;
     } finally {
       this.chunkHandlers.delete(requestId);
+      this.firstOutputHandlers.delete(requestId);
     }
   }
 
@@ -1469,6 +1487,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.registerReverseMethods();
   }
 
+  onTurnPerformance(handler: (event: TurnPerformanceEvent) => Promise<void>): void {
+    this.turnPerformanceHandler = handler;
+    this.registerReverseMethods();
+  }
+
   notifyApiStreamDelta(requestId: string, text: string): void {
     this.conn.send({
       jsonrpc: '2.0',
@@ -1506,6 +1529,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       handleApiChatCancel: (params) => this.handleApiChatCancel(params),
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
+      handleTurnPerformance: (params) => this.handleTurnPerformance(params),
     });
   }
 
@@ -1557,6 +1581,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw new Error('No api.health handler registered');
     }
     return await this.apiHealthHandler();
+  }
+
+  private async handleTurnPerformance(params: unknown): Promise<TurnPerformanceIngestResult> {
+    if (!isRecord(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'event')) {
+      throw new Error('telemetry.turn.performance requires exactly params.event');
+    }
+    if (!this.turnPerformanceHandler) {
+      throw new Error('No telemetry.turn.performance handler registered');
+    }
+    const event = parseTurnPerformanceEvent(params.event);
+    await this.turnPerformanceHandler(event);
+    return { accepted: true };
   }
 
   private handleVoiceStreamStart(params: unknown): VoiceStreamAckResult {
@@ -1781,6 +1817,33 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       return;
     }
 
+  }
+
+  private handleFirstOutputNotification(params: unknown): void {
+    if (!isRecord(params)) {
+      log.warn('Ignoring malformed llm.first_output notification');
+      return;
+    }
+    const requestId = typeof params.requestId === 'string' ? params.requestId : '';
+    const kind = params.kind;
+    const monotonicAtMs = params.monotonicAtMs;
+    const timestampMs = params.timestampMs;
+    if (!requestId
+      || requestId !== requestId.trim()
+      || (kind !== 'text' && kind !== 'thinking' && kind !== 'tool')
+      || typeof monotonicAtMs !== 'number'
+      || !Number.isFinite(monotonicAtMs)
+      || monotonicAtMs < 0
+      || typeof timestampMs !== 'number'
+      || !Number.isFinite(timestampMs)
+      || timestampMs < 0) {
+      log.warn('Ignoring malformed llm.first_output notification', { requestId });
+      return;
+    }
+    const handler = this.firstOutputHandlers.get(requestId);
+    if (!handler) return;
+    this.firstOutputHandlers.delete(requestId);
+    handler({ kind, monotonicAtMs, timestampMs });
   }
 
   private handleNotification(method: string, params: unknown): void {

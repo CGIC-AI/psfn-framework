@@ -299,6 +299,40 @@ describe('GatewayServer', () => {
       });
     });
 
+    it('forwards gateway timing stages through the typed agent RPC', async () => {
+      const server = new GatewayServer(createMinimalOptions());
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
+      mockedCreateSocketServer.mockImplementation((_path, cb) => {
+        onConnectionCb = cb;
+        return { close: vi.fn(), listen: vi.fn() } as any;
+      });
+      server.start();
+      const mockConn = createMockConnection();
+      onConnectionCb!(mockConn.conn);
+
+      const forwarding = server.requestAgentTurnPerformance({
+        schemaVersion: 1,
+        traceId: 'voice-gateway-1',
+        stage: 'speech_end',
+        monotonicAtMs: 1_000,
+        timestampMs: 1_000,
+        channelId: 'voice-1',
+        channelType: 'discord-voice',
+      });
+      await vi.waitFor(() => {
+        expect(mockConn.sent.some((frame: any) => frame.method === 'telemetry.turn.performance')).toBe(true);
+      });
+      const request = mockConn.sent.find(
+        (frame: any) => frame.method === 'telemetry.turn.performance',
+      ) as any;
+      expect(request.params.event).toMatchObject({
+        traceId: 'voice-gateway-1',
+        stage: 'speech_end',
+      });
+      mockConn._emit({ jsonrpc: '2.0', id: request.id, result: { accepted: true } });
+      await expect(forwarding).resolves.toBeUndefined();
+    });
+
     it('times out when agent does not respond', async () => {
       const options = createMinimalOptions();
       const server = new GatewayServer(options);

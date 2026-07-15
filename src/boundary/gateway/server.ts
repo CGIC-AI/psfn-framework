@@ -98,6 +98,7 @@ import {
 } from '../../shared/routing/companion-id.js';
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
 import { materializeGatewayAttachments } from './attachment-materialization.js';
+import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -1904,6 +1905,64 @@ export class GatewayServer {
       ),
     ]);
     return result as T;
+  }
+
+  /**
+   * Forward a gateway-process timing observation to the owning agent process,
+   * where the canonical Garden tracker lives. Multi-companion routing requires
+   * an explicit event companionId and never falls back to another agent.
+   */
+  async requestAgentTurnPerformance(
+    event: TurnPerformanceEvent,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<void> {
+    let client: JSONRPCServerAndClient;
+    if (this.multiCompanion.enabled) {
+      if (!event.companionId) {
+        throw new Error('Multi-companion turn performance forwarding requires event.companionId');
+      }
+      const companionId = createCompanionId(event.companionId, 'Turn performance companionId');
+      this.refreshConnectionHealth();
+      const conn = this.companionConnections.get(companionId);
+      const status = conn ? this.connectionStatuses.get(conn) : undefined;
+      if (!conn
+        || !status
+        || status.role !== 'agent'
+        || status.state !== 'ready'
+        || status.health !== 'healthy') {
+        throw new Error(`No ready agent connection for turn performance companion "${companionId}"`);
+      }
+      const routedClient = this.rpcClients.get(conn);
+      if (!routedClient) {
+        throw new Error(`No RPC client for turn performance companion "${companionId}"`);
+      }
+      client = routedClient;
+    } else {
+      client = this.resolveReadyRpcClient();
+    }
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error('Turn performance forwarding timed out')),
+        timeoutMs,
+      );
+      timeoutHandle.unref();
+    });
+    let result: unknown;
+    try {
+      result = await Promise.race([
+        client.request('telemetry.turn.performance', { event }),
+        timeout,
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+    if (!isRecord(result)
+      || result.accepted !== true
+      || Object.keys(result).some(key => key !== 'accepted')) {
+      throw new Error('Agent rejected turn performance telemetry');
+    }
   }
 
   async requestAgentVoiceStream(

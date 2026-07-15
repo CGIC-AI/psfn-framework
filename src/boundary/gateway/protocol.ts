@@ -8,6 +8,7 @@ import type {
   ContextMessage,
   LLMProviderObservability,
   LLMCallAccountingContext,
+  LLMStreamFirstOutputObservation,
   LLMSystemPromptCacheBoundaries,
   LLMUsageDetails,
   ModelThinkingEffort,
@@ -81,6 +82,7 @@ import type {
   IcpAutonomyReasonCode,
   IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
+import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -709,6 +711,18 @@ export interface LLMChunkNotification {
   text: string;
 }
 
+export interface LLMFirstOutputNotification extends LLMStreamFirstOutputObservation {
+  requestId: string;
+}
+
+export interface TurnPerformanceIngestParams {
+  event: TurnPerformanceEvent;
+}
+
+export interface TurnPerformanceIngestResult {
+  accepted: true;
+}
+
 export interface DiscordMessageNotification {
   message: SubstrateMessage;
 }
@@ -919,6 +933,7 @@ export interface GatewayMethods {
 
 export interface GatewayNotifications {
   'llm.chunk': LLMChunkNotification;
+  'llm.first_output': LLMFirstOutputNotification;
   'discord.message': DiscordMessageNotification;
   'companion.message': CompanionMessageNotification;
   'companion.message.delivery_failure': CompanionMessageDeliveryFailureNotification;
@@ -1013,6 +1028,7 @@ export interface AgentMethods {
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
   'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];
   'api.health': [Record<string, never>, ApiHealthRpcResult];
+  'telemetry.turn.performance': [TurnPerformanceIngestParams, TurnPerformanceIngestResult];
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──

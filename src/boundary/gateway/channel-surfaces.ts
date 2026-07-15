@@ -127,6 +127,7 @@ export async function loadGatewayChannelSurfaces(
         allowedBotUserIds: account.allowedBotUserIds,
         account: {
           accountId: account.accountId,
+          companionId: account.companionId,
           token: account.token,
           // Live sibling lookup through the registry: every other companion
           // account's logged-in bot user id counts as a sibling companion bot.

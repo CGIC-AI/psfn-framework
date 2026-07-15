@@ -116,7 +116,7 @@ interface IdentityClaimHeaders {
 interface ActiveRequestState {
   channelId: string;
   /** Direct model-room completions abort via their own controller instead of the agent loop. */
-  abort?: () => void;
+  abort?: () => boolean;
 }
 
 interface ObservedTurnCompletion {
@@ -219,34 +219,61 @@ export class AgentApiBackend {
   ): Promise<ApiChatCompletionCancelRpcResult> {
     const active = this.activeRequests.get(params.requestId);
     if (!active) {
+      await this.emitCancellationOutcome(params.requestId, undefined, 'failed');
       return { cancelled: false };
     }
-    if (active.abort) {
-      active.abort();
-      this.eventBus.emit('api.turn.abort', {
-        channelId: active.channelId,
-        reason: 'client_disconnected',
-      }).catch(() => undefined);
-      this.emitCancellationAcknowledgement(params.requestId, active.channelId);
-      return { cancelled: true };
-    }
-    this.abortActiveTurn(active.channelId, 'client_disconnected');
-    this.emitCancellationAcknowledgement(params.requestId, active.channelId);
-    return { cancelled: true };
+    const cancelled = await this.cancelActiveRequest(
+      params.requestId,
+      active,
+      'client_disconnected',
+    );
+    return { cancelled };
   }
 
-  private emitCancellationAcknowledgement(requestId: string, channelId: string): void {
-    void emitTurnPerformance(this.eventBus, {
+  private async cancelActiveRequest(
+    requestId: string,
+    active: ActiveRequestState,
+    reason: 'timeout' | 'client_disconnected',
+  ): Promise<boolean> {
+    let cancelled = false;
+    try {
+      cancelled = active.abort
+        ? active.abort()
+        : this.abortActiveTurn(active.channelId);
+    } catch (error) {
+      log.error('API turn cancellation failed', {
+        requestId,
+        channelId: active.channelId,
+        error: toErrorMessage(error),
+      });
+    }
+    if (cancelled) {
+      await this.eventBus.emit('api.turn.abort', {
+        channelId: active.channelId,
+        reason,
+      });
+    }
+    await this.emitCancellationOutcome(
+      requestId,
+      active.channelId,
+      cancelled ? 'acknowledged' : 'failed',
+    );
+    return cancelled;
+  }
+
+  private async emitCancellationOutcome(
+    requestId: string,
+    channelId: string | undefined,
+    cancellationOutcome: 'acknowledged' | 'failed',
+  ): Promise<void> {
+    await emitTurnPerformance(this.eventBus, {
       traceId: requestId,
       requestId,
-      channelId,
+      ...(channelId ? { channelId } : {}),
       channelType: 'api',
       stage: 'cancellation_ack',
-      cancellationOutcome: 'acknowledged',
-    }).catch(error => log.debug('API cancellation performance telemetry emit failed', {
-      requestId,
-      error: toErrorMessage(error),
-    }));
+      cancellationOutcome,
+    });
   }
 
   async handleChatCompletion(
@@ -358,7 +385,15 @@ export class AgentApiBackend {
       ? null
       : new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
-          this.abortActiveTurn(pendingTurn.value.channelId, 'timeout');
+          void this.cancelActiveRequest(
+            params.requestId,
+            { channelId: pendingTurn.value.channelId },
+            'timeout',
+          ).catch(error => log.error('API timeout cancellation reporting failed', {
+            requestId: params.requestId,
+            channelId: pendingTurn.value.channelId,
+            error: toErrorMessage(error),
+          }));
           reject(new Error('api_chat_completion_timeout'));
         }, timeoutMs);
         timeoutHandle.unref();
@@ -482,7 +517,25 @@ export class AgentApiBackend {
     // cancelChatCompletion can find them, and pass the per-request AbortSignal
     // into the provider so cancellation can stop provider work.
     const abortController = new AbortController();
-    const onExternalAbort = () => abortController.abort();
+    const activeRequest: ActiveRequestState = {
+      channelId,
+      abort: () => {
+        if (abortController.signal.aborted) return false;
+        abortController.abort();
+        return true;
+      },
+    };
+    const onExternalAbort = () => {
+      void this.cancelActiveRequest(
+        params.requestId,
+        activeRequest,
+        'client_disconnected',
+      ).catch(error => log.error('Direct API cancellation reporting failed', {
+        requestId: params.requestId,
+        channelId,
+        error: toErrorMessage(error),
+      }));
+    };
     if (params.signal) {
       if (params.signal.aborted) {
         abortController.abort();
@@ -490,10 +543,7 @@ export class AgentApiBackend {
         params.signal.addEventListener('abort', onExternalAbort, { once: true });
       }
     }
-    this.activeRequests.set(params.requestId, {
-      channelId,
-      abort: () => abortController.abort(),
-    });
+    this.activeRequests.set(params.requestId, activeRequest);
     const abortPromise = new Promise<never>((_, reject) => {
       const rejectCancelled = () => reject(new Error('api_chat_completion_cancelled'));
       if (abortController.signal.aborted) {
@@ -517,6 +567,15 @@ export class AgentApiBackend {
           new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
               reject(new Error('api_chat_completion_timeout'));
+              void this.cancelActiveRequest(
+                params.requestId,
+                activeRequest,
+                'timeout',
+              ).catch(error => log.error('Direct API timeout cancellation reporting failed', {
+                requestId: params.requestId,
+                channelId,
+                error: toErrorMessage(error),
+              }));
             }, timeoutMs);
             timeoutHandle.unref();
           }),
@@ -704,15 +763,14 @@ export class AgentApiBackend {
     };
   }
 
-  private abortActiveTurn(channelId: string, reason: 'timeout' | 'client_disconnected'): void {
+  private abortActiveTurn(channelId: string): boolean {
     const maybeAbortable = this.agentLoop as unknown as { abort?: () => void };
-    if (typeof maybeAbortable.abort !== 'function') return;
-    try {
-      maybeAbortable.abort();
-      this.eventBus.emit('api.turn.abort', { channelId, reason }).catch(() => undefined);
-    } catch {
-      // Best-effort abort only.
+    if (typeof maybeAbortable.abort !== 'function') {
+      log.warn('API turn cancellation requested but agent loop has no abort capability', { channelId });
+      return false;
     }
+    maybeAbortable.abort();
+    return true;
   }
 
   private deriveChannelId(headers: ApiRpcHeaders, principal: ApiAuthPrincipal): string {

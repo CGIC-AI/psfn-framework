@@ -364,7 +364,7 @@
                 {formatOptionalDuration(llmTtftPercentiles.p99Ms)}.
               {/if}
               {#if ttfaPercentiles}
-                Voice TTFA p50/p95/p99:
+                Voice TTFA playback proxy p50/p95/p99:
                 {formatOptionalDuration(ttfaPercentiles.p50Ms)} /
                 {formatOptionalDuration(ttfaPercentiles.p95Ms)} /
                 {formatOptionalDuration(ttfaPercentiles.p99Ms)}.

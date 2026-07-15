@@ -2419,7 +2419,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('emits stage telemetry for trust, memory, context, prompt, first-token, and end', async () => {
+  it('does not fabricate first-token telemetry for a terminal-only completion', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
@@ -2435,18 +2435,26 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage());
 
-    expect(stages).toEqual(['trust', 'memory', 'context', 'first-token', 'prompt', 'end']);
-    const firstToken = payloads.find(data => data.stage === 'first-token');
-    expect(firstToken?.ttftMs).toBeGreaterThanOrEqual(0);
-    expect(firstToken?.source).toBe('fallback');
+    expect(stages).toEqual(['trust', 'memory', 'context', 'prompt', 'end']);
+    expect(payloads.find(data => data.stage === 'first-token')).toBeUndefined();
+    expect(payloads.find(data => data.stage === 'end')).not.toHaveProperty('ttftMs');
   });
 
-  it('marks first-token telemetry as stream-driven when deltas arrive mid-prompt', async () => {
+  it('marks first-token telemetry from the provider first-output boundary', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
 
     promptSpy.mockImplementationOnce(async function (this: Agent) {
-      await (eventBus as any).emit('agent.stream.delta', { channelId: 'test-channel', text: 'M' });
+      const timestampMs = Date.now();
+      await eventBus.emit('agent.provider.first_output', {
+        requestId: 'msg-1',
+        channelId: 'test-channel',
+        kind: 'thinking',
+        monotonicAtMs: timestampMs,
+        timestampMs,
+        provider: 'test',
+        model: 'test-model',
+      });
       this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],

@@ -275,6 +275,7 @@ async function main(): Promise<void> {
     recordIcpDeliveryObservation: agent.recordIcpDeliveryObservation.bind(agent),
   };
   const registeredHandlers = registerGatewayMessageHandlers({
+    eventBus: startup.eventBus,
     gateway,
     agentLoop: certificationAgentLoop,
     shardManager: {

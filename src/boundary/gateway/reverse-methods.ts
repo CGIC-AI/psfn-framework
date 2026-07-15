@@ -30,6 +30,7 @@ export interface ReverseGatewayMethodRuntime {
   handleApiChatCancel(params: ApiChatCompletionCancelRpcParams): Promise<ApiChatCompletionCancelRpcResult>;
   handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
   handleApiHealth(): Promise<ApiHealthRpcResult>;
+  handleTurnPerformance(params: unknown): Promise<unknown>;
 }
 
 interface ReverseGatewayMethodDescriptor<P, R> {
@@ -78,6 +79,10 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
   {
     names: ['api.health'],
     handler: (_params: Record<string, never>, runtime) => runtime.handleApiHealth(),
+  },
+  {
+    names: ['telemetry.turn.performance'],
+    handler: (params: unknown, runtime) => runtime.handleTurnPerformance(params),
   },
 ];
 

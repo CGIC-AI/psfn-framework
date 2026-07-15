@@ -1,4 +1,12 @@
-import { AudioPlayerStatus, createAudioResource, EndBehaviorType, entersState } from '@discordjs/voice';
+import {
+  AudioPlayerStatus,
+  createAudioResource,
+  EndBehaviorType,
+  entersState,
+  VoiceConnectionStatus,
+  type AudioPlayer,
+  type VoiceConnection,
+} from '@discordjs/voice';
 import prism from 'prism-media';
 import { Readable } from 'node:stream';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -51,6 +59,7 @@ function emitVoicePerformance(
     requestId: turn.turnId,
     channelId: turn.channel.id,
     channelType: 'discord-voice',
+    ...(runtime.config.companionId ? { companionId: runtime.config.companionId } : {}),
     stage,
     ...details,
   }).catch(error => {
@@ -84,27 +93,51 @@ export async function cancelVoiceTurnResources(turn: ActiveVoiceTurn, reason: st
   if (turn.sttSession) {
     const session = turn.sttSession;
     turn.sttSession = null;
-    cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    cancelTasks.push(session.cancel(reason));
   }
   if (turn.ttsSession) {
     const session = turn.ttsSession;
     turn.ttsSession = null;
-    cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    cancelTasks.push(session.cancel(reason));
   }
 
   if (cancelTasks.length > 0) {
-    await Promise.allSettled(cancelTasks);
+    const results = await Promise.allSettled(cancelTasks);
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Voice cancellation failed for ${failures.length} connector(s)`);
+    }
   }
 }
 
 export async function cancelActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, reason: string): Promise<void> {
   const turn = runtime.activeTurn;
   if (!turn) return;
-  await cancelVoiceTurnResources(turn, reason);
-  emitVoicePerformance(runtime, turn, 'cancellation_ack', {
-    cancellationOutcome: 'acknowledged',
-  });
-  resetActiveVoiceTurnState(runtime, turn);
+  try {
+    await cancelVoiceTurnResources(turn, reason);
+    emitVoicePerformance(runtime, turn, 'cancellation_ack', {
+      cancellationOutcome: 'acknowledged',
+    });
+  } catch (error) {
+    emitVoicePerformance(runtime, turn, 'cancellation_ack', {
+      cancellationOutcome: 'failed',
+    });
+    log.error('Voice turn cancellation failed', {
+      turnId: turn.turnId,
+      reason,
+      error: toErrorMessage(error),
+    });
+    throw error;
+  } finally {
+    resetActiveVoiceTurnState(runtime, turn);
+  }
+}
+
+function hasReadySubscribedPlayback(connection: VoiceConnection, player: AudioPlayer): boolean {
+  const state = connection.state;
+  return state.status === VoiceConnectionStatus.Ready
+    && 'subscription' in state
+    && state.subscription?.player === player;
 }
 
 export async function emitVoiceTurnObservation(runtime: VoiceTurnRuntimeContext, params: {
@@ -632,7 +665,13 @@ export async function playReadableAudio(
       signal: turn?.abortController.signal,
       task: async () => {
         await entersState(player, AudioPlayerStatus.Playing, 5_000);
-        if (turn) emitVoicePerformance(runtime, turn, 'first_audible_playback');
+        // Discord exposes no remote-listener acknowledgement. The strongest
+        // observable playback proxy is local Playing while the live voice
+        // connection is Ready and still subscribed to this exact player.
+        // Disconnected/unsubscribed local playback emits no TTFA endpoint.
+        if (turn && hasReadySubscribedPlayback(turn.connection, player)) {
+          emitVoicePerformance(runtime, turn, 'first_audible_playback');
+        }
         await entersState(player, AudioPlayerStatus.Idle, 120_000);
       },
     });

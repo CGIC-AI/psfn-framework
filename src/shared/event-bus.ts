@@ -6,6 +6,7 @@ import type {
   TurnUsage,
   InferredPostTurnAction,
   CorrelationMetadata,
+  LLMStreamFirstOutputObservation,
   RunChargeEvent,
   FatigueBudgetEvent,
 } from './contracts/runtime.js';
@@ -397,6 +398,11 @@ export interface EventMap {
   };
   /** Content-free monotonic foreground timing envelope (mmo9.2). */
   'agent.turn.performance': TurnPerformanceEvent;
+  /** First substantive text/thinking/tool event observed at the provider stream boundary. */
+  'agent.provider.first_output': LLMStreamFirstOutputObservation & {
+    provider: string;
+    model: string;
+  } & EventCorrelationFields;
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
   /** An optional prompt section was dropped because macros stayed unresolved (E2.5 no-silent-leak). */
   'agent.prompt.section_dropped': {

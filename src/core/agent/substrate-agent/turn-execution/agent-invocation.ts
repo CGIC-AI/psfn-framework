@@ -77,7 +77,7 @@ export interface AgentInvocationMutableState {
 }
 
 export interface AgentInvocationResult {
-  firstTokenAt: number;
+  firstTokenAt: number | null;
   turnMessages: AgentMessage[];
   turnUsage: TurnUsage;
   responseModel: string;
@@ -452,7 +452,7 @@ export async function invokeAgentForTurn(input: {
     observability,
   } = input;
 
-  let firstTokenAt: number;
+  let firstTokenAt: number | null;
   let turnUsage: TurnUsage;
   let responseText: string;
   let responseModel = runtime.agent.state.model.id;
@@ -478,17 +478,21 @@ export async function invokeAgentForTurn(input: {
       warmState: providerWarmState,
     });
   };
-  const markProviderFirstToken = (source: 'stream' | 'fallback'): void => {
-    const observedAt = monotonicEpochNowMs();
+  const markProviderFirstToken = (event: {
+    kind: 'text' | 'thinking' | 'tool';
+    monotonicAtMs: number;
+    provider: string;
+    model: string;
+  }): void => {
     observability.emitPerformanceStage('provider_first_token', {
-      monotonicAtMs: observedAt,
+      monotonicAtMs: event.monotonicAtMs,
       ...(providerRequestAt !== null
-        ? { durationMs: Math.max(0, observedAt - providerRequestAt) }
+        ? { durationMs: Math.max(0, event.monotonicAtMs - providerRequestAt) }
         : {}),
-      model: runtime.agent.state.model.id,
-      provider: runtime.agent.state.model.provider,
+      model: event.model,
+      provider: event.provider,
+      providerOutputKind: event.kind,
       warmState: providerWarmState,
-      ...(source === 'fallback' ? { deferReason: 'no_stream_delta' } : {}),
     });
   };
 
@@ -521,15 +525,9 @@ export async function invokeAgentForTurn(input: {
         emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
       }),
     });
-    firstTokenAt = Date.now();
-    markProviderFirstToken('fallback');
-    observability.emitObservedTurnStage('first-token', {
-      ttftMs: firstTokenAt - startTime,
-      source: 'fallback',
-    });
+    firstTokenAt = null;
     observability.emitObservedTurnStage('prompt', {
       durationMs: Date.now() - promptStageStart,
-      ttftMs: firstTokenAt - startTime,
       mode: 'moa',
       rounds: moaResult.rounds,
       stopReason: moaResult.stopReason,
@@ -594,22 +592,15 @@ export async function invokeAgentForTurn(input: {
 
   const agentMessages: AgentMessage[] = piMessages;
 
-  let streamFirstTokenAt: number | null = null;
-  const streamTelemetryBus = runtime.eventBus as unknown as {
-    on: (event: string, handler: (data: {
-      channelId: string;
-      text: string;
-      requestId?: string;
-    }) => void) => () => void;
-  };
-  const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId, requestId: deltaRequestId }) => {
-    if (channelId !== message.channelId
-      || (deltaRequestId !== undefined && deltaRequestId !== requestId)
-      || streamFirstTokenAt != null) return;
-    streamFirstTokenAt = Date.now();
-    markProviderFirstToken('stream');
+  let providerFirstOutputAt: number | null = null;
+  const unsubscribeFirstToken = runtime.eventBus.on('agent.provider.first_output', (event) => {
+    if (event.requestId !== requestId
+      || (event.channelId !== undefined && event.channelId !== message.channelId)
+      || providerFirstOutputAt != null) return;
+    providerFirstOutputAt = event.timestampMs;
+    markProviderFirstToken(event);
     observability.emitObservedTurnStage('first-token', {
-      ttftMs: streamFirstTokenAt - startTime,
+      ttftMs: Math.max(0, event.timestampMs - startTime),
       source: 'stream',
     });
   });
@@ -759,20 +750,10 @@ export async function invokeAgentForTurn(input: {
   } finally {
     clearInitialPromptContext();
   }
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
-  if (streamFirstTokenAt == null) {
-    streamFirstTokenAt = Date.now();
-    markProviderFirstToken('fallback');
-    observability.emitObservedTurnStage('first-token', {
-      ttftMs: streamFirstTokenAt - startTime,
-      source: 'fallback',
-    });
-  }
-
   mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
   turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
   responseModel = runtimeFallbackModel ?? runtime.agent.state.model.id;
-  firstTokenAt = streamFirstTokenAt;
+  firstTokenAt = providerFirstOutputAt;
 
   responseText = runtime.extractResponseText();
   const runtimeContradictionDetection = detectRuntimeDatetimeContradiction(
@@ -1037,7 +1018,10 @@ export async function invokeAgentForTurn(input: {
   }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,
-    ttftMs: streamFirstTokenAt - startTime,
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- listener closure mutation is invisible to narrowing
+    ...(providerFirstOutputAt !== null
+      ? { ttftMs: Math.max(0, providerFirstOutputAt - startTime) }
+      : {}),
     ...(providerCacheUsage
       ? {
         cacheReadTokens: providerCacheUsage.cacheReadTokens,

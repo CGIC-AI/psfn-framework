@@ -800,6 +800,9 @@ async function main(): Promise<void> {
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
+  gateway.onTurnPerformance(async (event) => {
+    await eventBus.emit('agent.turn.performance', event);
+  });
 
   // ── Companion event relay forwarding (w9hj.1) ──
   // Redacts tool lifecycle + generated-artifact events at emission and
@@ -1288,6 +1291,7 @@ async function main(): Promise<void> {
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
   const registeredGatewayMessageHandlers = registerGatewayMessageHandlers({
+    eventBus,
     gateway,
     agentLoop,
     shardManager,

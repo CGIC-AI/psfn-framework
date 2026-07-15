@@ -1187,7 +1187,7 @@ export async function handleMessageForTurn(
     // canary context entirely so gateway client calls remain byte-identical.
     const recoveredInvocationResult: AgentInvocationResult | null = recoveredResponse
       ? {
-          firstTokenAt: startTime,
+          firstTokenAt: null,
           turnMessages: [],
           turnUsage: {
             inputTokens: recoveredResponse.metadata.inputTokens,

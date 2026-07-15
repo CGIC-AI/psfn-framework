@@ -119,12 +119,21 @@ describe('AgentApiBackend chat completion deadlines', () => {
     vi.useFakeTimers();
     try {
       const abort = vi.fn();
+      const eventBus = new EventBus();
+      const abortEvents: Array<{ reason: string }> = [];
+      const cancellationOutcomes: string[] = [];
+      eventBus.on('api.turn.abort', event => abortEvents.push({ reason: event.reason }));
+      eventBus.on('agent.turn.performance', event => {
+        if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+          cancellationOutcomes.push(event.cancellationOutcome);
+        }
+      });
       const backend = new AgentApiBackend({
         agentLoop: {
           handleMessage: vi.fn(() => new Promise(() => undefined)),
           abort,
         } as any,
-        eventBus: new EventBus(),
+        eventBus,
         sessionManager: createSessionManagerStub(),
       });
 
@@ -143,6 +152,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
       const result = await resultPromise;
 
       expect(abort).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(cancellationOutcomes).toEqual(['acknowledged']);
+      });
+      expect(abortEvents).toEqual([{ reason: 'timeout' }]);
       expect(result).toEqual({
         ok: false,
         error: {
@@ -155,6 +168,55 @@ describe('AgentApiBackend chat completion deadlines', () => {
       vi.useRealTimers();
     }
   });
+
+  it('reports failed cancellation when the active agent abort throws', async () => {
+    let resolveTurn!: (response: any) => void;
+    const turnPromise = new Promise<any>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const handleMessage = vi.fn(() => turnPromise);
+    const backend = new AgentApiBackend({
+      agentLoop: {
+        handleMessage,
+        abort: vi.fn(() => {
+          throw new Error('agent abort failed');
+        }),
+      } as any,
+      eventBus,
+      sessionManager: createSessionManagerStub(),
+    });
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-cancel-failed',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Long task' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-session-id': 'cancel-failed-session' },
+    });
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledOnce();
+    });
+
+    await expect(backend.cancelChatCompletion({ requestId: 'req-cancel-failed' })).resolves.toEqual({
+      cancelled: false,
+    });
+    expect(cancellationOutcomes).toEqual(['failed']);
+
+    resolveTurn({
+      content: 'eventual answer',
+      channelId: 'api:principal-1:cancel-failed-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
+  });
 });
 
 describe('AgentApiBackend direct model completions', () => {
@@ -162,6 +224,7 @@ describe('AgentApiBackend direct model completions', () => {
     complete?: ReturnType<typeof vi.fn>;
     handleMessage?: ReturnType<typeof vi.fn>;
     llmProvider?: false;
+    eventBus?: EventBus;
   } = {}) {
     const complete = overrides.complete ?? vi.fn(async () => ({
       content: 'raw model reply',
@@ -172,15 +235,16 @@ describe('AgentApiBackend direct model completions', () => {
       stopReason: 'stop',
     }));
     const handleMessage = overrides.handleMessage ?? vi.fn(() => new Promise(() => undefined));
+    const eventBus = overrides.eventBus ?? new EventBus();
     const backend = new AgentApiBackend({
       agentLoop: { handleMessage, abort: vi.fn() } as any,
-      eventBus: new EventBus(),
+      eventBus,
       sessionManager: createSessionManagerStub(),
       ...(overrides.llmProvider === false
         ? {}
         : { llmProvider: { complete, stream: vi.fn() } as any }),
     });
-    return { backend, complete, handleMessage };
+    return { backend, complete, handleMessage, eventBus };
   }
 
   const participantRequest = {
@@ -318,7 +382,14 @@ describe('AgentApiBackend direct model completions', () => {
       providerSignal = options?.signal;
       return new Promise<never>(() => undefined);
     });
-    const { backend } = createBackend({ complete });
+    const eventBus = new EventBus();
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const { backend } = createBackend({ complete, eventBus });
 
     const resultPromise = backend.handleChatCompletion({
       requestId: 'req-direct-cancel-1',
@@ -346,6 +417,7 @@ describe('AgentApiBackend direct model completions', () => {
 
     const repeatCancel = await backend.cancelChatCompletion({ requestId: 'req-direct-cancel-1' });
     expect(repeatCancel).toEqual({ cancelled: false });
+    expect(cancellationOutcomes).toEqual(['acknowledged', 'failed']);
   });
 
   it('cancels an in-flight direct completion when the caller AbortSignal fires', async () => {

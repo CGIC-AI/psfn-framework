@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTurnPerformanceEvent,
+  parseTurnPerformanceEvent,
   TurnPerformanceTracker,
   type TurnPerformanceEventInput,
 } from './turn-performance.js';
@@ -79,5 +80,34 @@ describe('TurnPerformanceTracker', () => {
       series.metric === 'compaction_wait' && Object.keys(series.dimensions).length === 0
     ));
     expect(all?.percentiles).toEqual({ samples: 2, p50Ms: 10, p95Ms: 20, p99Ms: 20 });
+  });
+});
+
+describe('parseTurnPerformanceEvent', () => {
+  it('accepts the closed content-free provider observation envelope', () => {
+    expect(parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'trace-provider-1',
+      stage: 'provider_first_token',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      provider: 'openrouter',
+      model: 'model-a',
+      providerOutputKind: 'thinking',
+    })).toMatchObject({
+      traceId: 'trace-provider-1',
+      providerOutputKind: 'thinking',
+    });
+  });
+
+  it('rejects content fields at the gateway-agent boundary', () => {
+    expect(() => parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'trace-private',
+      stage: 'speech_end',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      transcript: 'must never cross',
+    })).toThrow('unsupported field "transcript"');
   });
 });

@@ -49,6 +49,7 @@ import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
   extractDiscordDocumentAttachmentCandidates,
@@ -97,6 +98,7 @@ function createSuppressedDiscordResponse(channelId: string): AgentResponse {
  */
 export interface DiscordAdapterAccountBinding {
   accountId: string;
+  companionId: CompanionId;
   token: string;
   /** Live bot user ids of the other companion accounts on this gateway. */
   siblingBotUserIds?: () => readonly string[];
@@ -285,7 +287,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
     this.voice = new DiscordVoiceRuntime({
       client: this.client,
-      config,
+      config: this.account
+        ? { ...config, companionId: this.account.companionId }
+        : config,
       eventBus,
       getHandler: () => this.voiceHandler ?? this.handler,
       eligibilityGate: options.eligibilityGate,

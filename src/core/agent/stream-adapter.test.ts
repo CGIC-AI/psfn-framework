@@ -288,6 +288,62 @@ describe('createSubstrateStreamFn', () => {
     ]);
   });
 
+  it('reports the provider first output from the transport boundary with request correlation', async () => {
+    const config = makeConfig();
+    const onProviderFirstOutput = vi.fn();
+    const transport = {
+      stream: vi.fn(async (_context, callbacks) => {
+        callbacks?.onFirstOutput?.({
+          kind: 'tool',
+          monotonicAtMs: 1_234,
+          timestampMs: 5_678,
+        });
+        return {
+          content: '',
+          toolCalls: [{ id: 'call-1', name: 'memory_lookup', input: { query: 'hello' } }],
+          model: 'gateway-model',
+          inputTokens: 5,
+          outputTokens: 2,
+          stopReason: 'toolUse',
+        };
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, {
+      transport,
+      onProviderFirstOutput,
+    });
+
+    await runWithRequestContext(
+      {
+        turnId: 'turn-provider-output-1',
+        requestId: 'request-provider-output-1',
+        channelId: 'discord:general',
+        channelType: 'discord',
+        callType: 'chat',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => {
+        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect(onProviderFirstOutput).toHaveBeenCalledOnce();
+    expect(onProviderFirstOutput).toHaveBeenCalledWith({
+      kind: 'tool',
+      monotonicAtMs: 1_234,
+      timestampMs: 5_678,
+      turnId: 'turn-provider-output-1',
+      requestId: 'request-provider-output-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      callType: 'chat',
+      purpose: 'agent.turn.prompt',
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v3.2',
+    });
+  });
+
   it('normalizes pi-agent tool parameters to PSFN inputSchema before gateway transport', async () => {
     const config = makeConfig();
     const transport = {

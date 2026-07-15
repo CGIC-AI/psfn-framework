@@ -10,6 +10,7 @@ import type {
   LLMInvalidateModelDiscoveryParams,
   LLMInvalidateModelDiscoveryResult,
   LLMChunkNotification,
+  LLMFirstOutputNotification,
   GatewayCorrelationParams,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
@@ -119,6 +120,12 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           params.stream ? {
             onText: (text) => {
               runtime.notifyRequester('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+            },
+            onFirstOutput: (observation) => {
+              runtime.notifyRequester('llm.first_output', {
+                requestId,
+                ...observation,
+              } satisfies LLMFirstOutputNotification);
             },
           } : undefined,
         )),

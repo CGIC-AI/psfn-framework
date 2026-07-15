@@ -177,7 +177,7 @@ export async function schedulePostTurnWork(input: {
   requestId: string;
   startTime: number;
   completedAt: number;
-  firstTokenAt: number;
+  firstTokenAt: number | null;
   turnUsage: TurnUsage;
   context: LLMContext;
   deferredContinuationId: string | null;
@@ -284,7 +284,7 @@ export async function schedulePostTurnWork(input: {
     : [];
   observability.emitObservedTurnStage('end', {
     durationMs: completedAt - startTime,
-    ttftMs: firstTokenAt - startTime,
+    ...(firstTokenAt !== null ? { ttftMs: Math.max(0, firstTokenAt - startTime) } : {}),
     inputTokens: turnUsage.inputTokens,
     outputTokens: turnUsage.outputTokens,
     ...(response.metadata.noReply

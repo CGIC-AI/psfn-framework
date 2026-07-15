@@ -1,4 +1,6 @@
 import type { EventBus } from '../event-bus.js';
+import type { LLMStreamOutputKind } from '../contracts/runtime.js';
+import { isRecord } from '../utils/types.js';
 
 export const TURN_PERFORMANCE_STAGES = [
   'transport_received',
@@ -56,6 +58,7 @@ export interface TurnPerformanceEvent {
   channelType?: string;
   model?: string;
   provider?: string;
+  providerOutputKind?: LLMStreamOutputKind;
   warmState?: TurnPerformanceWarmState;
   cacheState?: TurnPerformanceCacheState;
   toolUse?: boolean;
@@ -146,6 +149,149 @@ export function buildTurnPerformanceEvent(input: TurnPerformanceEventInput): Tur
     monotonicAtMs: input.monotonicAtMs ?? monotonicEpochNowMs(),
     timestampMs: input.timestampMs ?? Date.now(),
   };
+}
+
+const TURN_PERFORMANCE_EVENT_KEYS = new Set<keyof TurnPerformanceEvent>([
+  'schemaVersion',
+  'traceId',
+  'stage',
+  'monotonicAtMs',
+  'timestampMs',
+  'turnId',
+  'requestId',
+  'companionId',
+  'channelId',
+  'channelType',
+  'model',
+  'provider',
+  'providerOutputKind',
+  'warmState',
+  'cacheState',
+  'toolUse',
+  'backgroundContention',
+  'durationMs',
+  'queueDepth',
+  'inputTokens',
+  'outputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'costUsd',
+  'backgroundJobAgeMs',
+  'deferReason',
+  'cancellationOutcome',
+]);
+
+const TURN_PERFORMANCE_STAGE_SET = new Set<string>(TURN_PERFORMANCE_STAGES);
+const TURN_PERFORMANCE_WARM_STATE_SET = new Set<string>(['warm', 'cold', 'unknown']);
+const TURN_PERFORMANCE_CACHE_STATE_SET = new Set<string>(['hit', 'miss', 'mixed', 'unknown']);
+const TURN_PERFORMANCE_PROVIDER_OUTPUT_KIND_SET = new Set<string>(['text', 'thinking', 'tool']);
+const TURN_PERFORMANCE_DEFER_REASON_SET = new Set<string>([
+  'no_stream_delta',
+  'queued',
+  'deduplicated',
+  'started',
+  'succeeded',
+  'rescheduled',
+  'retry_scheduled',
+  'failed',
+  'dropped_budget',
+  'cancelled',
+  'acknowledged',
+  'malformed_dropped',
+]);
+const TURN_PERFORMANCE_CANCELLATION_OUTCOME_SET = new Set<string>([
+  'acknowledged',
+  'timed_out',
+  'failed',
+]);
+
+/**
+ * Validate the gateway→agent wire envelope before it reaches the agent bus.
+ * Unknown keys are rejected so prompt text, transcripts, tool arguments, and
+ * audio can never hitch a ride on this content-free telemetry boundary.
+ */
+export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent {
+  if (!isRecord(value)) {
+    throw new Error('Turn performance event must be an object');
+  }
+  for (const key of Object.keys(value)) {
+    if (!TURN_PERFORMANCE_EVENT_KEYS.has(key as keyof TurnPerformanceEvent)) {
+      throw new Error(`Turn performance event contains unsupported field "${key}"`);
+    }
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error('Turn performance event schemaVersion must be 1');
+  }
+  requireNonEmptyString(value.traceId, 'traceId');
+  requireEnum(value.stage, TURN_PERFORMANCE_STAGE_SET, 'stage');
+  requireFiniteNonNegative(value.monotonicAtMs, 'monotonicAtMs');
+  requireFiniteNonNegative(value.timestampMs, 'timestampMs');
+  for (const key of [
+    'turnId',
+    'requestId',
+    'companionId',
+    'channelId',
+    'channelType',
+    'model',
+    'provider',
+  ] as const) {
+    if (value[key] !== undefined) requireNonEmptyString(value[key], key);
+  }
+  if (value.providerOutputKind !== undefined) {
+    requireEnum(value.providerOutputKind, TURN_PERFORMANCE_PROVIDER_OUTPUT_KIND_SET, 'providerOutputKind');
+  }
+  if (value.warmState !== undefined) {
+    requireEnum(value.warmState, TURN_PERFORMANCE_WARM_STATE_SET, 'warmState');
+  }
+  if (value.cacheState !== undefined) {
+    requireEnum(value.cacheState, TURN_PERFORMANCE_CACHE_STATE_SET, 'cacheState');
+  }
+  for (const key of ['toolUse', 'backgroundContention'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') {
+      throw new Error(`Turn performance event ${key} must be a boolean`);
+    }
+  }
+  for (const key of [
+    'durationMs',
+    'queueDepth',
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'costUsd',
+    'backgroundJobAgeMs',
+  ] as const) {
+    if (value[key] !== undefined) requireFiniteNonNegative(value[key], key);
+  }
+  if (value.deferReason !== undefined) {
+    requireEnum(value.deferReason, TURN_PERFORMANCE_DEFER_REASON_SET, 'deferReason');
+  }
+  if (value.cancellationOutcome !== undefined) {
+    requireEnum(
+      value.cancellationOutcome,
+      TURN_PERFORMANCE_CANCELLATION_OUTCOME_SET,
+      'cancellationOutcome',
+    );
+  }
+  return value as unknown as TurnPerformanceEvent;
+}
+
+function requireNonEmptyString(value: unknown, field: string): asserts value is string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value !== value.trim()) {
+    throw new Error(`Turn performance event ${field} must be a trimmed non-empty string`);
+  }
+}
+
+function requireFiniteNonNegative(value: unknown, field: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Turn performance event ${field} must be a finite non-negative number`);
+  }
+}
+
+function requireEnum(value: unknown, allowed: ReadonlySet<string>, field: string): asserts value is string {
+  if (typeof value !== 'string' || !allowed.has(value)) {
+    throw new Error(`Turn performance event ${field} is invalid`);
+  }
 }
 
 export function emitTurnPerformance(

@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -11,6 +11,7 @@ import { cloneTurnObservabilityRecord, cloneUnknownValue } from '../../turns/obs
 import { deriveProviderWireMessagesForTurnSnapshot } from './turn-execution/prompt-invocation-history.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
+import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session/runtime-fallback-provenance.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
@@ -92,10 +93,17 @@ export function recordAssistantMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }): number | null {
-  const metadata = input.emotionSnapshot
+  const emotionMetadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
+  const metadata = input.runtimeFallbackProvenance
+    ? buildSessionMetadataWithRuntimeFallbackProvenance(
+      emotionMetadata,
+      input.runtimeFallbackProvenance,
+    )
+    : emotionMetadata;
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
@@ -246,6 +254,9 @@ export function buildTurnRecord(input: {
           timestamp: Math.max(input.startedAt, input.completedAt),
           sourceMessageId: input.message.id,
           ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
+          ...(input.response?.metadata.runtimeFallbackProvenance
+            ? { runtimeFallbackProvenance: input.response.metadata.runtimeFallbackProvenance }
+            : {}),
         },
       }
       : {}),

@@ -14,6 +14,8 @@ import type {
   AgentResponse,
   CorrelationMetadata,
   ObservabilityCallType,
+  RuntimeFallbackProvenance,
+  RuntimeFallbackStrategy,
   SubstrateMessage,
   TurnID,
   TurnUsage,
@@ -80,6 +82,7 @@ export interface AgentInvocationResult {
   responseText: string;
   fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   turnIntent: string | null;
   persistedUserMessageContent?: string;
 }
@@ -354,6 +357,17 @@ function buildVisionUnavailableAssistantReply(message: SubstrateMessage): string
   return 'I got the image attachment, but my image reader failed before I could inspect it. Please resend it or describe what you want me to check.';
 }
 
+function buildRuntimeFallbackProvenance(
+  strategy: RuntimeFallbackStrategy,
+): RuntimeFallbackProvenance {
+  return {
+    schemaVersion: 1,
+    authoredBy: 'runtime',
+    model: RUNTIME_FALLBACK_MODEL,
+    strategy,
+  };
+}
+
 function appendRuntimeFallbackAssistantMessage(
   runtime: TurnExecutionRuntime,
   content: string,
@@ -442,6 +456,7 @@ export async function invokeAgentForTurn(input: {
   let responseModel = runtime.agent.state.model.id;
   let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   let runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
+  let runtimeFallbackProvenance: RuntimeFallbackProvenance | undefined;
   let runtimeContradictionDiagnostic: RuntimeContradictionDiagnostic | undefined;
   const turnIntent: string | null = autoloadOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
@@ -686,6 +701,7 @@ export async function invokeAgentForTurn(input: {
     });
     appendRuntimeFallbackAssistantMessage(runtime, buildVisionUnavailableAssistantReply(message));
     runtimeFallbackModel = RUNTIME_FALLBACK_MODEL;
+    runtimeFallbackProvenance = buildRuntimeFallbackProvenance('runtime_nonfabricating_notice');
     fallbackDiagnostics = {
       fallback: {
         code: 'vision_prompt_unavailable',
@@ -809,6 +825,7 @@ export async function invokeAgentForTurn(input: {
         runtimeContradiction: runtimeContradictionDiagnostic,
       };
       responseText = buildRuntimeDatetimeContradictionRefusal();
+      runtimeFallbackProvenance = buildRuntimeFallbackProvenance('runtime_datetime_contradiction_refusal');
     } else {
       runtimeContradictionDiagnostic = {
         ...runtimeContradictionDiagnostic,
@@ -933,6 +950,7 @@ export async function invokeAgentForTurn(input: {
       appendRuntimeFallbackAssistantMessage(runtime, buildVisionUnavailableAssistantReply(message));
       runtimeFallbackApplied = true;
       runtimeFallbackModel = RUNTIME_FALLBACK_MODEL;
+      runtimeFallbackProvenance = buildRuntimeFallbackProvenance('runtime_nonfabricating_notice');
       mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
       turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
       responseModel = RUNTIME_FALLBACK_MODEL;
@@ -1006,6 +1024,7 @@ export async function invokeAgentForTurn(input: {
     responseText,
     fallbackDiagnostics,
     runtimeContradictionDiagnostics,
+    ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),
     turnIntent,
     ...(turnUserContentBuildResult.persistedUserContent
       ? { persistedUserMessageContent: turnUserContentBuildResult.persistedUserContent }

@@ -464,17 +464,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
-    name: 'shard',
-    domain: 'subagents',
-    exposure: 'extended',
-    description: 'Future canonical long-horizon shard control plane.',
-    actions: ['spawn'],
-    capabilityMetadata: { kind: 'external_policy', source: 'docs/tool-surface.md' },
-    retiredAliases: [
-      retiredAlias('spawn_shard', 'shard', 'hidden', 'spawn', 'Long-horizon shard launch belongs on shard.'),
-    ],
-  },
-  {
     name: 'vault',
     domain: 'knowledge',
     exposure: 'extended',

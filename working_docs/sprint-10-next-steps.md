@@ -4,6 +4,86 @@ Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — d
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
+## 2026-07-13 branch handoff — orphan/stub/bugfix lane
+
+- Branch `fix/orphans-stubs-bugfixes`, pushed fixed point `3efa251c` (initial
+  hygiene implementation `a81cdd49`).
+- Closed `psfn-framework-jcic` and canonical identity-hygiene bead
+  `psfn-framework-rbqo`; closed `psfn-framework-3d9r` as an exact duplicate of
+  `rbqo`. The current orphan set was audited one bead at a time. A 2026-07-14
+  reconciliation also closed `psfn-framework-mihm` (bounded fail-closed
+  empty-argument retry/provenance shipped at `7243616b`) and
+  `psfn-framework-i698` (settings-owned active timezone and Intl scheduler
+  slots shipped at `80b14103`) instead of holding completed implementations
+  open for later validation. The important non-Pi runtime verification left
+  from `mihm` is now isolated as `psfn-framework-h7g9.1` under fix-wave epic
+  `psfn-framework-h7g9`. `vinz.19`, `vinz.20`, `vinz.21`, `vinz.29`, and
+  `7ang` remain genuinely open; `vinz.29` still lacks its formal twin mapping
+  on the Garden surface, and `7ang` still has live feature children. Active
+  ICP work was excluded.
+- Validation: 69 focused tests passed; `npm run lint`, `npm run build`,
+  `npm run verify:shared-type-guards`, `npm run verify:identity-literals`,
+  `npm run verify:repository-hygiene`, and `git diff --check` passed. Separate
+  standards and spec reviews both passed with no findings. No live host was
+  contacted.
+- Security follow-up `psfn-framework-upx0.8` is integrated and pushed at
+  `e2fa8e3e`: `isStrictSubpath` now has one canonical hardened definition in
+  `src/persistence/layout.ts`, used by artifact lifecycle and the surviving
+  Research Library file boundaries. The different-root absolute-relative
+  regression and normal-path coverage passed (24 focused non-SQLite tests),
+  as did lint, build, and the independent final review.
+- Companion-welfare follow-up `psfn-framework-upx0.7` is integrated and pushed
+  at `eb11bf9e`: shard-sourced unified memory `action=write` is classified
+  before the wrapped memory tool can execute and is staged in the existing
+  durable fold-review flow with both core and shard companion identities. The
+  independent review passed with no important findings; the final 135 focused
+  tests, lint, and ESM+DTS build also passed. Report-only/no bead: the
+  `SHARD_TO_PRIME_SYNC_OPERATIONS` entry and `allowed_shard_memory_write`
+  reason name are stale and read as if direct writes remain allowed, but the
+  policy denies the operation and tool sync fails closed if that policy ever
+  unexpectedly permits it, so there is no current bypass.
+- Credential-boundary follow-up `psfn-framework-upx0.6` is integrated and
+  pushed at `eb5ba082` (implementation `73fb7646`, review remediation
+  `8cdc6f5d`). The local split launcher now gives the agent a one-shot inherited
+  descriptor instead of the raw Postgres DSN in its environment; kube/Helm
+  agents receive only a Secret-mounted path; and `CoreSubstrateConfig` strips
+  the credential before core construction. The single independent review's
+  mandatory recovery-chart digest finding was remediated and its final check
+  passed. Integrated validation passed 75 credential/startup tests, Helm and
+  Kustomize deployment gates, startup/settings/repository-hygiene verifiers,
+  lint, ESM+DTS build, and the prior shard/path regression sets. Report-only/no
+  bead: explicitly setting projected Secret `defaultMode: 0440` would document
+  least-privilege intent more clearly than relying on Kubernetes defaults plus
+  pod `fsGroup: 999`; no current multi-user pod exposure was identified.
+- Runtime-fallback provenance follow-up `psfn-framework-upx0.12` is integrated
+  into `fix/orphans-stubs-bugfixes` and pushed at `5102b0ad` (implementation
+  `42a4be0b`). Forced vision-failure and datetime-contradiction notices now
+  retain explicit runtime-authored model/strategy provenance in response,
+  session/L0, and durable turn-record metadata; ordinary model-authored replies
+  remain untagged and existing consumers remain compatible. The single
+  independent review passed with no important or material report-only findings.
+  Final integrated validation passed all 75 focused tests, `npm run lint`, and
+  the ESM+DTS build.
+- Discord follow-up scheduling fix `psfn-framework-aoxt` is integrated into
+  `fix/orphans-stubs-bugfixes` and pushed at `a92fa7e7` (implementation
+  `491221e1`, review remediation `e7f18ba2`). The schedule tool exposes the
+  canonical five continuity destinations as one enum, rejects `discord_text`
+  without an alias, and preserves valid Discord DM/guild snowflake strings
+  unchanged through the real scheduler path. The single independent review
+  found numeric snowflakes could be precision-damaged by generic coercion; the
+  remediation now rejects raw non-string Discord IDs before enqueue, and the
+  same reviewer final check passed. Final integrated validation passed all 30
+  focused schedule/tool-call tests, `npm run lint`, and the ESM+DTS build.
+- Shard control-plane honesty fix `psfn-framework-upx0.10` is integrated at
+  implementation fixed point `b3946dbd`. Model-facing catalogs and descriptions
+  no longer advertise the unregistered shard tool; the duplicate subagent port,
+  dead shard adapter/tool, and uncalled post-turn registration are removed.
+  `SubagentFaculty` remains the sole model-facing subagent path, while
+  `ShardExecutionPort` and Wyoming delegation remain wired. The single
+  independent review passed with no IMPORTANT or material report-only findings.
+  Final integrated validation passed 9 files / 127 tests, `npm run lint`, and
+  the ESM+DTS build. Parent `psfn-framework-upx0` remains open.
+
 ## 0. 2026-07-12 update — decided priority order
 
 Outcome of the 2026-07-12 triage + grilling session. Tracker was reconciled the

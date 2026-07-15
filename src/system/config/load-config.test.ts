@@ -41,6 +41,8 @@ function clearRuntimePathEnv(): void {
   delete process.env.DISCORD_BOT_ID;
   delete process.env.PERSISTENCE_BACKEND;
   delete process.env.POSTGRES_DATABASE_URL;
+  delete process.env.POSTGRES_DATABASE_URL_FILE;
+  delete process.env.POSTGRES_DATABASE_URL_FD;
   delete process.env.OPENBAO_ADDR;
   delete process.env.OPENBAO_TOKEN;
   delete process.env.OPENBAO_KV_MOUNT;
@@ -98,6 +100,14 @@ describe('loadConfig path defaults', () => {
     process.env.PSFN_MULTI_COMPANION = '1';
     process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
+    const postgresCredentialPath = join(root, 'postgres-database-url');
+    writeFileSync(
+      postgresCredentialPath,
+      'postgres://postgres:secret@localhost:5432/psfn_test\n',
+      'utf8',
+    );
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
     return { root, companionId, dataDir, cardPath, postgresSchema };
   }
 
@@ -213,6 +223,31 @@ describe('loadConfig path defaults', () => {
 
     expect(() => loadConfig()).toThrow(
       'POSTGRES_DATABASE_URL is required for runtime persistence',
+    );
+  });
+
+  it('loads the agent database credential from a secret file without a raw DSN env var', () => {
+    clearRuntimePathEnv();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-load-agent-postgres-'));
+    tempDirs.push(root);
+    const credentialPath = join(root, 'database-url');
+    writeFileSync(credentialPath, 'postgresql://psfn:file-secret@postgres/psfn\n', 'utf8');
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.POSTGRES_DATABASE_URL_FILE = credentialPath;
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
+
+    const config = loadAgentConfig();
+
+    expect(process.env.POSTGRES_DATABASE_URL).toBeUndefined();
+    expect(config.postgresDatabaseUrl).toBe('postgresql://psfn:file-secret@postgres/psfn');
+  });
+
+  it('rejects a raw database credential in the agent process environment', () => {
+    clearRuntimePathEnv();
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
+
+    expect(() => loadAgentConfig()).toThrow(
+      'POSTGRES_DATABASE_URL must not be present in the agent process environment',
     );
   });
 
@@ -405,6 +440,16 @@ describe('loadConfig path defaults', () => {
 
   it('keeps agent config free of secret-bearing startup fields', () => {
     clearRuntimePathEnv();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-agent-config-'));
+    tempDirs.push(root);
+    const postgresCredentialPath = join(root, 'postgres-database-url');
+    writeFileSync(
+      postgresCredentialPath,
+      'postgres://postgres:secret@localhost:5432/psfn_test\n',
+      'utf8',
+    );
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
     process.env.DATA_DIR = './sandbox-data';
     process.env.DISCORD_TOKEN = 'discord-secret';
     process.env.DISCORD_BOT_ID = '123456789';

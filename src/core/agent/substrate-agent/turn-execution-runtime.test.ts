@@ -8,7 +8,8 @@ import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
-import type { SessionManager } from '../../session/manager.js';
+import { SessionManager } from '../../session/manager.js';
+import { SessionStore } from '../../../persistence/sessions/store.js';
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
@@ -44,6 +45,7 @@ import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
+import { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
@@ -171,6 +173,36 @@ function makeChargePolicy(): ChargePolicyConfig {
       premium_cloud: 4,
     },
     fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+function makePersistenceConfig(dataDir: string): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir,
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16_384,
+    extractionMaxTokens: 8_192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 4_096 },
+    },
   };
 }
 
@@ -719,6 +751,52 @@ function createRuntime(params: {
   } as unknown as TurnExecutionRuntime;
 
   return runtime;
+}
+
+function createPersistenceBackedRuntime(dataDir: string, eventBus: EventBus) {
+  const store = new SessionStore(dataDir);
+  const sessionManager = new SessionManager(store, makePersistenceConfig(dataDir));
+  const turnSupportRuntime = new TurnSupportRuntime({
+    eventBus,
+    sessionManager,
+    hashPromptText: text => `hash:${text.length}`,
+    resolveContextWindow: () => 4_096,
+  });
+  const buildContext = vi.fn(async () => ({
+    systemPrompt: 'System prompt',
+    messages: [],
+    manifest: undefined,
+  }));
+  const runtime = createRuntime({
+    eventBus,
+    sessionManager: {} as SessionManager,
+    buildContext,
+    scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+    awaitPendingAutoCompaction: vi.fn(async () => undefined),
+    recordUserMessage: vi.fn((...args: Parameters<TurnSupportRuntime['recordUserMessage']>) => (
+      turnSupportRuntime.recordUserMessage(...args)
+    )),
+    recordAssistantMessage: vi.fn((...args: Parameters<TurnSupportRuntime['recordAssistantMessage']>) => (
+      turnSupportRuntime.recordAssistantMessage(...args)
+    )),
+  });
+  runtime.sessionManager.recordTurn = sessionManager.recordTurn.bind(sessionManager);
+  runtime.buildTurnRecord = turnSupportRuntime.buildTurnRecord.bind(turnSupportRuntime);
+  runtime.extractResponseText = vi.fn(() => {
+    const latestAssistant = [...(runtime.agent.state.messages as any[])]
+      .reverse()
+      .find(message => message.role === 'assistant');
+    return Array.isArray(latestAssistant?.content)
+      ? latestAssistant.content
+        .filter((block: any) => block.type === 'text')
+        .map((block: any) => block.text)
+        .join('')
+      : typeof latestAssistant?.content === 'string'
+        ? latestAssistant.content
+        : '';
+  });
+
+  return { runtime, store };
 }
 
 describe('handleMessageForTurn intentional no-reply', () => {
@@ -3901,6 +3979,114 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         question: 'Describe exactly what is visible in the current image input.',
         summary: 'A catgirl sits on a server rack holding a pink rifle.',
       },
+    });
+  });
+
+  it('persists forced vision-failure provenance at the session and turn record boundary', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    runtime.agent.prompt = vi.fn(async () => {
+      throw new Error('vision provider unavailable');
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-persisted-fallback', {
+      channelType: 'discord',
+      content: 'what is in the image?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
+    expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_nonfabricating_notice',
+      },
+    });
+    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
+    expect(turnRecord.assistantMessage).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_nonfabricating_notice',
+      },
+    });
+  });
+
+  it('persists runtime datetime refusal provenance after a contradictory retry', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
+      active_timezone: 'America/New_York',
+      runtime_current_weekday: 'Wednesday',
+      runtime_current_date_human: 'March 18, 2026',
+      runtime_current_time_human: '9:30 AM',
+      runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+      runtime_current_today: '2026-03-18',
+      runtime_current_yesterday: '2026-03-17',
+      runtime_current_tomorrow: '2026-03-19',
+      runtime_current_part_of_day: 'late morning',
+    }));
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The time is wrong. Are you sure this is right?' }],
+        api: 'openai-completions',
+        provider: 'test',
+        model: 'test-model',
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      });
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-datetime-persisted-fallback', {
+      content: 'What time is it?',
+    }));
+
+    expect(response.metadata.diagnostics?.runtimeContradiction).toMatchObject({
+      retryAttempted: true,
+      retrySucceeded: false,
+      refusalApplied: true,
+    });
+    expect(response.metadata.runtimeFallbackProvenance).toEqual({
+      schemaVersion: 1,
+      authoredBy: 'runtime',
+      model: 'runtime-fallback',
+      strategy: 'runtime_datetime_contradiction_refusal',
+    });
+    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
+    expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_datetime_contradiction_refusal',
+      },
+    });
+    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
+    expect(turnRecord.assistantMessage?.runtimeFallbackProvenance).toEqual({
+      schemaVersion: 1,
+      authoredBy: 'runtime',
+      model: 'runtime-fallback',
+      strategy: 'runtime_datetime_contradiction_refusal',
     });
   });
 

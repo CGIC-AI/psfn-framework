@@ -252,7 +252,7 @@ export function evaluateShardSessionMemorySyncPolicy(
     return { allowed: true, reason: 'allowed_prime_memory_seed' };
   }
   if (envelope.operation === 'memory_write') {
-    return { allowed: true, reason: 'allowed_shard_memory_write' };
+    return { allowed: false, reason: 'denied_operation' };
   }
   return { allowed: false, reason: 'denied_operation' };
 }

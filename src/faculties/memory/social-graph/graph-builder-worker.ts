@@ -11,7 +11,7 @@
 //      across >= coPresenceMinSessions windows -> 'acquaintance' (undirected),
 //      confidence ~0.5.
 //   b) Overheard interactions — a memory addressMode 'overheard_room_context'
-//      naming two tracked people (sourceContactId + subjectContactId) -> typed
+//      naming two tracked people (sourceContactId + resolved target contact) -> typed
 //      per inferRelationshipTypeFromFact (coarse) else acquaintance,
 //      confidence ~0.6.
 //   c) Named-relationship facts ("my sister Iki") — a relational statement whose
@@ -252,14 +252,14 @@ function buildCoPresenceCandidates(
 
 /**
  * (b) Overheard interactions. A memory addressMode 'overheard_room_context'
- * naming two tracked people (sourceContactId + subjectContactId).
+ * naming two tracked people (sourceContactId + subjectContactId/routedContactId).
  */
 function buildOverheardCandidates(memories: readonly PurrMemory[]): EdgeCandidate[] {
   const candidates: EdgeCandidate[] = [];
   for (const memory of memories) {
     if (memory.provenance?.addressMode !== 'overheard_room_context') continue;
     const source = memory.provenance.sourceContactId;
-    const target = memory.provenance.subjectContactId;
+    const target = memory.provenance.subjectContactId ?? memory.provenance.routedContactId;
     if (!source || !target || source === target) continue;
     const coarse = inferRelationshipTypeFromFact(memoryToFact(memory));
     const kind: SocialRelationshipKind = coarse ? coarseRelationshipTypeToKind(coarse) : 'acquaintance';
@@ -290,7 +290,7 @@ function buildNamedRelationshipCandidates(memories: readonly PurrMemory[]): Edge
   for (const memory of memories) {
     if (memory.provenance?.addressMode === 'overheard_room_context') continue;
     const source = memory.provenance?.sourceContactId;
-    const target = memory.provenance?.subjectContactId;
+    const target = memory.provenance?.subjectContactId ?? memory.provenance?.routedContactId;
     if (!source || !target || source === target) continue;
     const inference = inferSocialRelationshipKindFromText(memory.text);
     if (!inference) continue;

@@ -190,6 +190,38 @@ describe('SocialGraphBuilderWorker', () => {
     expect(await proposalStore.list()).toHaveLength(2);
   });
 
+  it('proposes an overheard edge when provenance carries only routedContactId', async () => {
+    const overheard = makeMemory({
+      id: 'ov-routed',
+      text: 'Bob is Alice\'s sister',
+      extractedAt: 2_500,
+      provenance: {
+        channelId: 'room-1',
+        addressMode: 'overheard_room_context',
+        sourceContactId: ALICE,
+        routedContactId: BOB,
+      },
+    });
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader([overheard]),
+      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(1);
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      evidenceClass: 'overheard_interaction',
+      sourceContactId: ALICE,
+      targetContactId: BOB,
+      evidenceMemoryIds: ['ov-routed'],
+    });
+  });
+
   it('AC2: an operator-set edge survives a conflicting proposal (conflict lands in review, edge untouched)', async () => {
     const operatorEdge: SocialRelationshipEdge = {
       id: 'edge:operator-1',
@@ -311,6 +343,125 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals[0].relationshipType).toBe('sibling');
     expect(proposals[0].directional).toBe(false);
     expect(proposals[0].confidence).toBeCloseTo(0.7);
+  });
+
+  it('proposes a named-relationship edge when provenance carries only routedContactId', async () => {
+    const named = makeMemory({
+      id: 'named-routed',
+      text: 'my sister Bob came over',
+      extractedAt: 6_500,
+      provenance: {
+        channelId: 'room-1',
+        addressMode: 'reply_to_user',
+        sourceContactId: ALICE,
+        routedContactId: BOB,
+      },
+    });
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader([named]),
+      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(1);
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      evidenceClass: 'named_relationship',
+      sourceContactId: ALICE,
+      targetContactId: BOB,
+      relationshipType: 'sibling',
+      evidenceMemoryIds: ['named-routed'],
+    });
+  });
+
+  it('prefers subjectContactId when both target provenance fields are present', async () => {
+    const CARL = 'c-carl';
+    const tracked = new Map([
+      ...trackedAliceBob(),
+      [CARL, makeContact(CARL, 'Carl')] as const,
+    ]);
+    const memories = [
+      makeMemory({
+        id: 'ov-both-targets',
+        text: 'Bob is Alice\'s sister',
+        extractedAt: 6_600,
+        provenance: {
+          channelId: 'room-1',
+          addressMode: 'overheard_room_context',
+          sourceContactId: ALICE,
+          subjectContactId: BOB,
+          routedContactId: CARL,
+        },
+      }),
+      makeMemory({
+        id: 'named-both-targets',
+        text: 'my sister Bob came over',
+        extractedAt: 6_700,
+        provenance: {
+          channelId: 'room-1',
+          addressMode: 'reply_to_user',
+          sourceContactId: ALICE,
+          subjectContactId: BOB,
+          routedContactId: CARL,
+        },
+      }),
+    ];
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader(memories),
+      contacts: makeStubContacts({ tracked }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(2);
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(2);
+    expect(proposals.every(proposal => proposal.targetContactId === BOB)).toBe(true);
+    expect(proposals.some(proposal => proposal.targetContactId === CARL)).toBe(false);
+  });
+
+  it('does not fabricate overheard or named-relationship edges without a target contact id', async () => {
+    const memories = [
+      makeMemory({
+        id: 'ov-no-target',
+        text: 'Bob is Alice\'s sister',
+        extractedAt: 6_800,
+        provenance: {
+          channelId: 'room-1',
+          addressMode: 'overheard_room_context',
+          sourceContactId: ALICE,
+        },
+      }),
+      makeMemory({
+        id: 'named-no-target',
+        text: 'my sister Bob came over',
+        extractedAt: 6_900,
+        provenance: {
+          channelId: 'room-1',
+          addressMode: 'reply_to_user',
+          sourceContactId: ALICE,
+        },
+      }),
+    ];
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader(memories),
+      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.scanned).toBe(2);
+    expect(result.proposed).toBe(0);
+    expect(result.skippedUntracked).toBe(0);
+    expect(await proposalStore.list()).toHaveLength(0);
   });
 
   it('reader scans oldest unprocessed room memories when a channel exceeds the scan limit', async () => {

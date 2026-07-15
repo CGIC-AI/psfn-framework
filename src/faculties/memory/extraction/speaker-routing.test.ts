@@ -228,7 +228,15 @@ describe('structured group fact routing', () => {
 
     const replyContext = await context([
       entry(2, 'iki', 'Iki', 'That plan works for me.', {
-        metadata: JSON.stringify({ replyToMessageId: 'discord-1' }),
+        metadata: JSON.stringify({
+          turn: {
+            schemaVersion: 1,
+            turnId: '019f59cd-0eaf-74c6-98dc-7ddf0e7f67e5',
+            requestId: 'request-1',
+            role: 'user',
+            replyToMessageId: 'discord-1',
+          },
+        }),
       }),
     ]);
     expect(resolveFactRouting(

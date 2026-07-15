@@ -657,6 +657,12 @@ export interface CompanionMessageSendParams {
   authorName?: string;
   /** Client-stamped companion identity; verified against the connection binding. */
   companionId?: string;
+  /**
+   * Gateway-issued inbound message id this send directly answers. For room
+   * messages, the gateway may use the matching delivery receipt as a
+   * short-lived, one-shot stale-presence reply capability.
+   */
+  replyToMessageId?: string;
 }
 
 export interface CompanionMessageSendResult {

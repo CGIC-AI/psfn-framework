@@ -48,6 +48,104 @@ describe('CompanionDeliveryFailureReceipts', () => {
       reason: 'processing_failed',
     }, 1_000 + 60 * 60_000 + 1)).toBeNull();
   });
+
+  it('claims a one-shot reply capability for the exact recipient and channel', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-reply-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+      roomPresenceEpoch: {
+        since: new Date(100).toISOString(),
+      },
+    });
+
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-room:elsewhere',
+      'companion-reply-source',
+      1_001,
+    )).toBeNull();
+    expect(receipts.claimReply(
+      'comp-c',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_001,
+    )).toBeNull();
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_001,
+    )).toMatchObject({
+      senderCompanionId: 'comp-a',
+      roomPresenceEpoch: { since: new Date(100).toISOString() },
+    });
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_002,
+    )).toBeNull();
+  });
+
+  it('claims DM reply lineage even though it carries no room presence epoch', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: 'companion-dm-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+    });
+
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-dm:comp-a:comp-b',
+      'companion-dm-source',
+      1_001,
+    )).toMatchObject({ messageId: 'companion-dm-source' });
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-dm:comp-a:comp-b',
+      'companion-dm-source',
+      1_002,
+    )).toBeNull();
+  });
+
+  it('rejects expired receipts and receipts delivered in the future', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-old-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+    });
+
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-old-source',
+      1_000 + 60 * 60_000 + 1,
+    )).toBeNull();
+
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-future-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 2_000,
+    });
+    expect(receipts.claimReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-future-source',
+      1_999,
+    )).toBeNull();
+  });
 });
 
 describe('parseCompanionMessageFailureReport', () => {

@@ -14,6 +14,10 @@ export interface CompanionDeliveryReceipt {
   senderCompanionId: CompanionId;
   recipientCompanionId: CompanionId;
   deliveredAt: number;
+  /** Room recipients only: stable presence epoch accepted at delivery time. */
+  roomPresenceEpoch?: {
+    since: string;
+  };
 }
 
 export interface CompanionMessageFailureReport {
@@ -28,10 +32,13 @@ function receiptKey(recipientCompanionId: CompanionId, messageId: string): strin
 
 export class CompanionDeliveryFailureReceipts {
   private readonly receipts = new Map<string, CompanionDeliveryReceipt>();
+  private readonly claimedReplies = new Set<string>();
 
   record(receipt: CompanionDeliveryReceipt): void {
     this.prune(receipt.deliveredAt);
-    this.receipts.set(receiptKey(receipt.recipientCompanionId, receipt.messageId), receipt);
+    const key = receiptKey(receipt.recipientCompanionId, receipt.messageId);
+    this.claimedReplies.delete(key);
+    this.receipts.set(key, receipt);
   }
 
   findVerified(
@@ -44,12 +51,46 @@ export class CompanionDeliveryFailureReceipts {
     return receipt?.channelId === report.channelId ? receipt : null;
   }
 
+  /**
+   * Claim the one reply capability created by any gateway delivery. The tuple
+   * is gateway-authored, recipient- and channel-bound, expires with the
+   * delivery receipt, and is atomically single-use. Presence privilege, when
+   * needed for a room, is separately decided by the channel lane.
+   * Failure-report verification remains available after this claim.
+   */
+  claimReply(
+    replyingCompanionId: CompanionId,
+    channelId: string,
+    replyToMessageId: string,
+    now = Date.now(),
+  ): CompanionDeliveryReceipt | null {
+    this.prune(now);
+    const key = receiptKey(replyingCompanionId, replyToMessageId);
+    if (this.claimedReplies.has(key)) return null;
+    const receipt = this.receipts.get(key);
+    if (
+      !receipt
+      || receipt.channelId !== channelId
+      || !Number.isFinite(now)
+      || !Number.isFinite(receipt.deliveredAt)
+      || receipt.deliveredAt > now
+      || receipt.deliveredAt < now - DELIVERY_RECEIPT_TTL_MS
+    ) {
+      return null;
+    }
+    this.claimedReplies.add(key);
+    return receipt;
+  }
+
   consume(recipientCompanionId: CompanionId, messageId: string): void {
-    this.receipts.delete(receiptKey(recipientCompanionId, messageId));
+    const key = receiptKey(recipientCompanionId, messageId);
+    this.receipts.delete(key);
+    this.claimedReplies.delete(key);
   }
 
   clear(): void {
     this.receipts.clear();
+    this.claimedReplies.clear();
   }
 
   private prune(now: number): void {
@@ -57,6 +98,7 @@ export class CompanionDeliveryFailureReceipts {
     for (const [key, receipt] of this.receipts.entries()) {
       if (receipt.deliveredAt < oldestAllowed) {
         this.receipts.delete(key);
+        this.claimedReplies.delete(key);
       }
     }
   }

@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13; **room-mechanics feature branch completed 2026-07-13** on `feat/room-mechanics` @ `a410a342` (review-approved). Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -125,8 +125,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 **Unblocked now (entry points):**
 
 1. `s10mc.6.1` — ICP W1 contracts (heads the ICP chain)
-2. `s10rm` — sender-presence gate + presence-windowed delivery remainder
-   (blocks ICP `6.3` and `6.9`)
+2. `s10rm` — **feature branch complete and independently approved** @
+   `a410a342`; sender-presence authorization, presence-windowed room delivery,
+   and durable room/reply provenance are ready for the operator's later branch
+   integration.
 3. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
 4. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
    one activity with the `s10mc.8` live demo)
@@ -172,11 +174,18 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
   discovered B without discarding active form/attachment state before the
   operator reload; both paths then reloaded B offline. The focused service
   worker suite passed 8/8, Playwright passed 2/2, and companion-ui build and
-  lint pass. This is feature-branch evidence only: the work is not yet merged
-  to `main` or live-deployed.
+  lint pass.
 - The remaining audited working set is `mmo9.1`, `lghd` (unbounded re-prompt
   retry is intentional design, no bounded abort exists; stays P1), and `343f`.
   `sj4d` and `nw90` were fixed 2026-07-09 and are closed.
+- `s10rm` is no longer unbuilt. The review-approved `feat/room-mechanics`
+  branch closes the ordinary absent-sender injection hole, preserves only a
+  one-shot recipient/channel-bound reply capability across the same stable
+  presence epoch, and carries gateway-authoritative room place/privacy plus
+  reply lineage through session, turn-record, and memory-extraction seams.
+  Group text channels remain scrollback channels outside the location-room
+  lane; public location rooms skip the private join-time cutoff, while private
+  location rooms deliver only within the witnessed presence window.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 
@@ -304,7 +313,7 @@ In order — later steps assume earlier ones are done, except (b) and (a) can ru
 
 **(d) Flagship cutover off `public` schema + shard schema derivation** (remainder of `psfn-framework-s10mc.2`) — **hard gate: verify a restore round-trip of a real flagship snapshot first.** The cutover helper moves the flagship's live data out of the `public` schema into its own `companion_<uuid>` schema; doing that against production data without first proving restore works is the one step in this plan with irreversible-mistake risk. Restore functions are code-complete on `feat/fleet-workspace-isolation` (§0.5), but that is not the real-data proof: merge the branch, restore a flagship snapshot into a disposable Postgres + destination tree, verify it, then cut over.
 
-**(e) Presence-windowed private-room delivery** (remainder of `psfn-framework-s10rm`, locations-side). Entry-event system notes already merged (`144fb5c9` → `98e964eb`); what remains is delivering room chat only between join and exit for private/invite rooms (so L0 naturally holds only what was witnessed, no extraction-pipeline change needed), the group-chat exemption (public/group-marked channels see everything regardless of presence), and the who-related/privacy-level memory-tag tweaks.
+**(e) Presence-windowed location-room delivery** (`psfn-framework-s10rm`) — **feature branch complete; pending operator integration into `main`.** Entry-event system notes remain merged on `main` (`144fb5c9` → `98e964eb`), and the delivery foundation is at `47dbf683`. The final branch commits (`f7d5d55c`, `d9593b22`, `a410a342`) require a fresh sender presence for ordinary location-room posts; permit only one gateway-verified reply bound to the exact recipient, channel, receipt lifetime, and stable presence epoch; reject forged, expired, reused, moved, or post-leave lineage; persist authoritative room place/privacy and reply provenance into L0/TurnRecord/extraction; and preserve public/group-text semantics without applying the private join-time cutoff. Validation on the final branch: focused gateway/extraction 47/47, affected runtime/session/extraction 280/280, real two-companion loop lane 3/3, build and lint pass, and full Vitest 7,642 passed / 3 skipped with only the two pre-existing scheduler fixture drifts (`minPartnerIdleMinutes`) failing. Final independent review approved `a410a342`.
 
 **(f) Live two-companion demo** — closes `psfn-framework-s10mc.8` for real (crossover correctness is already proven under test load; this is the "watch it happen" milestone): two agent processes, one gateway, one hand-made shared room channel, a fatigue-bounded MI↔MI conversation observed on real infrastructure. This is naturally the same exercise as (a)'s flag-on half — treat them as one activity, not two.
 
@@ -347,7 +356,7 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10mc.6` | W6 inter-companion communication — **not started**, last unbuilt workstream (§2c) |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |
-| `psfn-framework-s10rm` | Room mechanics — entry-event note merged @ `98e964eb`; **open**: presence-windowed delivery, public-room semantics, memory-tag tweaks (§2e) |
+| `psfn-framework-s10rm` | Room mechanics — feature branch complete and independently approved (`f7d5d55c` + `d9593b22` + `a410a342`); bead closed 2026-07-13 with build/lint and room/DM lifecycle evidence; branch pending operator merge to `main` (§2e) |
 | `psfn-framework-s10wm` | World-tool `move` must write presence through `CompanionPresenceTurnPort` — integration note for the locations epic, not yet built |
 | `psfn-framework-s10d1` | Future-idea: cross-cluster direct companion communication trust model — deferred |
 | `psfn-framework-s10d2` | Future-idea: cognitive security firewall at the gateway — deferred, blocks full `s10d1` rollout |

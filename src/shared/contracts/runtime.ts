@@ -16,6 +16,7 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type { PlacePrivacy } from './places-registry.js';
 import type {
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
@@ -50,6 +51,8 @@ export interface TurnRecordMessage {
   sourceMessageId?: string;
   authorId?: string;
   authorName?: string;
+  /** Gateway-authoritative parent message for direct reply lineage. */
+  replyToMessageId?: string;
   runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }
 
@@ -80,11 +83,9 @@ export interface TurnRecordVersionPointers {
 }
 
 /**
- * Durable satellite/place origin recorded on a turn for long-lived history.
- * Sourced from the message's satellite routing metadata (`placeId` is the
- * static foreign key into `places.json` established by the satellite→place
- * binding). Fail-closed: the field is absent unless the turn actually carried a
- * bound `placeId`; nothing is fabricated for non-satellite turns.
+ * Durable room/satellite place origin recorded on a turn for long-lived
+ * history. Fail-closed: the field is absent unless authoritative routing
+ * carried a non-empty placeId.
  */
 export interface TurnRecordLocation {
   /** Static place binding carried onto the turn (`SatelliteConfig.placeId`). */
@@ -102,8 +103,10 @@ export interface TurnRecord {
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
-  /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
+  /** Durable room/satellite place origin; absent on unbound turns. */
   location?: TurnRecordLocation;
+  /** Gateway/session disclosure classification captured for this turn. */
+  channelPrivacy?: ChannelPrivacy;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
@@ -282,6 +285,11 @@ export interface MessageRoutingMetadata {
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
+  /** Gateway-authoritative location-room classification for companion turns. */
+  room?: {
+    placeId: string;
+    privacy: PlacePrivacy;
+  };
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
   modelOverride?: MessageModelOverride;
@@ -341,6 +349,8 @@ export interface SubstrateMessage {
   timestamp: Date;
   /** True for direct/private messages (e.g. Discord DMs). Adapters set this explicitly. */
   isDirectMessage?: boolean;
+  /** Gateway-authoritative parent message id when this message is a reply. */
+  replyToMessageId?: string;
   /** Optional transport/runtime routing hints (e.g. Wyoming session policy decisions). */
   routing?: MessageRoutingMetadata;
 }

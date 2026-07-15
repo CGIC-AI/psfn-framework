@@ -235,6 +235,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /** Shared clock for companion room delivery/reply boundary tests. */
+  companionChannelNow?: () => number;
   /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke
@@ -733,15 +735,37 @@ export class GatewayServer {
       throw new Error('companion.message.send requires an identified agent companion connection');
     }
 
-    const { channelId, content, authorName } = parseCompanionMessageSendParams(params);
+    const { channelId, content, authorName, replyToMessageId } = parseCompanionMessageSendParams(params);
 
     // The envelope timestamp is minted BEFORE recipient resolution and handed
     // to the lane: private-room windowing (psfn-framework-s10rm) compares each
     // recipient's presence `since` against this exact instant, so the window
     // check and the delivered envelope can never disagree on the clock.
-    const mintedAt = new Date();
+    const mintedAt = new Date(this.options.companionChannelNow?.() ?? Date.now());
+    const senderReplyReceipt = replyToMessageId !== undefined
+      ? this.companionDeliveryFailureReceipts.claimReply(
+        senderCompanionId,
+        channelId,
+        replyToMessageId,
+        mintedAt.getTime(),
+      )
+      : null;
+    if (replyToMessageId !== undefined && !senderReplyReceipt) {
+      this.alarmCompanionViolation(
+        'companion_reply_unverified',
+        'Companion reply does not match an unclaimed gateway delivery receipt',
+        { senderCompanionId, channelId, replyToMessageId },
+      );
+      throw new JSONRPCErrorException(
+        'Companion reply does not match an unclaimed gateway delivery receipt',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
     const resolution = await lane.resolveDelivery(senderCompanionId, channelId, {
       messageTimestampMs: mintedAt.getTime(),
+      ...(senderReplyReceipt?.roomPresenceEpoch
+        ? { senderReplyPresenceEpoch: senderReplyReceipt.roomPresenceEpoch }
+        : {}),
     });
     if (!resolution.ok) {
       this.alarmCompanionViolation(
@@ -773,7 +797,17 @@ export class GatewayServer {
       routing: {
         source: 'companion',
         authorIsMachineIntelligence: true,
+        ...(resolution.kind === 'room'
+          ? {
+            channelPrivacy: resolution.roomPrivacy,
+            room: {
+              placeId: resolution.placeId,
+              privacy: resolution.roomPrivacy,
+            },
+          }
+          : {}),
       },
+      ...(senderReplyReceipt ? { replyToMessageId: senderReplyReceipt.messageId } : {}),
     };
 
     this.refreshConnectionHealth();
@@ -803,12 +837,16 @@ export class GatewayServer {
         skippedOffline.push(recipientId);
         continue;
       }
+      const roomPresenceEpoch = resolution.kind === 'room'
+        ? resolution.recipientPresenceEpochs[recipientId]
+        : undefined;
       this.companionDeliveryFailureReceipts.record({
         channelId,
         messageId: message.id,
         senderCompanionId,
         recipientCompanionId: recipientId,
         deliveredAt: mintedAt.getTime(),
+        ...(roomPresenceEpoch ? { roomPresenceEpoch } : {}),
       });
       try {
         this.notifyOne(recipientConn, 'companion.message', { message });
@@ -819,7 +857,7 @@ export class GatewayServer {
       deliveredTo.push(recipientId);
     }
 
-    if (resolution.windowExcluded && resolution.windowExcluded.length > 0) {
+    if (resolution.kind === 'room' && resolution.windowExcluded && resolution.windowExcluded.length > 0) {
       // Private-room join race: present companions whose window opened after
       // the mint receive nothing pre-join (psfn-framework-s10rm). Loud log,
       // not a violation — this is the window working as designed.
@@ -1897,6 +1935,7 @@ function extractViolationCompanionId(details: Record<string, unknown>): string |
 
 const COMPANION_MESSAGE_MAX_CONTENT_CHARS = 65_536;
 const COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS = 200;
+const COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS = 256;
 
 /**
  * Fail-closed validation for companion.message.send params. Note the sender
@@ -1908,6 +1947,7 @@ function parseCompanionMessageSendParams(params: unknown): {
   channelId: string;
   content: string;
   authorName?: string;
+  replyToMessageId?: string;
 } {
   if (!isRecord(params)) {
     throw new Error('companion.message.send requires an object params payload');
@@ -1937,7 +1977,25 @@ function parseCompanionMessageSendParams(params: unknown): {
       );
     }
   }
-  return { channelId, content, ...(authorName ? { authorName } : {}) };
+  let replyToMessageId: string | undefined;
+  if (params.replyToMessageId !== undefined) {
+    if (typeof params.replyToMessageId !== 'string') {
+      throw new Error('companion.message.send replyToMessageId must be a string when provided');
+    }
+    replyToMessageId = params.replyToMessageId.trim();
+    if (!replyToMessageId || replyToMessageId.length > COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS) {
+      throw new Error(
+        'companion.message.send replyToMessageId must be '
+        + `1-${COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS} characters`,
+      );
+    }
+  }
+  return {
+    channelId,
+    content,
+    ...(authorName ? { authorName } : {}),
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+  };
 }
 
 function extractGatewayCorrelation(

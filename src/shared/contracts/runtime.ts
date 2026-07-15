@@ -855,7 +855,14 @@ export interface LLMProviderObservability {
   backendBaseUrl?: string;
   systemRole: LLMSystemRoleCapabilityMetadata;
   promptCaching: LLMPromptCacheObservability;
-  providerWireMessages: LLMProviderWireMessage[];
+  /**
+   * Flattened provider wire capture. Live captures always carry it; SLIM
+   * persisted turn snapshots omit it when the view is byte-derivable from the
+   * canonical PromptPlan (bead hgw3.3). Consumers must preserve absence —
+   * never coerce a missing capture to [] (the Garden read path treats absence
+   * as "derive from the plan" and an empty array as "captured empty").
+   */
+  providerWireMessages?: LLMProviderWireMessage[];
 }
 
 export interface ToolCall {
@@ -1010,9 +1017,10 @@ export interface ModelRegistryEntry {
 /**
  * Registry-wide provider prompt-caching policy (models.json owner, E2.4).
  *
- * `enabled` is the master switch and seeds OFF: the operator flips it to true
- * after verifying cache engagement on a test channel. When disabled, no
- * provider request carries any cache parameter (zero wire change). When
+ * `enabled` is the master switch and seeds ON (the shipped models.seed.json
+ * default): the operator can flip it to false to fully disable provider
+ * caching. When disabled, no provider request carries any cache parameter
+ * (zero wire change). When
  * enabled, per-provider serializers engage the mechanism the pi-ai layer
  * actually supports (Anthropic cache_control breakpoints at PromptPlan
  * boundaries, OpenRouter anthropic cache_control passthrough, OpenAI

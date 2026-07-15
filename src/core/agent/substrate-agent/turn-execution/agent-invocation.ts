@@ -628,10 +628,12 @@ export async function invokeAgentForTurn(input: {
   const historyMessages = agentMessages.slice();
   runtime.agent.state.messages = historyMessages;
   mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
-  if (turnSnapshot.promptContext?.providerObservability) {
+  if (turnSnapshot.promptContext?.providerObservability?.providerWireMessages) {
+    // Live captures always carry the wire messages (prompt-assembly seeds them
+    // from the serialized plan). Preserve absence rather than coercing to [].
     const providerObservability = turnSnapshot.promptContext.providerObservability;
     providerObservability.providerWireMessages = rebuildProviderWireMessagesForPrompt(
-      providerObservability.providerWireMessages,
+      providerObservability.providerWireMessages ?? [],
       historyMessages,
       currentPromptMessage,
     );

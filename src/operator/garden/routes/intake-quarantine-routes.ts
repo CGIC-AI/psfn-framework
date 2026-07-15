@@ -29,7 +29,7 @@ import {
 } from '../services/intake-quarantine-service.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
-import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
+import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const ADMIN_INTAKE_POLICY_API_PATH = '/api/admin/intake/policy';
@@ -139,7 +139,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
       match: exactPath(ADMIN_INTAKE_QUARANTINE_API_PATH),
       handle: (_req, res) => {
         try {
-          sendJson(res, 200, quarantineService.listItems(), ADMIN_DYNAMIC_JSON_HEADERS);
+          sendJson(res, 200, quarantineService.listItems(), ADMIN_POLLED_QUEUE_JSON_HEADERS);
         } catch (error) {
           sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load quarantine queue'),

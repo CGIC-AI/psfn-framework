@@ -174,12 +174,12 @@ describe('subsystem config round-trip', () => {
       .toThrow(/promptCaching: expected object/);
   });
 
-  it('validates the distributed models seed with promptCaching disabled by default', () => {
+  it('validates the distributed models seed with promptCaching enabled by default', () => {
     const dataDir = makeDataDir('psfn-models-seed-prompt-caching-');
     const seed = readJsonFile<Record<string, unknown>>(join('config', 'models.seed.json'));
     writeFileSync(join(dataDir, MODELS_FILE_NAME), JSON.stringify(seed, null, 2));
     const loaded = loadModelsConfig(dataDir, { defaultContextWindow: 128_000 });
-    expect(loaded.modelRegistry.promptCaching).toEqual({ enabled: false });
+    expect(loaded.modelRegistry.promptCaching).toEqual({ enabled: true });
   });
 
   it('fails closed when canonical primary-per-purpose invariant is violated', () => {

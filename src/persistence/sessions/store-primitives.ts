@@ -7,6 +7,7 @@ import {
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
+import type { SessionTailCachePort } from './session-tail-cache-port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -39,6 +40,14 @@ export interface ChannelCache {
   lastMessageAuthorName?: string;
   lastMessagePreview: string;
   fullyLoaded: boolean;
+  /**
+   * Archive file fingerprint (dev/ino/size/mtime/ctime) captured when a
+   * fullyLoaded cache last read or wrote the journal file. Multiple processes
+   * mount the same sessions dir, so every read served from a fullyLoaded cache
+   * must verify this against the file on disk and reload when it moved
+   * (fail closed: `null` on a non-empty archive never matches).
+   */
+  archiveFingerprint: string | null;
   recentEntriesByLimit: Map<number, CachedRecentEntries>;
 }
 
@@ -77,6 +86,12 @@ export interface SessionStoreOptions {
   transcriptProjection?: TranscriptProjectionPort | null;
   transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;
+  /**
+   * Optional bounded hot session tail shared across processes
+   * (psfn-framework-hgw3.5). Null/absent keeps reads and writes byte-identical
+   * to the file-only path.
+   */
+  tailCache?: SessionTailCachePort | null;
 }
 
 export interface SessionIntegrityProvider {

@@ -466,6 +466,7 @@ export function createLightweightCache(
     lastMessageAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
     lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     fullyLoaded: false,
+    archiveFingerprint: null,
     recentEntriesByLimit: new Map(),
   };
 }

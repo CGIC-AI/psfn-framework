@@ -123,13 +123,12 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
     const mutationSource = resolveTrustMutationSource(actor, options.mutationSource);
     if (
       mutationSource === 'behavior_drift'
-      && isHighTierTrustLevel(contact.trustLevel)
+      && (isHighTierTrustLevel(contact.trustLevel) || isHighTierTrustLevel(trustLevel))
     ) {
       return false;
     }
     if (
-      mutationSource === 'behavior_drift'
-      && isHighTierTrustLevel(trustLevel)
+      (isHighTierTrustLevel(contact.trustLevel) || isHighTierTrustLevel(trustLevel))
       && !isManualHighTierTrustMutationAuthorized(actor, mutationSource)
     ) {
       return false;

@@ -89,7 +89,6 @@ export function validateObsidianCliPathSetting(value: string): string {
 export interface SettingsDomainSplit {
   runtime: EditableSettings;
   models: EditableSettings;
-  salienceDecayIntervalMs?: number;
   capabilityTier?: CapabilityTier;
   legacyKeys: string[];
 }
@@ -137,8 +136,11 @@ export interface EditableSettings {
   sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
+  /** Retired owner key; accepted only so validation can reject it explicitly. */
   salienceDecayIntervalMs?: number;
-  /** Removed runtime mirror; scheduler.json > salienceDecayIntervalMs is canonical. */
+  /** Garden projection owned by scheduler.json > backgroundMaintenance.intervalMs. */
+  backgroundMaintenanceIntervalMs?: number;
+  /** Removed runtime mirror; scheduler.json is canonical. */
   maintenanceIntervalMs?: number;
   extractionThresholdPct?: number;
   compactionThresholdPct?: number;
@@ -277,7 +279,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'continuityMessageLimit',
   'sessionRestartBehavior',
   'extractionInterval',
-  'salienceDecayIntervalMs',
   'extractionThresholdPct',
   'compactionThresholdPct',
   'observationMaskingWindow',

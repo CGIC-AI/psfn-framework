@@ -62,7 +62,6 @@ const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
 };
 const DEFAULT_EXTRACTION_INTERVAL = 5;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 3_600_000;
-const DEFAULT_SALIENCE_DECAY_INTERVAL_MS = 3_600_000;
 const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
 const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
 const DEFAULT_OBSERVATION_MASKING_WINDOW = 1;
@@ -396,7 +395,6 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     sessionMirrorChannelOverrides: {},
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
-    salienceDecayIntervalMs: DEFAULT_SALIENCE_DECAY_INTERVAL_MS,
     defaultContextWindow,
     extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,

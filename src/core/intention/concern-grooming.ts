@@ -1,5 +1,5 @@
 import type { EventBus } from '../../shared/event-bus.js';
-import type { Scheduler } from '../scheduler/scheduler.js';
+import type { BackgroundMaintenanceRegistrar } from '../scheduler/background-maintenance.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import type {
   ConcernRouteDispatcher,
@@ -14,9 +14,8 @@ import {
   type ActiveConcern,
 } from './concerns.js';
 
-const CONCERN_GROOMING_TASK_ID = 'concern-grooming';
+const CONCERN_GROOMING_OPERATION_ID = 'concern-grooming';
 const CONCERN_GROOMING_TASK_NAME = 'Concern Grooming';
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_GROOMING_ROUTE_TARGET: ConcernRouteTarget = 'introspection';
 const STALE_RESOLUTION_OUTCOME =
   'Retired from the short-time concern set after the review window elapsed.';
@@ -144,48 +143,51 @@ function deriveConcernTitle(text: string): string {
   return compacted.length <= 78 ? compacted : `${compacted.slice(0, 75).trim()}...`;
 }
 
-export interface RegisterConcernGroomingTaskOptions {
-  scheduler: Scheduler;
+export interface RegisterConcernGroomingOperationOptions {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
   concernStore: ConcernStorePort;
   eventBus?: EventBus | null;
-  intervalMs?: number;
-  /** Durable-substrate dispatcher for retired concerns (etj1). */
+  maxActiveConcerns: number;
   routeDispatcher?: ConcernRouteDispatcher;
-  /** Target substrate for retired concerns; defaults to introspection. */
   routeTarget?: ConcernRouteTarget;
 }
 
-export function registerConcernGroomingTask(options: RegisterConcernGroomingTaskOptions): void {
-  if (options.scheduler.getTask(CONCERN_GROOMING_TASK_ID)) {
-    return;
-  }
-  options.scheduler.register({
-    id: CONCERN_GROOMING_TASK_ID,
+async function executeConcernGrooming(
+  options: Pick<
+    RegisterConcernGroomingOperationOptions,
+    'concernStore' | 'eventBus' | 'maxActiveConcerns' | 'routeDispatcher' | 'routeTarget'
+  >,
+): Promise<void> {
+  const result = await groomConcernSet({
+    concernStore: options.concernStore,
+    maxActiveConcerns: options.maxActiveConcerns,
+    ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
+    ...(options.routeTarget ? { routeTarget: options.routeTarget } : {}),
+  });
+  const routedCount = result.routeOutcomes.filter(o => o.disposition === 'routed').length;
+  const blockedRouteCount = result.routeOutcomes.filter(o => o.disposition === 'blocked').length;
+  await options.eventBus?.emit('intention.concern.groomed', {
+    staleResolvedCount: result.staleResolved.length,
+    capResolvedCount: result.capResolved.length,
+    activeCountBeforeCap: result.activeCountBeforeCap,
+    activeCountAfterCap: result.activeCountAfterCap,
+    routedCount,
+    blockedRouteCount,
+    timestamp: Date.now(),
+  });
+}
+
+export function registerConcernGroomingOperation(
+  options: RegisterConcernGroomingOperationOptions,
+): void {
+  options.backgroundMaintenance.registerOperation({
+    id: CONCERN_GROOMING_OPERATION_ID,
     name: CONCERN_GROOMING_TASK_NAME,
-    type: 'every',
-    intervalMs: options.intervalMs ?? ONE_DAY_MS,
-    cadence: { kind: 'daily', hour: 6, minute: 15, timezone: 'local' },
-    handler: async () => {
-      const result = await groomConcernSet({
-        concernStore: options.concernStore,
-        ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
-        ...(options.routeTarget ? { routeTarget: options.routeTarget } : {}),
-      });
-      const routedCount = result.routeOutcomes.filter(o => o.disposition === 'routed').length;
-      const blockedRouteCount = result.routeOutcomes.filter(o => o.disposition === 'blocked').length;
-      await options.eventBus?.emit('intention.concern.groomed', {
-        staleResolvedCount: result.staleResolved.length,
-        capResolvedCount: result.capResolved.length,
-        activeCountBeforeCap: result.activeCountBeforeCap,
-        activeCountAfterCap: result.activeCountAfterCap,
-        routedCount,
-        blockedRouteCount,
-        timestamp: Date.now(),
-      });
-    },
+    description:
+      `Resolves expired concerns and enforces the scheduler-owned active cap of ${options.maxActiveConcerns}.`,
     eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
-  }, { skipFirstRun: true });
+    handler: () => executeConcernGrooming(options),
+  });
 }
 
 function normalizeAsOf(value: string | undefined): string {

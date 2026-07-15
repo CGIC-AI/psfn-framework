@@ -294,22 +294,6 @@ export function applyAdminSettingsMutation(options: {
     }
   }
 
-  if (domainSplit.salienceDecayIntervalMs !== undefined) {
-    try {
-      const currentScheduler = configStore.loadScheduler();
-      const savedScheduler = configStore.saveScheduler({
-        ...currentScheduler,
-        salienceDecayIntervalMs: domainSplit.salienceDecayIntervalMs,
-      });
-      config.salienceDecayIntervalMs = savedScheduler.salienceDecayIntervalMs;
-    } catch (error) {
-      return {
-        ok: false,
-        message: `Settings saved but scheduler update failed: ${toErrorMessage(error)}`,
-      };
-    }
-  }
-
   if (domainSplit.capabilityTier !== undefined) {
     try {
       const currentCapabilities = configStore.loadCapabilityTier();
@@ -417,7 +401,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
         'episodic',
         0,
       ),
-      salienceDecayIntervalMs: this.deps.config.salienceDecayIntervalMs,
+      backgroundMaintenanceIntervalMs:
+        this.deps.configStore.loadScheduler().backgroundMaintenance.intervalMs,
       discordToken: marker(presence.discordToken),
       apiKey: marker(presence.apiKey),
       adminToken: marker(presence.adminToken),
@@ -1144,8 +1129,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
             : { ok: false, message: result.message };
         }
         case 'scheduler': {
-          const saved = this.deps.configStore.saveScheduler(parsed);
-          this.deps.config.salienceDecayIntervalMs = saved.salienceDecayIntervalMs;
+          this.deps.configStore.saveScheduler(parsed);
           return { ok: true, message: 'scheduler.json saved' };
         }
         case 'capabilities': {

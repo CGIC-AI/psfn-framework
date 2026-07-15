@@ -212,14 +212,42 @@ export interface ArcFormationConfig {
 }
 
 /**
- * Social-graph builder worker cadence (E4.2). Background job in the memory-agent
- * lane that proposes social-graph edges from accumulated room evidence. Runs on
- * a poll interval; the worker itself only acts on memories past its watermark.
- * Optional block — conservative defaults apply when absent.
+ * Shared cadence for cheap background housekeeping. The runtime exposes every
+ * operation attached to this tick in Garden; this is deliberately one honest
+ * knob rather than a hidden alias or one interval per maintenance operation.
+ */
+export interface BackgroundMaintenanceConfig {
+  /** Shared poll interval for every operation listed by the bundled task. */
+  intervalMs: number;
+  /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
+  ambientPresence: {
+    minIdleMinutes: number;
+    minNoteIntervalMinutes: number;
+  };
+  /** Concern-set grooming threshold evaluated on the shared tick. */
+  concernGrooming: {
+    maxActiveConcerns: number;
+  };
+}
+
+export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
+  intervalMs: 3_600_000,
+  ambientPresence: {
+    minIdleMinutes: 180,
+    minNoteIntervalMinutes: 360,
+  },
+  concernGrooming: {
+    maxActiveConcerns: 7,
+  },
+};
+
+/**
+ * Social-graph builder worker tuning (E4.2). The worker proposes social-graph
+ * edges from accumulated room evidence and only acts on memories past its
+ * watermark. Its cadence is the shared `backgroundMaintenance.intervalMs`.
+ * Optional block — conservative thresholds apply when absent.
  */
 export interface SocialGraphBuilderCadenceConfig {
-  /** Poll interval for the background worker (ms). */
-  intervalMs: number;
   /** Distinct co-presence windows required before an acquaintance is proposed. */
   coPresenceMinSessions: number;
   /** Fallback co-presence window size when a memory has no session id (minutes). */
@@ -229,7 +257,6 @@ export interface SocialGraphBuilderCadenceConfig {
 }
 
 export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConfig = {
-  intervalMs: 1_800_000,
   coPresenceMinSessions: 3,
   coPresenceWindowMinutes: 1440,
   scanMemoryLimit: 500,
@@ -544,7 +571,7 @@ export interface WeightedThoughtOutreachConfig {
 
 export const DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG: WeightedThoughtOutreachConfig = {
   enabled: false,
-  checkIntervalMs: 300_000,
+  checkIntervalMs: 1_800_000,
   nudgeThreshold: 1,
   maxNudgesPerRun: 1,
   lifecycle: {
@@ -593,7 +620,7 @@ export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
-  salienceDecayIntervalMs: number;
+  backgroundMaintenance: BackgroundMaintenanceConfig;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   nearTurnMemory: NearTurnMemoryCadenceConfig;
@@ -935,11 +962,13 @@ function validateSocialGraphBuilderConfig(
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: socialGraphBuilder must be an object`);
   }
+  if (raw.intervalMs !== undefined) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: socialGraphBuilder.intervalMs was removed; `
+      + 'the worker now uses backgroundMaintenance.intervalMs with the other bundled operations',
+    );
+  }
   return {
-    intervalMs: toInterval(
-      raw.intervalMs ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.intervalMs,
-      'socialGraphBuilder.intervalMs',
-    ),
     coPresenceMinSessions: toPositiveInteger(
       raw.coPresenceMinSessions ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceMinSessions,
       'socialGraphBuilder.coPresenceMinSessions',
@@ -955,6 +984,47 @@ function validateSocialGraphBuilderConfig(
       'socialGraphBuilder.scanMemoryLimit',
       1,
     ),
+  };
+}
+
+function validateBackgroundMaintenanceConfig(
+  raw: unknown,
+  sourcePath: string,
+): BackgroundMaintenanceConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundMaintenance must be an object`);
+  }
+  if (!isRecord(raw.ambientPresence)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.ambientPresence must be an object`,
+    );
+  }
+  if (!isRecord(raw.concernGrooming)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
+    );
+  }
+  return {
+    intervalMs: toInterval(raw.intervalMs, 'backgroundMaintenance.intervalMs'),
+    ambientPresence: {
+      minIdleMinutes: toPositiveInteger(
+        raw.ambientPresence.minIdleMinutes,
+        'backgroundMaintenance.ambientPresence.minIdleMinutes',
+        1,
+      ),
+      minNoteIntervalMinutes: toPositiveInteger(
+        raw.ambientPresence.minNoteIntervalMinutes,
+        'backgroundMaintenance.ambientPresence.minNoteIntervalMinutes',
+        1,
+      ),
+    },
+    concernGrooming: {
+      maxActiveConcerns: toPositiveInteger(
+        raw.concernGrooming.maxActiveConcerns,
+        'backgroundMaintenance.concernGrooming.maxActiveConcerns',
+        1,
+      ),
+    },
   };
 }
 
@@ -1405,11 +1475,17 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
       + 'Rename the key and remove any heavy-pass expectations from turn cadence.',
     );
   }
+  if (raw.salienceDecayIntervalMs !== undefined) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: salienceDecayIntervalMs was removed; `
+      + 'use backgroundMaintenance.intervalMs, the shared cadence Garden labels with every bundled operation',
+    );
+  }
 
   return {
     tickIntervalMs: toInterval(raw.tickIntervalMs, 'tickIntervalMs'),
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
-    salienceDecayIntervalMs: toInterval(raw.salienceDecayIntervalMs, 'salienceDecayIntervalMs'),
+    backgroundMaintenance: validateBackgroundMaintenanceConfig(raw.backgroundMaintenance, sourcePath),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),

@@ -72,7 +72,6 @@ function buildConfig(
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
     maintenanceIntervalMs: 300_000,
-    salienceDecayIntervalMs: 300_000,
     defaultContextWindow,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
@@ -527,7 +526,10 @@ describe('AdminSettingsDataService', () => {
     const service = buildService(config);
     const schedulerPayload = {
       ...JSON.parse(service.getSubConfigJson('scheduler') ?? '{}'),
-      salienceDecayIntervalMs: 180_000,
+      backgroundMaintenance: {
+        ...loadSchedulerConfig(root).backgroundMaintenance,
+        intervalMs: 180_000,
+      },
     };
     const capabilitiesPayload = {
       capabilityTier: 'custom',
@@ -556,8 +558,7 @@ describe('AdminSettingsDataService', () => {
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
 
     const schedulerConfig = loadSchedulerConfig(root);
-    expect(schedulerConfig.salienceDecayIntervalMs).toBe(180_000);
-    expect(config.salienceDecayIntervalMs).toBe(180_000);
+    expect(schedulerConfig.backgroundMaintenance.intervalMs).toBe(180_000);
     expect(config.maintenanceIntervalMs).toBe(300_000);
 
     const capabilityConfig = loadCapabilityTierConfig(root);
@@ -565,7 +566,7 @@ describe('AdminSettingsDataService', () => {
     expect(capabilityConfig.customTokens).toEqual(capabilitiesPayload.customTokens);
 
     const settingsData = await service.getSettingsData();
-    expect(settingsData.editors.scheduler.salienceDecayIntervalMs).toBe(180_000);
+    expect(settingsData.editors.scheduler.backgroundMaintenance.intervalMs).toBe(180_000);
     expect(settingsData.editors.capabilities).toEqual(expect.objectContaining({
       tier: 'custom',
       customTokens: capabilitiesPayload.customTokens,

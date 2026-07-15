@@ -443,7 +443,7 @@ async function main(): Promise<void> {
     log.info('No persisted internal state snapshot found; starting fresh');
   }
 
-  const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
+  const { scheduler, postTurnActions, backgroundMaintenance } = buildAgentSchedulerRuntime({
     eventBus,
     eligibilityGate,
     config,
@@ -1269,6 +1269,7 @@ async function main(): Promise<void> {
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
+      backgroundMaintenance,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       driftVelocityReview,
       secondArrowReview,

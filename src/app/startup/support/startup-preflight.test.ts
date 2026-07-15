@@ -135,7 +135,10 @@ describe('resolveStartupPreflightBundle', () => {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
-      salienceDecayIntervalMs: 123_000,
+      backgroundMaintenance: {
+        ...loadSchedulerSeedDefaults().backgroundMaintenance,
+        intervalMs: 123_000,
+      },
     });
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
@@ -171,10 +174,9 @@ describe('resolveStartupPreflightBundle', () => {
     expect(bundle.startupHydration.companionDataDir).toBe(companionDataDir);
     expect(bundle.startupHydration.pathSnapshot.systemDataDir).toBe(systemDataDir);
     expect(bundle.startupHydration.pathSnapshot.companionDataDir).toBe(companionDataDir);
-    expect(bundle.startupHydration.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
+    expect(bundle.startupHydration.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.memoryRetrievalLimit).toBe(15);
-    expect(config.salienceDecayIntervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(300_000);
   });
 

@@ -9,7 +9,9 @@ export interface SettingAuthorityInfo {
 }
 
 interface SchedulerEditorConfig {
-  salienceDecayIntervalMs?: unknown;
+  backgroundMaintenance?: {
+    intervalMs?: unknown;
+  };
 }
 
 interface CapabilitiesEditorConfig {
@@ -96,17 +98,16 @@ export function resolveSettingAuthority(
 ): SettingAuthorityInfo {
   const fallback = defaultAuthority(data, schema, key);
 
-  if (key === 'salienceDecayIntervalMs') {
+  if (key === 'backgroundMaintenanceIntervalMs') {
     const scheduler = (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
-    const effectiveMs = asInteger(scheduler.salienceDecayIntervalMs)
-      ?? asInteger(asRecord(data?.config)?.salienceDecayIntervalMs);
+    const effectiveMs = asInteger(scheduler.backgroundMaintenance?.intervalMs);
     return {
       sourceLabel: fallback.sourceLabel,
       ...(effectiveMs !== undefined ? { effectiveValue: `${effectiveMs.toLocaleString()} ms` } : {}),
       detail:
-        'Authoritative source: scheduler.json > salienceDecayIntervalMs. Saving here writes scheduler.json, and the runtime uses that dedicated cadence.',
+        'Authoritative source: scheduler.json > backgroundMaintenance.intervalMs. Saving here changes the one shared cadence for every operation listed on the Bundled Background Maintenance task.',
       precedence:
-        'scheduler.json wins. Compression-guideline review runs on the bundled heartbeat and does not share this cadence.',
+        'scheduler.json wins. Weighted-thought outreach, wake timing, backups, reflections, episode synthesis, and post-turn work keep their own justified triggers.',
     };
   }
 

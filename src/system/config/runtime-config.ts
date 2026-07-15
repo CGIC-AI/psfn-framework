@@ -32,8 +32,6 @@ export function hydrateJsonBackedRuntimeConfig(
     dataDir,
     ...(seedDir ? { seedDir } : {}),
   });
-  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
-
   config.capabilityTier = loadCapabilityTierConfig(dataDir, loadOptions).tier;
   config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
 

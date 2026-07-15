@@ -28,6 +28,9 @@ function makeTask(overrides: Partial<ScheduledTask> & { id: string; name: string
   if (overrides.lastError !== undefined) task.lastError = overrides.lastError;
   if (overrides.lastErrorAt !== undefined) task.lastErrorAt = overrides.lastErrorAt;
   if (overrides.lastDeniedReason !== undefined) task.lastDeniedReason = overrides.lastDeniedReason;
+  if (overrides.description !== undefined) task.description = overrides.description;
+  if (overrides.scheduleSource !== undefined) task.scheduleSource = overrides.scheduleSource;
+  if (overrides.operations !== undefined) task.operations = overrides.operations;
   return task;
 }
 
@@ -227,6 +230,39 @@ describe('AdminSchedulerService', () => {
       lastOutcome: 'failed',
       lastError: 'Task failed during test',
       lastErrorAt: 1_700_000_010_000,
+    });
+  });
+
+  it('exposes the bundled task description, canonical cadence owner, and exact operation manifest', () => {
+    const { scheduler } = createSchedulerStub([
+      makeTask({
+        id: 'background-maintenance',
+        name: 'Bundled Background Maintenance',
+        description: 'Runs only the operations listed here.',
+        scheduleSource: 'scheduler.json > backgroundMaintenance.intervalMs',
+        operations: [
+          {
+            id: 'salience-decay',
+            name: 'Memory Salience Decay',
+            description: 'Apply durable-memory decay.',
+          },
+          {
+            id: 'ambient-presence',
+            name: 'Ambient Presence',
+            description: 'Check quiet-time presence eligibility.',
+          },
+        ],
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    expect(service.getFullData().tasks[0]).toMatchObject({
+      description: 'Runs only the operations listed here.',
+      scheduleSource: 'scheduler.json > backgroundMaintenance.intervalMs',
+      operations: [
+        { id: 'salience-decay', name: 'Memory Salience Decay' },
+        { id: 'ambient-presence', name: 'Ambient Presence' },
+      ],
     });
   });
 });

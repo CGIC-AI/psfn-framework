@@ -172,7 +172,6 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     sessionRestartBehavior:
       config.sessionRestartBehavior ?? 'reuse_latest_session',
     extractionInterval: config.extractionInterval,
-    salienceDecayIntervalMs: config.salienceDecayIntervalMs,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
     observationMaskingWindow: config.observationMaskingWindow ?? 1,
@@ -199,7 +198,6 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'continuityMessageLimit'
     | 'sessionRestartBehavior'
     | 'extractionInterval'
-    | 'salienceDecayIntervalMs'
     | 'extractionThresholdPct'
     | 'compactionThresholdPct'
     | 'observationMaskingWindow'

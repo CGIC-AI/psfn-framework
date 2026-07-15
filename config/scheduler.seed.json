@@ -1,7 +1,16 @@
 {
   "tickIntervalMs": 60000,
   "heartbeatIntervalMs": 1800000,
-  "salienceDecayIntervalMs": 3600000,
+  "backgroundMaintenance": {
+    "intervalMs": 3600000,
+    "ambientPresence": {
+      "minIdleMinutes": 180,
+      "minNoteIntervalMinutes": 360
+    },
+    "concernGrooming": {
+      "maxActiveConcerns": 7
+    }
+  },
   "artifactLifecycle": {
     "scratchpadRetentionDays": 14,
     "generatedMediaRetentionDays": 30,
@@ -67,7 +76,6 @@
     "maxEpisodesPerRun": 60
   },
   "socialGraphBuilder": {
-    "intervalMs": 1800000,
     "coPresenceMinSessions": 3,
     "coPresenceWindowMinutes": 1440,
     "scanMemoryLimit": 500
@@ -134,7 +142,7 @@
   },
   "weightedThoughtOutreach": {
     "enabled": false,
-    "checkIntervalMs": 300000,
+    "checkIntervalMs": 1800000,
     "nudgeThreshold": 1,
     "maxNudgesPerRun": 1,
     "lifecycle": {

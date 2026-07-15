@@ -4,39 +4,61 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import { registerSalienceDecayTask } from './scheduler-runtime.js';
+import {
+  isCompressionGuidelineEvolutionChannel,
+  registerSalienceDecayOperation,
+} from './scheduler-runtime.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 describe('agent scheduler runtime wiring', () => {
-  it('registers ambient presence as a scheduler-owned internal task', () => {
+  it('registers ambient presence on the shared background-maintenance task', () => {
     const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 
-    expect(source).toContain('registerAmbientPresenceTask({');
+    expect(source).toContain('registerAmbientPresenceOperation({');
+    expect(source).toContain('backgroundMaintenance,');
     expect(source).toContain('restWindow: options.schedulerConfig.episodicProcessing');
   });
 
-  it('registers salience decay from its dedicated runtime key', () => {
+  it('registers salience decay as an operation on the shared scheduler-owned cadence', () => {
     const scheduler = new Scheduler(new EventBus());
-    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
-
-    registerSalienceDecayTask({
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'autonomous',
+      getGrantedTokens: () => new Set(),
+      has: () => true,
+    }));
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
       scheduler,
-      memoryStore: {} as MemoryStorePort,
+      eligibilityGate,
       intervalMs: 3_600_000,
     });
+    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 
-    expect(scheduler.getTask('salience-decay')?.intervalMs).toBe(3_600_000);
-    expect(source).toContain('intervalMs: options.config.salienceDecayIntervalMs');
+    registerSalienceDecayOperation({
+      backgroundMaintenance,
+      memoryStore: {} as MemoryStorePort,
+    });
+
+    expect(scheduler.getTask('background-maintenance')).toMatchObject({
+      intervalMs: 3_600_000,
+      operations: [{ id: 'salience-decay', name: 'Memory Salience Decay' }],
+    });
+    expect(source).toContain('intervalMs: options.schedulerConfig.backgroundMaintenance.intervalMs');
+    expect(source).not.toContain('options.config.salienceDecayIntervalMs');
     expect(source).not.toContain('intervalMs: options.config.maintenanceIntervalMs');
   });
 
-  it('bundles compression-guideline review into heartbeat instead of a decay-cadence task', () => {
+  it('reviews compression guidance only after real shard compaction signals', () => {
     const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 
-    expect(source).toContain('scheduler.registerHeartbeat(async () => {');
-    expect(source).toContain('runPeriodicCompressionGuidelineUpdate');
+    expect(isCompressionGuidelineEvolutionChannel('shard:analysis-1')).toBe(true);
+    expect(isCompressionGuidelineEvolutionChannel('discord:chat')).toBe(false);
+    expect(isCompressionGuidelineEvolutionChannel('api:main')).toBe(false);
+    expect(source).toContain('if (!isCompressionGuidelineEvolutionChannel(message.channelId)) return;');
+    expect(source).toContain('await runCompressionGuidelineReview(options);');
     expect(source).not.toContain("id: 'compaction-guideline-review'");
   });
 });

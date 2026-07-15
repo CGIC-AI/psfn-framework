@@ -4,7 +4,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 // Provides task CRUD and reflection template management.
 
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
-import { AMBIENT_PRESENCE_TASK_ID } from '../../../core/scheduler/ambient-presence.js';
+import { BACKGROUND_MAINTENANCE_TASK_ID } from '../../../core/scheduler/background-maintenance.js';
 import {
   HeartbeatPolicyStore,
   resolveConsolidatedReflectionTemplateId,
@@ -18,6 +18,7 @@ import type {
   RecurringCadence,
   RecurringCadenceTimezone,
   ScheduledTask,
+  ScheduledTaskOperation,
   TaskType,
 } from '../../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
@@ -227,6 +228,9 @@ function readCadenceFromTask(task: ScheduledTask): AdminTaskCadence | undefined 
 export interface AdminScheduledTask {
   id: string;
   name: string;
+  description?: string;
+  scheduleSource?: string;
+  operations?: ScheduledTaskOperation[];
   type: TaskType;
   intervalMs: number;
   runAt?: number;
@@ -258,6 +262,9 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
   return {
     id: task.id,
     name: task.name,
+    description: task.description,
+    scheduleSource: task.scheduleSource,
+    operations: task.operations?.map(operation => ({ ...operation })),
     type: task.type,
     intervalMs: task.intervalMs,
     runAt: task.runAt,
@@ -556,8 +563,7 @@ export class AdminSchedulerService {
     // Protect core system tasks
     const protectedTasks = new Set([
       'heartbeat',
-      AMBIENT_PRESENCE_TASK_ID,
-      'salience-decay',
+      BACKGROUND_MAINTENANCE_TASK_ID,
       'maintenance',
     ]);
     if (protectedTasks.has(id)) {

@@ -17,15 +17,21 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
-import { registerAmbientPresenceTask } from '../../core/scheduler/ambient-presence.js';
-import { registerConcernGroomingTask } from '../../core/intention/concern-grooming.js';
+import {
+  registerAmbientPresenceOperation,
+} from '../../core/scheduler/ambient-presence.js';
+import {
+  BackgroundMaintenanceRegistry,
+  type BackgroundMaintenanceRegistrar,
+} from '../../core/scheduler/background-maintenance.js';
+import { registerConcernGroomingOperation } from '../../core/intention/concern-grooming.js';
 import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import {
   SocialGraphBuilderWorker,
   createSocialGraphBuilderMemoryReader,
-  SOCIAL_GRAPH_BUILDER_TASK_ID,
+  SOCIAL_GRAPH_BUILDER_OPERATION_ID,
 } from '../../faculties/memory/social-graph/graph-builder-worker.js';
 import type {
   SocialGraphProposalStore,
@@ -49,11 +55,16 @@ import {
 } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Agent');
-const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
+const COMPACTION_GUIDELINE_REVIEW_ACTION_KIND = 'compaction-guideline-review';
+
+export function isCompressionGuidelineEvolutionChannel(channelId: string): boolean {
+  return channelId.startsWith('shard:');
+}
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
 }
 
 export interface BuildAgentSchedulerRuntimeOptions {
@@ -83,10 +94,9 @@ export interface BuildAgentSchedulerRuntimeOptions {
   socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
 }
 
-export function registerSalienceDecayTask(input: {
-  scheduler: Scheduler;
+export function registerSalienceDecayOperation(input: {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
   memoryStore: MemoryStorePort;
-  intervalMs: number;
   config?: SubstrateConfig;
 }): void {
   const salienceDecay = new SalienceDecay(input.memoryStore, {
@@ -94,14 +104,12 @@ export function registerSalienceDecayTask(input: {
       ? { memoryRetrievalPolicy: () => input.config?.memoryRetrievalPolicy }
       : {}),
   });
-  input.scheduler.register({
+  input.backgroundMaintenance.registerOperation({
     id: 'salience-decay',
     name: 'Memory Salience Decay',
-    type: 'every',
-    intervalMs: input.intervalMs,
+    description: 'Applies the configured memory weight decay pass to durable memories.',
     handler: () => salienceDecay.run(),
     eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
   });
 }
 
@@ -110,10 +118,8 @@ async function runCompressionGuidelineReview(
 ): Promise<void> {
   const eligibility = options.eligibilityGate.evaluate(
     {
-      kind: 'scheduler.task',
-      taskId: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
-      taskName: 'Compression Guideline Review',
-      taskType: 'every',
+      kind: 'post_turn.action',
+      actionKind: COMPACTION_GUIDELINE_REVIEW_ACTION_KIND,
     },
     { requiredTokens: ['memory.write'] },
   );
@@ -154,11 +160,15 @@ export function buildAgentSchedulerRuntime(
       eligibilityGate: options.eligibilityGate,
     },
   );
-
-  registerSalienceDecayTask({
+  const backgroundMaintenance = new BackgroundMaintenanceRegistry({
     scheduler,
+    eligibilityGate: options.eligibilityGate,
+    intervalMs: options.schedulerConfig.backgroundMaintenance.intervalMs,
+  });
+
+  registerSalienceDecayOperation({
+    backgroundMaintenance,
     memoryStore: options.memoryStore,
-    intervalMs: options.config.salienceDecayIntervalMs,
     config: options.config,
   });
 
@@ -293,19 +303,24 @@ export function buildAgentSchedulerRuntime(
     // are logged loudly inside the runtime and never thrown, so they can never
     // take down the heartbeat lane.
     await options.companionPresence?.refreshOwnPresence();
-    await runCompressionGuidelineReview(options);
   });
-  registerAmbientPresenceTask({
-    scheduler,
+  registerAmbientPresenceOperation({
+    backgroundMaintenance,
     sessionManager: options.sessionManager,
     restWindow: options.schedulerConfig.episodicProcessing,
     eventBus: options.eventBus,
+    minIdleMs:
+      options.schedulerConfig.backgroundMaintenance.ambientPresence.minIdleMinutes * 60_000,
+    minNoteIntervalMs:
+      options.schedulerConfig.backgroundMaintenance.ambientPresence.minNoteIntervalMinutes * 60_000,
   });
   if (options.concernStore) {
-    registerConcernGroomingTask({
-      scheduler,
+    registerConcernGroomingOperation({
+      backgroundMaintenance,
       concernStore: options.concernStore,
       eventBus: options.eventBus,
+      maxActiveConcerns:
+        options.schedulerConfig.backgroundMaintenance.concernGrooming.maxActiveConcerns,
       routeDispatcher: createDefaultConcernRouteDispatcher({
         companionDataDir: options.pathSnapshot.companionDataDir,
         eventBus: options.eventBus,
@@ -352,19 +367,18 @@ export function buildAgentSchedulerRuntime(
         }
       },
     });
-    scheduler.register({
-      id: SOCIAL_GRAPH_BUILDER_TASK_ID,
+    backgroundMaintenance.registerOperation({
+      id: SOCIAL_GRAPH_BUILDER_OPERATION_ID,
       name: 'Social Graph Builder',
-      type: 'every',
-      intervalMs: builderCadence.intervalMs,
+      description:
+        'Scans bounded room-memory evidence and creates operator-reviewed social-graph proposals.',
       handler: async () => {
         await socialGraphBuilder.run();
       },
       eligibility: { requiredTokens: ['memory.write'] },
-      state: 'idle',
     });
     log.info('Social-graph builder worker registered', {
-      intervalMs: builderCadence.intervalMs,
+      intervalMs: options.schedulerConfig.backgroundMaintenance.intervalMs,
       coPresenceMinSessions: builderCadence.coPresenceMinSessions,
     });
   }
@@ -376,7 +390,8 @@ export function buildAgentSchedulerRuntime(
     eligibilityGate: options.eligibilityGate,
     persistencePath: resolvePostTurnActionQueuePath(options.pathSnapshot.companionDataDir),
   });
-  options.eventBus.on('agent.turn.end', ({ message, response }) => {
+  options.eventBus.on('agent.turn.end', async ({ message, response }) => {
+    if (!isCompressionGuidelineEvolutionChannel(message.channelId)) return;
     const captured = options.sessionManager.recordCompressionFailureFromResponse(
       message.channelId,
       message.id,
@@ -387,11 +402,13 @@ export function buildAgentSchedulerRuntime(
       channelId: message.channelId,
       sourceMessageId: message.id,
     });
+    await runCompressionGuidelineReview(options);
   });
 
   log.info(`Memory system enabled (${options.gateway.dims}d embeddings via gateway)`);
   return {
     scheduler,
     postTurnActions,
+    backgroundMaintenance,
   };
 }

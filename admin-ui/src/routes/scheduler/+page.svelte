@@ -252,7 +252,7 @@
   }
 
   // ── Protected tasks ──
-  const PROTECTED_TASKS = new Set(['heartbeat', 'salience-decay', 'maintenance']);
+  const PROTECTED_TASKS = new Set(['heartbeat', 'background-maintenance', 'maintenance']);
   function isProtected(id: string): boolean {
     return PROTECTED_TASKS.has(id);
   }
@@ -775,6 +775,24 @@
                 <td class="px-4 py-3">
                   <code class="text-sm font-mono text-shadow-800">{task.name}</code>
                   <span class="text-xs text-shadow-500 block font-mono">{task.id}</span>
+                  {#if task.description}
+                    <p class="mt-1 max-w-xl text-xs text-shadow-600">{task.description}</p>
+                  {/if}
+                  {#if task.scheduleSource}
+                    <p class="mt-1 text-[11px] text-shadow-500">
+                      Shared cadence: <code class="font-mono">{task.scheduleSource}</code>
+                    </p>
+                  {/if}
+                  {#if task.operations?.length}
+                    <ul class="mt-2 space-y-1" aria-label={`${task.name} operations`}>
+                      {#each task.operations as operation (operation.id)}
+                        <li class="text-[11px] text-shadow-600">
+                          <code class="font-mono text-shadow-700">{operation.name}</code>
+                          <span class="block text-shadow-500">{operation.description}</span>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
                 </td>
                 <td class="px-4 py-3">
                   <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium {TYPE_BADGE[task.type] || 'bg-bark-200 text-shadow-600'}">

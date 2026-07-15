@@ -2,7 +2,7 @@
 
 ## Fixed point and boundaries
 
-- Worktree: `/home/ada/ai/dev/worktrees/psfn-framework/icp-autonomy`
+- Worktree: `<operator-home>/ai/dev/worktrees/psfn-framework/icp-autonomy`
 - Branch: `feat/icp-autonomy`
 - Pre-handoff code HEAD: `72238bc8952a063efd236cf21e0a0afc6d81fd42`
   (`fix(icp): own idle queue ingress`)
@@ -11,7 +11,7 @@
 - Before this document, the worktree was clean, 0 behind / 16 ahead, and the W6
   commits were unpushed. The document commit is intentionally not self-recorded;
   use `git log -1 --oneline` for its hash.
-- Do not use main, live infrastructure, SSH, the Pi/PSFN-PI, or a Dolt remote.
+- Do not use main, live infrastructure, SSH, any live edge device, or a Dolt remote.
   The separate dirty SQLite worktree was not entered, edited, cleaned, or tested.
 
 The branch is a review candidate, not a finished feature branch. Do not merge it

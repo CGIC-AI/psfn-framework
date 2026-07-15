@@ -874,7 +874,7 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — closed on `feat/fleet-workspace-isolation` @ `70068448`; both restore-security children are closed; final evidence includes 434/434 focused isolation/restore tests, 69/69 hygiene regressions, settings, full repository hygiene, lint, ESM+DTS build, backup verification, and diff checks (§0.5) |
 | `psfn-framework-wprg` | Restore rollback ownership — integrated, independently reviewed, remediated, final-check approved, and closed @ `078f7bfe` (§0.5) |
 | `psfn-framework-5s70` | Restore credential-channel hardening — integrated, independently reviewed, remediated, combined-check approved, and closed through merge `28c7cba4` (§0.5) |
-| `psfn-framework-g44z` | Separate live validation: lossless Personal Workspace migration, cross-Garden isolation proof using the existing Carlini leak corpus, and disposable real-flagship restore rehearsal before cutover; does not block c337 |
+| `psfn-framework-g44z` | Separate live validation: lossless Personal Workspace migration, cross-Garden isolation proof using the existing synthetic leak corpus, and disposable real-flagship restore rehearsal before cutover; does not block c337 |
 | `psfn-framework-s10d7` | Fleet restore functions — verified shipped with c337 and closed; real flagship restore rehearsal is tracked by `psfn-framework-g44z` and still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |

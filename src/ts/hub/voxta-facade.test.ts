@@ -398,17 +398,17 @@ test("authenticated Voxta interruption detaches stalled TTS before admitting a r
   }
 });
 
-test("Voxta interrupt during a pending replyChunk send excludes the cancelled assistant reply from history", async () => {
+test("Voxta interrupt detaches a stalled replyChunk send before admitting a replacement", async () => {
   const agent = new BlockingVoxtaAgent();
-  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  const server = new RealtimeHubServer(testHubConfig({ sttStreamEnabled: true }), { agent, voxtaTts: null });
   const originalSend = WebSocket.prototype.send;
   let delayedFirstReplyChunk = false;
   let notifyReplyChunkSendStarted: () => void = () => undefined;
   const replyChunkSendStarted = new Promise<void>((resolve) => {
     notifyReplyChunkSendStarted = resolve;
   });
-  let releaseReplyChunkSend: () => void = () => undefined;
-  const replyChunkSendRelease = new Promise<void>((resolve) => {
+  let releaseReplyChunkSend: (error?: Error) => void = () => undefined;
+  const replyChunkSendRelease = new Promise<Error | undefined>((resolve) => {
     releaseReplyChunkSend = resolve;
   });
   type SendCallback = (error?: Error) => void;
@@ -431,7 +431,7 @@ test("Voxta interrupt during a pending replyChunk send excludes the cancelled as
     delayedFirstReplyChunk = true;
     notifyReplyChunkSendStarted();
     const delayedCallback: SendCallback = (error) => {
-      void replyChunkSendRelease.then(() => sendCallback(error));
+      void replyChunkSendRelease.then((lateError) => sendCallback(lateError ?? error));
     };
     if (typeof optionsOrCallback === "function") {
       Reflect.apply(originalSend, this, [data, delayedCallback]);
@@ -482,15 +482,16 @@ test("Voxta interrupt during a pending replyChunk send excludes the cancelled as
       sessionId: chatStarted.sessionId,
       text: "replacement",
     })));
-    releaseReplyChunkSend();
 
     await waitForVoxta(
       frames,
       "replyCancelled",
       (payload) => payload.messageId === cancelledChunk.messageId,
     );
+    await waitForCondition(() => agent.calls.length === 2);
     await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
     await waitForCompletion(frames, "send-after-delayed-chunk");
+    assert.equal(socket.readyState, WebSocket.OPEN);
 
     assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
       "cancel while sending",
@@ -502,6 +503,25 @@ test("Voxta interrupt during a pending replyChunk send excludes the cancelled as
       )),
       [],
     );
+
+    const payloadsBeforeLateCallback = voxtaPayloads(frames);
+    releaseReplyChunkSend(new Error("late stale replyChunk send failure"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(voxtaPayloads(frames), payloadsBeforeLateCallback);
+
+    socket.send(encodeFrame(invocation("send-after-late-chunk-callback", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after late callback",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after late callback");
+    await waitForCompletion(frames, "send-after-late-chunk-callback");
+    assert.deepEqual(agent.calls[2]?.history?.map((message) => message.content), [
+      "cancel while sending",
+      "replacement",
+      "reply:replacement",
+      "after late callback",
+    ]);
   } finally {
     releaseReplyChunkSend();
     WebSocket.prototype.send = originalSend;

@@ -59,7 +59,7 @@ beforeAll(async () => {
   try {
     for (const role of Object.values(ROLES)) {
       await admin.query(
-        `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${PASSWORDS[role]}'`,
+        `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${PASSWORDS[role]}'`,
       );
     }
   } finally {

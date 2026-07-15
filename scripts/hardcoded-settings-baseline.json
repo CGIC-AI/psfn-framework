@@ -3484,6 +3484,12 @@
       "value": "256"
     },
     {
+      "file": "src/persistence/postgres/fleet-auth/reapproval.ts",
+      "name": "CONTACT_ID_MAX_LENGTH",
+      "value": "256",
+      "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
+    },
+    {
       "file": "src/persistence/postgres/icp-admin-projection-store.ts",
       "name": "MAX_ADMIN_ROWS",
       "value": "100"

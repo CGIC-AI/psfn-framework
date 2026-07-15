@@ -62,13 +62,41 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
   return url.toString();
 }
 
+function accountReapprovalScope(input: {
+  principalId: string;
+  providerSubjectId: string;
+  companionId: string;
+  contactId: string;
+  bindingId: string;
+  roleGrantId: string;
+  role: 'owner' | 'admin' | 'member' | 'guest';
+  authorityLineageId: string;
+  authorityGeneration: number;
+  restoreCheckpoint: number;
+}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    principalId: input.principalId,
+    provider: 'discord',
+    providerSubjectId: input.providerSubjectId,
+    companionId: input.companionId,
+    contactId: input.contactId,
+    bindingId: input.bindingId,
+    roleGrantId: input.roleGrantId,
+    role: input.role,
+    authorityLineageId: input.authorityLineageId,
+    authorityGeneration: input.authorityGeneration,
+    restoreCheckpoint: input.restoreCheckpoint,
+  };
+}
+
 beforeAll(async () => {
   harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
   const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
   try {
     for (const role of [...Object.values(ROLES), COMPANION_ROLE]) {
       await admin.query(
-        `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${PASSWORDS[role as keyof typeof PASSWORDS]}'`,
+        `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${PASSWORDS[role as keyof typeof PASSWORDS]}'`,
       );
     }
   } finally {
@@ -100,6 +128,18 @@ async function freshDatabase() {
   };
 }
 
+async function reconcileThroughCoordinator(
+  backupUrl: string,
+  floor: Parameters<typeof reconcileFleetAuthAuthorityState>[1],
+): Promise<void> {
+  const backup = createPostgresPool(backupUrl, { max: 1 });
+  try {
+    await reconcileFleetAuthAuthorityState(backup, floor, randomUUID());
+  } finally {
+    await backup.end();
+  }
+}
+
 describe('fleet_auth Postgres authority boundary', () => {
   it('serializes replica migrations and records one checksummed ledger', async () => {
     const db = await freshDatabase();
@@ -113,7 +153,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -187,7 +227,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     try {
       for (const role of Object.values(probeRoles)) {
         await admin.query(
-          `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${probePassword}'`,
+          `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${probePassword}'`,
         );
       }
       // A least-privilege LOGIN role with none of the forbidden attributes must
@@ -241,7 +281,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     try {
       for (const role of Object.values(probeRoles)) {
         await admin.query(
-          `CREATE ROLE ${quoteIdentifier(role)} LOGIN REPLICATION PASSWORD '${probePassword}'`,
+          `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT REPLICATION CONNECTION LIMIT 16 PASSWORD '${probePassword}'`,
         );
       }
       // The preflight must reject the REPLICATION runtime credential before any
@@ -265,6 +305,104 @@ describe('fleet_auth Postgres authority boundary', () => {
         await replica.end();
       }
     } finally {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(role)}`).catch(() => undefined);
+      }
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects unsafe login posture and target-database ownership for every authority role', async () => {
+    if (!harness) throw new Error('Postgres harness unavailable');
+    const db = await freshDatabase();
+    const databaseName = decodeURIComponent(new URL(db.adminUrl).pathname.slice(1));
+    const probeRoles: FleetAuthDatabaseRoles = {
+      runtime: 'probe_posture_runtime',
+      migration: 'probe_posture_migration',
+      backupRestore: 'probe_posture_backup',
+    };
+    const probePassword = 'probe-password';
+    const probeUrl = (role: keyof FleetAuthDatabaseRoles): string => {
+      const url = new URL(db.adminUrl);
+      url.username = probeRoles[role];
+      url.password = probePassword;
+      return url.toString();
+    };
+    const authorities: Array<{
+      role: keyof FleetAuthDatabaseRoles;
+      run: () => Promise<unknown>;
+    }> = [
+      {
+        role: 'migration',
+        run: () => migrateFleetAuthSchema({ databaseUrl: probeUrl('migration'), roles: probeRoles }),
+      },
+      {
+        role: 'runtime',
+        run: () => assertFleetAuthRuntimePrivileges(probeUrl('runtime'), probeRoles),
+      },
+      {
+        role: 'backupRestore',
+        run: () => assertFleetAuthBackupRestorePrivileges(probeUrl('backupRestore'), probeRoles),
+      },
+    ];
+    const unsafePostures = [
+      {
+        unsafe: 'INHERIT',
+        reset: 'NOINHERIT',
+        expected: /must be NOINHERIT, credential-valid, finite CONNECTION LIMIT >= 1/,
+      },
+      {
+        unsafe: "VALID UNTIL '2000-01-01'",
+        reset: "VALID UNTIL 'infinity'",
+        expected: /credential-valid|password authentication failed/,
+      },
+      {
+        unsafe: 'CONNECTION LIMIT -1',
+        reset: 'CONNECTION LIMIT 16',
+        expected: /must be NOINHERIT, credential-valid, finite CONNECTION LIMIT >= 1/,
+      },
+      {
+        unsafe: 'CONNECTION LIMIT 0',
+        reset: 'CONNECTION LIMIT 16',
+        expected: /finite CONNECTION LIMIT|too many connections for role/,
+      },
+    ] as const;
+    const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+    try {
+      for (const role of Object.values(probeRoles)) {
+        await admin.query(
+          `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${probePassword}'`,
+        );
+      }
+      for (const { role, run } of authorities) {
+        for (const posture of unsafePostures) {
+          await admin.query(
+            `ALTER ROLE ${quoteIdentifier(probeRoles[role])} WITH ${posture.unsafe}`,
+          );
+          try {
+            await expect(run()).rejects.toThrow(posture.expected);
+          } finally {
+            await admin.query(
+              `ALTER ROLE ${quoteIdentifier(probeRoles[role])} WITH ${posture.reset}`,
+            );
+          }
+        }
+
+        await admin.query(
+          `ALTER DATABASE ${quoteIdentifier(databaseName)} OWNER TO ${quoteIdentifier(probeRoles[role])}`,
+        );
+        try {
+          await expect(run()).rejects.toThrow(/must not own the target database/);
+        } finally {
+          await admin.query(
+            `ALTER DATABASE ${quoteIdentifier(databaseName)} OWNER TO postgres`,
+          );
+        }
+      }
+    } finally {
+      await admin.query(
+        `ALTER DATABASE ${quoteIdentifier(databaseName)} OWNER TO postgres`,
+      ).catch(() => undefined);
       for (const role of Object.values(probeRoles)) {
         await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(role)}`).catch(() => undefined);
       }
@@ -307,6 +445,13 @@ describe('fleet_auth Postgres authority boundary', () => {
       )).rejects.toThrow(/permission denied/);
       await expect(runtime.query(
         `SELECT * FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations`,
+      )).rejects.toThrow(/permission denied/);
+      await expect(runtime.query(
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+         SET authority_generation = authority_generation + 1 WHERE singleton = TRUE`,
+      )).rejects.toThrow(/permission denied/);
+      await expect(runtime.query(
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE`,
       )).rejects.toThrow(/permission denied/);
       await expect(companion.query(
         `SELECT * FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals`,
@@ -351,11 +496,39 @@ describe('fleet_auth Postgres authority boundary', () => {
         `GRANT ${quoteIdentifier(ROLES.migration)} TO ${quoteIdentifier(ROLES.runtime)}`,
       );
       await expect(assertFleetAuthRuntimePrivileges(db.runtimeUrl, ROLES))
-        .rejects.toThrow(/must not inherit or SET ROLE/);
+        .rejects.toThrow(/must have no role memberships or SET ROLE targets/);
     } finally {
       await admin.query(
         `REVOKE ${quoteIdentifier(ROLES.migration)} FROM ${quoteIdentifier(ROLES.runtime)}`,
       );
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects direct and transitive membership in external roles, including server-program authority', async () => {
+    if (!harness) throw new Error('Postgres harness unavailable');
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+    const bridgeRole = `probe_bridge_${randomUUID().replaceAll('-', '')}`;
+    try {
+      await admin.query(`CREATE ROLE ${quoteIdentifier(bridgeRole)} NOLOGIN`);
+      await admin.query(
+        `GRANT pg_execute_server_program TO ${quoteIdentifier(bridgeRole)}`,
+      );
+      await admin.query(
+        `GRANT ${quoteIdentifier(bridgeRole)} TO ${quoteIdentifier(ROLES.runtime)}`,
+      );
+      await expect(assertFleetAuthRuntimePrivileges(db.runtimeUrl, ROLES))
+        .rejects.toThrow(/must have no role memberships.*pg_execute_server_program/i);
+    } finally {
+      await admin.query(
+        `REVOKE ${quoteIdentifier(bridgeRole)} FROM ${quoteIdentifier(ROLES.runtime)}`,
+      ).catch(() => undefined);
+      await admin.query(
+        `REVOKE pg_execute_server_program FROM ${quoteIdentifier(bridgeRole)}`,
+      ).catch(() => undefined);
+      await admin.query(`DROP ROLE IF EXISTS ${quoteIdentifier(bridgeRole)}`).catch(() => undefined);
       await admin.end();
     }
   }, TIMEOUT_MS);
@@ -378,7 +551,7 @@ describe('fleet_auth Postgres authority boundary', () => {
           `GRANT ${quoteIdentifier(protectedRole)} TO ${quoteIdentifier(memberRole)}`,
         );
         await expect(migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES }))
-          .rejects.toThrow(/must not inherit|unexpected role membership.*fleet auth authority/i);
+          .rejects.toThrow(/no role memberships|unexpected role membership.*fleet auth authority/i);
         await admin.query(
           `REVOKE ${quoteIdentifier(protectedRole)} FROM ${quoteIdentifier(memberRole)}`,
         );
@@ -494,6 +667,40 @@ describe('fleet_auth Postgres authority boundary', () => {
         ['b'.repeat(64), principalId],
       );
     } finally {
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('preserves history-only provider ownership when the backup role restores immutable history', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const backup = createPostgresPool(db.backupUrl, { max: 1 });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    const historicalPrincipalId = randomUUID();
+    const replacementPrincipalId = randomUUID();
+    const subjectId = '123456789012345680';
+    try {
+      await backup.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
+          (event_id, provider, subject_id, principal_id, state, event_type,
+           authority_generation, payload)
+         VALUES ($1, 'discord', $2, $3, 'revoked', 'unlinked', 1, '{}')`,
+        [randomUUID(), subjectId, historicalPrincipalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation)
+         VALUES ($1, 'pending', 1)`,
+        [replacementPrincipalId],
+      );
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation)
+         VALUES ('discord', $1, $2, 'pending', 1)`,
+        [subjectId, replacementPrincipalId],
+      )).rejects.toThrow(/permanently bound to another principal/);
+    } finally {
+      await backup.end();
       await runtime.end();
     }
   }, TIMEOUT_MS);
@@ -682,7 +889,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         activationGeneration: 1,
         databaseHasDurableAuthority: true,
       });
-      await reconcileFleetAuthAuthorityState(runtime, ordinaryRestart, randomUUID());
+      await reconcileThroughCoordinator(db.backupUrl, ordinaryRestart);
       const beforeDisable = await runtime.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions`,
       );
@@ -698,7 +905,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         databaseHasDurableAuthority: true,
         lifecycleTransitionId,
       });
-      await reconcileFleetAuthAuthorityState(runtime, reenabled, randomUUID());
+      await reconcileThroughCoordinator(db.backupUrl, reenabled);
       lifecycle.publishEnabled(
         lifecyclePreparation,
         reenabled.trustedHost.lineageId,
@@ -765,7 +972,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+      await reconcileThroughCoordinator(db.backupUrl, floor);
       await migration.query(`
         CREATE SCHEMA companion_alpha;
         CREATE TABLE companion_alpha.snapshot_probe (value TEXT NOT NULL);
@@ -881,7 +1088,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         activationGeneration: 1,
         databaseHasDurableAuthority: false,
       });
-      await reconcileFleetAuthAuthorityState(sourceRuntime, sourceFloor, randomUUID());
+      await reconcileThroughCoordinator(source.backupUrl, sourceFloor);
       await sourceMigration.query(`
         CREATE SCHEMA companion_alpha;
         CREATE TABLE companion_alpha.snapshot_probe (value TEXT NOT NULL);
@@ -1086,7 +1293,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         activationGeneration: 1,
         databaseHasDurableAuthority: false,
       });
-      await reconcileFleetAuthAuthorityState(sourceRuntime, oldFloor, randomUUID());
+      await reconcileThroughCoordinator(source.backupUrl, oldFloor);
       await sourceMigration.query(`
         CREATE SCHEMA companion_alpha;
         CREATE TABLE companion_alpha.snapshot_probe (value TEXT NOT NULL);
@@ -1131,7 +1338,7 @@ describe('fleet_auth Postgres authority boundary', () => {
           databaseHasDurableAuthority: false,
         });
         expect(newFloor.trustedHost.lineageId).not.toBe(oldFloor.trustedHost.lineageId);
-        await reconcileFleetAuthAuthorityState(targetRuntime, newFloor, randomUUID());
+        await reconcileThroughCoordinator(target.backupUrl, newFloor);
         const floorBefore = newFloors.read();
         const stateBefore = await targetRuntime.query(
           `SELECT * FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state`,
@@ -1184,7 +1391,19 @@ describe('fleet_auth Postgres authority boundary', () => {
     try {
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+      await reconcileThroughCoordinator(db.backupUrl, floor);
+      const exactScope = accountReapprovalScope({
+        principalId,
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        role: 'owner',
+        authorityLineageId: floor.trustedHost.lineageId,
+        authorityGeneration: floor.trustedHost.authorityGeneration,
+        restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
+      });
 
       // A quarantined restore candidate: principal + provider subject + binding + role.
       await runtime.query(
@@ -1263,6 +1482,63 @@ describe('fleet_auth Postgres authority boundary', () => {
         at: '2026-07-15T12:00:00.000Z',
       })).rejects.toThrow(/does not bind the requested account/);
 
+      // The ceremony must bind the exact grant and role; a guest-scoped
+      // ceremony cannot promote a quarantined owner grant.
+      const wrongRoleCeremonyId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb, 1,
+                 clock_timestamp() + interval '5 minutes')`,
+        [
+          wrongRoleCeremonyId,
+          'a'.repeat(64),
+          subjectId,
+          companionId,
+          JSON.stringify({ ...exactScope, role: 'guest' }),
+        ],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: wrongRoleCeremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:00:00.000Z',
+      })).rejects.toThrow(/exact scope/);
+
+      // Expiry is database-owned. Backdating the caller-provided event time
+      // cannot revive an already expired ceremony.
+      const expiredCeremonyId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, created_at, expires_at)
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb, 1,
+                 clock_timestamp() - interval '2 seconds',
+                 clock_timestamp() - interval '1 second')`,
+        [expiredCeremonyId, 'b'.repeat(64), subjectId, companionId, JSON.stringify(exactScope)],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: expiredCeremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2000-01-01T00:00:00.000Z',
+      })).rejects.toThrow(/expired/);
+
       // The exact ceremony reapproves the account atomically.
       const ceremonyId = randomUUID();
       await migration.query(
@@ -1270,9 +1546,9 @@ describe('fleet_auth Postgres authority boundary', () => {
           (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
            expected_companion_id, expected_contact_id, exact_scope,
            global_auth_epoch, expires_at)
-         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', '{}', 1,
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb, 1,
                  clock_timestamp() + interval '5 minutes')`,
-        [ceremonyId, 'f'.repeat(64), subjectId, companionId],
+        [ceremonyId, 'f'.repeat(64), subjectId, companionId, JSON.stringify(exactScope)],
       );
       const result = await executeAccountReapproval(runtime, {
         ceremonyId,
@@ -1444,7 +1720,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       // gate rather than failing earlier on an unprovisioned lineage.
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+      await reconcileThroughCoordinator(db.backupUrl, floor);
 
       // Runtime can no longer author a trusted-host ceremony.
       await expect(runtime.query(

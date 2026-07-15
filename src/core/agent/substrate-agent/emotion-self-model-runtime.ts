@@ -464,6 +464,7 @@ export class EmotionSelfModelRuntime {
     maxSessionEntryId?: number;
     icpCorrelation?: IcpConversationCorrelation;
     assertEffectAllowed?: () => Promise<void>;
+    /** Undefined permits direct-call history lookup; an empty array is authoritative. */
     recentEntries?: readonly SessionEntry[];
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
@@ -482,7 +483,7 @@ export class EmotionSelfModelRuntime {
       return;
     }
 
-    const recentEntries = params.recentEntries
+    const recentEntries = params.recentEntries !== undefined
       ? [...params.recentEntries]
       : params.maxSessionEntryId === undefined
         ? manager.getRecentMessages(params.sessionChannelId, 10)

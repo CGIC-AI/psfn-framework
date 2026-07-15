@@ -215,7 +215,7 @@ export interface AutoCompactionBetweenTurnsParams {
   icpCorrelation?: IcpConversationCorrelation;
   throwOnFailure?: boolean;
   assertEffectAllowed?: () => Promise<void>;
-  /** Exact source-bounded input captured and rechecked under TurnRecord fences. */
+  /** Exact source-bounded input captured and rechecked under TurnRecord fences; empty is authoritative. */
   capturedRecentEntries?: readonly SessionEntry[];
 }
 
@@ -841,7 +841,7 @@ export class SessionManager {
           this.config,
           params.turnBudgetCharacteristics,
         );
-        const recent = params.capturedRecentEntries
+        const recent = params.capturedRecentEntries !== undefined
           ? [...params.capturedRecentEntries]
           : this.captureAutoCompactionRecentEntries({
               channelId: resolvedChannelId,

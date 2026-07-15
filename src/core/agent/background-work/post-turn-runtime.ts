@@ -160,6 +160,20 @@ async function withStableConsumedSnapshot<T>(
   }
 }
 
+/**
+ * A bounded snapshot is usable only when it still contains the entry it was
+ * anchored to. Older source entries may legitimately fall outside the window,
+ * so require the max boundary id rather than every id recorded on the job.
+ */
+function requireSourceSessionEntry(
+  entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
+  requiredSessionEntryId: number,
+): void {
+  if (!entries.some(entry => entry.id === requiredSessionEntryId)) {
+    throw new BackgroundWorkDeferredError('source_not_ready', 250);
+  }
+}
+
 export async function executePostTurnBackgroundWork(
   input: BackgroundWorkExecutionInput,
   dependencies: PostTurnBackgroundRuntimeDependencies,
@@ -178,6 +192,7 @@ export async function executePostTurnBackgroundWork(
       async (recentEntries) => {
         await input.effects.assertOwned();
         const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         const extractor = dependencies.getMemoryExtractor();
         if (!extractor) throw new Error('Memory extraction background handler is not wired');
         await input.effects.run('memory-extraction', async (assertOwned) => {
@@ -210,6 +225,7 @@ export async function executePostTurnBackgroundWork(
       async (recentEntries) => {
         await input.effects.assertOwned();
         const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
           throw new BackgroundWorkPermanentError('source_mismatch');
         }
@@ -246,6 +262,7 @@ export async function executePostTurnBackgroundWork(
       async (recentEntries) => {
         await input.effects.assertOwned();
         requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         await input.effects.run('auto-compaction', async (assertOwned) => {
           await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
             channelId: payload.source.logicalSessionId,

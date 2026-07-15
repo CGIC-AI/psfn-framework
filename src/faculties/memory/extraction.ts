@@ -288,7 +288,7 @@ export class MemoryExtractor {
       channelId,
       trigger.triggerReason,
       canonicalContactId,
-      recoveredEntries ? [...recoveredEntries] : undefined,
+      recoveredEntries !== undefined ? [...recoveredEntries] : undefined,
       turnId,
       undefined,
       placeId,

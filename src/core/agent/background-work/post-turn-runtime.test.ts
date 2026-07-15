@@ -5,6 +5,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { SessionEntry } from '../../session/types.js';
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
+import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
 import {
   BackgroundWorkDeferredError,
@@ -106,6 +107,77 @@ function makeExecution(record: TurnRecord): {
   };
 }
 
+function makeEmotionExecution(record: TurnRecord) {
+  const base = makeExecution(record);
+  const payload: EmotionAppraisalBackgroundPayload = {
+    schemaVersion: 1,
+    kind: 'emotion_appraisal',
+    source: base.payload.source,
+    emotionSessionId: record.sessionId!,
+    internalStateSnapshotRef: record.internalStateSnapshotRef!,
+    appraisalState: {
+      schemaVersion: 1,
+      emotional: {
+        vad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
+        mood: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
+        discreteEmotions: { joy: 0.7 },
+        confidence: 0.8,
+        telemetry: { status: 'trusted', source: 'runtime_state', reasons: [], weight: 1 },
+      },
+      cognitive: { certaintyLevel: 0.6, topicEngagement: 0.7, processingQuality: 'fluent' },
+      attention: {
+        activeConcernCount: 2,
+        salientEntityCount: 1,
+        conversationTrajectory: 'deepening',
+      },
+      relational: { contactId: 'contact-1', trustLevel: 'regular', moodDrift: 0.1 },
+    },
+    personalityOwnerRef: 'character-card',
+    personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection({
+      personality: 'old queued personality',
+    }),
+  };
+  return {
+    payload,
+    effects: base.effects,
+    job: {
+      ...base.job,
+      kind: payload.kind,
+      payload,
+      payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+    },
+  };
+}
+
+function makeAutoCompactionExecution(record: TurnRecord) {
+  const base = makeExecution(record);
+  const payload: AutoCompactionBackgroundPayload = {
+    schemaVersion: 1,
+    kind: 'auto_compaction',
+    source: base.payload.source,
+    systemPromptTokenCount: 12,
+    memoriesTokenCount: 4,
+    adaptiveProfile: {
+      enabled: false,
+      source: 'disabled',
+      category: 'default',
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+    },
+    turnBudgetCharacteristics: {},
+  };
+  return {
+    payload,
+    effects: base.effects,
+    job: {
+      ...base.job,
+      kind: payload.kind,
+      payload,
+      payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+    },
+  };
+}
+
 function makeDependencies(input: {
   record: TurnRecord | null;
   now?: number;
@@ -113,6 +185,7 @@ function makeDependencies(input: {
   runIntentionPostTurnHooks?: ReturnType<typeof vi.fn>;
   beforeSourceEligibilityFence?: () => void;
   recentEntries?: SessionEntry[];
+  liveRecentEntries?: SessionEntry[];
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
@@ -138,6 +211,8 @@ function makeDependencies(input: {
   ) => operation(readSnapshot()));
   const captureAutoCompactionRecentEntries = vi.fn(() => input.recentEntries ?? []);
   const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+  const getMessageCount = vi.fn(() => (input.liveRecentEntries ?? input.recentEntries ?? []).length);
+  const getRecentMessages = vi.fn(() => input.liveRecentEntries ?? input.recentEntries ?? []);
   return {
     dependencies: {
       sessionManager: {
@@ -148,6 +223,9 @@ function makeDependencies(input: {
         withStableRecordedTurnEligibilitySnapshot,
         captureAutoCompactionRecentEntries,
         scheduleAutoCompactionBetweenTurns,
+        getMessageCount,
+        getRecentMessages,
+        characterName: 'Purrsephone',
       } as unknown as SessionManager,
       llmProvider: {} as LLMProviderPort,
       getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
@@ -163,6 +241,8 @@ function makeDependencies(input: {
     withStableRecordedTurnEligibilitySnapshot,
     captureAutoCompactionRecentEntries,
     scheduleAutoCompactionBetweenTurns,
+    getMessageCount,
+    getRecentMessages,
     maybeExtract,
     runIntentionPostTurnHooks,
     triggerEmotionAppraisal,
@@ -228,10 +308,110 @@ describe('executePostTurnBackgroundWork', () => {
     );
   });
 
+  it('runs the real extraction orchestrator from the bounded post-turn snapshot only', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    delete execution.payload.canonicalContactId;
+    execution.job.payloadFingerprint = fingerprintBackgroundWorkPayload(execution.payload);
+    const sourceEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'Authoritative source turn B contains the bounded private detail.',
+        authorName: 'Partner',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: 'Authoritative source turn B response.',
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const liveRecentEntries: SessionEntry[] = [
+      {
+        id: 10,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'Unfenced live turn A must not enter the prompt.',
+        timestamp: 80,
+      },
+      {
+        id: 12,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: 'Unfenced newer live turn C must not enter the prompt.',
+        timestamp: 120,
+      },
+    ];
+    const fixture = makeDependencies({ record, recentEntries: sourceEntries, liveRecentEntries });
+    const complete = vi.fn().mockResolvedValue({ content: '<response></response>' });
+    const extractor = new RealMemoryExtractor(
+      { complete } as unknown as LLMProviderPort,
+      fixture.dependencies.sessionManager,
+      {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[2],
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as ConstructorParameters<typeof RealMemoryExtractor>[3],
+      {
+        emit: vi.fn().mockResolvedValue(undefined),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[4],
+      {
+        extractionInterval: 1,
+        minImportance: 0,
+        minConfidence: 0,
+        minNovelty: 0,
+        telemetryEnabled: true,
+      },
+    );
+    fixture.dependencies.getMemoryExtractor = () => extractor;
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(fixture.getRecentMessages).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+    const prompt = complete.mock.calls[0]?.[0].systemPrompt;
+    expect(prompt).toContain('Authoritative source turn B contains the bounded private detail.');
+    expect(prompt).toContain('Authoritative source turn B response.');
+    expect(prompt).not.toContain('Unfenced live turn A must not enter the prompt.');
+    expect(prompt).not.toContain('Unfenced newer live turn C must not enter the prompt.');
+  });
+
   it('rehydrates an exact physical-source/logical-session turn without copying content into the job', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
-    const fixture = makeDependencies({ record });
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: record.turnId,
+        requestId: record.requestId,
+        role: 'assistant',
+        actorKind: 'machine_intelligence',
+      }),
+    }];
+    const fixture = makeDependencies({ record, recentEntries });
 
     await executePostTurnBackgroundWork(execution, fixture.dependencies);
 
@@ -247,10 +427,55 @@ describe('executePostTurnBackgroundWork', () => {
       'living-room',
       undefined,
       expect.any(Function),
-      [],
+      recentEntries,
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);
+  });
+
+  it('defers an authoritative empty memory snapshot before entering the effect sink', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const fixture = makeDependencies({ record, recentEntries: [] });
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'source_not_ready',
+      }));
+
+    expect(execution.effects.run).not.toHaveBeenCalled();
+    expect(fixture.maybeExtract).not.toHaveBeenCalled();
+  });
+
+  it('defers a reduced memory snapshot that is missing the source boundary entry', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const fixture = makeDependencies({
+      record,
+      recentEntries: [{
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'An older entry survived, but the source boundary did not.',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4f',
+          requestId: 'request-older',
+          role: 'user',
+          actorKind: 'human',
+        }),
+      }],
+    });
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'source_not_ready',
+      }));
+
+    expect(execution.effects.run).not.toHaveBeenCalled();
+    expect(fixture.maybeExtract).not.toHaveBeenCalled();
   });
 
   it('defers a briefly missing canonical record instead of consuming an attempt', async () => {
@@ -292,45 +517,8 @@ describe('executePostTurnBackgroundWork', () => {
 
   it('runs emotion appraisal from a hash-bound aggregate projection', async () => {
     const record = makeTurnRecord();
-    const base = makeExecution(record);
-    const payload: EmotionAppraisalBackgroundPayload = {
-      schemaVersion: 1,
-      kind: 'emotion_appraisal',
-      source: base.payload.source,
-      emotionSessionId: record.sessionId!,
-      internalStateSnapshotRef: record.internalStateSnapshotRef!,
-      appraisalState: {
-        schemaVersion: 1,
-        emotional: {
-          vad: { valence: 0.2, arousal: 0.3, dominance: 0.4 },
-          mood: { valence: 0.1, arousal: 0.2, dominance: 0.3 },
-          discreteEmotions: { joy: 0.7 },
-          confidence: 0.8,
-          telemetry: { status: 'trusted', source: 'runtime_state', reasons: [], weight: 1 },
-        },
-        cognitive: { certaintyLevel: 0.6, topicEngagement: 0.7, processingQuality: 'fluent' },
-        attention: {
-          activeConcernCount: 2,
-          salientEntityCount: 1,
-          conversationTrajectory: 'deepening',
-        },
-        relational: { contactId: 'contact-1', trustLevel: 'regular', moodDrift: 0.1 },
-      },
-      personalityOwnerRef: 'character-card',
-      personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection({
-        personality: 'old queued personality',
-      }),
-    };
-    const execution = {
-      payload,
-      effects: base.effects,
-      job: {
-        ...base.job,
-        kind: payload.kind,
-        payload,
-        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
-      },
-    };
+    const execution = makeEmotionExecution(record);
+    const { payload } = execution;
     const appraisalEntry: SessionEntry = {
       id: 2,
       channelId: record.sessionId!,
@@ -398,32 +586,7 @@ describe('executePostTurnBackgroundWork', () => {
 
   it('runs auto-compaction from the exact bounded source-turn snapshot', async () => {
     const record = makeTurnRecord();
-    const base = makeExecution(record);
-    const payload: AutoCompactionBackgroundPayload = {
-      schemaVersion: 1,
-      kind: 'auto_compaction',
-      source: base.payload.source,
-      systemPromptTokenCount: 12,
-      memoriesTokenCount: 4,
-      adaptiveProfile: {
-        enabled: false,
-        source: 'disabled',
-        category: 'default',
-        sessionHistoryBudgetPct: 6,
-        memoryRetrievalBudgetPct: 2,
-      },
-      turnBudgetCharacteristics: {},
-    };
-    const execution = {
-      payload,
-      effects: base.effects,
-      job: {
-        ...base.job,
-        kind: payload.kind,
-        payload,
-        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
-      },
-    };
+    const execution = makeAutoCompactionExecution(record);
     const recentEntries: SessionEntry[] = [{
       id: 2,
       channelId: record.sessionId!,
@@ -459,6 +622,34 @@ describe('executePostTurnBackgroundWork', () => {
         capturedRecentEntries: recentEntries,
       }),
     );
+  });
+
+  it('defers empty emotion and compaction snapshots before entering their effect sinks', async () => {
+    const record = makeTurnRecord();
+
+    const emotionExecution = makeEmotionExecution(record);
+    const emotionFixture = makeDependencies({ record, recentEntries: [] });
+    await expect(executePostTurnBackgroundWork(
+      emotionExecution,
+      emotionFixture.dependencies,
+    )).rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+      name: 'BackgroundWorkDeferredError',
+      reasonCode: 'source_not_ready',
+    }));
+    expect(emotionExecution.effects.run).not.toHaveBeenCalled();
+    expect(emotionFixture.triggerEmotionAppraisal).not.toHaveBeenCalled();
+
+    const compactionExecution = makeAutoCompactionExecution(record);
+    const compactionFixture = makeDependencies({ record, recentEntries: [] });
+    await expect(executePostTurnBackgroundWork(
+      compactionExecution,
+      compactionFixture.dependencies,
+    )).rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+      name: 'BackgroundWorkDeferredError',
+      reasonCode: 'source_not_ready',
+    }));
+    expect(compactionExecution.effects.run).not.toHaveBeenCalled();
+    expect(compactionFixture.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
   });
 
   it('checks the source tombstone/uniqueness gate before reading raw turn content', async () => {

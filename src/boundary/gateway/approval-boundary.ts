@@ -61,6 +61,8 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   method: string;
   handler: (params: P) => Promise<R>;
   paramsSummary: (params: P) => Record<string, unknown>;
+  /** Authenticated owner of the RPC that may enter the confirmation queue. */
+  authenticatedCompanionId: () => string | undefined;
   approvalAction: string;
   approvalScope: (params: P) => string;
   approvalReason?: (params: P) => string;
@@ -85,11 +87,21 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
+  const confirmationOwners = new Map<string, string>();
+  let enqueueOwner: string | undefined;
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
     observer: {
       onEnqueued: (entry) => {
+        if (!enqueueOwner) {
+          approvalLog.error('Refusing to emit ownerless companion.approval.requested', {
+            id: entry.id,
+          });
+          return;
+        }
+        confirmationOwners.set(entry.id, enqueueOwner);
         options.eventBus.emit('companion.approval.requested', {
+          companionId: enqueueOwner,
           payload: redactApprovalRequested(entry),
           timestamp: Date.now(),
         }).catch((error) => {
@@ -100,7 +112,16 @@ export function createGatewayApprovalBoundaryService(
         });
       },
       onResolved: (outcome) => {
+        const companionId = confirmationOwners.get(outcome.id);
+        if (!companionId) {
+          approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
+            id: outcome.id,
+          });
+          return;
+        }
+        confirmationOwners.delete(outcome.id);
         options.eventBus.emit('companion.approval.resolved', {
+          companionId,
           payload: redactApprovalResolved({
             id: outcome.id,
             status: outcome.status,
@@ -156,35 +177,47 @@ export function createGatewayApprovalBoundaryService(
           }
 
           if (decision === 'NEEDS_APPROVAL' && options.capabilityTierProvider() !== 'autonomous') {
+            const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+            if (!authenticatedCompanionId) {
+              throw new Error(
+                `Cannot queue ${gateOptions.method}: requesting connection has no authenticated companion owner`,
+              );
+            }
             const paramsRecord = params as unknown as Record<string, unknown>;
-            const queueEntry = confirmationQueue.enqueue(
-              {
-                method: gateOptions.method,
-                action: gateOptions.approvalAction,
-                scope: gateOptions.approvalScope(params),
-                params: paramsRecord,
-                companionReason: resolveCompanionReason(
-                  paramsRecord,
-                  gateOptions.approvalReason?.(params) ?? 'Outside workspace',
-                ),
-                expiresInMs: confirmationConfig.expiryMs,
-              },
-              async (approvedParams, entry) => executeQueuedAction({
-                method: gateOptions.method,
-                handler: gateOptions.handler,
-                paramsSummary: gateOptions.paramsSummary,
-                params: approvedParams as P,
-                entry,
-                audit: options.audit,
-                auditComplete: options.auditComplete,
-              }).then((result) => {
-                options.recordMethodSuccess(gateOptions.method);
-                return result;
-              }).catch((error) => {
-                options.recordMethodFailure(gateOptions.method, error);
-                throw error;
-              }),
-            );
+            let queueEntry: ConfirmationQueueEntry;
+            enqueueOwner = authenticatedCompanionId;
+            try {
+              queueEntry = confirmationQueue.enqueue(
+                {
+                  method: gateOptions.method,
+                  action: gateOptions.approvalAction,
+                  scope: gateOptions.approvalScope(params),
+                  params: paramsRecord,
+                  companionReason: resolveCompanionReason(
+                    paramsRecord,
+                    gateOptions.approvalReason?.(params) ?? 'Outside workspace',
+                  ),
+                  expiresInMs: confirmationConfig.expiryMs,
+                },
+                async (approvedParams, entry) => executeQueuedAction({
+                  method: gateOptions.method,
+                  handler: gateOptions.handler,
+                  paramsSummary: gateOptions.paramsSummary,
+                  params: approvedParams as P,
+                  entry,
+                  audit: options.audit,
+                  auditComplete: options.auditComplete,
+                }).then((result) => {
+                  options.recordMethodSuccess(gateOptions.method);
+                  return result;
+                }).catch((error) => {
+                  options.recordMethodFailure(gateOptions.method, error);
+                  throw error;
+                }),
+              );
+            } finally {
+              enqueueOwner = undefined;
+            }
             await notifyOperatorForPendingAction({
               entry: queueEntry,
               discordAdapter: options.discordAdapter,

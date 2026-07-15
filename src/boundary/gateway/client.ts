@@ -55,6 +55,8 @@ import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js'
 import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
+import { isGardenQueueName, type GardenQueueName } from '../../shared/event-bus.js';
+import { isRecord } from '../../shared/utils/types.js';
 import type {
   GitCommitResult,
   GitDiffResult,
@@ -1065,6 +1067,17 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return this.onNotification('discord.message', (params) => {
       const notification = params as DiscordMessageNotification;
       handler(notification.message);
+    });
+  }
+
+  /** Coarse queue invalidation relayed from the gateway approval boundary. */
+  onGardenQueueChanged(handler: (queue: GardenQueueName) => void): () => void {
+    return this.onNotification('garden.queue.changed', (params) => {
+      if (!isRecord(params) || !isGardenQueueName(params.queue)) {
+        log.warn('Rejected invalid garden.queue.changed notification');
+        return;
+      }
+      handler(params.queue);
     });
   }
 

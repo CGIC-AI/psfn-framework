@@ -1096,6 +1096,22 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect((messages[0] as any).content).toBe('test notification');
   });
 
+  it('accepts only coarse Garden queue-change notifications', () => {
+    const queues: string[] = [];
+    client.onGardenQueueChanged((queue) => queues.push(queue));
+
+    conn._emit({
+      method: 'garden.queue.changed',
+      params: { queue: 'confirmations', entryId: 'must-not-cross' },
+    });
+    conn._emit({
+      method: 'garden.queue.changed',
+      params: { queue: 'unknown-queue' },
+    });
+
+    expect(queues).toEqual(['confirmations']);
+  });
+
   it('routes companion delivery failure notifications to their observe-only handler', () => {
     const failures: unknown[] = [];
     client.onCompanionDeliveryFailure((failure) => failures.push(failure));

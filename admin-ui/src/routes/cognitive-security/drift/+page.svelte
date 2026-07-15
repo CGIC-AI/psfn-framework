@@ -3,6 +3,7 @@
   import { getDriftReviews, resolveDriftReviewCard } from '$lib/api/endpoints/drift';
   import type { DriftReviewCard, DriftReviewCardResolution } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
 
   let cards = $state<DriftReviewCard[]>([]);
   let loading = $state(true);
@@ -122,13 +123,15 @@
     }
   }
 
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const refreshPoller = createVisibilityAwarePoller({
+    refresh: loadData,
+    intervalMs: 30_000,
+  });
   onMount(() => {
-    loadData();
-    refreshTimer = setInterval(loadData, 30_000);
+    refreshPoller.start();
   });
   onDestroy(() => {
-    if (refreshTimer) clearInterval(refreshTimer);
+    refreshPoller.stop();
   });
 </script>
 

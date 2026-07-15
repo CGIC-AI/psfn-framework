@@ -10,6 +10,7 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
 
   let proposals = $state<GraphProposal[]>([]);
   let loading = $state(true);
@@ -69,13 +70,16 @@
     }
   }
 
-  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+  const queueRefresh = createGardenQueueRefresh({
+    queue: 'graph-proposals',
+    refresh: loadData,
+    intervalMs: 15_000,
+  });
   onMount(() => {
-    loadData();
-    refreshInterval = setInterval(loadData, 15_000);
+    queueRefresh.start();
   });
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    queueRefresh.stop();
   });
 </script>
 

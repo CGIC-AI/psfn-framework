@@ -548,6 +548,9 @@ function createTestServices(): GardenAdminDomainServices {
     },
     auditHistory: {
       appendGardenEntry: vi.fn(),
+      getAuditHistoryDetail: vi.fn(async () => {
+        throw new Error('not used in operator surface test');
+      }),
       getAuditHistory: vi.fn(async () => ({
         entries: [],
         filters: {

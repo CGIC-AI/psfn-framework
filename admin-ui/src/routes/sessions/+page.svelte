@@ -1,13 +1,21 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import {
-    listSessions,
+    getCachedSessionList,
+    getSessionDetail,
     getSessionMessages,
     getSessionTurnDetail,
+    revalidateSessionList,
     SESSION_MESSAGE_PAGE_SIZE,
   } from '$lib/api/endpoints/sessions';
+  import {
+    loadSelectedSessionData,
+    loadSessionIndex,
+  } from './session-data-loader';
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import type {
+    AdminSessionDetailData,
+    AdminSessionListData,
     ChannelInfo,
     AdminSessionMessagesData,
     AdminSessionTurnDetailData,
@@ -18,6 +26,7 @@
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
+  let selectedSessionDetail = $state<AdminSessionDetailData | null>(null);
   let messages = $state<SessionEntry[]>([]);
   let messageOntologyViews = $state<AdminSessionMessagesData['messageOntologyViews']>([]);
   let compactionAudits = $state<AdminSessionMessagesData['compactionAuditViews']>([]);
@@ -39,7 +48,11 @@
   let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
   let messageSearch = $state('');
   const companionName = $derived(getCompanionName());
-  const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
+  const selectedChannel = $derived(
+    selectedSessionDetail?.channel
+      ?? channels.find(channel => channel.sessionId === selectedSessionId)
+      ?? null,
+  );
 
   // Channel type labels matching the htmx admin
   const CHANNEL_TYPE_LABELS: Record<string, string> = {
@@ -82,22 +95,34 @@
     return Number.isFinite(timestamp) ? timestamp : null;
   }
 
+  function applySessionList(data: AdminSessionListData) {
+    channels = data.channels;
+    const seeded = new Map(channelLastActivity);
+    for (const channel of data.channels) {
+      const ts = toTimestampMs(channel.lastActivityAt);
+      if (ts !== null && ts > (seeded.get(channel.sessionId) ?? 0)) {
+        seeded.set(channel.sessionId, ts);
+      }
+    }
+    channelLastActivity = seeded;
+  }
+
   async function loadChannels() {
     loadingChannels = true;
     error = '';
     try {
-      const data = await listSessions();
-      channels = data.channels;
-      const seeded = new Map<string, number>();
-      for (const channel of data.channels) {
-        const ts = toTimestampMs(channel.lastActivityAt);
-        if (ts !== null) {
-          seeded.set(channel.sessionId, ts);
-        }
-      }
-      channelLastActivity = seeded;
+      await loadSessionIndex({
+        getCached: getCachedSessionList,
+        revalidate: revalidateSessionList,
+        onList: (data, source) => {
+          applySessionList(data);
+          if (source === 'cache') loadingChannels = false;
+        },
+      });
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load sessions';
+      if (channels.length === 0) {
+        error = e instanceof Error ? e.message : 'Failed to load sessions';
+      }
     } finally {
       loadingChannels = false;
     }
@@ -143,6 +168,7 @@
 
   async function selectChannel(sessionId: string) {
     selectedSessionId = sessionId;
+    selectedSessionDetail = null;
     const requestSessionId = sessionId;
     loadingMessages = true;
     loadingOlderMessages = false;
@@ -154,20 +180,30 @@
     expandedToolCall = null;
     resetTurnDetail();
     try {
-      // Initial page: keep compaction summaries but drop the up-to-50 full turn
-      // snapshots — turn detail is fetched lazily on expand (bead t5z7.1).
-      const data = await getSessionMessages(sessionId, {
-        limit: SESSION_MESSAGE_PAGE_SIZE,
-        includeTurns: false,
+      await loadSelectedSessionData({
+        sessionId,
+        loadMessages: requestSessionId => getSessionMessages(requestSessionId, {
+          // Initial page: keep compaction summaries but drop the up-to-50 full
+          // turn snapshots — turn detail is fetched lazily on expand.
+          limit: SESSION_MESSAGE_PAGE_SIZE,
+          includeTurns: false,
+        }),
+        loadDetail: getSessionDetail,
+        onMessages: async (data) => {
+          if (selectedSessionId !== requestSessionId) return;
+          messages = data.messages;
+          messageOntologyViews = data.messageOntologyViews ?? [];
+          compactionAudits = data.compactionAuditViews ?? [];
+          updatePaginationState(data);
+          updateLastActivityFromMessages(data);
+          loadingMessages = false;
+          await scrollMessagesToBottom();
+        },
+        onDetail: (data) => {
+          if (selectedSessionId !== requestSessionId) return;
+          selectedSessionDetail = data;
+        },
       });
-      if (selectedSessionId !== requestSessionId) return;
-      messages = data.messages;
-      messageOntologyViews = data.messageOntologyViews ?? [];
-      compactionAudits = data.compactionAuditViews ?? [];
-      updatePaginationState(data);
-      updateLastActivityFromMessages(data);
-      loadingMessages = false;
-      await scrollMessagesToBottom();
     } catch (e) {
       if (selectedSessionId === requestSessionId) {
         error = e instanceof Error ? e.message : 'Failed to load messages';
@@ -302,8 +338,7 @@
 
     // For person turns, try to use the linked contact name from the selected channel.
     if (msg.role === 'user') {
-      const channel = channels.find(c => c.sessionId === selectedSessionId);
-      if (channel?.linkedContactName) return channel.linkedContactName;
+      if (selectedChannel?.linkedContactName) return selectedChannel.linkedContactName;
     }
 
     // Fallback to role
@@ -370,8 +405,7 @@
       if (!needle) return true;
       return channelLabel(ch).toLowerCase().includes(needle)
         || ch.channelId.toLowerCase().includes(needle)
-        || ch.sessionId.toLowerCase().includes(needle)
-        || (ch.linkedContactName ?? '').toLowerCase().includes(needle);
+        || ch.sessionId.toLowerCase().includes(needle);
     });
 
     const sorted = [...list].sort((a, b) => {
@@ -486,10 +520,6 @@
                 <span class="text-sm text-shadow-600">
                   {ch.messageCount} messages
                 </span>
-                {#if ch.linkedContactName}
-                  <span class="text-sm text-shadow-600">&middot;</span>
-                  <span class="text-sm text-moss-700">{ch.linkedContactName}</span>
-                {/if}
               </div>
               {#if lastActivityTs}
                 <span class="text-sm text-shadow-600 block mt-0.5">
@@ -522,6 +552,9 @@
             {/if}
             {#if selectedChannel && selectedChannel.sessionId !== selectedChannel.channelId}
               <p class="text-sm text-shadow-600 font-mono truncate">session: {selectedChannel.sessionId}</p>
+            {/if}
+            {#if selectedChannel?.linkedContactName}
+              <p class="text-sm text-moss-700 truncate">Contact: {selectedChannel.linkedContactName}</p>
             {/if}
           </div>
           <span class="text-sm text-shadow-600">

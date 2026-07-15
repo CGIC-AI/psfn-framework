@@ -71,7 +71,7 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
-import type { EventBus } from '../../shared/event-bus.js';
+import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationResolveResult,
@@ -267,6 +267,7 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly gardenQueueChangeUnsubscribers: Array<() => void> = [];
   private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
 
   constructor(options: GatewayServerOptions) {
@@ -341,6 +342,20 @@ export class GatewayServer {
       vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],
       vaultOpsConfigured: Boolean(options.policyConfig.vault?.ops),
     });
+    const notifyConfirmationQueueChanged = ({ companionId }: { companionId: string }): void => {
+      this.notifyCompanionGardenQueueChanged(companionId, 'confirmations');
+    };
+    this.gardenQueueChangeUnsubscribers.push(
+      options.eventBus.on('companion.approval.requested', notifyConfirmationQueueChanged),
+      options.eventBus.on('companion.approval.resolved', notifyConfirmationQueueChanged),
+      options.eventBus.on('garden.queue.changed', ({ companionId, queue }) => {
+        if (!companionId) {
+          log.error('Refusing to route ownerless gateway Garden queue change', { queue });
+          return;
+        }
+        this.notifyCompanionGardenQueueChanged(companionId, queue);
+      }),
+    );
     log.info('Session HMAC keyring configured', {
       activeVersion: this.sessionHmacKeyring.activeVersion,
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
@@ -425,6 +440,7 @@ export class GatewayServer {
       personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
+      authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
@@ -953,6 +969,49 @@ export class GatewayServer {
       return null;
     }
     return conn;
+  }
+
+  private authenticatedCompanionId(conn: GatewayRpcConnection): string | undefined {
+    const status = this.connectionStatuses.get(conn);
+    if (!status || status.role !== 'agent' || status.state === 'offline') {
+      return undefined;
+    }
+    if (this.multiCompanion.enabled) {
+      return status.companionId;
+    }
+    return status.companionId ?? this.options.companionId ?? DEFAULT_COMPANION_ID;
+  }
+
+  private notifyCompanionGardenQueueChanged(
+    companionId: string,
+    queue: GardenQueueName,
+  ): void {
+    this.refreshConnectionHealth();
+    if (this.multiCompanion.enabled) {
+      const conn = this.resolveReadyCompanionConnection(companionId);
+      if (!conn) {
+        log.warn('Garden queue change owner has no healthy ready agent connection', {
+          companionId,
+          queue,
+        });
+        return;
+      }
+      this.notifyOne(conn, 'garden.queue.changed', { queue });
+      return;
+    }
+
+    for (const conn of this.connections) {
+      const status = this.connectionStatuses.get(conn);
+      if (status?.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
+        continue;
+      }
+      const connectionCompanionId = status.companionId
+        ?? this.options.companionId
+        ?? DEFAULT_COMPANION_ID;
+      if (connectionCompanionId === companionId) {
+        this.notifyOne(conn, 'garden.queue.changed', { queue });
+      }
+    }
   }
 
   // ── Connection management ──
@@ -1879,6 +1938,9 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    for (const unsubscribe of this.gardenQueueChangeUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
     for (const conn of this.connections) {
       conn.destroy();
     }

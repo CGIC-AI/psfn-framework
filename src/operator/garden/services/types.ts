@@ -147,7 +147,9 @@ export type {
 } from './types/continuity.js';
 
 export type {
+  AdminSessionListRow,
   AdminSessionListData,
+  AdminSessionDetailData,
   AdminSessionRouteView,
   AdminSessionRouteListData,
   AdminSessionRouteResetInput,

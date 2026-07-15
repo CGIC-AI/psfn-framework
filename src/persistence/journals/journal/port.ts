@@ -1,9 +1,11 @@
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { buildMessageJournalEntry } from './entries.js';
 import type {
   JournalFileMetadata,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,
@@ -13,9 +15,11 @@ import type {
 export type { JournalFileMetadata } from './types.js';
 import {
   appendJournalEntry,
+  fingerprintJournalArchive,
   quarantineSidecarPath,
   readJournalFile,
   readJournalFirstEntry,
+  readJournalEntriesBefore,
   readJournalTailEntries,
   scanJournalFileMetadata,
   writeJournalFileAtomic,
@@ -30,6 +34,7 @@ export interface SessionJournalPort {
   quarantineSidecarPath(filePath: string): string;
   readJournalFile(filePath: string, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(filePath: string): JournalEntry | null;
+  readJournalEntriesBefore(filePath: string, options: ReadJournalBeforeOptions): ReadJournalBeforeResult;
   readJournalTailEntries(filePath: string, options: ReadJournalTailOptions): ReadJournalTailResult;
   scanJournalFileMetadata(filePath: string, options?: ScanJournalMetadataOptions): JournalFileMetadata;
 }
@@ -81,6 +86,7 @@ export interface SessionArchivePort {
   quarantineSidecarPath(handle: SessionArchiveHandle): string;
   readJournalFile(handle: SessionArchiveHandle, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(handle: SessionArchiveHandle): JournalEntry | null;
+  readJournalEntriesBefore(handle: SessionArchiveHandle, options: ReadJournalBeforeOptions): ReadJournalBeforeResult;
   readJournalTailEntries(handle: SessionArchiveHandle, options: ReadJournalTailOptions): ReadJournalTailResult;
   fingerprintArchive(handle: SessionArchiveHandle): string | null;
   scanJournalFileMetadata(
@@ -97,6 +103,7 @@ export function createFilesystemSessionJournalPort(): SessionJournalPort {
     quarantineSidecarPath,
     readJournalFile,
     readJournalFirstEntry,
+    readJournalEntriesBefore,
     readJournalTailEntries,
     scanJournalFileMetadata,
   };
@@ -142,20 +149,16 @@ export function createFilesystemSessionArchivePort(
     readJournalFirstEntry: (handle) => (
       journalPort.readJournalFirstEntry(requireFilesystemHandle(handle).filePath)
     ),
+    readJournalEntriesBefore: (handle, options) => (
+      journalPort.readJournalEntriesBefore(requireFilesystemHandle(handle).filePath, options)
+    ),
     readJournalTailEntries: (handle, options) => (
       journalPort.readJournalTailEntries(requireFilesystemHandle(handle).filePath, options)
     ),
     fingerprintArchive: (handle) => {
       const { filePath } = requireFilesystemHandle(handle);
       try {
-        const stats = statSync(filePath);
-        return [
-          stats.dev,
-          stats.ino,
-          stats.size,
-          stats.mtimeMs,
-          stats.ctimeMs,
-        ].join(':');
+        return fingerprintJournalArchive(filePath);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') return null;

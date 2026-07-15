@@ -33,15 +33,24 @@ import type {
   AdminContinuityProvenanceView,
 } from './continuity.js';
 
+export type AdminSessionListRow = Pick<
+  ChannelInfo,
+  'sessionId' | 'channelId' | 'messageCount' | 'lastActivityAt' | 'displayLabel'
+>;
+
 export interface AdminSessionListData {
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
+}
+
+export interface AdminSessionDetailData {
+  channel: AdminSessionListRow & Pick<ChannelInfo, 'linkedContactId' | 'linkedContactName'>;
 }
 
 export type AdminSessionRouteView = SourceChannelSessionRoute;
 
 export interface AdminSessionRouteListData {
   routes: AdminSessionRouteView[];
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
 }
 
 export interface AdminSessionRouteResetInput {
@@ -205,6 +214,16 @@ export interface AdminSessionTurnDetailData {
 
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
+  getSessionDetail(sessionId: string): Promise<AdminSessionDetailData>;
+  /**
+   * Garden transport read path. The newest page may use the optional shared
+   * session tail; older cursor pages stay on the canonical bounded reader.
+   */
+  getSessionMessagesForAdminRead(
+    sessionId: string,
+    options?: AdminSessionMessagePaginationOptions,
+  ): Promise<AdminSessionMessagesData>;
+  /** Canonical synchronous reader used by non-transport callers and fallback. */
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
   getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData;
   searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;

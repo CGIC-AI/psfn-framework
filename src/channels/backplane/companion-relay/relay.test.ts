@@ -56,6 +56,7 @@ describe('CompanionEventRelay', () => {
     const toolsOnly = collect(['tool.activity']);
 
     await eventBus.emit('companion.approval.requested', {
+      companionId: 'test-companion',
       payload: {
         id: 'conf-1',
         title: 'write file: /workspace/todo.txt',

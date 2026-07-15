@@ -800,6 +800,9 @@ function makeServices(): GardenAdminDomainServices {
         ...(input.details ? { details: input.details } : {}),
         ...(input.actor ? { actor: input.actor } : {}),
       }),
+      getAuditHistoryDetail: async () => {
+        throw new Error('not used in Postgres memory cutover smoke');
+      },
       getAuditHistory: async () => ({
         entries: [],
         filters: {

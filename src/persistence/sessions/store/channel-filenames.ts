@@ -16,6 +16,7 @@ const log = createComponentLogger('SessionStore');
 
 export function isSessionJournalFilename(filename: string): boolean {
   return filename.endsWith('.jsonl')
+    && !/\.\d{5,}\.jsonl$/u.test(filename)
     && !filename.startsWith('user_')
     && filename !== IMPORT_MANIFEST_FILENAME;
 }

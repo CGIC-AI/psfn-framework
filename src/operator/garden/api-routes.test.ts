@@ -720,6 +720,7 @@ describe('AdminServer JSON API routes', () => {
 
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
+      env: { GATEWAY_SESSION_HMAC_KEY: 'garden-api-routes-test-session-hmac-key' },
       memoryStore,
       episodicStore,
       sessionStore,

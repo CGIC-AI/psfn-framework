@@ -4,6 +4,96 @@ Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — d
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
+## 2026-07-14 feature status — `feat/garden-wan-performance`
+
+- `psfn-framework-t5z7.2` is closed at `4b22e676` (bounded archive reader
+  `2b0bc87b`, Garden `beforeId` adoption `689f7cfc`, single-review remediation
+  `4b22e676`). Older-message pages now seek to the requested cursor without a
+  full channel replay, and select among numbered sealed segments without
+  linearly opening every newer sibling. The existing pagination API and
+  optional-Redis behavior are unchanged.
+- The one independent review found mandatory integrity, bounded-IO,
+  cross-process tombstone-privacy, segmented-authority, and lint gaps. The one
+  allowed remediation made cursor skip authority HMAC-verified, refreshed the
+  fingerprint-gated tombstone index before bounded reads, and made canonical
+  replay, metadata, tails, quarantine, fingerprints, and rewrites agree on the
+  same logical segmented archive. Final integrated gate at `4b22e676`: six
+  exact regressions passed, the proportional journal/session/Garden slice
+  passed 137/137, lint passed, root ESM+DTS build passed, and diff checks were
+  clean. Parent epic `psfn-framework-t5z7` remains open because `.9` and `.10`
+  remain real work.
+- `psfn-framework-t5z7.5` is closed through `b2af5296` (server-cache
+  implementation `2ff153c0`, single-review remediation `77d2d825`, integration
+  merge `9dbc59d0`, pagination-seam test alignment `b2af5296`). The hot newest
+  transcript page now reuses the deployment/companion-scoped shared Redis tail
+  while authenticated journal rows remain authoritative on every ID overlap.
+  A current bounded canonical window rejects and repopulates cross-process
+  tails that lag a durable append; Redis-disabled, degraded-cache, older-page,
+  and namespace-isolation behavior remain intact. Recent activity and session
+  lists were already slim channel-index reads, so no redundant cache was added.
+- The one independent review found two important partner-data issues: an
+  unauthenticated same-ID tail row could override journal content/channel, and
+  the freshness checkpoint was process-local. The one allowed remediation made
+  journal truth win and added the exact blocked-writer/two-store freshness
+  proof. Final integrated gate at `b2af5296`: both exact regressions passed,
+  the combined server-cache/journal/session slice passed 95/95, lint passed,
+  root ESM+DTS build passed, and diff checks were clean. Parent epic
+  `psfn-framework-t5z7` remains open only for `.9` and `.10`.
+- `psfn-framework-t5z7.4` is closed at `af553dc0` (server/API slice
+  `118890bd`, client/UI slice `af553dc0`). The sessions index is now one
+  contact-free request carrying only bounded channel/session identity,
+  activity, and counts; `listSessionRoutes` no longer recursively calls
+  `listSessions`.
+- Contact linkage resolves only after the operator selects one session, through
+  a focused detail endpoint that exposes the prior id/display-name fields but
+  not contact notes, trust, relationship, or privacy data. Repeat SPA navigation
+  paints the Garden-session cache immediately and performs one conditional
+  ETag-compatible revalidation; selection detail survives list refreshes.
+- The single independent review passed at fixed point `af553dc0` with no
+  important findings and no remediation. Final integrated gate: service/routes
+  27/27, admin endpoint/client/loader 17/17, Garden build, root ESM+DTS build,
+  lint, and worktree plus branch-range diff checks passed. The two known,
+  untouched prompt-monitor Svelte diagnostics remain report-only. Parent epic
+  `psfn-framework-t5z7` remains open for its other children.
+- `psfn-framework-t5z7.8` is closed at `582f3160` (bounded JSONL/memo slice
+  `47626be8`, list/detail API and explicit-click Garden UI slice `1165cfba`,
+  independent-review remediation `582f3160`). Garden audit history now reads a
+  bounded 16 MiB/2,000-entry tail, memoizes unchanged file identities, and
+  fails closed when the file changes during a read. List responses omit raw
+  source blobs and internal record IDs; authenticated no-store detail resolves
+  raw data only after an explicit operator click.
+- The single independent review at `1165cfba` found three important privacy and
+  consistency issues. The one allowed remediation replaced predictable hashes
+  with companion-bound HMAC opaque IDs backed by the canonical session-HMAC
+  keyring, sanitized gateway error text in list-visible data, and made list and
+  detail use the same bounded unfiltered source window before local filtering.
+  Final integrated gate at `582f3160`: server/service/routes 33/33, Garden
+  endpoint 2/2, lint, Garden build, root ESM+DTS build, and worktree plus
+  branch-range diff checks passed. The inherited, untouched diagnostics at
+  `admin-ui/src/lib/events/prompt-monitor.ts:336` and
+  `admin-ui/src/lib/events/prompt-monitor.test.ts:260` remain report-only.
+  Parent epic `psfn-framework-t5z7` remains open for its other children.
+- `psfn-framework-t5z7.7` is closed through `c22a1cea` (shared visibility and
+  websocket queue controllers `edc50e4b`, polling-page adoption `2a9150e2`,
+  gateway signal scoping `5042ae25`, reconnect and subsystem-health remediation
+  `c22a1cea`). Hidden Garden tabs now make zero network poll requests; becoming
+  visible performs one immediate refresh and resumes the fallback interval.
+  Confirmation, contact-approval, graph-proposal, and CogSec approval pages use
+  content-free websocket invalidations while connected and visibility-aware
+  fallback polling while disconnected. Local-only shards and telemetry clocks
+  remain local intervals.
+- The single independent review at `2a9150e2` found four important freshness
+  and multi-companion issues. The one allowed remediation pinned confirmation
+  and gateway queue signals to the authenticated healthy companion, emitted
+  intake-quarantine hints only after durable text/image holds, made a
+  websocket false-to-true reconnect perform exactly one visibility-gated
+  refresh with no fallback timer left behind, and moved subsystem health onto
+  the shared visibility poller. Final integrated gate at `c22a1cea`: gateway
+  signaling and quarantine tests 130/130, Garden poller/adoption tests 17/17,
+  root ESM+DTS build, Garden build, lint, and worktree plus branch-range diff
+  checks passed. Garden's inherited `codeSplitting` warnings and the untouched
+  prompt-monitor diagnostics remain report-only. Parent epic
+  `psfn-framework-t5z7` remains open for its other children.
 ## 2026-07-13 branch handoff — orphan/stub/bugfix lane
 
 - Branch `fix/orphans-stubs-bugfixes`, pushed fixed point `3efa251c` (initial

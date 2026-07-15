@@ -5,6 +5,7 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import {
   journalToMarkerEntry,
+  fingerprintJournalArchive,
   readJournalFirstEntry,
   readJournalTailEntries,
   scanJournalFileMetadata,
@@ -69,6 +70,15 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
   const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(row.activeTurnTombstoneCount);
   if (activeTurnTombstoneCount !== undefined) entry.activeTurnTombstoneCount = activeTurnTombstoneCount;
 
+  if (Array.isArray(row.activeTurnTombstoneIds)) {
+    entry.activeTurnTombstoneIds = [...new Set(row.activeTurnTombstoneIds
+      .filter((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)
+      .map(candidate => candidate.trim()))].sort();
+  }
+
+  const archiveFingerprint = normalizeOptionalString(row.archiveFingerprint);
+  if (archiveFingerprint !== undefined) entry.archiveFingerprint = archiveFingerprint;
+
   const lastTimestamp = normalizeOptionalNonNegativeNumber(row.lastTimestamp);
   if (lastTimestamp !== undefined) entry.lastTimestamp = lastTimestamp;
 
@@ -115,7 +125,10 @@ export function loadChannelIndex(
     const parsed = JSON.parse(raw) as ChannelIndexFile;
     const version = (parsed as { version?: unknown }).version;
 
-    if ((version !== 1 && version !== 2 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
+    if (
+      (version !== 1 && version !== 2 && version !== 3 && version !== CHANNEL_INDEX_VERSION)
+      || typeof parsed.channels !== 'object'
+    ) {
       log.warn('Ignoring invalid channel index payload', {
         path: channelIndexPath,
         version,
@@ -163,6 +176,9 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (!entry.filename) return false;
   if (normalizeOptionalNonNegativeNumber(entry.messageCount) === undefined) return false;
   if (normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) === undefined) return false;
+  const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) ?? 0;
+  if ((entry.activeTurnTombstoneIds?.length ?? 0) !== activeTurnTombstoneCount) return false;
+  if (!normalizeOptionalString(entry.archiveFingerprint)) return false;
   if (normalizeOptionalNonNegativeNumber(entry.lastTimestamp) === undefined) return false;
 
   const maxId = normalizeOptionalNonNegativeNumber(entry.maxId);
@@ -252,6 +268,8 @@ export function buildIndexEntry(
     filename,
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
+    activeTurnTombstoneIds: metadata.activeTurnTombstoneIds,
+    archiveFingerprint: fingerprintJournalArchive(filePath) ?? undefined,
     lastTimestamp: metadata.lastTimestamp,
     lastMessageTimestamp: lastMessageEntry?.timestamp,
     lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry?.role) ?? null,
@@ -289,18 +307,23 @@ export function ensureChannelIndexEntry(params: {
     && indexedChannelId(params.sessionId, existing) === params.channelId
   ) {
     if (isIndexEntryComplete(existing)) {
-      return existing;
-    }
-
-    const enriched = enrichIndexEntryWithLastMessage(existing, params.filePath);
-    if (isIndexEntryComplete(enriched)) {
-      upsertChannelIndex(
-        params.sessionId,
-        enriched,
-        params.channelIndexPath,
-        params.channelIndex,
-      );
-      return enriched;
+      if (existing.archiveFingerprint === fingerprintJournalArchive(params.filePath)) {
+        return existing;
+      }
+    } else {
+      const enriched = enrichIndexEntryWithLastMessage(existing, params.filePath);
+      if (
+        isIndexEntryComplete(enriched)
+        && enriched.archiveFingerprint === fingerprintJournalArchive(params.filePath)
+      ) {
+        upsertChannelIndex(
+          params.sessionId,
+          enriched,
+          params.channelIndexPath,
+          params.channelIndex,
+        );
+        return enriched;
+      }
     }
   }
 
@@ -326,6 +349,8 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
     filename: basename(cache.resolvedPath),
     messageCount: cache.messageCount,
     activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
+    activeTurnTombstoneIds: [...cache.turnTombstones].sort(),
+    archiveFingerprint: cache.archiveFingerprint ?? undefined,
     lastTimestamp: cache.lastTimestamp,
     lastMessageTimestamp: cache.lastMessageTimestamp,
     lastMessageRole: cache.lastMessageRole,
@@ -451,7 +476,7 @@ export function createLightweightCache(
     channelId,
     entries: [],
     compactions: [],
-    turnTombstones: new Set(),
+    turnTombstones: new Set(indexEntry.activeTurnTombstoneIds ?? []),
     activeTurnTombstoneCount: normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0,
     nextId: maxId + 1,
     lastHmac: normalizeOptionalHmac(indexEntry.lastHmac) ?? null,

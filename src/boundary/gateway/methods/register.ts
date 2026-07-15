@@ -36,6 +36,7 @@ export function registerGatedDescriptors(
       method: string;
       handler: (params: unknown) => Promise<unknown>;
       paramsSummary?: (params: unknown) => Record<string, unknown>;
+      authenticatedCompanionId: () => string | undefined;
       approvalAction?: string;
       approvalScope?: (params: unknown) => string;
       approvalReason?: (params: unknown) => string;
@@ -47,6 +48,7 @@ export function registerGatedDescriptors(
       method: input.method,
       handler: input.handler,
       paramsSummary: input.paramsSummary ?? (() => ({})),
+      authenticatedCompanionId: input.authenticatedCompanionId,
       approvalAction: input.approvalAction ?? input.method,
       approvalScope: input.approvalScope ?? (() => input.method),
       ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
@@ -66,6 +68,7 @@ export function registerGatedDescriptors(
         method: descriptor.name,
         handler: (params: unknown) => descriptor.handler(params as never, runtime),
         paramsSummary: descriptor.summary as (params: unknown) => Record<string, unknown>,
+        authenticatedCompanionId: runtime.authenticatedCompanionId,
         approvalAction: descriptor.approvalAction,
         approvalScope: descriptor.approvalScope as (params: unknown) => string,
         approvalReason: descriptor.approvalReason as ((params: unknown) => string) | undefined,

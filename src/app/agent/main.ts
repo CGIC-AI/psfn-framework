@@ -109,6 +109,7 @@ import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
 import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
 import {
@@ -290,6 +291,7 @@ async function main(): Promise<void> {
       });
     },
     logger: log,
+    onQueueChanged: () => emitGardenQueueChanged(eventBus, 'contact-approvals'),
   });
 
   // ── Load identity (mounted read-only in container) ──
@@ -391,20 +393,29 @@ async function main(): Promise<void> {
   // classifier stays gateway-side; the agent process runs deterministic L1
   // scanners only.
   const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
+  const intakeQuarantineWriter = intakePolicy.mode !== 'off'
+    ? createIntakeQuarantineStore(
+      resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+      {
+        itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+        maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+      },
+    )
+    : null;
   const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
-    ...(intakePolicy.mode !== 'off'
+    ...(intakeQuarantineWriter
       ? {
-        quarantine: createIntakeQuarantineStore(
-          resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
-          {
-            itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-            maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+        quarantine: {
+          hold: (input: Parameters<typeof intakeQuarantineWriter.hold>[0]) => {
+            const entry = intakeQuarantineWriter.hold(input);
+            emitGardenQueueChanged(eventBus, 'intake-quarantine');
+            return entry;
           },
-        ),
+        },
       }
       : {}),
   });
@@ -782,6 +793,9 @@ async function main(): Promise<void> {
     eventBus,
     publisher: gateway,
   });
+  const detachGatewayQueueChange = gateway.onGardenQueueChanged((queue) => {
+    emitGardenQueueChanged(eventBus, queue);
+  });
 
   // ── Admin transport (optional) ──
 
@@ -867,6 +881,7 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     detachCompanionEventForwarder();
+    detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
     // the read-side staleness TTL — see companion-presence-runtime.ts).

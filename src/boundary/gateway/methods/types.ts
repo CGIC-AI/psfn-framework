@@ -54,6 +54,8 @@ export interface GatewayMethodRuntime {
   personalWorkspaceIsolation?: boolean;
   sessionHmacKeyring: SessionHmacKeyring;
   approvalBoundary: ApprovalBoundaryService;
+  /** Authenticated companion bound to the connection serving this RPC. */
+  authenticatedCompanionId(): string | undefined;
   /**
    * Notify the connection that originated the current request. Single-companion
    * mode preserves the historical broadcast; multi-companion mode pins delivery

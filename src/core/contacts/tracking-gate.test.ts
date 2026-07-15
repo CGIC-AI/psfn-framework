@@ -54,12 +54,13 @@ describe('createContactTrackingGate', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  function makeGate() {
+  function makeGate(onQueueChanged?: () => void) {
     return createContactTrackingGate({
       channelLabels: CHANNEL_LABELS,
       pendingApprovals,
       notifyOperatorPendingContact: notify,
       logger: { warn },
+      ...(onQueueChanged ? { onQueueChanged } : {}),
     });
   }
 
@@ -115,6 +116,16 @@ describe('createContactTrackingGate', () => {
       'hello everyone',
       'second message',
     ]);
+  });
+
+  it('signals queue consumers only when a new approval is durably enqueued', async () => {
+    const onQueueChanged = vi.fn();
+    const gate = makeGate(onQueueChanged);
+
+    await gate.reportUntrackedSpeaker(makeSighting());
+    await gate.reportUntrackedSpeaker(makeSighting({ messageId: 'msg-2' }));
+
+    expect(onQueueChanged).toHaveBeenCalledTimes(1);
   });
 
   it('never re-enqueues or re-notifies a denied speaker', async () => {

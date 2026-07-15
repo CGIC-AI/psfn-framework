@@ -337,6 +337,7 @@ async function createHarness(options: {
 
   const port = await allocatePort();
   const services = createInProcessGardenAdminContract({
+    env: { GATEWAY_SESSION_HMAC_KEY: 'garden-server-test-session-hmac-key' },
     memoryStore,
     sessionStore,
     sessionManager,

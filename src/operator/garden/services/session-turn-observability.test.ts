@@ -232,6 +232,54 @@ describe('promptLoom renders the PromptPlan (E2.3)', () => {
     );
   });
 
+  it('surfaces the captured raw wire body (tools counted once) alongside the cleaned plan view (bead hgw3-80f6)', async () => {
+    const eventBus = new EventBus();
+    const store = new AdminSessionTurnObservabilityStore({ eventBus });
+    const snapshot = buildPlanBackedSnapshot('turn-wire-1', 'discord:dm:contact-1');
+    const rawBody = {
+      model: 'model-x',
+      max_tokens: 1024,
+      system: 'the true static system prompt as sent',
+      messages: [{ role: 'user', content: 'current turn input' }],
+      tools: [
+        { name: 'memory_search', input_schema: { type: 'object' } },
+        { name: 'recall', input_schema: { type: 'object' } },
+      ],
+    };
+    (snapshot.promptContext!.providerObservability as Record<string, unknown>).capturedWirePayload = {
+      api: 'anthropic-messages',
+      model: 'model-x',
+      capturedAtMs: 1_700_000_000_000,
+      byteLength: Buffer.byteLength(JSON.stringify(rawBody), 'utf8'),
+      toolCount: 2,
+      body: rawBody,
+    };
+
+    await eventBus.emit('agent.turn.snapshot', { snapshot });
+    const data = store.buildTurnData(minimalRecord('turn-wire-1', 'discord:dm:contact-1'));
+
+    const wire = data.promptLoom.providerWire;
+    // The cleaned-by-blocks view is still the plan serialization.
+    expect(wire.source).toBe('prompt_plan');
+    // The raw-as-sent view is the captured body — byte-identical, tools once.
+    expect(wire.capturedWirePayload).not.toBeNull();
+    expect(wire.capturedWirePayload?.toolCount).toBe(2);
+    expect(JSON.stringify(wire.capturedWirePayload?.body)).toBe(JSON.stringify(rawBody));
+    const inputSchemaCount = JSON.stringify(wire.capturedWirePayload?.body).match(/input_schema/g)?.length ?? 0;
+    expect(inputSchemaCount).toBe(wire.capturedWirePayload?.toolCount);
+  });
+
+  it('reports a null captured wire payload when no capture was recorded', async () => {
+    const eventBus = new EventBus();
+    const store = new AdminSessionTurnObservabilityStore({ eventBus });
+    const snapshot = buildPlanBackedSnapshot('turn-wire-none', 'discord:dm:contact-1');
+
+    await eventBus.emit('agent.turn.snapshot', { snapshot });
+    const data = store.buildTurnData(minimalRecord('turn-wire-none', 'discord:dm:contact-1'));
+
+    expect(data.promptLoom.providerWire.capturedWirePayload).toBeNull();
+  });
+
   it('degrades to the recorded wire capture for legacy pre-plan records', async () => {
     const eventBus = new EventBus();
     const store = new AdminSessionTurnObservabilityStore({ eventBus });

@@ -20,6 +20,7 @@ import type {
 } from './types.js';
 import type {
   ContextMessage,
+  LLMCapturedProviderWirePayload,
   LLMProviderWireMessage,
   PromptSectionTelemetry,
   ToolSchema,
@@ -353,18 +354,33 @@ function derivePromptLoomPromptStrings(
 }
 
 /**
- * Provider Wire projection (E2.3). For plan-backed turns the wire view is the
- * pure serialization OF the persisted plan (serializePromptPlanForProvider),
- * so the tab content is byte-equal to what shipped by construction. Legacy
- * pre-plan records (and the never-expected plan-without-transport case) fall
- * back to the recorded provider-wire capture with an explicit source marker.
+ * Provider Wire projection. Two views (bead hgw3-80f6):
+ *  - `capturedWirePayload`: the RAW body captured as-sent via pi-ai `onPayload`
+ *    — the byte-identical wire truth (tools included, counted once, cache_control
+ *    and provider transforms intact). Present whenever the turn streamed through
+ *    the agent loop and its capture survived the persist/resolve round-trip.
+ *  - `messages`/`systemPrompt`/`toolDefinitions`: the CLEANED-by-blocks view. For
+ *    plan-backed turns this is the pure serialization of the persisted plan; for
+ *    legacy pre-plan records it falls back to the recorded provider-wire capture.
  */
+function resolveCapturedWirePayload(
+  snapshot: AdminTurnSnapshotData | null,
+): LLMCapturedProviderWirePayload | null {
+  const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
+  if (!captured) return null;
+  return {
+    ...captured,
+    ...(captured.body !== undefined ? { body: cloneUnknownValue(captured.body) } : {}),
+  };
+}
+
 function buildProviderWireData(
   snapshot: AdminTurnSnapshotData | null,
   legacyFinalSystemPrompt: string | null,
 ): AdminPromptLoomProviderWireData {
   const plan = snapshot?.plan ?? null;
   const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
+  const capturedWirePayload = resolveCapturedWirePayload(snapshot);
   if (plan && transport) {
     const payload = serializePromptPlanForProvider(plan, transport);
     return {
@@ -374,6 +390,7 @@ function buildProviderWireData(
       systemPrompt: payload.systemPrompt,
       messages: payload.providerWireMessages.map(message => ({ ...message })),
       toolDefinitions: requireResolvedPlanToolDefinitions(plan).map(tool => cloneUnknownValue(tool)),
+      capturedWirePayload,
     };
   }
   return {
@@ -383,6 +400,7 @@ function buildProviderWireData(
     systemPrompt: legacyFinalSystemPrompt,
     messages: resolveProviderMessages(snapshot),
     toolDefinitions: resolveActiveTools(snapshot),
+    capturedWirePayload,
   };
 }
 

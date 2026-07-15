@@ -28,7 +28,9 @@ import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-auto
 import {
   createTurnRecordSharedStore,
   resolveTurnRecordToolDefinitions,
+  resolveTurnRecordWirePayload,
   slimTurnRecordToolDefinitionsForAppend,
+  slimTurnRecordWirePayloadForAppend,
 } from './turn-record-shared-store.js';
 import {
   fileIdentityKey,
@@ -1122,8 +1124,11 @@ export function createFilesystemTurnRecordStorePort(
       // rotation-aware append (bead hgw3.4). Slimming runs on the normalized
       // record; the ref round-trips normalizeTurnRecord, so the re-normalize
       // inside appendTurnRecordWithRotation preserves it.
-      const slimmed = slimTurnRecordToolDefinitionsForAppend(
-        normalizeTurnRecord(record, record.channelId),
+      const slimmed = slimTurnRecordWirePayloadForAppend(
+        slimTurnRecordToolDefinitionsForAppend(
+          normalizeTurnRecord(record, record.channelId),
+          sharedStore,
+        ),
         sharedStore,
       );
       appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
@@ -1146,7 +1151,10 @@ export function createFilesystemTurnRecordStorePort(
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      return windowed.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
+      return windowed.map(record => resolveTurnRecordWirePayload(
+        resolveTurnRecordToolDefinitions(record, sharedStore),
+        sharedStore,
+      ));
     },
     findTurnRecord: (channelId, turnId) => {
       const record = findTurnRecordAcrossSegments(
@@ -1155,7 +1163,12 @@ export function createFilesystemTurnRecordStorePort(
         turnId,
         scanChunkBytes,
       );
-      return record ? resolveTurnRecordToolDefinitions(record, sharedStore) : null;
+      return record
+        ? resolveTurnRecordWirePayload(
+          resolveTurnRecordToolDefinitions(record, sharedStore),
+          sharedStore,
+        )
+        : null;
     },
   };
 }

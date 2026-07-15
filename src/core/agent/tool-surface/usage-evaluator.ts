@@ -1,33 +1,37 @@
 // Periodic tool-usage evaluator (psfn-framework-b0yl.5).
 //
-// Closes the LOD feedback loop: it reads DURABLE per-tool aggregates back out of
-// the Postgres `model_usage_events` store (which survives restart), turns them
-// into a deterministic ordering signal, and surfaces operator-visible pin
-// SUGGESTIONS. It never gates callability, never revives activation state, and
+// Closes the LOD feedback loop: it reads DURABLE per-tool usage back out of the
+// turn-record stream (`_turn_records/*.jsonl`, per-companion, survives restart)
+// via ToolUsageAggregateSource, turns it into a deterministic ordering signal,
+// and surfaces operator-visible pin SUGGESTIONS. Turn records capture EVERY tool
+// call in a turn (`toolCalls[]`), so the aggregate reflects actual invocations of
+// all catalog tools — deterministic tools (repo, shell, fs, memory, …) included,
+// not just the handful of tool-internal LLM calls the old `model_usage_events`
+// source saw. It never gates callability, never revives activation state, and
 // never applies a pin silently — suggestions are recorded through the existing
 // autonomous-action memory path exactly like companion-initiated pins.
 
-import type {
-  ModelUsageQueryPort,
-  ModelUsageRange,
-} from '../../../shared/telemetry/model-usage.js';
-import { MODEL_USAGE_UNKNOWN_DIMENSION } from '../../../shared/telemetry/model-usage-attribution.js';
+import type { ModelUsageRange } from '../../../shared/telemetry/model-usage.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { buildAutonomousActionMemoryContext } from '../../../faculties/memory/types.js';
-import { isCanonicalFirstPartyToolName } from './registry.js';
+import type { ToolUsageAggregate, ToolUsageAggregateSource } from './turn-record-usage-source.js';
 import {
   buildToolUsageRanking,
   computeToolPinSuggestions,
   type ToolPinSuggestion,
   type ToolUsageRanking,
-  type ToolUsageStat,
 } from './usage-ranking.js';
 
 export interface ToolUsageEvaluatorDeps {
-  /** Lazy handle to the durable model-usage query port; null on non-postgres. */
-  getModelUsageQuery: () => ModelUsageQueryPort | null;
+  /**
+   * Lazy handle to the durable turn-record usage aggregate source; null when the
+   * session store is unavailable (fail-closed skip).
+   */
+  getUsageAggregateSource: () => ToolUsageAggregateSource | null;
   /** Currently-registered extended tool names (pin candidates). */
   getExtendedToolNames: () => readonly string[];
+  /** Total catalog tool count (core + extended) for coverage telemetry. */
+  getCatalogToolCount: () => number;
   /** Currently-pinned extended tools. */
   getPromotedExtendedTools: () => readonly string[];
   /** Maximum pinned slots. */
@@ -36,7 +40,7 @@ export interface ToolUsageEvaluatorDeps {
   applyRanking: (ranking: ToolUsageRanking) => void;
   /** Memory writer for operator-visible suggestion records; absent => no suggestions surfaced. */
   getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
-  /** Durable telemetry window the ranking is computed over. */
+  /** Durable window the ranking is computed over (for suggestion provenance text). */
   usageWindow: ModelUsageRange;
   /** Minimum successful invocations before a tool is worth suggesting to pin. */
   minPinSuggestionInvocations: number;
@@ -45,18 +49,30 @@ export interface ToolUsageEvaluatorDeps {
 }
 
 export type ToolUsageEvaluatorEvent =
-  | { outcome: 'skipped'; reason: 'usage_query_unavailable' }
+  | { outcome: 'skipped'; reason: 'usage_source_unavailable' }
   | {
       outcome: 'evaluated';
+      /** Durable source the aggregate came from (coverage honesty). */
+      dataSource: 'turn_records';
       rankedToolCount: number;
+      /** Distinct tools that had durable usage data in the window. */
+      toolsWithData: number;
+      /** Catalog size (core + extended) so a sparse aggregate is visibly sparse. */
+      catalogToolCount: number;
+      channelsScanned: number;
+      turnRecordsScanned: number;
+      toolCallsCounted: number;
+      /** True when a scan cap truncated the window (aggregate under-counts). */
+      truncated: boolean;
       suggestionCount: number;
       newlySuggested: readonly string[];
     };
 
 export interface ToolUsageEvaluationResult {
   status: 'skipped' | 'evaluated';
-  reason?: 'usage_query_unavailable';
+  reason?: 'usage_source_unavailable';
   ranking?: ToolUsageRanking;
+  aggregate?: ToolUsageAggregate;
   suggestions: ToolPinSuggestion[];
   newlySuggested: string[];
 }
@@ -114,31 +130,18 @@ export function createToolUsageEvaluator(deps: ToolUsageEvaluatorDeps): ToolUsag
 
   return {
     async evaluate(): Promise<ToolUsageEvaluationResult> {
-      const query = deps.getModelUsageQuery();
-      if (!query) {
-        deps.onEvent?.({ outcome: 'skipped', reason: 'usage_query_unavailable' });
-        return { status: 'skipped', reason: 'usage_query_unavailable', suggestions: [], newlySuggested: [] };
+      const source = deps.getUsageAggregateSource();
+      if (!source) {
+        deps.onEvent?.({ outcome: 'skipped', reason: 'usage_source_unavailable' });
+        return { status: 'skipped', reason: 'usage_source_unavailable', suggestions: [], newlySuggested: [] };
       }
 
-      const data = await query.getUsageData({
-        range: deps.usageWindow,
-        groupBy: ['toolName'],
-      });
+      // Durable aggregate over the turn-record stream: actual per-tool
+      // invocations for ALL catalog tools (the source already filters to
+      // canonical first-party tools and windows by turn start time).
+      const aggregate = source.aggregate(now());
 
-      const stats: ToolUsageStat[] = [];
-      for (const group of data.groups) {
-        const toolName = group.dimensions.toolName;
-        if (!toolName || toolName === MODEL_USAGE_UNKNOWN_DIMENSION) continue;
-        if (!isCanonicalFirstPartyToolName(toolName)) continue;
-        stats.push({
-          toolName,
-          invocations: group.metrics.calls,
-          successes: group.metrics.successfulCalls,
-          failures: group.metrics.failedCalls,
-        });
-      }
-
-      const ranking = buildToolUsageRanking(stats, now());
+      const ranking = buildToolUsageRanking(aggregate.stats, now());
       deps.applyRanking(ranking);
 
       const suggestions = computeToolPinSuggestions({
@@ -171,12 +174,19 @@ export function createToolUsageEvaluator(deps: ToolUsageEvaluatorDeps): ToolUsag
 
       deps.onEvent?.({
         outcome: 'evaluated',
+        dataSource: aggregate.sourceId,
         rankedToolCount: ranking.rankedToolNames.length,
+        toolsWithData: aggregate.toolsWithData,
+        catalogToolCount: deps.getCatalogToolCount(),
+        channelsScanned: aggregate.channelsScanned,
+        turnRecordsScanned: aggregate.turnRecordsScanned,
+        toolCallsCounted: aggregate.toolCallsCounted,
+        truncated: aggregate.truncated,
         suggestionCount: suggestions.length,
         newlySuggested,
       });
 
-      return { status: 'evaluated', ranking, suggestions, newlySuggested };
+      return { status: 'evaluated', ranking, aggregate, suggestions, newlySuggested };
     },
   };
 }

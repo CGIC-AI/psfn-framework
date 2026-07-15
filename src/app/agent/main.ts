@@ -580,15 +580,19 @@ async function main(): Promise<void> {
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   // Durable tool-usage evaluator lane (psfn-framework-b0yl.5): closes the LOD
-  // loop by reading per-tool aggregates back out of model_usage_events to feed
-  // presentation ordering + operator-visible pin suggestions. Opt-in via
-  // scheduler.json (registers only when enabled); registered here so it can use
-  // the real MemoryWriter for its autonomous-action suggestion records.
+  // loop by aggregating ACTUAL per-tool invocations from the durable turn-record
+  // stream (every catalog tool, per-companion) to feed presentation ordering +
+  // operator-visible pin suggestions. Opt-in via scheduler.json (registers only
+  // when enabled); registered here so it can use the real MemoryWriter for its
+  // autonomous-action suggestion records and the session store's turn records.
   if (schedulerConfig.toolUsageEvaluator) {
     registerToolUsageEvaluatorTask({
       scheduler,
       agent: agentLoop,
-      getModelUsageQuery: coreRuntime.getModelUsageQuery,
+      turnRecordAccess: {
+        listChannelKeys: () => sessionStore.listChannels().map(channel => channel.sessionId),
+        readRecentTurnRecords: (channelKey, limit) => sessionStore.getRecentTurnRecords(channelKey, limit),
+      },
       getMemoryWriter: () => memoryWriter,
       config: schedulerConfig.toolUsageEvaluator,
     });

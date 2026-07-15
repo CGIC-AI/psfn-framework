@@ -596,10 +596,11 @@ export type ToolUsageEvaluatorWindow = Exclude<ModelUsageRange, 'custom'>;
 
 /**
  * Tool-usage evaluator cadence + thresholds (psfn-framework-b0yl.5). The
- * evaluator reads durable per-tool aggregates from `model_usage_events` and
- * feeds presentation ordering plus operator-visible pin suggestions. It never
- * gates callability. Opt-in (fail-closed default) and registered only when
- * enabled, mirroring the introspection-audit lane.
+ * evaluator aggregates ACTUAL per-tool invocations from the durable turn-record
+ * stream (every catalog tool, per-companion) and feeds presentation ordering
+ * plus operator-visible pin suggestions. It never gates callability. Opt-in
+ * (fail-closed default) and registered only when enabled, mirroring the
+ * introspection-audit lane. `usageWindow` bounds which turn records count.
  */
 export interface ToolUsageEvaluatorConfig {
   enabled: boolean;

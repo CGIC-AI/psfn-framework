@@ -177,6 +177,10 @@ import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
+import {
+  ModelCallPreemptedError,
+  modelCallPreemptedErrorFromData,
+} from '../../primitives/llm/model-call-gate.js';
 import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
@@ -262,6 +266,26 @@ function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEve
   } catch {
     return undefined;
   }
+}
+
+/**
+ * mmo9.5.1: reconstruct the typed preemption error the gateway's model-call
+ * gate raised, so a preempted background call defers (no attempt consumed)
+ * instead of being misread as a generic provider failure. Without this the
+ * gateway error arrives as a flattened -32603 and the agent's name-match
+ * (`error.name === 'ModelCallPreemptedError'`) fails, exhausting retries and
+ * losing the background cognition job.
+ */
+function modelCallPreemptedErrorFromRpc(
+  error: unknown,
+): ModelCallPreemptedError | undefined {
+  if (
+    !(error instanceof JSONRPCErrorException)
+    || error.code !== GatewayErrors.MODEL_CALL_PREEMPTED
+  ) {
+    return undefined;
+  }
+  return modelCallPreemptedErrorFromData(error.data);
 }
 
 function icpConversationCostBreakerErrorFromRpc(
@@ -635,6 +659,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const preemptBlock = modelCallPreemptedErrorFromRpc(error);
+      if (preemptBlock) {
+        callbacks?.onError?.(preemptBlock);
+        throw preemptBlock;
+      }
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) {
         callbacks?.onError?.(icpCostBlock);
@@ -718,6 +747,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         );
       }
     } catch (error) {
+      const preemptBlock = modelCallPreemptedErrorFromRpc(error);
+      if (preemptBlock) throw preemptBlock;
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) throw icpCostBlock;
       const budgetBlock = modelBudgetBlockedEventFromError(error);

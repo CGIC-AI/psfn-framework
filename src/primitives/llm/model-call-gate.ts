@@ -2,6 +2,7 @@ import {
   compareRuntimeLanePriority,
   resolveRuntimeLaneBudgetProfile,
   FOREGROUND_CHAT_RUNTIME_CLASS,
+  RUNTIME_LANE_CLASSES,
   type RuntimeLaneClass,
 } from '../../core/agent/worker-lanes.js';
 
@@ -61,6 +62,57 @@ export class ModelCallPreemptedError extends Error {
     );
     this.name = 'ModelCallPreemptedError';
   }
+}
+
+/**
+ * Wire shape carrying the identity of a model-call preemption across the
+ * gateway→agent RPC boundary. The gate lives only on the gateway's LLMClient,
+ * so a preemption raised there must survive JSON-RPC serialization as typed
+ * data — otherwise json-rpc-2.0 flattens it to a generic -32603 and the agent
+ * misclassifies the abort as a provider failure (attempt consumed, job lost).
+ */
+export interface ModelCallPreemptedErrorData {
+  resourceKey: string;
+  preemptedRuntimeClass: RuntimeLaneClass;
+  preemptorRuntimeClass: RuntimeLaneClass;
+}
+
+const RUNTIME_LANE_CLASS_VALUES: readonly RuntimeLaneClass[] = Object.values(RUNTIME_LANE_CLASSES);
+
+function isRuntimeLaneClass(value: unknown): value is RuntimeLaneClass {
+  return typeof value === 'string'
+    && (RUNTIME_LANE_CLASS_VALUES as readonly string[]).includes(value);
+}
+
+/** Serialize a preemption error to its wire data for a typed JSON-RPC error. */
+export function toModelCallPreemptedErrorData(
+  error: ModelCallPreemptedError,
+): ModelCallPreemptedErrorData {
+  return {
+    resourceKey: error.resourceKey,
+    preemptedRuntimeClass: error.preemptedRuntimeClass,
+    preemptorRuntimeClass: error.preemptorRuntimeClass,
+  };
+}
+
+/**
+ * Reconstruct a typed ModelCallPreemptedError from JSON-RPC error data received
+ * across the gateway boundary. Returns undefined (fail-closed to the caller's
+ * generic-error path) when the payload is not a well-formed preemption record.
+ */
+export function modelCallPreemptedErrorFromData(
+  data: unknown,
+): ModelCallPreemptedError | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const record = data as Record<string, unknown>;
+  if (typeof record.resourceKey !== 'string' || !record.resourceKey) return undefined;
+  if (!isRuntimeLaneClass(record.preemptedRuntimeClass)) return undefined;
+  if (!isRuntimeLaneClass(record.preemptorRuntimeClass)) return undefined;
+  return new ModelCallPreemptedError(
+    record.resourceKey,
+    record.preemptedRuntimeClass,
+    record.preemptorRuntimeClass,
+  );
 }
 
 interface ActiveCall {

@@ -227,6 +227,51 @@ for this rollout — do not suppress rollback." An `overall: 'waived'` verdict i
 an operator emergency assertion with no probe evidence and means "do not
 auto-rollback," not "healthy."
 
+### Manual and Automatic Helm Rollback
+
+The rollback surface (`src/system/lifecycle/kube-helm-rollback.ts` and
+`src/system/lifecycle/kube-auto-rollback.ts`) enacts and validates a Helm
+rollback of the companion release, closing the self-management loop.
+
+**Manual** rollback is the `rollback` self-management action. `helm rollback`
+needs full release-management credentials — unlike the RBAC-scoped rollout
+restart — so, like the deploy pipeline, the rollback executor holds the
+operator-job's own Helm transport and is composed **only** in the operator-job
+composition, never on the agent-only path. The companion may *request* a
+rollback; an operator approves it through the same x5rt.4 approval/audit boundary
+and x5rt.10 credential separation; only then does the executor run
+`helm rollback <release> <targetRevision>` and wait for the agent/gateway/garden
+Deployments to recover. A rollback whose release does not come back ready is a
+**failed rollback** (`rollbackStatus: 'failed'`) that escalates rather than a
+silent success. Manual and automatic rollbacks both record to
+`<system-data>/state/kube-rollback-latest.json` (bounded JSONL history alongside).
+
+**Automatic** rollback is the deploy job's own safety net (not the agent approval
+path): after a self-update, it consumes the post-rollout verdict and rolls back a
+failed rollout. Its decision honours the x5rt.7 review contract exactly:
+
+1. **Bind before trusting.** The verdict is trusted only when it binds to the
+   current rollout on `(release, helmRevision, sourceCommit)`. A stale verdict
+   from a prior deploy is "no verdict for this rollout": a stale *healthy* verdict
+   never suppresses a needed rollback, and a stale *failed* verdict never triggers
+   one — both surface to the operator instead.
+2. **Act once per revision.** After a rollback, `latest.json` still holds the
+   *failed* verdict of the rolled-back-from revision. The decision keys on
+   `(release, fromHelmRevision)` and consults the rollback ledger, so it never
+   rollback-loops. A rollback that ran but failed to recover is still recorded, so
+   it is not silently re-fired.
+3. **Waived means the operator owns it.** An `overall: 'waived'` verdict is
+   surfaced, never treated as health and never auto-rolled-back.
+4. **Absent/errored/stale = fail-safe, not auto-rollback.** Auto-rollback fires on
+   validation *failure* for the current rollout, not on validation *absence*
+   (rolling back an unvalidated deploy is itself destructive). An absent, stale, or
+   malformed verdict surfaces to the operator and, crucially, still refuses to
+   declare the rollout healthy. When the failed revision is the first-ever revision
+   (no previous revision to target), the rollback is a recorded no-op escalation.
+
+Live k3d end-to-end coverage of both paths is x5rt.9; the modules are fully
+testable off-cluster through the injected Helm rollback API port.
+
 ## Host-Specific Storage Validation
 
 Live hostnames, private addresses, device identifiers, mount points, and home

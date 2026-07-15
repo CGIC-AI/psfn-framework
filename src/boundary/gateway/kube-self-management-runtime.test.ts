@@ -202,4 +202,66 @@ describe('resolveKubeSelfManagementController', () => {
     });
     expect(withPipeline).toBeDefined();
   });
+
+  it('composes the manual rollback executor only when an operator-job Helm transport is supplied', async () => {
+    const baseEnv = {
+      PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
+      PSFN_HELM_NAMESPACE: 'psfn-test',
+      PSFN_HELM_RELEASE_NAME: 'psfn',
+      PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
+      PSFN_HELM_REVISION: '9',
+      PSFN_GIT_COMMIT: 'a'.repeat(40),
+      PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+    } as const;
+    const createApi = () => ({ getDeployment: vi.fn(), listPods: vi.fn(async () => []) });
+    const createRolloutApi = () => ({ getDeployment: vi.fn(), restartDeployment: vi.fn() });
+
+    // Agent path (no Helm transport): rollback is not wired, so it fails closed as unsupported.
+    const agentOnly = resolveKubeSelfManagementController({
+      env: { ...baseEnv }, audit: vi.fn(async () => 1), createApi, createRolloutApi,
+    });
+    await expect(agentOnly?.invoke({
+      actor: 'companion',
+      params: {
+        action: 'rollback', namespace: 'psfn-test', release: 'psfn',
+        sourceRevision: 'b'.repeat(40),
+        targetImage: 'localhost/psfn-framework:0.1.0-kube-bbbbbbbbbbbb',
+        helmRevision: 8, reason: 'roll back',
+      },
+      approvals: { enqueue: vi.fn() },
+    })).rejects.toThrow(/not configured in this runtime/);
+
+    // Operator-job composition: rollback becomes available behind operator approval.
+    const rollback = vi.fn(async () => ({ helmRevision: 10 }));
+    const enqueue = vi.fn(async () => ({ id: 'approval-r', expiresAt: 456 }));
+    const withRollback = resolveKubeSelfManagementController({
+      env: { ...baseEnv },
+      audit: vi.fn(async () => 1),
+      createApi,
+      createRolloutApi,
+      helmRollback: {
+        api: {
+          rollback,
+          getDeployment: vi.fn(async (_ns: string, name: string) => ({
+            name, generation: 1, observedGeneration: 1,
+            desiredReplicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1,
+          })),
+        },
+      },
+    });
+    const response = await withRollback?.invoke({
+      actor: 'companion',
+      params: {
+        action: 'rollback', namespace: 'psfn-test', release: 'psfn',
+        sourceRevision: 'b'.repeat(40),
+        targetImage: 'localhost/psfn-framework:0.1.0-kube-bbbbbbbbbbbb',
+        helmRevision: 8, reason: 'roll back the broken update',
+      },
+      approvals: { enqueue },
+    });
+    // Rollback is a mutation: it enqueues operator approval and does not execute before approval.
+    expect(response).toEqual({ status: 'approval_required', approvalId: 'approval-r', expiresAt: 456 });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(rollback).not.toHaveBeenCalled();
+  });
 });

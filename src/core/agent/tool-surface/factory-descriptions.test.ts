@@ -1,0 +1,132 @@
+import { describe, expect, it } from 'vitest';
+import { isRecord } from '../../../shared/utils/types.js';
+import { createCanonicalFactoryTools } from './canonical-tool-catalog.test-support.js';
+import {
+  CANONICAL_TOOL_SURFACE_CONTRACTS,
+  CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
+} from './descriptions.js';
+import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from './registry.js';
+
+const LEGACY_ACTION_ALIASES_BY_TOOL: Readonly<Record<string, ReadonlySet<string>>> = {
+  beads: new Set([
+    'issue_ready',
+    'issue_show',
+    'issue_create',
+    'issue_update',
+    'issue_close',
+    'issue_sync',
+  ]),
+  repo: new Set(['status', 'diff', 'create_branch', 'open_pr']),
+  skill: new Set(['skill_list', 'skill_view', 'skill_stats', 'skill_create', 'skill_update']),
+  system: new Set(['settings_get', 'self_restart', 'self_rebuild']),
+  vault: new Set(['vault_read', 'vault_write', 'vault_search', 'vault_daily']),
+};
+
+function extractLiteralStrings(schema: unknown): string[] {
+  if (!isRecord(schema)) return [];
+
+  const literals = [
+    ...(typeof schema.const === 'string' ? [schema.const] : []),
+    ...(Array.isArray(schema.enum)
+      ? schema.enum.filter((value): value is string => typeof value === 'string')
+      : []),
+  ];
+  const variants = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+  ];
+  return [...literals, ...variants.flatMap(extractLiteralStrings)];
+}
+
+function extractActionLiterals(schema: unknown): string[] {
+  if (!isRecord(schema)) return [];
+
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const variants = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+    ...(Array.isArray(schema.allOf) ? schema.allOf : []),
+  ];
+  return [...new Set([
+    ...extractLiteralStrings(properties.action),
+    ...variants.flatMap(extractActionLiterals),
+  ])].sort();
+}
+
+function extractSchemaPropertyNames(schema: unknown): Set<string> {
+  if (!isRecord(schema)) return new Set();
+  const properties = isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+  const variants = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+    ...(Array.isArray(schema.allOf) ? schema.allOf : []),
+  ];
+  return new Set([
+    ...properties,
+    ...variants.flatMap(variant => [...extractSchemaPropertyNames(variant)]),
+  ]);
+}
+
+function actionContractPattern(action: string): RegExp {
+  const escaped = action.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`\\baction\\s*=\\s*["']?${escaped}\\b`, 'u');
+}
+
+describe('canonical first-party tool factories', () => {
+  it('enumerates every canonical registry surface exactly once', () => {
+    const factoryNames = createCanonicalFactoryTools().map(tool => tool.name).sort();
+    const registryNames = CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(entry => entry.name).sort();
+
+    expect(factoryNames).toEqual(registryNames);
+  });
+
+  it('derives every concrete factory description from the canonical table', () => {
+    for (const tool of createCanonicalFactoryTools()) {
+      expect(tool.description, tool.name).toBe(
+        CANONICAL_TOOL_SURFACE_DESCRIPTIONS[
+          tool.name as keyof typeof CANONICAL_TOOL_SURFACE_DESCRIPTIONS
+        ],
+      );
+    }
+  });
+
+  it('documents every preferred action exposed by a concrete factory schema', () => {
+    for (const tool of createCanonicalFactoryTools()) {
+      const legacyAliases = LEGACY_ACTION_ALIASES_BY_TOOL[tool.name] ?? new Set<string>();
+      const preferredActions = extractActionLiterals(tool.parameters)
+        .filter(action => !legacyAliases.has(action));
+
+      for (const action of preferredActions) {
+        expect(tool.description, `${tool.name} description missing action=${action}`)
+          .toMatch(actionContractPattern(action));
+      }
+    }
+  });
+
+  it('keeps structured action contracts aligned with concrete factory schemas', () => {
+    for (const tool of createCanonicalFactoryTools()) {
+      const contract = CANONICAL_TOOL_SURFACE_CONTRACTS[
+        tool.name as keyof typeof CANONICAL_TOOL_SURFACE_CONTRACTS
+      ];
+      const propertyNames = extractSchemaPropertyNames(tool.parameters);
+      const legacyAliases = LEGACY_ACTION_ALIASES_BY_TOOL[tool.name] ?? new Set<string>();
+      const schemaActions = extractActionLiterals(tool.parameters)
+        .filter(action => !legacyAliases.has(action));
+      const contractActions = [...new Set(
+        contract.actions.filter(action => action.actionField !== false).map(action => action.action),
+      )].sort();
+
+      expect(contractActions, `${tool.name} structured action inventory`).toEqual(schemaActions);
+      for (const action of contract.actions) {
+        for (const field of [
+          ...action.required,
+          ...action.optional,
+          ...(action.requiredAnyOf ?? []).flat(),
+          ...(action.requiredOneOf ?? []),
+        ]) {
+          expect(propertyNames.has(field), `${tool.name}/${action.id} unknown field ${field}`).toBe(true);
+        }
+      }
+    }
+  });
+});

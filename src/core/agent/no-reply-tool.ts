@@ -11,6 +11,7 @@ import {
   listPendingPaidDeliverables,
   type PendingPaidDeliverable,
 } from '../../shared/paid-deliverable-tracking.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from './tool-surface/descriptions.js';
 
 const MAX_NO_REPLY_REASON_LENGTH = 500;
 
@@ -79,10 +80,7 @@ export function createResponseControlTool(
   return {
     name: RESPONSE_CONTROL_TOOL_NAME,
     label: RESPONSE_CONTROL_TOOL_NAME,
-    description:
-      'Control outward response disposition for the current turn. '
-      + 'Use action=no_reply only when intentionally choosing silence/no outward reply; '
-      + 'do not write NO_REPLY as text.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.response_control,
     parameters: RESPONSE_CONTROL_PARAMETERS,
     execute: async (
       toolCallId: string,

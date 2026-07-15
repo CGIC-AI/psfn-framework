@@ -12,6 +12,7 @@ import {
   createContactSetChannelPrivacyTool,
   createContactSetTrustTool,
 } from './tools.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -31,9 +32,7 @@ describe('contact tools', () => {
 
       expect(tool.name).toBe('contact');
       expect(tool.label).toBe('contact');
-      expect(tool.description).toContain('Unified contact surface');
-      expect(tool.description).toContain('action=search with query');
-      expect(tool.description).toContain('action=lookup with exact contactId');
+      expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.contact);
       expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
       expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const))
         .toEqual(expect.arrayContaining(['set_relationship', 'propose_relationship']));

@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult, AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
@@ -417,9 +418,7 @@ export function createSystemTool(
   return {
     name: 'system',
     label: 'system',
-    description:
-      'Unified runtime settings and lifecycle surface. Use action=read|restart|rebuild. '
-      + 'Read exposes safe runtime settings; restart and rebuild preserve lifecycle safeguards.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.system,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('read'),

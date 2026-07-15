@@ -14,6 +14,7 @@ import {
   createSelfStatusTool,
   type SelfStatusToolRuntime,
 } from './self-status.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content.map(part => part.text).join('');
@@ -407,7 +408,7 @@ describe('createSelfStatusTool', () => {
     const tool = createSelfStatusTool(makeRuntime());
     const catalogEntry = buildRuntimeToolCatalogEntry(tool, 'core');
 
-    expect(tool.description).toContain('safe structured snapshot of current runtime state');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status);
     expect(JSON.stringify(tool.parameters)).toContain('Message content is never returned');
     expect(catalogEntry.schema).toMatchObject({
       actions: expect.arrayContaining([

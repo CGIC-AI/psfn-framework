@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSubagentTool } from './tools.js';
 import type { SubagentControlPort } from './port.js';
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 
 function parseText(result: Awaited<ReturnType<ReturnType<typeof createSubagentTool>['execute']>>): unknown {
   return JSON.parse(result.content[0]?.text ?? '{}');
@@ -143,9 +144,9 @@ describe('createSubagentTool', () => {
     const tool = createSubagentTool(createPort());
 
     expect((tool.parameters as any).properties.max_turns.maximum).toBe(16);
-    expect(tool.description).toContain('action=spawn requires name and task');
-    expect(tool.description).toContain('action=message requires subagent_id and message');
-    expect(tool.description).toContain('Use status without subagent_id');
+    expect((tool.parameters as any).properties).not.toHaveProperty('toolset');
+    expect(tool.description).not.toContain('toolset');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent);
   });
 
   it('routes spawn requests through the bounded subagent control surface', async () => {

@@ -10,6 +10,7 @@ import type {
 } from './reference-store.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import {
   assertChargeSurfaceAvailable,
   chargeSurface,
@@ -255,13 +256,6 @@ function resolveCurrentTurnVisionReviewFallback(
     model: 'current-turn-review',
     imageCount: currentTurnVisionReview.imageUrls.length,
   };
-}
-
-function buildImageCreateDescription(selfImage: boolean): string {
-  if (selfImage) {
-    return 'Send a selfie or self-portrait of yourself. Use it when the user wants an image OF YOU: "send me a selfie", "what do you look like right now", "show yourself in a summer dress". Requires prompt: combine your appearance context with pose, camera angle, lighting, background, and style; the saved-reference anchoring keeps your face consistent by default (set use_reference_image=false only if explicitly asked). Do NOT use this for anything that is not you — other people, scenes, objects, and photo edits belong to generate_image.';
-  }
-  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits of yourself, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
 
 function buildImageCreatePromptDescription(selfImage: boolean): string {
@@ -763,13 +757,7 @@ export function createGenerateImageTool(
   const tool: SubstrateAgentTool = {
     name: GENERATE_IMAGE_TOOL_NAME,
     label: GENERATE_IMAGE_TOOL_NAME,
-    description:
-      'Create or edit an image from a text prompt. Use this when the user asks you to draw, render, or make a picture: '
-      + '"draw me a...", "make an image of...", "edit this photo to...". '
-      + 'action="generate" requires prompt; action="edit" requires prompt and input_urls; '
-      + 'action="analyze" requires input_urls and describes an existing image (optional question). '
-      + 'Do NOT use this for images of yourself: selfies, self-portraits, and "what do you look like right now" '
-      + 'belong to selfie_create, which keeps your appearance context and saved-reference anchoring active.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.generate_image,
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
@@ -888,7 +876,9 @@ function createImageGenerationTool(
   return {
     name: toolName,
     label: toolName,
-    description: buildImageCreateDescription(selfImage),
+    description: selfImage
+      ? CANONICAL_TOOL_SURFACE_DESCRIPTIONS.selfie_create
+      : CANONICAL_TOOL_SURFACE_DESCRIPTIONS.generate_image,
     parameters: Type.Object(parameterShape),
     execute: async (
       toolCallId: string,

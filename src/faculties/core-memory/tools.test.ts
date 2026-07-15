@@ -11,6 +11,7 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import { ValuesJournalStore } from '../values/store.js';
 import { IntrospectionConsentStore } from '../introspection/consent-store.js';
 import { IntrospectionTurnSensitivityDecisions } from '../introspection/turn-sensitivity.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -142,17 +143,14 @@ describe('orient tool', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('keeps model-facing orientation guidance concise and action grouped', () => {
+  it('uses the canonical orientation description', () => {
     const tool = createOrientTool({
       append: vi.fn(),
       replace: vi.fn(),
       rethink: vi.fn(),
     });
 
-    expect(tool.description.length).toBeLessThan(620);
-    expect(tool.description).toContain('Blocks: append/replace');
-    expect(tool.description).toContain('Values: values_list/add/update');
-    expect(tool.description).toContain('Concerns: create_concern/list_concerns/resolve_concern/transition_concern');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.orient);
     expect((tool.parameters as any).properties.text.description).toContain('Create a concern in the same turn');
   });
 
@@ -277,6 +275,32 @@ describe('orient tool', () => {
     });
     expect(resultText(result)).toContain('Reoriented active blocks');
     expect(result.details?.isError).toBeUndefined();
+  });
+
+  it.each(['persona', 'human', 'goals'])('requires reorient field %s', async (field) => {
+    const store = {
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const tool = createOrientTool(store);
+    const args: Record<string, unknown> = {
+      action: 'reorient',
+      persona: 'Pragmatic and helpful.',
+      human: 'Prefers concise answers.',
+      goals: 'Keep continuity coherent.',
+    };
+    delete args[field];
+
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute(`call-reorient-missing-${field}`, args as any));
+
+    expect(resultText(result)).toContain(`${field} must be a string for action=reorient`);
+    expect(result.details?.isError).toBe(true);
+    expect(store.rethink).not.toHaveBeenCalled();
   });
 
   it('rejects CogSec-risk orientation rewrites before touching core memory', async () => {

@@ -12,6 +12,7 @@ import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { createSessionTool, type UnifiedSessionToolOptions } from './session.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -434,11 +435,9 @@ class InMemoryTranscriptSearch {
 
     expect(tool.name).toBe('session');
     expect(tool.label).toBe('session');
-    expect(tool.description).toContain('action=list returns exact sessionId values');
-    expect(tool.description).toContain('action=search requires query');
-    expect(tool.description).toContain('action=grep requires pattern');
-    expect(tool.description).toContain('action=resume requires a sessionId from list/search');
-    expect(tool.description).toContain('action=wake_return requires summary');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session);
+    expect(tool.description).toMatch(/action=new[^.]*optional: metadata/u);
+    expect(tool.description).not.toMatch(/action=new[^.]*\breason\b/u);
     expect(Value.Check((tool as any).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
     expect(Value.Check((tool as any).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 

@@ -2,6 +2,7 @@
 // Agent-accessible tools for intentional memory creation.
 
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
@@ -790,12 +791,7 @@ export function createMemoryTool(
 ): SubstrateAgentTool {
   return {
     name: 'memory',
-    description:
-      'Unified long-term memory tool. '
-      + 'Use action=search with required query for lookup, action=write with required text and type to store memory, '
-      + 'and action=census|exists|timeline for orientation before writing. '
-      + 'Use action=shared_background with contact_a and contact_b to find what links two people. '
-      + 'Mutation actions require exact IDs: patch/redact/delete use memory_id; restore uses delete_id.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory,
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({

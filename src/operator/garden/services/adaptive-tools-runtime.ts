@@ -5,6 +5,7 @@ import {
   type RuntimeToolCatalogSnapshot,
 } from '../../../core/agent/tool-catalog.js';
 import { cloneToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
@@ -31,7 +32,7 @@ const CONDITIONAL_SERVICE_TOOL_DEFINITIONS = new Map<
 >([
   ['vault', {
     name: 'vault',
-    description: 'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.vault,
     scope: 'conditional',
     wiringMeta: {
       requiredServices: ['vault'],

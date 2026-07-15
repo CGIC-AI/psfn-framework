@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -522,12 +523,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
   return {
     name: 'self_status',
     label: 'self_status',
-    description:
-      'Read a safe structured snapshot of current runtime state: capability tier, active tools, charge lanes, channels, heartbeat, uptime, memory counts, and coarse substrate health. '
-      + 'Use action="diagnose" for a live Kubernetes self-diagnosis (deployment identity and shipped fixes, repository state, tooling availability, storage, model-routing health, policy flags, and tool-surface conformance). '
-      + 'Use action="logs" for bounded, redacted recent warnings/errors, tool validation counts, lifecycle events, and backup status. '
-      + 'Use action="conformance" to run a safe, LLM-free tool-surface conformance sweep and return its aggregated result (no session transcript is written). '
-      + 'Availability actions read/publish/clear this companion\'s bounded coarse presence lease and list only already-known canonical peer contacts.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         [

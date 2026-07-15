@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitCommitResult, GitDiffResult, GitOperations, GitStatusResult } from './ops.js';
+import {
+  CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
+  getCanonicalToolSurfaceDescription,
+} from '../../../core/agent/tool-surface/descriptions.js';
 import { createRepoTool } from './tools.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -24,14 +28,10 @@ describe('repo tool', () => {
     mockOps = createMockGitOps();
   });
 
-  it('describes inspect-first workflow and required mutation arguments', () => {
+  it('uses the canonical repository description', () => {
     const tool = createRepoTool(mockOps);
 
-    expect(tool.description).toContain('Use action=inspect before mutating');
-    expect(tool.description).toContain('action=patch requires file_path and full replacement content');
-    expect(tool.description).toContain('action=branch requires name');
-    expect(tool.description).toContain('action=commit requires message');
-    expect(tool.description).toContain('action=publish/open_pr requires title/body');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.repo);
   });
 
   it('reports repository status and diff through the unified repo surface', async () => {
@@ -126,6 +126,9 @@ describe('repo tool', () => {
 
   it('denies mutation actions in read_only mode', async () => {
     const tool = createRepoTool(mockOps, { access: 'read_only' });
+    expect(tool.description).toBe(getCanonicalToolSurfaceDescription('repo', 'read_only'));
+    expect(tool.description).toContain('action=inspect');
+    expect(tool.description).not.toMatch(/action=(?:patch|branch|commit|publish)/u);
     const result = await tool.execute('call-patch', {
       action: 'patch',
       file_path: 'src/foo.ts',

@@ -28,6 +28,7 @@ import {
   type EpisodeArc,
 } from '../../shared/contracts/episodic-memory.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -213,7 +214,7 @@ describe('createMemoryTool', () => {
 
     expect(tool.name).toBe('memory');
     expect(tool.label).toBe('memory');
-    expect(tool.description).toContain('Unified long-term memory tool');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory);
     expect(tool.parameters).toBeDefined();
   });
 
@@ -305,10 +306,7 @@ describe('createMemoryTool', () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    expect(tool.description).toContain('action=search with required query');
-    expect(tool.description).toContain('action=write with required text and type');
-    expect(tool.description).toContain('patch/redact/delete use memory_id');
-    expect(tool.description).toContain('restore uses delete_id');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory);
   });
 
   it('searches through action=search and formats results', async () => {
@@ -717,6 +715,20 @@ describe('createMemoryTool', () => {
         tags: ['archive'],
       }),
     ]);
+  });
+
+  it('requires records, not a legacy entries field, for unified action=import', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-import-wrong-shape', {
+      action: 'import',
+      entries: [{ text: 'Legacy shape', type: 'semantic' }],
+    } as any);
+
+    expect(resultText(result as any)).toContain('records must be a non-empty array for action=import');
+    expect(result.details?.isError).toBe(true);
+    expect(writer.importBatch).not.toHaveBeenCalled();
   });
 
   it('redacts through action=redact with unified requestedBy/sourceRef', async () => {

@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type {
@@ -494,13 +495,7 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
   return {
     name: 'world',
     label: 'world',
-    description:
-      'Perceive, control, and move through the physical/virtual world via the places registry and Home Assistant. '
-      + 'Use action=perceive to read a place\'s live affordance states, action=list to enumerate '
-      + 'affordances for a place or the whole site, action=control to actuate an effector, and '
-      + 'action=move to deliberately walk to a VIRTUAL place (returns its description and exits; '
-      + 'physical places cannot be moved to — physical presence follows the satellites sensing you). '
-      + 'Address any affordance globally by affordanceId; omit placeId to default to where you are.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.world,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('perceive'),

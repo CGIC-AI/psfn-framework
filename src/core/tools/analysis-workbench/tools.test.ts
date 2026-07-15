@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createAnalysisWorkbenchTool } from './tools.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../agent/tool-surface/descriptions.js';
 import { runRLMLoop } from './loop.js';
 
 vi.mock('./loop.js', () => ({
@@ -13,7 +14,7 @@ describe('createAnalysisWorkbenchTool', () => {
     vi.mocked(runRLMLoop).mockReset();
   });
 
-  it('describes the analysis workbench as a bounded large-context tool', () => {
+  it('uses the canonical analysis workbench description', () => {
     const tool = createAnalysisWorkbenchTool({
       llmProvider: {} as any,
       embeddingService: null,
@@ -23,13 +24,8 @@ describe('createAnalysisWorkbenchTool', () => {
     });
 
     expect(tool.name).toBe('analysis_workbench');
-    expect(tool.description).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
-    expect(tool.description).toContain('Use direct semantic tools first');
-    expect(tool.description).toContain('use tool_search/toolset');
-    expect(tool.description).toContain('Do not use this for routine reasoning, tool discovery');
-    expect(tool.description).toContain('routine orient actions, concern maintenance, scheduler/schedule work');
-    expect(tool.description).toContain('simple lookup');
-    expect(tool.description).toContain('Pass only the task');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.analysis_workbench);
+    expect(tool.description).not.toMatch(/(?:missing|absent)[^.]*capabil|capabil[^.]*(?:missing|absent)/iu);
   });
 
   it('marks truncated analysis workbench results as tool errors', async () => {

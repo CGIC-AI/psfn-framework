@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
@@ -207,12 +208,7 @@ export function createOrientTool(
   return {
     name: 'orient',
     label: 'orient',
-    description:
-      'Manage scoped continuity, values, concerns, and private introspection choices. '
-      + 'Blocks: append/replace or reorient local continuity; never assign identity or mood. '
-      + 'Values: values_list/add/update. '
-      + 'Concerns: create_concern/list_concerns/resolve_concern/transition_concern; copy exact concernId values. '
-      + 'Introspection: on an explicitly public non-DM turn, introspection_turn_sensitivity_set marks only the current turn non_intimate or intimate for later private audit; uncertainty stays unmarked and cannot be replayed.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.orient,
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
         type: 'string',

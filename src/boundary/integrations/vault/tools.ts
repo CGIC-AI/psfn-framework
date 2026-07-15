@@ -2,6 +2,7 @@
 // Legacy external Obsidian bridge for bounded source access and compatibility.
 
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { VaultOperations } from './ops.js';
@@ -142,10 +143,7 @@ export function createVaultTool(ops: VaultOperations): SubstrateAgentTool {
   return {
     name: 'vault',
     label: 'vault',
-    description:
-      'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility. '
-      + 'Canonical durable reference knowledge belongs in the internal wiki tool, not vault. '
-      + 'Use action=read|write|search|daily. Legacy vault_* aliases remain accepted as action values only.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.vault,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('read'),

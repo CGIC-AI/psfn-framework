@@ -3,6 +3,7 @@ import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { textResultWithError } from '../../tools/results.js';
+import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 
 const candidateNotifyParameters = Type.Object({
   action: Type.Literal('send'),
@@ -67,9 +68,8 @@ export function createIcpCandidateScopedNotifyTool(input: {
     ...input.notifyTool,
     name: 'notify',
     label: 'notify',
-    description:
-      'Permit-governed companion outreach for this exact private candidate turn. '
-      + 'Only action=send with target_kind=companion is available; message content is authored later by the target-channel turn.',
+    description: getCanonicalToolSurfaceDescription('notify', 'companion_candidate')
+      ?? input.notifyTool.description,
     parameters: candidateNotifyParameters,
     execute: async (toolCallId, rawParams, signal) => {
       let params: ReturnType<typeof parseCandidateNotifyParams>;

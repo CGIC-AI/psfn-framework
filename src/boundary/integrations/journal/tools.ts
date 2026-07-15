@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { JournalOperations } from './ops.js';
@@ -57,10 +58,7 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
   return {
     name: 'journal',
     label: 'journal',
-    description:
-      'Durable markdown journal for companion-authored notes, reflections, and longer-lived context that is not a typed memory or active open thread. '
-      + 'Use action=list|read|write|append|search. Create separate markdown files for new topics; append only when continuing an existing note. '
-      + 'Do not use journal for same-turn scratch work, temporary excerpts, or open proactive reminders; use scratchpad for temporary work and orient concerns/open threads for follow-ups.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.journal,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),

@@ -24,9 +24,12 @@ import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../
  * references and reconstructs it from the journal at the persistence read
  * boundary, so:
  * - the session journal (L0) is the single durable source of the conversation;
- * - a redacted / tombstoned / rolled-off L0 entry can NEVER be resurrected from
- *   the turn record — reconstruction only ever surfaces the journal's CURRENT
- *   truth (redaction marker, or the entry is simply gone);
+ * - for REF-BACKED records (written since this module), a redacted / tombstoned
+ *   / rolled-off L0 entry can NEVER be resurrected from the turn record —
+ *   reconstruction only ever surfaces the journal's CURRENT truth (redaction
+ *   marker, or the entry is simply gone). Old fat records pass their inline
+ *   `recentEntries` through UNGATED (pre-existing exposure, tracked by the
+ *   hgw3 fixes epic); only their `plan.messages` view is gated;
  * - the rendered view (`plan.messages`, the Loom conversation) is redaction-
  *   gated at read time via each message's `provenance.sourceEntryIds`.
  *

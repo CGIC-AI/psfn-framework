@@ -5,6 +5,7 @@ import {
   abortActiveAgentRun,
   installAgentToolSchedulerPatch,
 } from '../../boundary/pi-agent/agent-loop-patch.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import {
   ParentTurnContinuationBudgetExceededError,
 } from './turn-limits.js';
@@ -227,7 +228,7 @@ describe('parent-turn continuation fuse', () => {
 });
 
 describe('patched agent active-run cancellation', () => {
-  it('only reports success after the active provider signal is synchronously aborted', async () => {
+  it('only aborts the provider run owned by the expected request', async () => {
     let providerSignal: AbortSignal | undefined;
     let markProviderEntered!: () => void;
     const providerEntered = new Promise<void>((resolve) => {
@@ -261,20 +262,37 @@ describe('patched agent active-run cancellation', () => {
     });
     installAgentToolSchedulerPatch(agent, { maxParallelToolCalls: 1 });
 
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'not_active' });
-    const prompt = agent.prompt(userMessage('wait for the provider'));
+    expect(abortActiveAgentRun(agent, 'request-b')).toEqual({ status: 'not_active' });
+    const prompt = runWithRequestContext(
+      { requestId: 'request-b', channelId: 'api:request-b' },
+      () => agent.prompt(userMessage('wait for the provider')),
+    );
     await providerEntered;
+    expect(abortActiveAgentRun(agent, 'request-a')).toEqual({ status: 'owner_mismatch' });
+    expect(providerSignal?.aborted).toBe(false);
+
     const abortSpy = vi.spyOn(agent, 'abort').mockImplementation(() => {});
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'not_signaled' });
+    expect(abortActiveAgentRun(agent, 'request-b')).toEqual({ status: 'not_signaled' });
     expect(providerSignal?.aborted).toBe(false);
     abortSpy.mockRestore();
 
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'signaled' });
+    expect(abortActiveAgentRun(agent, 'request-b')).toEqual({ status: 'signaled' });
     expect(providerSignal?.aborted).toBe(true);
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'already_aborted' });
+    expect(abortActiveAgentRun(agent, 'request-b')).toEqual({ status: 'already_aborted' });
 
     await expect(prompt).rejects.toBeDefined();
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'not_active' });
+
+    providerSignal = undefined;
+    const ownerlessPrompt = agent.prompt(userMessage('wait without request ownership'));
+    await vi.waitFor(() => {
+      expect(providerSignal).toBeDefined();
+    });
+    expect(abortActiveAgentRun(agent, 'request-unknown')).toEqual({ status: 'owner_mismatch' });
+    expect(providerSignal?.aborted).toBe(false);
+    expect(abortActiveAgentRun(agent)).toEqual({ status: 'signaled' });
+    expect(providerSignal?.aborted).toBe(true);
+    await expect(ownerlessPrompt).rejects.toBeDefined();
+    expect(abortActiveAgentRun(agent, 'request-b')).toEqual({ status: 'not_active' });
   });
 
   it('propagates the active run signal into cooperative tool execution and settles', async () => {
@@ -348,12 +366,17 @@ describe('patched agent active-run cancellation', () => {
     } as never];
     installAgentToolSchedulerPatch(agent, { maxParallelToolCalls: 1 });
 
-    const prompt = agent.prompt(userMessage('run the slow tool'));
+    const prompt = runWithRequestContext(
+      { requestId: 'request-tool', channelId: 'api:request-tool' },
+      () => agent.prompt(userMessage('run the slow tool')),
+    );
     await toolEntered;
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'signaled' });
+    expect(abortActiveAgentRun(agent, 'different-request')).toEqual({ status: 'owner_mismatch' });
+    expect(toolSignal?.aborted).toBe(false);
+    expect(abortActiveAgentRun(agent, 'request-tool')).toEqual({ status: 'signaled' });
     expect(toolSignal?.aborted).toBe(true);
     await expect(prompt).rejects.toBeDefined();
     expect(agent.state.isStreaming).toBe(false);
-    expect(abortActiveAgentRun(agent)).toEqual({ status: 'not_active' });
+    expect(abortActiveAgentRun(agent, 'request-tool')).toEqual({ status: 'not_active' });
   });
 });

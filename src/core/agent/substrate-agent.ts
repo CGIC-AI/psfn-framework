@@ -1215,10 +1215,10 @@ export class SubstrateAgent {
     return this.turnSupportRuntime.registerIntentionPostTurnHook(hook);
   }
 
-  /** Abort the current prompt and report whether its signal was actually tripped. */
-  abort(): SubstrateAgentAbortResult {
+  /** Abort the expected request's prompt and report whether its signal was actually tripped. */
+  abort(expectedRequestId?: string): SubstrateAgentAbortResult {
     this.turnRunReservation.assertActiveRunMutationAllowed('abort');
-    return abortActiveAgentRun(this.agent);
+    return abortActiveAgentRun(this.agent, expectedRequestId);
   }
 
   async handleMessage(

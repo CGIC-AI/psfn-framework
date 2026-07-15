@@ -151,7 +151,8 @@ describe('AgentApiBackend chat completion deadlines', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const result = await resultPromise;
 
-      expect(abort).toHaveBeenCalledTimes(1);
+      expect(abort).toHaveBeenCalledOnce();
+      expect(abort).toHaveBeenCalledWith('req-timeout');
       await vi.waitFor(() => {
         expect(cancellationOutcomes).toEqual(['acknowledged']);
       });
@@ -208,6 +209,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
       cancelled: true,
     });
     expect(abort).toHaveBeenCalledOnce();
+    expect(abort).toHaveBeenCalledWith('req-cancel-active-prompt');
     expect(abortEvents).toEqual([{ reason: 'client_disconnected' }]);
     expect(cancellationOutcomes).toEqual(['acknowledged']);
 
@@ -258,6 +260,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
       cancelled: false,
     });
     expect(abort).toHaveBeenCalledOnce();
+    expect(abort).toHaveBeenCalledWith('req-cancel-pre-prompt');
     expect(abortEvents).toEqual([]);
     expect(cancellationOutcomes).toEqual(['failed']);
 
@@ -272,6 +275,56 @@ describe('AgentApiBackend chat completion deadlines', () => {
       cancelled: false,
     });
     expect(cancellationOutcomes).toEqual(['failed', 'failed']);
+  });
+
+  it('does not acknowledge cancellation when another request owns the active parent run', async () => {
+    let resolveTurn!: (response: any) => void;
+    const turnPromise = new Promise<any>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const abortEvents: Array<{ reason: string }> = [];
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('api.turn.abort', event => abortEvents.push({ reason: event.reason }));
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const handleMessage = vi.fn(() => turnPromise);
+    const abort = vi.fn(() => ({ status: 'owner_mismatch' as const }));
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort } as any,
+      eventBus,
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'request-a',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Wait while another run is active' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-session-id': 'owner-mismatch-session' },
+    });
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledOnce();
+    });
+
+    await expect(backend.cancelChatCompletion({ requestId: 'request-a' })).resolves.toEqual({
+      cancelled: false,
+    });
+    expect(abort).toHaveBeenCalledWith('request-a');
+    expect(abortEvents).toEqual([]);
+    expect(cancellationOutcomes).toEqual(['failed']);
+
+    resolveTurn({
+      content: 'request eventually settled',
+      channelId: 'api:principal-1:owner-mismatch-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
 
   it('reports failed cancellation when the active agent abort throws', async () => {

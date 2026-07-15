@@ -242,7 +242,7 @@ export class AgentApiBackend {
     try {
       abortResult = active.abort
         ? active.abort()
-        : this.abortActiveTurn(active.channelId);
+        : this.abortActiveTurn(requestId, active.channelId);
     } catch (error) {
       log.error('API turn cancellation failed', {
         requestId,
@@ -767,8 +767,8 @@ export class AgentApiBackend {
     };
   }
 
-  private abortActiveTurn(channelId: string): SubstrateAgentAbortResult {
-    const result = this.agentLoop.abort();
+  private abortActiveTurn(requestId: string, channelId: string): SubstrateAgentAbortResult {
+    const result = this.agentLoop.abort(requestId);
     if (result.status === 'not_signaled') {
       log.error('API turn cancellation did not trip the active agent signal', { channelId });
     } else if (result.status !== 'signaled') {

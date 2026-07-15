@@ -459,4 +459,46 @@ describe('scheduler config seed defaults', () => {
       );
     });
   });
+
+  describe('tool-usage evaluator config (b0yl.5)', () => {
+    it('is absent by default and loads a valid opt-in block', () => {
+      withSeedDir((seedDir) => {
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), buildValidSchedulerConfig());
+        expect(loadSchedulerSeedDefaults({ seedDir }).toolUsageEvaluator).toBeUndefined();
+
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+          ...buildValidSchedulerConfig(),
+          toolUsageEvaluator: {
+            enabled: true,
+            intervalMs: 21_600_000,
+            usageWindow: 'month',
+            minPinSuggestionInvocations: 25,
+          },
+        });
+        expect(loadSchedulerSeedDefaults({ seedDir }).toolUsageEvaluator).toEqual({
+          enabled: true,
+          intervalMs: 21_600_000,
+          usageWindow: 'month',
+          minPinSuggestionInvocations: 25,
+        });
+      });
+    });
+
+    it('fails closed on an unsupported usage window', () => {
+      withSeedDir((seedDir) => {
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+          ...buildValidSchedulerConfig(),
+          toolUsageEvaluator: {
+            enabled: true,
+            intervalMs: 21_600_000,
+            usageWindow: 'custom',
+            minPinSuggestionInvocations: 25,
+          },
+        });
+        expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+          'toolUsageEvaluator.usageWindow must be one of',
+        );
+      });
+    });
+  });
 });

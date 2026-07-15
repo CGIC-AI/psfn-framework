@@ -15,6 +15,11 @@ import {
   type KubeSelfManagementExecutor,
   type KubeSelfManagementRequest,
 } from './kube-self-management.js';
+import type {
+  PostRolloutValidationRecord,
+  PostRolloutValidationRunner,
+  RawCheckResult,
+} from './kube-post-rollout-validation.js';
 
 const COMMIT = 'a'.repeat(40);
 const SECRET_LIVE_VALUES = {
@@ -34,6 +39,44 @@ function basePlan(overrides: Partial<DeployPipelinePlan> = {}): DeployPipelinePl
     imageRepository: 'localhost/psfn-framework',
     imageTag: '0.1.0-kube-aaaaaaaa',
     k3dValidation: { mode: 'skip', reason: 'no k3d on this build host' },
+    ...overrides,
+  };
+}
+
+const POST_ROLLOUT_PASS: RawCheckResult = { verdict: 'pass' };
+
+function healthyPostRolloutRunner(
+  overrides: Partial<PostRolloutValidationRunner> = {},
+): PostRolloutValidationRunner {
+  return {
+    checkRolloutStatus: async () => POST_ROLLOUT_PASS,
+    checkGardenHealth: async () => POST_ROLLOUT_PASS,
+    checkModelRoute: async () => POST_ROLLOUT_PASS,
+    checkPgVector: async () => POST_ROLLOUT_PASS,
+    checkRedis: async () => POST_ROLLOUT_PASS,
+    checkAgentReadiness: async () => POST_ROLLOUT_PASS,
+    checkChatTurnProbe: async () => POST_ROLLOUT_PASS,
+    fetchToolConformance: async () => ({
+      schemaVersion: 1,
+      ranAt: 1000,
+      trigger: 'post_rollout',
+      results: [
+        { toolName: 'self_status', probeKind: 'read_only', action: 'status', ok: true, durationMs: 2 },
+      ],
+    }),
+    fetchDiagnostics: async () => ({
+      schemaVersion: 1,
+      generatedAt: 2000,
+      window: { sinceMs: 0, untilMs: 2000, windowMs: 2000, limit: 20, includeFileLogs: false, logsDir: '/app/logs' },
+      sources: [],
+      agentLog: { status: 'available', counts: { warn: 0, error: 0, total: 0 }, records: [] },
+      fileLogs: { status: 'unavailable', reason: 'requires kube surface' },
+      toolValidationFailures: { status: 'available', total: 0, byTool: [] },
+      lifecycle: { status: 'available', events: [] },
+      rollout: { status: 'unavailable', reason: 'requires kube surface' },
+      pods: { status: 'unavailable', reason: 'requires kube surface' },
+      backup: { status: 'available', counts: { success: 0, failure: 0, total: 0 }, lastSuccess: null, lastFailure: null, recent: [] },
+    }),
     ...overrides,
   };
 }
@@ -248,6 +291,79 @@ describe('runKubeDeployPipeline', () => {
     const { runner } = fakeRunner({ archiveSource: async () => ({ sha256: 'nope' }) });
     const error = await runKubeDeployPipeline(basePlan(), { runner }).catch(caught => caught);
     expect((error as DeployPipelineError).record.errorCode).toBe('archive_checksum_invalid');
+  });
+
+  it('leaves the post-rollout stage not_run when no validator is supplied', async () => {
+    const { runner } = fakeRunner();
+    const record = await runKubeDeployPipeline(basePlan(), { runner });
+    expect(record.postRolloutValidation).toBeNull();
+    expect(record.stages.find(stage => stage.id === 'post_rollout_validation')?.status).toBe('not_run');
+    expect(record.outcome).toBe('succeeded');
+  });
+
+  it('runs the post-rollout gate after helm_upgrade and passes on a healthy verdict', async () => {
+    const { runner } = fakeRunner();
+    const persisted: PostRolloutValidationRecord[] = [];
+    const record = await runKubeDeployPipeline(basePlan(), {
+      runner,
+      postRolloutValidation: {
+        runner: healthyPostRolloutRunner(),
+        persist: verdict => persisted.push(verdict),
+      },
+    });
+    expect(record.stages.find(stage => stage.id === 'post_rollout_validation')?.status).toBe('passed');
+    expect(record.postRolloutValidation?.healthy).toBe(true);
+    expect(record.postRolloutValidation?.trigger).toBe('deploy_pipeline');
+    expect(record.postRolloutValidation?.helmRevision).toBe(9);
+    expect(record.outcome).toBe('succeeded');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.healthy).toBe(true);
+  });
+
+  it('fails closed after rollout when the post-rollout gate reports unhealthy, attaching the verdict', async () => {
+    const { runner, calls } = fakeRunner();
+    const persisted: PostRolloutValidationRecord[] = [];
+    const error = await runKubeDeployPipeline(basePlan(), {
+      runner,
+      postRolloutValidation: {
+        runner: healthyPostRolloutRunner({
+          checkModelRoute: async () => ({ verdict: 'fail', detail: 'model route missing' }),
+        }),
+        persist: verdict => persisted.push(verdict),
+      },
+    }).catch(caught => caught);
+
+    expect(error).toBeInstanceOf(DeployPipelineError);
+    const record = (error as DeployPipelineError).record;
+    expect(record.failedStage).toBe('post_rollout_validation');
+    expect(record.errorCode).toBe('post_rollout_validation_failed');
+    // Live was already touched by the upgrade — the verdict is the rollback signal.
+    expect(record.liveUntouched).toBe(false);
+    expect(calls).toContain('upgrade');
+    expect(record.postRolloutValidation?.healthy).toBe(false);
+    expect(record.postRolloutValidation?.recommendedAction).toBe('rollback');
+    // Persisted on the unhealthy path too, so x5rt.8 always has a verdict.
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.healthy).toBe(false);
+  });
+
+  it('rebuild never reaches the post-rollout stage even with a validator supplied', async () => {
+    const { runner } = fakeRunner();
+    let gateRan = false;
+    const record = await runKubeDeployPipeline(basePlan({ action: 'rebuild' }), {
+      runner,
+      postRolloutValidation: {
+        runner: healthyPostRolloutRunner({
+          checkRolloutStatus: async () => {
+            gateRan = true;
+            return { verdict: 'pass' };
+          },
+        }),
+      },
+    });
+    expect(gateRan).toBe(false);
+    expect(record.postRolloutValidation).toBeNull();
+    expect(record.stages.find(stage => stage.id === 'post_rollout_validation')?.status).toBe('not_run');
   });
 });
 

@@ -181,6 +181,52 @@ manual/automatic Helm rollback consume the pipeline record and the
 `DeployPipelineRunner` interface; k3d end-to-end coverage exercises the runner
 against a throwaway cluster.
 
+### Post-Rollout Validation Gate
+
+After `helm_upgrade`, an optional `post_rollout_validation` stage
+(`src/system/lifecycle/kube-post-rollout-validation.ts`) validates the
+*live-rolled* companion — distinct from the pre-rollout `k3d_validation`, which
+runs an imported image on a throwaway cluster before anything live changes. Helm
+reporting "deployed" is not proof of health; this gate is. It is opt-in and
+supplied only by the operator-job composition (its own transport, no agent
+credentials); the agent path stays diagnose-only.
+
+The gate runs a fixed set of required checks and returns a structured verdict
+with per-check evidence and timestamps: agent/gateway/garden rollout status,
+Garden `/health` with admin transport up, gateway `/v1/models` includes the
+expected companion model route, Postgres pgvector present, Redis `PONG`, agent
+readiness (Ready log, no `CrashLoopBackOff`, running image matches the target
+tag/revision), a two-turn gateway smoke (served provider matches the request and
+the persisted turn record is residue-free), the tool-surface conformance harness
+result (reused from x5rt.3, fetched from the new pod's `post_rollout` run), and a
+bounded diagnostics scan (reused from x5rt.2) for crash/owner-file/tool-wiring
+failures.
+
+Fail-closed is the safety semantics that makes the sibling rollback correct: a
+companion that cannot *prove* it is healthy is not healthy. Any check that is
+inconclusive, errors, or times out is treated as a **fail**, never a silent
+pass. The gate is healthy only when every required check passes; tool conformance
+is the sole check that may be explicitly skipped with a recorded reason. An
+`emergencyWaiver` with a non-empty justification records a healthy-by-waiver
+verdict without running checks (documented, like emergency-recovery for the
+quality gate). When the verdict is unhealthy the pipeline fails at the
+`post_rollout_validation` stage with the verdict attached to the record.
+
+The verdict (`healthy`, `recommendedAction`, per-check results, and bounded,
+already-sanitized log context for rollback debugging) is written to
+`<system-data>/state/post-rollout-validation-latest.json` (bounded JSONL history
+alongside) on the healthy and unhealthy verdict paths **when the operator-job
+composition supplies the `persist` callback** — the stable cross-workstream
+contract the Helm-rollback surface reads to decide whether to roll back.
+Persistence is opt-in: if the `post_rollout_validation` stage is not composed, or
+the gate itself errors before producing a verdict, no fresh verdict is written
+and `latest.json` retains the **prior** rollout's verdict. The Helm-rollback
+surface must therefore bind on `(release, helmRevision, sourceCommit)` before
+trusting a `healthy` verdict, and treat an absent/stale verdict as "no verdict
+for this rollout — do not suppress rollback." An `overall: 'waived'` verdict is
+an operator emergency assertion with no probe evidence and means "do not
+auto-rollback," not "healthy."
+
 ## Host-Specific Storage Validation
 
 Live hostnames, private addresses, device identifiers, mount points, and home

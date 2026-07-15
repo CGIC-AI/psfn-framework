@@ -13,6 +13,12 @@ import {
   type KubeSelfManagementExecutor,
   type KubeSelfManagementRequest,
 } from './kube-self-management.js';
+import {
+  runPostRolloutValidation,
+  summarizePostRolloutValidationRecord,
+  type PostRolloutValidationRecord,
+  type PostRolloutValidationRunner,
+} from './kube-post-rollout-validation.js';
 
 /**
  * Guarded build -> test -> image -> deploy pipeline for the kube companion.
@@ -44,7 +50,8 @@ export type DeployPipelineStageId =
   | 'build'
   | 'import'
   | 'k3d_validation'
-  | 'helm_upgrade';
+  | 'helm_upgrade'
+  | 'post_rollout_validation';
 
 export type DeployPipelineStageStatus = 'passed' | 'failed' | 'skipped' | 'not_run';
 
@@ -186,6 +193,14 @@ export interface DeployPipelineRecord {
   liveValues: DeployPipelineLiveValuesSummary;
   helmRevision: number | null;
   liveUntouched: boolean;
+  /**
+   * Post-rollout validation verdict (x5rt.7). Null when the gate did not run
+   * (a `rebuild`, or a `deploy` with no post-rollout validator supplied). When
+   * the gate runs and the companion is not healthy, the pipeline fails at the
+   * `post_rollout_validation` stage with the verdict attached here so the
+   * rollback surface (x5rt.8) can consume it.
+   */
+  postRolloutValidation: PostRolloutValidationRecord | null;
   stages: DeployPipelineStageRecord[];
   outcome: 'succeeded' | 'failed';
   failedStage?: DeployPipelineStageId;
@@ -211,6 +226,7 @@ const STAGE_ORDER: readonly DeployPipelineStageId[] = [
   'import',
   'k3d_validation',
   'helm_upgrade',
+  'post_rollout_validation',
 ];
 
 function isDeployPipelineAction(value: unknown): value is DeployPipelineAction {
@@ -337,6 +353,7 @@ function initialRecord(plan: DeployPipelinePlan): DeployPipelineRecord {
     liveValues: { captured: false, redactedKeys: [] },
     helmRevision: null,
     liveUntouched: true,
+    postRolloutValidation: null,
     stages: STAGE_ORDER.map(id => ({ id, status: 'not_run' as DeployPipelineStageStatus })),
     outcome: 'failed',
     errorCode: 'incomplete',
@@ -395,8 +412,37 @@ export function deriveLocalImportRetag(
   };
 }
 
+/**
+ * Post-rollout validation wiring (x5rt.7). Opt-in and supplied only by the
+ * operator-job composition (its own transport, no agent credentials). When
+ * present on a `deploy`, the gate runs after `helm_upgrade` against the live-
+ * rolled companion; an unhealthy verdict fails the pipeline at the
+ * `post_rollout_validation` stage with the verdict attached to the record. When
+ * absent, the stage stays `not_run` (the pipeline mechanics are honest about not
+ * having validated), and the composition layer is responsible for the health
+ * decision. `rebuild` never reaches this stage.
+ */
+export interface DeployPipelinePostRolloutValidation {
+  runner: PostRolloutValidationRunner;
+  /**
+   * Documented emergency waiver forwarded to the gate: the verdict is recorded
+   * as healthy-by-waiver without running checks. Fail-closed on an empty
+   * justification (rejected by the gate).
+   */
+  emergencyWaiver?: { justification: string };
+  /** Post-rollout tool-validation-failure count that fails the log scan (default 1). */
+  toolValidationFailureThreshold?: number;
+  /**
+   * Persist the verdict so x5rt.8 can read it out-of-band. Invoked on BOTH the
+   * healthy and unhealthy paths before the pipeline resolves/throws.
+   */
+  persist?: (record: PostRolloutValidationRecord) => void;
+  now?: () => number;
+}
+
 export interface RunKubeDeployPipelineOptions {
   runner: DeployPipelineRunner;
+  postRolloutValidation?: DeployPipelinePostRolloutValidation;
 }
 
 /**
@@ -579,9 +625,59 @@ export async function runKubeDeployPipeline(
       'Kube deploy pipeline Helm upgrade failed.', error);
   }
 
+  // 8. Post-rollout validation (x5rt.7) — runs AFTER the live rollout against the
+  // live-rolled companion. Opt-in; when no validator is supplied the stage stays
+  // `not_run` and the composition layer owns the health decision. Fail-closed: an
+  // unhealthy verdict fails the pipeline with the verdict attached so the sibling
+  // rollback surface (x5rt.8) can consume it. The verdict is persisted on BOTH
+  // paths before this function resolves or throws.
+  if (options.postRolloutValidation) {
+    const validation = options.postRolloutValidation;
+    let verdict: PostRolloutValidationRecord;
+    try {
+      verdict = await runPostRolloutValidation(
+        {
+          namespace: plan.namespace,
+          release: plan.release,
+          sourceCommit: plan.sourceCommit,
+          imageReference: record.imageReference,
+          imageRevisionLabel: record.imageRevisionLabel,
+          helmRevision: upgradeRevision(record),
+          trigger: 'deploy_pipeline',
+          ...(validation.emergencyWaiver ? { emergencyWaiver: validation.emergencyWaiver } : {}),
+        },
+        {
+          runner: validation.runner,
+          ...(validation.toolValidationFailureThreshold !== undefined
+            ? { toolValidationFailureThreshold: validation.toolValidationFailureThreshold }
+            : {}),
+          ...(validation.now ? { now: validation.now } : {}),
+        },
+      );
+    } catch (error) {
+      fail(record, 'post_rollout_validation', 'post_rollout_validation_errored',
+        'Kube deploy pipeline post-rollout validation could not run.', error);
+    }
+    record.postRolloutValidation = verdict;
+    if (validation.persist) validation.persist(verdict);
+    if (!verdict.healthy) {
+      fail(record, 'post_rollout_validation', 'post_rollout_validation_failed',
+        'Kube deploy pipeline post-rollout validation reported an unhealthy companion.');
+    }
+    setStage(record, 'post_rollout_validation', 'passed');
+  }
+
   record.outcome = 'succeeded';
   delete record.errorCode;
   return record;
+}
+
+/** The recorded Helm revision after a successful upgrade; guaranteed positive here. */
+function upgradeRevision(record: DeployPipelineRecord): number {
+  if (record.helmRevision === null) {
+    throw new Error('Kube deploy pipeline post-rollout validation ran without a Helm revision.');
+  }
+  return record.helmRevision;
 }
 
 /** Sanitized, secret-free projection of the record for audit `details`. */
@@ -605,6 +701,9 @@ export function summarizeDeployPipelineRecord(
     liveValuesSha256: record.liveValues.sha256 ?? null,
     helmRevision: record.helmRevision,
     liveUntouched: record.liveUntouched,
+    ...(record.postRolloutValidation
+      ? { postRolloutValidation: summarizePostRolloutValidationRecord(record.postRolloutValidation) }
+      : {}),
     outcome: record.outcome,
     ...(record.failedStage ? { failedStage: record.failedStage } : {}),
     ...(record.errorCode ? { errorCode: record.errorCode } : {}),
@@ -622,6 +721,13 @@ export interface KubeDeployPipelineExecutorOptions {
     DeployPipelinePlan,
     'action' | 'namespace' | 'release'
   >;
+  /**
+   * Post-rollout validation gate (x5rt.7). Supplied by the operator-job
+   * composition so a `deploy` is validated against the live-rolled companion and
+   * an unhealthy verdict surfaces as a `failed` validation result (and a throw)
+   * the controller audits and x5rt.8 acts on. Never supplied by the agent path.
+   */
+  postRolloutValidation?: DeployPipelinePostRolloutValidation;
 }
 
 /**
@@ -649,11 +755,20 @@ export function createKubeDeployPipelineExecutor(
         release: request.release,
         ...details,
       };
-      const record = await runKubeDeployPipeline(plan, { runner: options.runner });
+      const record = await runKubeDeployPipeline(plan, {
+        runner: options.runner,
+        ...(options.postRolloutValidation
+          ? { postRolloutValidation: options.postRolloutValidation }
+          : {}),
+      });
+      // A post-rollout gate that ran and passed is the strongest health signal;
+      // otherwise fall back to the pre-rollout quality-gate outcome. (An unhealthy
+      // verdict throws inside the pipeline, so it never reaches this success path.)
       const validationResult: KubeSelfManagementExecutionResult['validationResult'] =
-        record.gate.overall === 'passed' ? 'passed'
-          : record.gate.overall === 'failed' ? 'failed'
-            : 'not_run';
+        record.postRolloutValidation?.healthy === true ? 'passed'
+          : record.gate.overall === 'passed' ? 'passed'
+            : record.gate.overall === 'failed' ? 'failed'
+              : 'not_run';
       return {
         validationResult,
         rollbackStatus: 'not_requested',

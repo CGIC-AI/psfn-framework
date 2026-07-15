@@ -7,6 +7,7 @@ import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { GatewayCompanionChannelLane } from './companion-channels.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import { EventBus } from '../../shared/event-bus.js';
 import type {
   FatigueBudgetEvent,
   SubstrateMessage,
@@ -188,6 +189,7 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
     multiCompanion: multiCompanionConfig,
     companionChannels: lane,
     companionChannelNow: () => NOW,
+    eventBus: new EventBus(),
   };
 }
 

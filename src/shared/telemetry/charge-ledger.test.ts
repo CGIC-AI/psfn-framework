@@ -6,8 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../event-bus.js';
 import type { RunChargeEvent } from '../contracts/runtime.js';
 import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
-import { RunChargeLedger } from './charge-ledger.js';
 import {
+  readRunChargeRollingWindowFromLedger,
+  RunChargeLedger,
+} from './charge-ledger.js';
+import {
+  chargeSurfaceDurably,
   chargeSurface,
   getRunChargeRollingWindowSnapshot,
   resetRunChargeRollingWindowForTests,
@@ -166,6 +170,88 @@ describe('RunChargeLedger', () => {
     expect(data.events[0].event.quota).toBe(10);
   });
 
+  it('fails before accounting when durable charge persistence fails', async () => {
+    const recordChargeEvent = vi.fn(async () => {
+      throw new Error('ledger append failed');
+    });
+
+    await expect(runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'durable-failure-run',
+    }, async () => await chargeSurfaceDurably('externalModelConsult', {
+      eventId: 'durable-failure-event',
+      probeChargeEvent: async () => 'absent',
+      recordChargeEvent,
+    }))).rejects.toThrow('ledger append failed');
+
+    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(0);
+  });
+
+  it('replays a stable durable charge identity after restart without a duplicate append', async () => {
+    const firstTimestampMs = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(firstTimestampMs);
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath);
+    const eventId = 'stable-companion-social-turn:companion-social';
+    await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'stable-charge-run',
+    }, async () => {
+      await chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        probeChargeEvent: (event) => firstLedger.probeChargeEvent(event),
+        recordChargeEvent: (event) => {
+          return firstLedger.commitChargeEvent(event).outcome;
+        },
+      });
+    });
+    firstLedger.close();
+    expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+
+    resetRunChargeRollingWindowForTests();
+    vi.setSystemTime(firstTimestampMs + 24 * 60 * 60_000 + 1);
+    const restartedLedger = new RunChargeLedger(ledgerPath);
+    const replayProbe = vi.fn((event: RunChargeEvent) => {
+      return restartedLedger.probeChargeEvent(event);
+    });
+    const replayRecorder = vi.fn((event: RunChargeEvent) => {
+      return restartedLedger.commitChargeEvent(event).outcome;
+    });
+    await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'stable-charge-run',
+    }, async () => {
+      chargeSurface('externalModelConsult');
+      chargeSurface('externalModelConsult');
+      chargeSurface('externalModelConsult');
+      await chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        probeChargeEvent: replayProbe,
+        recordChargeEvent: replayRecorder,
+      });
+      await expect(chargeSurfaceDurably('externalModelConsult', {
+        eventId: 'unknown-charge-at-full-quota',
+        probeChargeEvent: replayProbe,
+        recordChargeEvent: replayRecorder,
+      })).rejects.toThrow('Charge quota exceeded');
+      await expect(chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        details: { changedBinding: true },
+        probeChargeEvent: replayProbe,
+        recordChargeEvent: replayRecorder,
+      })).rejects.toThrow('identity collision');
+    });
+
+    expect(replayProbe).toHaveBeenCalledTimes(3);
+    expect(replayRecorder).not.toHaveBeenCalled();
+    expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(3);
+  });
+
   it('hydrates rolling charge enforcement from persisted ledger events after restart', async () => {
     const nowMs = 1_800_000_000_000;
     vi.useFakeTimers();
@@ -191,6 +277,25 @@ describe('RunChargeLedger', () => {
       chargeSurface('externalModelConsult', { amount: 2 });
     })).rejects.toThrow('rolling 24-hour budget');
     rebootedLedger.close();
+  });
+
+  it('freshly reads the canonical rolling balance without process hydration', () => {
+    const nowMs = 1_800_000_000_000;
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    ledger.recordChargeEvent(makeEvent({
+      timestampMs: nowMs - 60_000,
+      lane: 'companion_social',
+      amount: 11,
+    }));
+    ledger.close();
+    resetRunChargeRollingWindowForTests();
+
+    expect(readRunChargeRollingWindowFromLedger(ledgerPath, nowMs)).toEqual({
+      windowMs: 24 * 60 * 60_000,
+      spentByLane: { companion_social: 11 },
+      entryCount: 1,
+    });
   });
 
   it('hydrates two persisted events with identical metadata as two spends', () => {

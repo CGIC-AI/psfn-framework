@@ -150,6 +150,43 @@ async function waitForCondition(description: string, condition: () => boolean): 
 }
 
 describe('runExtractionOrchestration fail-closed errors', () => {
+  it('propagates typed ICP lineage into extraction completion correlation', async () => {
+    const complete = vi.fn().mockResolvedValue({ content: '<response></response>' });
+    const icpCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerContactId: 'contact-nova',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+    await runExtractionOrchestration(buildOptions({
+      icpCorrelation,
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+    }));
+
+    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+      requestId: 'memory-extraction:api:test:manual',
+      icpCorrelation: {
+        ...icpCorrelation,
+        requestId: 'memory-extraction:api:test:manual',
+        costPurpose: 'extraction',
+        costOriginStage: 'post_turn',
+      },
+    });
+    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
+  });
+
   it('emits concern candidate context from accepted extraction material', async () => {
     const emitConcernCandidates = vi.fn().mockResolvedValue(undefined);
     const options = buildOptions({
@@ -692,14 +729,14 @@ describe('runExtractionOrchestration naming fidelity', () => {
       processFact,
       resolveParticipantNames: () => ({
         userName: 'Alex',
-        companionName: 'Carlini',
+        companionName: 'Lyra',
       }),
     });
 
     await runExtractionOrchestration(options);
 
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
-      text: "Alex appreciates Carlini's patience.",
+      text: "Alex appreciates Lyra's patience.",
     }), expect.any(String), undefined, expect.objectContaining({
       routingReason: 'single_speaker_transcript',
       sourceSpeakerName: 'Alex',
@@ -970,13 +1007,13 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       ] as ExtractionRunOptions['recoveredEntries'],
       sessionManager: {
         getRecentMessages: vi.fn(),
-        characterName: 'Carlini',
+        characterName: 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       llmClient: {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
-<text>MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
+<text>MrDragonFox believes that if Lyra is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
 <type>semantic</type>
 <importance>0.92</importance>
 <confidence>0.95</confidence>
@@ -1051,7 +1088,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           role: 'user',
           authorId: 'discord-mrdragonfox',
           authorName: 'MrDragonFox',
-          content: 'Carlini, Vega is helping run moderation tonight.',
+          content: 'Lyra, Vega is helping run moderation tonight.',
           timestamp: 1,
         },
         {
@@ -1066,7 +1103,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       ] as ExtractionRunOptions['recoveredEntries'],
       sessionManager: {
         getRecentMessages: vi.fn(),
-        characterName: 'Carlini',
+        characterName: 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       llmClient: {
         complete: vi.fn().mockResolvedValue({
@@ -1152,7 +1189,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       ] as ExtractionRunOptions['recoveredEntries'],
       sessionManager: {
         getRecentMessages: vi.fn(),
-        characterName: 'Carlini',
+        characterName: 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       llmClient: {
         complete: vi.fn().mockResolvedValue({
@@ -1320,7 +1357,7 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
-<text>Carlini needs stronger launch planning.</text>
+<text>Lyra needs stronger launch planning.</text>
 <type>semantic</type>
 <importance>0.9</importance>
 <confidence>0.9</confidence>

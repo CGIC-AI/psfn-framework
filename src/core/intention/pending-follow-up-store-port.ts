@@ -2,6 +2,7 @@ export type Awaitable<T> = T | Promise<T>;
 type PendingFollowUp = import('./pending-follow-ups.js').PendingFollowUp;
 type PendingFollowUpActivateOptions = import('./pending-follow-ups.js').PendingFollowUpActivateOptions;
 type PendingFollowUpCreateInput = import('./pending-follow-ups.js').PendingFollowUpCreateInput;
+type PendingFollowUpDampenOptions = import('./pending-follow-ups.js').PendingFollowUpDampenOptions;
 type PendingFollowUpListOptions = import('./pending-follow-ups.js').PendingFollowUpListOptions;
 
 export interface PendingFollowUpQuarantineInput {
@@ -34,6 +35,7 @@ export interface PendingFollowUpStorePort {
     id: string,
     options?: PendingFollowUpActivateOptions,
   ): Awaitable<PendingFollowUp | null>;
+  dampen?(id: string, options: PendingFollowUpDampenOptions): Awaitable<PendingFollowUp | null>;
   quarantine(input: PendingFollowUpQuarantineInput): Awaitable<PendingFollowUpQuarantineRecord>;
   list(options?: PendingFollowUpListOptions): Awaitable<PendingFollowUp[]>;
   listQuarantined(
@@ -48,6 +50,9 @@ export function createPendingFollowUpStorePort(
     enqueue: async (input) => await store.enqueue(input),
     peek: async (id) => await store.peek(id),
     dequeue: async (id, options) => await store.dequeue(id, options),
+    ...(store.dampen
+      ? { dampen: async (id, options) => await store.dampen!(id, options) }
+      : {}),
     quarantine: async (input) => await store.quarantine(input),
     list: async (options) => await store.list(options),
     listQuarantined: async (options) => await store.listQuarantined(options),

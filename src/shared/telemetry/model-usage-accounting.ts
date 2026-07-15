@@ -85,6 +85,33 @@ export function roundModelUsageUsd(value: number): number {
   return Math.round((value + Number.EPSILON) * 1_000_000_000_000) / 1_000_000_000_000;
 }
 
+/** Conservative USD quantization for pre-provider admission decisions. */
+export function ceilModelUsageUsd(value: number): number {
+  return Math.ceil(value * 1_000_000_000_000) / 1_000_000_000_000;
+}
+
+/**
+ * Projects the worst-case token envelope without rounding a positive provider
+ * charge down. Missing pricing for any non-empty billable bucket stays unknown.
+ */
+export function estimateConservativeModelUsageCostUsd(
+  input: ModelUsageTokenBucketsInput,
+  rates: ModelUsageCostRates | undefined,
+): number | undefined {
+  if (!rates) return undefined;
+  const usage = normalizeUsage(input);
+  normalizeCurrency(rates.currency, 'estimatedRates.currency');
+  let total = 0;
+  for (const bucket of COST_BUCKETS) {
+    const tokens = usage[bucket.tokens];
+    if (tokens === 0) continue;
+    const rate = normalizeMoney(rates[bucket.rate], `estimatedRates.${bucket.rate}`);
+    if (rate === undefined) return undefined;
+    total += (tokens / 1_000_000) * rate;
+  }
+  return ceilModelUsageUsd(total);
+}
+
 function normalizeUsage(input: ModelUsageTokenBucketsInput): ModelUsageTokenBuckets {
   const usage = {
     inputTokens: normalizeCount(input.inputTokens, 'inputTokens'),

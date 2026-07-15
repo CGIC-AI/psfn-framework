@@ -2,7 +2,7 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-14.
 
 ## Source Of Truth Order
 
@@ -182,6 +182,35 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - loads model and provider registries with legacy migration support
 - loads trust-policy, scheduler, capability, charge-policy, backup, skills, and channel config
 - warns on legacy drift instead of silently re-authorizing `.env`
+
+## Same-Cluster Inter-Companion Autonomy
+
+- Autonomous initiation is same-cluster only, disabled by default, and started
+  only when `scheduler.json > icpAutonomy.enabled` is true. Its strict owner
+  block also owns candidate TTL/retry, permit TTL, and operator availability
+  lease TTL. There is no env shadow or compatibility reader.
+- `charge-policy.json` owns companion-social quota and continuation cost,
+  fatigue/social/overcharge reserve, structured continuation-evidence switches,
+  and the ICP conversation cost breaker. Existing `trust-policy.json`,
+  `channels.json`, capability tier, contact block/trust, and gateway policy
+  remain independent mandatory gates.
+- Candidate motivation and peer-contact binding stay companion-local. Shared
+  arbitration stores only content-free availability, episode, provenance, and
+  permit control state. Permits are short-lived, single-use, candidate-bound,
+  recovery-safe, and invalidated when operator DND or emergency disable fences a
+  participant.
+- Peer-visible content is authored by the target ordinary channel turn. The
+  source handoff never accepts message content, and ICP-correlated turns cannot
+  recursively initiate another channel.
+- Garden `/autonomy` exposes only bounded/redacted local-participant
+  control-plane state and effective/on-disk/restart owner semantics. Unrelated
+  peer↔peer lifecycle, provenance, reason, fatigue, cost, and derived counts are
+  excluded. Audited local controls are
+  revision-checked candidate cancellation, operator DND, and one-way live
+  emergency disable plus persisted owner disable.
+- Not shipped: cross-cluster communication, fleet-wide/cross-companion control,
+  message puppeteering, private transcript/reasoning inspection, and any Garden
+  exposure of chain-of-thought.
 
 ## Security And Fail-Closed Posture
 

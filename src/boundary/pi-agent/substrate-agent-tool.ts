@@ -2,7 +2,7 @@
 // pi-agent-core 0.73 types `AgentTool.execute` parameters via typebox v1
 // `Static<TParameters>`, which resolves to `unknown` for `AgentTool<any>` and
 // cannot infer from this repo's @sinclair/typebox schema values when the
-// generic is erased. PSFN's tool-call scheduler validates every tool call's
+// generic is erased. The companion runtime's tool-call scheduler validates every tool call's
 // arguments against the tool's JSON schema (`validateToolArguments`) before
 // `execute` is invoked, so tool implementations receive schema-validated
 // arguments and keep their concrete parameter typings.

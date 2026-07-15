@@ -25,7 +25,7 @@ const NEVER_ABORT_SIGNAL = new AbortController().signal;
 type RuntimeErrorCode =
   | 'SESSION_NOT_FOUND'
   | 'SESSION_END_IN_PROGRESS'
-  | 'INVALID_AUDIO_BASE64'
+  | 'INVALID_AUDIO_CHUNK'
   | 'AUDIO_CHUNK_TOO_LARGE'
   | 'STT_TRANSCRIPT_STREAM_FAILED'
   | 'SECURITY_VIOLATION'
@@ -87,10 +87,6 @@ function toSessionKey(transportSession: WebSocketVoiceSession, frameSessionId: s
   return `${transportSession.connectionId}:${frameSessionId}`;
 }
 
-function canonicalBase64(input: string): string {
-  return input.replace(/\s+/g, '').replace(/=+$/g, '');
-}
-
 export class WebSocketVoiceRuntime {
   private readonly sessions = new Map<string, RuntimeSessionState>();
   private readonly startsInFlight = new Map<string, SessionStartInFlight>();
@@ -125,7 +121,7 @@ export class WebSocketVoiceRuntime {
           await this.handleSessionStart(session, frame.sessionId);
           return;
         case 'audio.chunk':
-          await this.handleAudioChunk(session, frame.sessionId, frame.audioBase64);
+          await this.handleAudioChunk(session, frame.sessionId, frame.audio);
           return;
         case 'session.end':
           await this.handleSessionEnd(session, frame.sessionId);
@@ -261,14 +257,14 @@ export class WebSocketVoiceRuntime {
   private async handleAudioChunk(
     transportSession: WebSocketVoiceSession,
     frameSessionId: string,
-    audioBase64: string,
+    audio: Uint8Array,
   ): Promise<void> {
     const state = this.requireState(transportSession, frameSessionId);
     this.throwIfInterrupted(state);
 
     const chunk = await this.runStage(
       'ingest',
-      async () => this.decodeAudioChunk(audioBase64),
+      async () => this.validateAudioChunk(audio),
       state.abortController.signal,
     );
 
@@ -470,14 +466,12 @@ export class WebSocketVoiceRuntime {
       this.throwIfInterrupted(state);
 
       totalBytes = this.security.validateTtsAudioChunk(chunk.audio, totalBytes);
-      const encoded = Buffer.from(chunk.audio).toString('base64');
-
       await this.runStage(
         'output',
         () => this.emitOutbound(state.transportSession, state.frameSessionId, {
           type: 'playback.chunk',
           seq: Number.isFinite(chunk.sequence) ? chunk.sequence : fallbackSeq,
-          audioBase64: encoded,
+          audio: new Uint8Array(chunk.audio),
         }),
         state.abortController.signal,
       );
@@ -488,27 +482,18 @@ export class WebSocketVoiceRuntime {
     state.ttsSession = null;
   }
 
-  private decodeAudioChunk(audioBase64: string): Uint8Array {
-    const trimmed = audioBase64.trim();
-    if (trimmed.length === 0) {
-      throw new WebSocketVoiceRuntimeError('INVALID_AUDIO_BASE64', 'audioBase64 payload is required');
+  private validateAudioChunk(audio: Uint8Array): Uint8Array {
+    if (!(audio instanceof Uint8Array) || audio.byteLength === 0) {
+      throw new WebSocketVoiceRuntimeError('INVALID_AUDIO_CHUNK', 'Binary audio payload is required');
     }
-
-    const normalized = canonicalBase64(trimmed);
-    const decodedBuffer = Buffer.from(trimmed, 'base64');
-
-    if (decodedBuffer.byteLength === 0 || canonicalBase64(decodedBuffer.toString('base64')) !== normalized) {
-      throw new WebSocketVoiceRuntimeError('INVALID_AUDIO_BASE64', 'audioBase64 payload is invalid');
-    }
-
-    if (decodedBuffer.byteLength > this.maxAudioChunkBytes) {
+    if (audio.byteLength > this.maxAudioChunkBytes) {
       throw new WebSocketVoiceRuntimeError(
         'AUDIO_CHUNK_TOO_LARGE',
-        `Audio chunk exceeds runtime limit (${decodedBuffer.byteLength} > ${this.maxAudioChunkBytes})`,
+        `Audio chunk exceeds runtime limit (${audio.byteLength} > ${this.maxAudioChunkBytes})`,
       );
     }
 
-    const chunk = new Uint8Array(decodedBuffer);
+    const chunk = new Uint8Array(audio);
     try {
       this.security.validatePcmAudio(chunk);
     } catch (error) {
@@ -607,7 +592,7 @@ export class WebSocketVoiceRuntime {
           timestampMs,
           type: 'playback.chunk',
           seq: frame.seq,
-          audioBase64: frame.audioBase64,
+          audio: frame.audio,
         };
         break;
       case 'pong':

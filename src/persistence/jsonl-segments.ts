@@ -14,7 +14,6 @@ export interface NumberedJsonlSegment {
   segmentNumber: number;
   path: string;
 }
-
 export interface JsonlReadStats {
   bytesRead: number;
   readCalls?: number;
@@ -64,7 +63,6 @@ export function listNumberedJsonlSegments(activePath: string): NumberedJsonlSegm
   }
   return segments;
 }
-
 function recordFileRead(stats: JsonlReadStats | undefined): void {
   if (stats?.filesRead !== undefined) stats.filesRead += 1;
 }

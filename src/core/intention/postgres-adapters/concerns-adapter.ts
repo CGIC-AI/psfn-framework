@@ -15,6 +15,7 @@ import {
   mergeConcernStatus,
   mergeConcernStringLists,
   normalizeConcernEvidenceRefs,
+  normalizeOptionalConcernIcpRootInitiationId,
   validateConcernStatusTransition,
 } from '../concerns.js';
 import type {
@@ -61,7 +62,8 @@ const ACTIVE_CONCERN_SELECT_COLUMNS = `
   id, text, priority, source, status, created_at, expires_at,
   salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
   resolved_at, resolution_outcome, contact_id, formation_vad,
-  last_reviewed_at, next_review_at, merged_from_ids, split_from_id
+  last_reviewed_at, next_review_at, merged_from_ids, split_from_id,
+  origin_icp_root_initiation_id
 `;
 
 function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
@@ -73,6 +75,32 @@ function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
 
 function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): boolean {
   return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
+}
+
+function assertCompatibleConcernIcpRoot(
+  existing: Pick<ActiveConcern, 'id' | 'originIcpRootInitiationId'>,
+  incomingRoot: string | undefined,
+): void {
+  if (existing.originIcpRootInitiationId
+    && incomingRoot
+    && existing.originIcpRootInitiationId !== incomingRoot) {
+    throw new Error(`Cannot merge active concern "${existing.id}" across conflicting ICP roots`);
+  }
+}
+
+interface ConcernMergeInput {
+  priority: ActiveConcern['priority'];
+  status: ActiveConcernStatus;
+  expiresAt: string;
+  salience: number;
+  sensitivity: ActiveConcernSensitivity;
+  owner: ActiveConcernOwner;
+  evidenceRefs: readonly ActiveConcernEvidenceRef[];
+  lastReviewedAt: string;
+  nextReviewAt?: string;
+  mergedFromIds: readonly string[];
+  splitFromId?: string;
+  originIcpRootInitiationId?: string;
 }
 
 export class PostgresActiveConcernStore implements ConcernStorePortBackend {
@@ -151,6 +179,9 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       : undefined;
     const mergedFromIds = input.mergedFromIds ? [...new Set(input.mergedFromIds)] : [];
     const splitFromId = normalizeContactId(input.splitFromId);
+    const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
+      input.originIcpRootInitiationId,
+    );
 
     if (isConcernAttentionStatus(status)) {
       await this.resolveStaleConcerns({
@@ -176,6 +207,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           nextReviewAt,
           mergedFromIds,
           splitFromId,
+          originIcpRootInitiationId,
         });
       }
 
@@ -186,17 +218,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       });
       if (recentlyResolved) {
         if (input.reopenResolved === true) {
-          const reopened = await this.transitionConcernStatus(recentlyResolved.id, {
-            status,
-            transitionedAt: createdAt,
-            evidenceRefs,
-            ...(nextReviewAt ? { nextReviewAt } : {}),
-            salience,
-          });
-          if (!reopened) {
-            throw new Error(`Failed to reopen active concern "${recentlyResolved.id}"`);
-          }
-          return await this.mergeConcern(reopened, {
+          return await this.reopenResolvedConcernAtomically(recentlyResolved.id, {
             priority,
             status,
             expiresAt: boundedExpiresAt,
@@ -208,6 +230,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
             nextReviewAt,
             mergedFromIds,
             splitFromId,
+            originIcpRootInitiationId,
           });
         }
         return recentlyResolved;
@@ -233,10 +256,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           id, text, priority, source, status, created_at, expires_at,
           salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
           resolved_at, contact_id, formation_vad, last_reviewed_at, next_review_at,
-          merged_from_ids, split_from_id
+          merged_from_ids, split_from_id, origin_icp_root_initiation_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
-          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19
+          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20
         )
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -260,6 +283,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         nextReviewAt ?? null,
         serializeStringList(mergedFromIds),
         splitFromId ?? null,
+        originIcpRootInitiationId ?? null,
       ],
     );
 
@@ -540,76 +564,203 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     return bestMatch;
   }
 
+  private async reopenResolvedConcernAtomically(
+    concernId: string,
+    input: ConcernMergeInput,
+  ): Promise<ActiveConcern> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockedResult = await client.query<ActiveConcernRow>(
+        `
+          SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
+          FROM active_concerns
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [concernId],
+      );
+      const lockedRow = lockedResult.rows.at(0);
+      if (!lockedRow) {
+        throw new Error(`Failed to lock resolved concern "${concernId}" for reopen`);
+      }
+      const existing = mapActiveConcernRow(lockedRow);
+      assertCompatibleConcernIcpRoot(existing, input.originIcpRootInitiationId);
+      const status = isConcernTerminalStatus(existing.status)
+        ? input.status
+        : mergeConcernStatus(existing.status, input.status);
+      validateConcernStatusTransition({
+        from: existing.status,
+        to: status,
+        evidenceRefs: input.evidenceRefs,
+      });
+      const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
+      const nextReviewAt = chooseEarlierOptionalConcernTimestamp(
+        existing.nextReviewAt,
+        input.nextReviewAt,
+      );
+      const originIcpRootInitiationId = existing.originIcpRootInitiationId
+        ?? input.originIcpRootInitiationId;
+      const updatedResult = await client.query<ActiveConcernRow>(
+        `
+          UPDATE active_concerns
+          SET
+            priority = $2,
+            status = $3,
+            expires_at = $4,
+            salience = $5,
+            sensitivity = $6,
+            owner = $7,
+            evidence_refs = $8::jsonb,
+            resolved_at = NULL,
+            resolution_outcome = NULL,
+            last_reviewed_at = $9,
+            next_review_at = $10,
+            merged_from_ids = $11::jsonb,
+            split_from_id = $12,
+            origin_icp_root_initiation_id = $13
+          WHERE id = $1
+          RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
+        `,
+        [
+          existing.id,
+          chooseHigherConcernPriority(existing.priority, input.priority),
+          status,
+          clampConcernExpiresAt(
+            chooseLaterConcernTimestamp(existing.expiresAt, boundedExpiresAt),
+            existing.createdAt,
+          ),
+          Math.max(existing.salience, input.salience),
+          mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
+          input.owner,
+          serializeConcernEvidenceRefs(mergeConcernEvidenceRefs(existing.evidenceRefs, input.evidenceRefs)),
+          input.lastReviewedAt,
+          nextReviewAt ?? null,
+          serializeStringList(mergeConcernStringLists(existing.mergedFromIds ?? [], input.mergedFromIds)),
+          input.splitFromId ?? existing.splitFromId ?? null,
+          originIcpRootInitiationId ?? null,
+        ],
+      );
+      const updatedRow = updatedResult.rows.at(0);
+      if (!updatedRow) {
+        throw new Error(`Failed to reopen active concern "${existing.id}"`);
+      }
+      const concern = mapActiveConcernRow(updatedRow);
+      await client.query('COMMIT');
+      this.activeConcernCache.set(concern.id, concern);
+      return concern;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `Failed to roll back active concern reopen transaction for "${concernId}"`,
+        );
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   private async mergeConcern(
     existing: ActiveConcern,
-    input: {
-      priority: ActiveConcern['priority'];
-      status: ActiveConcernStatus;
-      expiresAt: string;
-      salience: number;
-      sensitivity: ActiveConcernSensitivity;
-      owner: ActiveConcernOwner;
-      evidenceRefs: readonly ActiveConcernEvidenceRef[];
-      lastReviewedAt: string;
-      nextReviewAt?: string;
-      mergedFromIds: readonly string[];
-      splitFromId?: string;
-    },
+    input: ConcernMergeInput,
   ): Promise<ActiveConcern> {
-    if (isConcernTerminalStatus(existing.status)) {
-      throw new Error(`Cannot merge into terminal concern "${existing.id}"`);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockedResult = await client.query<ActiveConcernRow>(
+        `
+          SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
+          FROM active_concerns
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [existing.id],
+      );
+      const lockedRow = lockedResult.rows.at(0);
+      if (!lockedRow) {
+        throw new Error(`Failed to lock active concern "${existing.id}" for merge`);
+      }
+      const locked = mapActiveConcernRow(lockedRow);
+      if (isConcernTerminalStatus(locked.status)) {
+        throw new Error(`Cannot merge into terminal concern "${locked.id}"`);
+      }
+      assertCompatibleConcernIcpRoot(locked, input.originIcpRootInitiationId);
+      const status = mergeConcernStatus(locked.status, input.status);
+      validateConcernStatusTransition({
+        from: locked.status,
+        to: status,
+        evidenceRefs: input.evidenceRefs,
+      });
+      const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, locked.createdAt);
+      const nextReviewAt = chooseEarlierOptionalConcernTimestamp(
+        locked.nextReviewAt,
+        input.nextReviewAt,
+      );
+      const originIcpRootInitiationId = locked.originIcpRootInitiationId
+        ?? input.originIcpRootInitiationId;
+      const updatedResult = await client.query<ActiveConcernRow>(
+        `
+          UPDATE active_concerns
+          SET
+            priority = $2,
+            status = $3,
+            expires_at = $4,
+            salience = $5,
+            sensitivity = $6,
+            owner = $7,
+            evidence_refs = $8::jsonb,
+            last_reviewed_at = $9,
+            next_review_at = $10,
+            merged_from_ids = $11::jsonb,
+            split_from_id = $12,
+            origin_icp_root_initiation_id = $13
+          WHERE id = $1
+          RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
+        `,
+        [
+          locked.id,
+          chooseHigherConcernPriority(locked.priority, input.priority),
+          status,
+          clampConcernExpiresAt(
+            chooseLaterConcernTimestamp(locked.expiresAt, boundedExpiresAt),
+            locked.createdAt,
+          ),
+          Math.max(locked.salience, input.salience),
+          mergeConcernSensitivity(locked.sensitivity, input.sensitivity),
+          input.owner,
+          serializeConcernEvidenceRefs(mergeConcernEvidenceRefs(locked.evidenceRefs, input.evidenceRefs)),
+          input.lastReviewedAt,
+          nextReviewAt ?? null,
+          serializeStringList(mergeConcernStringLists(locked.mergedFromIds ?? [], input.mergedFromIds)),
+          input.splitFromId ?? locked.splitFromId ?? null,
+          originIcpRootInitiationId ?? null,
+        ],
+      );
+      const updatedRow = updatedResult.rows.at(0);
+      if (!updatedRow) {
+        throw new Error(`Failed to merge active concern "${locked.id}"`);
+      }
+      const concern = mapActiveConcernRow(updatedRow);
+      await client.query('COMMIT');
+      this.activeConcernCache.set(concern.id, concern);
+      return concern;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `Failed to roll back active concern merge transaction for "${existing.id}"`,
+        );
+      }
+      throw error;
+    } finally {
+      client.release();
     }
-    const status = mergeConcernStatus(existing.status, input.status);
-    validateConcernStatusTransition({
-      from: existing.status,
-      to: status,
-      evidenceRefs: input.evidenceRefs,
-    });
-    const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
-    const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
-    const row = await queryOne<ActiveConcernRow>(
-      this.pool,
-      `
-        UPDATE active_concerns
-        SET
-          priority = $2,
-          status = $3,
-          expires_at = $4,
-          salience = $5,
-          sensitivity = $6,
-          owner = $7,
-          evidence_refs = $8::jsonb,
-          last_reviewed_at = $9,
-          next_review_at = $10,
-          merged_from_ids = $11::jsonb,
-          split_from_id = $12
-        WHERE id = $1
-        RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
-      `,
-      [
-        existing.id,
-        chooseHigherConcernPriority(existing.priority, input.priority),
-        status,
-        clampConcernExpiresAt(
-          chooseLaterConcernTimestamp(existing.expiresAt, boundedExpiresAt),
-          existing.createdAt,
-        ),
-        Math.max(existing.salience, input.salience),
-        mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
-        input.owner,
-        serializeConcernEvidenceRefs(mergeConcernEvidenceRefs(existing.evidenceRefs, input.evidenceRefs)),
-        input.lastReviewedAt,
-        nextReviewAt ?? null,
-        serializeStringList(mergeConcernStringLists(existing.mergedFromIds ?? [], input.mergedFromIds)),
-        input.splitFromId ?? existing.splitFromId ?? null,
-      ],
-    );
-    if (!row) {
-      throw new Error(`Failed to merge active concern "${existing.id}"`);
-    }
-    const concern = mapActiveConcernRow(row);
-    this.activeConcernCache.set(concern.id, concern);
-    return concern;
   }
 
   private resolveConcernTtlMs(priority: 'high' | 'medium' | 'low'): number {

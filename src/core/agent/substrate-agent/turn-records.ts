@@ -15,6 +15,8 @@ import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
+import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
 
@@ -126,21 +128,27 @@ export function recordUserMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   contentOverride?: string;
+  actorKind: SessionActorKind;
 }): number | null {
   const content = input.contentOverride ?? input.message.content;
   // htm9.3: intake-envelope snapshots screened by the channel adapter ride
   // the routing metadata; persisting them onto the session entry lets the
   // prompt_assembly and memory_write sink gates consult them downstream.
   const intakeEnvelopes = input.message.routing?.intakeEnvelopes;
+  const icpMetadata = input.message.routing?.icpCorrelation
+    ? buildSessionMetadataWithIcpCorrelation(undefined, input.message.routing.icpCorrelation)
+    : undefined;
   const recordOptions = {
     trustLevel: input.trustLevel,
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
+    actorKind: input.actorKind,
     ...(input.message.replyToMessageId
       ? { replyToMessageId: input.message.replyToMessageId }
       : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
+    ...(icpMetadata ? { metadata: icpMetadata } : {}),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
   if (input.continuityUserId) {
@@ -175,17 +183,28 @@ export function recordAssistantMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
+  recoveryResponse?: AgentResponse;
   runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }): number | null {
-  const emotionMetadata = input.emotionSnapshot
+  let metadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
-  const metadata = input.runtimeFallbackProvenance
-    ? buildSessionMetadataWithRuntimeFallbackProvenance(
-      emotionMetadata,
+  if (input.runtimeFallbackProvenance) {
+    metadata = buildSessionMetadataWithRuntimeFallbackProvenance(
+      metadata,
       input.runtimeFallbackProvenance,
-    )
-    : emotionMetadata;
+    );
+  }
+  if (input.message.routing?.icpCorrelation) {
+    metadata = buildSessionMetadataWithIcpCorrelation(
+      metadata,
+      input.message.routing.icpCorrelation,
+      {
+        deliveryStatus: 'pending',
+        ...(input.recoveryResponse ? { recoveryResponse: input.recoveryResponse } : {}),
+      },
+    );
+  }
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
@@ -387,6 +406,9 @@ export function buildTurnRecord(input: {
         : {}),
     },
     provenanceRefs,
+    ...(input.message.routing?.icpCorrelation
+      ? { icpCorrelation: input.message.routing.icpCorrelation }
+      : {}),
   };
 }
 

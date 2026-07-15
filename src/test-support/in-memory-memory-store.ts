@@ -123,7 +123,10 @@ export class InMemoryMemoryStore {
 
   insertMemory(memory: PurrMemory, embedding: Float32Array = new Float32Array()): void {
     this.memories.set(memory.id, {
-      memory: cloneMemory(memory),
+      memory: cloneMemory({
+        ...memory,
+        salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
+      }),
       embedding: cloneEmbedding(embedding),
     });
   }
@@ -205,6 +208,9 @@ export class InMemoryMemoryStore {
     const stored = this.memories.get(id);
     if (!stored) return;
     const next = cloneMemory({ ...stored.memory, ...updates });
+    if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
+      next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
+    }
     this.memories.set(id, {
       memory: next,
       embedding: updates.embedding
@@ -486,7 +492,11 @@ export class InMemoryMemoryStore {
       const stored = this.memories.get(update.id);
       if (!stored || stored.memory.deletedAt) continue;
       this.memories.set(update.id, {
-        memory: cloneMemory({ ...stored.memory, salience: update.salience }),
+        memory: cloneMemory({
+          ...stored.memory,
+          salience: update.salience,
+          salienceDecayAnchorAt: update.salienceDecayAnchorAt,
+        }),
         embedding: stored.embedding,
       });
       count += 1;

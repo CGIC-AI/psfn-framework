@@ -173,7 +173,11 @@ function applyActiveMemoryContextRefresh(
   const { target } = input;
   const now = Date.now();
   const existing = deps.activeMemoryContexts.get(target.identity.key);
-  const previousEntries = existing?.entries ?? new Map<string, ActiveMemoryEntry>();
+  const canRetainExistingEntries = target.accessPolicyHash !== undefined
+    && existing?.completedAccessPolicyHash === target.accessPolicyHash;
+  const previousEntries = canRetainExistingEntries
+    ? existing.entries
+    : new Map<string, ActiveMemoryEntry>();
   const nextEntries = new Map<string, ActiveMemoryEntry>();
   const selectedIds = new Set(input.selectedForPrompt.map(item => item.memory.id));
   const maxEntries = Math.max(
@@ -277,6 +281,12 @@ function applyActiveMemoryContextRefresh(
     episodicChains,
     refreshSerial,
     maxEntries,
+    ...(target.fingerprint
+      ? { completedRefreshFingerprint: { ...target.fingerprint } }
+      : {}),
+    ...(target.accessPolicyHash
+      ? { completedAccessPolicyHash: target.accessPolicyHash }
+      : {}),
   });
   void deps.eventBus?.emit('memory.active_context.refresh', {
     channelId: target.request.channelId,

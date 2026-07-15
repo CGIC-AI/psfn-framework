@@ -2,6 +2,10 @@ import type { Agent } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import type {
+  DurableRunChargeProbe,
+  DurableRunChargeRecorder,
+} from '../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -30,6 +34,7 @@ import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 
 interface TurnExecutionAdapterCallbacks {
@@ -141,7 +146,10 @@ interface TurnExecutionAdapterCallbacks {
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  durableChargeRecorder?: DurableRunChargeRecorder | null;
+  durableChargeProbe?: DurableRunChargeProbe | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /** Cross-companion presence (W5a); absent/null skips presence writes. */
   companionPresence?: CompanionPresenceTurnPort | null;
@@ -184,7 +192,10 @@ export function createTurnExecutionRuntimeAdapter(
   return {
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
+    durableChargeRecorder: options.durableChargeRecorder ?? null,
+    durableChargeProbe: options.durableChargeProbe ?? null,
     fatigueBudget: options.fatigueBudget ?? null,
+    fatigueRegulationReservations: options.fatigueRegulationReservations ?? null,
     satellitePresence: options.satellitePresence,
     companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,
@@ -246,8 +257,8 @@ export function createTurnExecutionRuntimeAdapter(
       callType,
       payload,
     ),
-    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId, contentOverride) => options.turnSupportRuntime
-      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId, contentOverride),
+    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId, contentOverride, actorKind) => options.turnSupportRuntime
+      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId, contentOverride, actorKind),
     recordSystemMessage: (message, turnId, requestId, content, continuityUserId) => options.turnSupportRuntime
       .recordSystemMessage(message, turnId, requestId, content, continuityUserId),
     resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
@@ -362,6 +373,7 @@ export function createTurnExecutionRuntimeAdapter(
     preloadExtendedToolsForTurn: (message, taskKind, correlation) => options.toolRuntimeFacade
       .preloadExtendedToolsForTurn(message, taskKind, correlation),
     getAdaptiveToolRuntimeState: () => options.toolRuntimeFacade.getAdaptiveToolRuntimeState(),
+    getActiveTurnTools: () => options.toolRuntimeFacade.getActiveTurnTools(),
     applyActiveToolsToAgentForTurn: (
       message,
       taskKind,
@@ -392,6 +404,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      recoveryResponse,
       runtimeFallbackProvenance,
     ) => options.turnSupportRuntime.recordAssistantMessage(
       message,
@@ -401,6 +414,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      recoveryResponse,
       runtimeFallbackProvenance,
     ),
     buildTurnToolSummary: (turnMessages) => options.turnSupportRuntime.buildTurnToolSummary(turnMessages),

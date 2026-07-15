@@ -321,11 +321,17 @@ export function hydrateCanonicalStartupConfig(
         relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    icpAutonomy: {
+      enabled: persistedScheduler.icpAutonomy.enabled,
+      candidate: { ...persistedScheduler.icpAutonomy.candidate },
+      permit: { ...persistedScheduler.icpAutonomy.permit },
+      availability: { ...persistedScheduler.icpAutonomy.availability },
+    },
     ...(persistedScheduler.introspectionAudit
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),
   };
-  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
 

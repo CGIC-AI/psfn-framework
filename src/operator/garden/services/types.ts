@@ -72,6 +72,20 @@ export type {
 } from './types/tools.js';
 
 export type {
+  AdminIcpAutonomyData,
+  AdminIcpAutonomyService,
+  AdminIcpAvailabilityView,
+  AdminIcpCandidateCancelInput,
+  AdminIcpCandidateView,
+  AdminIcpCostView,
+  AdminIcpEpisodeView,
+  AdminIcpFatigueView,
+  AdminIcpMutationResult,
+  AdminIcpPermitView,
+  AdminIcpReasonCount,
+} from './types/icp-autonomy.js';
+
+export type {
   AdminMemoryContactSummary,
   AdminMemoryBodyRedaction,
   AdminMemoryView,

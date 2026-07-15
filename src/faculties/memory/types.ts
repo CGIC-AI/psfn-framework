@@ -234,6 +234,8 @@ export interface PurrMemory {
   emotionalValence: number;
   formationVAD?: MemoryFormationVAD;
   salience: number;
+  /** Epoch at which the stored salience snapshot was calculated. */
+  salienceDecayAnchorAt?: number;
   embedding?: Float32Array;
   sourceRef: string;
   sourceType?: MemorySourceType;
@@ -350,7 +352,7 @@ export const MEMORY_CONFIG = {
   retrievalAccessFreshnessWeight: 0.65,
   retrievalAccessReinforcementMaxBoost: 0.25,
   privacyRiskPenaltyWeight: 0.45,
-  maintenanceIntervalMs: 60_000,
+  maintenanceIntervalMs: 3_600_000,
   salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
   durableHalflifeMultiplier: 8,

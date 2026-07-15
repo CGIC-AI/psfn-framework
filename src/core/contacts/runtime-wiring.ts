@@ -5,6 +5,8 @@ import type { ChannelPrivacyLevel } from './types.js';
 import type { ContactBlockListStore } from '../cogsec/contact-block-list.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { createContactTool } from './tools.js';
+import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 
 export interface ContactRuntimeTarget {
   contactStore: ContactStorePort | null;
@@ -31,11 +33,14 @@ export interface ContactRuntimeOptions {
    * blocked inbound before it reaches the agent.
    */
   blockList?: ContactBlockListStore;
+  /** Gateway-owned invalidation that must commit before companion blocks. */
+  permitInvalidation?: ContactBlockPermitInvalidationPort;
   /**
    * Intake sink gate provider (htm9.3): trust_mutation gate for
    * contact action=set_trust. Absent/null = firewall off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>;
 }
 
 export async function registerContactRuntime(
@@ -65,7 +70,9 @@ export async function registerContactRuntime(
   target.registerTool(createContactTool(contactStore, {
     proposalQueue: options.proposalQueue,
     ...(options.blockList ? { blockList: options.blockList } : {}),
+    ...(options.permitInvalidation ? { permitInvalidation: options.permitInvalidation } : {}),
     ...(options.getIntakeSinkGate ? { getIntakeSinkGate: options.getIntakeSinkGate } : {}),
+    ...(options.peerAvailability ? { peerAvailability: options.peerAvailability } : {}),
   }));
 
   return contactStore;

@@ -1,13 +1,22 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendJsonLine,
   appendShardSessionMemorySyncAudit,
   readJsonLines,
   type ReadJsonLineErrorContext,
 } from './jsonl.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    mkdirSync: vi.fn(actual.mkdirSync),
+  };
+});
 
 describe('jsonl append helpers', () => {
   const tempRoots: string[] = [];
@@ -33,8 +42,26 @@ describe('jsonl append helpers', () => {
     expect(JSON.parse(lines[1])).toEqual({ event: 'beta' });
   });
 
+  it('ensures an append directory once and recreates it after external removal', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-jsonl-ensure-'));
+    tempRoots.push(root);
+    const path = join(root, 'events', 'generic.jsonl');
+    const mkdirSpy = vi.mocked(fs.mkdirSync);
+    mkdirSpy.mockClear();
+
+    appendJsonLine(path, { event: 'alpha' });
+    appendJsonLine(path, { event: 'beta' });
+    expect(mkdirSpy).toHaveBeenCalledTimes(1);
+
+    rmSync(join(root, 'events'), { recursive: true });
+    appendJsonLine(path, { event: 'gamma' });
+
+    expect(mkdirSpy).toHaveBeenCalledTimes(2);
+    expect(readFileSync(path, 'utf-8').trim()).toBe(JSON.stringify({ event: 'gamma' }));
+  });
+
   it('appends shard session/memory sync audit records', () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-shard-sync-jsonl-'));
+    const root = mkdtempSync(join(tmpdir(), 'psfn-sync-jsonl-'));
     tempRoots.push(root);
     const path = join(root, 'audit', 'shard-session-memory-sync-audit.jsonl');
 

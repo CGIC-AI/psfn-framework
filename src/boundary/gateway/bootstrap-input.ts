@@ -243,7 +243,7 @@ function parseVaultActionsEnv(value: string | undefined): Array<(typeof ALL_VAUL
   return actions;
 }
 
-// Resolve the explicit web backend (bead psfn-framework-htm9.10). When the
+// Resolve the explicit web backend (bead htm9.10). When the
 // OpenRouter web tools are enabled in providers.json, the gateway resolves the
 // OpenRouter base URL + API key here (the gateway is the secret holder) and
 // fails closed if any required piece is missing — there is no silent fallback

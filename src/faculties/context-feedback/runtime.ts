@@ -17,6 +17,10 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
+import {
   ContextEvaluator,
   type ContextFeedbackSignalKey,
 } from './evaluator.js';
@@ -50,6 +54,7 @@ export interface ContextFeedbackActionPayload {
   responseOutputTokens: number;
   contextManifest: ContextManifest;
   canonicalContactKey?: string;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 function parseRequiredString(value: unknown, field: string): string {
@@ -132,6 +137,9 @@ function normalizeContextManifest(value: unknown): ContextManifest {
 export function normalizeContextFeedbackActionPayload(payload: unknown): ContextFeedbackActionPayload | null {
   if (!isRecord(payload)) return null;
   const canonicalContactKey = parseOptionalString(payload.canonicalContactKey, 'canonicalContactKey');
+  const icpCorrelation = payload.icpCorrelation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(payload.icpCorrelation);
 
   return {
     turnId: parseRequiredString(payload.turnId, 'turnId'),
@@ -144,6 +152,7 @@ export function normalizeContextFeedbackActionPayload(payload: unknown): Context
     responseOutputTokens: parseNonNegativeNumber(payload.responseOutputTokens, 'responseOutputTokens'),
     contextManifest: normalizeContextManifest(payload.contextManifest),
     ...(canonicalContactKey ? { canonicalContactKey } : {}),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
   };
 }
 
@@ -205,6 +214,9 @@ function buildContextFeedbackCandidate(context: Parameters<PostTurnActionInferer
       responseOutputTokens: context.response.metadata.outputTokens,
       contextManifest: cloneContextManifest(context.contextManifest),
       ...(context.canonicalContactKey ? { canonicalContactKey: context.canonicalContactKey } : {}),
+      ...(context.message.routing?.icpCorrelation
+        ? { icpCorrelation: context.message.routing.icpCorrelation }
+        : {}),
     } satisfies ContextFeedbackActionPayload,
     maxRetries: 1,
   }];
@@ -283,6 +295,7 @@ export function wireContextFeedbackRuntime(options: WireContextFeedbackRuntimeOp
             outputTokens: payload.responseOutputTokens,
           },
           ...(followUpText ? { userFollowUp: followUpText } : {}),
+          ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
         });
 
         await emitContextFeedbackTelemetry(options.eventBus, {

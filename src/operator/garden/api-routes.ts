@@ -29,6 +29,7 @@ import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
+import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
@@ -53,6 +54,7 @@ import type {
   AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
+  AdminIcpAutonomyService,
   AdminMemoryService,
   AdminModelUsageService,
   AdminPromptsService,
@@ -278,6 +280,7 @@ export function buildAdminApiRoutes(options: {
   concernService?: AdminConcernService | null;
   subsystemHealthService?: AdminSubsystemHealthService | null;
   toolConformanceService?: AdminToolConformanceService | null;
+  icpAutonomyService?: AdminIcpAutonomyService | null;
   settingsService: AdminSettingsService;
   sharedWorkspaceService?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11); always wired in production. */
@@ -331,6 +334,7 @@ export function buildAdminApiRoutes(options: {
     concernService,
     subsystemHealthService,
     toolConformanceService,
+    icpAutonomyService,
     settingsService,
     sharedWorkspaceService,
     intakeQuarantineService,
@@ -812,6 +816,13 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
+    ...(icpAutonomyService
+      ? buildAdminIcpAutonomyRoutes({
+        service: icpAutonomyService,
+        appendAuditTimelineEntry,
+        withBody,
+      })
+      : []),
     // ── Skills ──
     {
       method: 'GET',

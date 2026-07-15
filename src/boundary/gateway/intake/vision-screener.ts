@@ -690,6 +690,7 @@ export interface VisionIntakeImageScreenResult {
   noticeText?: string;
   model?: string;
   latencyMs?: number;
+  retainedImage?: import('../inline-image-retention.js').GatewayRetainedImageDescriptor;
 }
 
 export function toVisionIntakeImageScreenResult(

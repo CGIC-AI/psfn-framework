@@ -1,6 +1,6 @@
 // ── Cert-manager PKI core ──
 //
-// Pure-JS X.509 issuance for the PSFN private CA sidecar, built on
+// Pure-JS X.509 issuance for the companion runtime's private CA sidecar, built on
 // `@peculiar/x509` over Node's WebCrypto. No openssl subprocesses, ever.
 //
 // Why a private CA at all: public ACME CAs (Let's Encrypt) refuse to issue

@@ -15,6 +15,7 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -563,6 +564,30 @@ function resolveEmbeddingProviderKind(
   throw new Error(
     `Unsupported EMBEDDING_PROVIDER "${value}". Expected one of: ollama, transformers, api.`,
   );
+}
+
+export function resolveEmbeddingProviderProvenanceFromConfig(
+  config: EmbeddingProviderRuntimeConfig,
+  actualDimensions?: number,
+): RetrievalQueryEmbeddingProvenance {
+  const provider = resolveEmbeddingProviderKind(config.embeddingProvider);
+  const model = (provider === 'transformers'
+    ? config.transformersModel ?? config.embeddingModel
+    : provider === 'api'
+      ? config.embeddingApiModel ?? config.embeddingModel
+      : config.embeddingModel)?.trim();
+  const dimensions = toPositiveInteger(
+    provider === 'api' ? config.embeddingApiDims ?? config.embeddingDims : config.embeddingDims,
+  );
+  if (!model || !dimensions) {
+    throw new Error(`Embedding provenance requires provider, model, and dimensions for ${provider}`);
+  }
+  if (actualDimensions !== undefined && actualDimensions !== dimensions) {
+    throw new Error(
+      `Embedding provenance dimension mismatch: settings declare ${dimensions}, provider exposes ${actualDimensions}`,
+    );
+  }
+  return { provider, model, dimensions };
 }
 
 function resolveOllamaProvider(env: NodeJS.ProcessEnv): OllamaEmbeddingProvider {

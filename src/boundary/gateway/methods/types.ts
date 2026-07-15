@@ -24,6 +24,8 @@ import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../../custody/credential-vault.js';
+import type { GatewayInlineImageRetention } from '../inline-image-retention.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -48,6 +50,8 @@ export interface GatewayMethodRuntime {
    * no OpenRouter backend is resolvable.
    */
   visionIntake?: GatewayVisionIntakeScreener;
+  /** Connection-scoped screened inline image bytes for the immediately-following turn. */
+  inlineImageRetention?: GatewayInlineImageRetention;
   policyConfig: PolicyConfig;
   workspacePath: string;
   /** True when this connection is confined to one fleet Personal Workspace. */
@@ -69,6 +73,10 @@ export interface GatewayMethodRuntime {
   getRuntimeHealth(): RuntimeHealthResult;
   getCredentialPresence?(): GatewayCredentialPresenceResult;
   nextStreamRequestId(): string;
+  /** Authenticates nested ICP cost identity against the connection and durable episode. */
+  authorizeIcpConversationCorrelation?(
+    correlation: IcpConversationCorrelation,
+  ): Promise<IcpConversationCorrelation>;
   recordAuditEvent?(entry: {
     method: string;
     decision: PolicyDecision;

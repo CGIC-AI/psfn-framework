@@ -20,7 +20,8 @@ export type FatiguePolicySpendReason =
 
 export type FatiguePolicyOverchargeReason =
   | 'recent_human_participation'
-  | 'work_intent_wrapup';
+  | 'work_intent_wrapup'
+  | 'explicit_peer_invitation';
 
 export type FatiguePolicyOverchargeBlockedReason =
   | 'overcharge_disabled'
@@ -62,6 +63,7 @@ export interface EvaluateFatiguePolicyInput {
   intent: FatiguePolicyIntent;
   spent: number;
   triggerAuthorKind: FatiguePolicyTriggerAuthorKind;
+  explicitPeerInvitation?: boolean;
 }
 
 export interface FatiguePolicySpendResult {
@@ -82,6 +84,7 @@ export interface FatiguePolicyOverchargeInputs {
   hasRecentHumanParticipation: boolean;
   intent: FatiguePolicyIntent;
   hasWorkIntentWrapup: boolean;
+  explicitPeerInvitation: boolean;
   baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
 }
 
@@ -90,6 +93,26 @@ export interface FatiguePolicyOverchargeResult {
   reasons: FatiguePolicyOverchargeReason[];
   blockedReasons: FatiguePolicyOverchargeBlockedReason[];
   inputs: FatiguePolicyOverchargeInputs;
+}
+
+export function isFatigueWorkIntent(intent: FatiguePolicyIntent): boolean {
+  return intent === 'work' || intent === 'research' || intent === 'problem_solving';
+}
+
+export function resolveFatigueOverchargeDeterministicBlockedReasons(input: {
+  peerIsMachineIntelligence: boolean;
+  turnSpendsFatigue: boolean;
+  baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
+}): FatiguePolicyOverchargeBlockedReason[] {
+  return [
+    ...(!input.peerIsMachineIntelligence
+      ? ['peer_not_machine_intelligence' as const]
+      : []),
+    ...(!input.turnSpendsFatigue ? ['turn_does_not_spend_fatigue' as const] : []),
+    ...(input.baseState !== 'hard_exhausted'
+      ? ['normal_allowance_not_exhausted' as const]
+      : []),
+  ];
 }
 
 export interface FatiguePolicyEvaluation {
@@ -274,6 +297,7 @@ function computeOvercharge(input: {
   recentHumanParticipation: FatiguePolicyRecentHumanParticipationInput;
   baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
   intent: FatiguePolicyIntent;
+  explicitPeerInvitation?: boolean;
 }): FatiguePolicyOverchargeResult {
   const latestHumanMessageAgeMs = input.recentHumanParticipation.latestMessageAgeMs;
   const hasKnownRecentHumanMessage = typeof latestHumanMessageAgeMs === 'number'
@@ -283,9 +307,8 @@ function computeOvercharge(input: {
   const hasRecentHumanParticipation = hasKnownRecentHumanMessage
     && input.recentHumanParticipation.messageCount >= input.config.overcharge.minRecentHumanMessages
     && input.recentHumanParticipation.participantCount >= input.config.overcharge.minRecentHumanParticipants;
-  const hasWorkIntentWrapup = input.intent === 'work'
-    || input.intent === 'research'
-    || input.intent === 'problem_solving';
+  const hasWorkIntentWrapup = isFatigueWorkIntent(input.intent);
+  const explicitPeerInvitation = input.explicitPeerInvitation === true;
 
   const inputs: FatiguePolicyOverchargeInputs = {
     enabled: input.config.overcharge.enabled,
@@ -299,6 +322,7 @@ function computeOvercharge(input: {
     hasRecentHumanParticipation,
     intent: input.intent,
     hasWorkIntentWrapup,
+    explicitPeerInvitation,
     baseState: input.baseState,
   };
 
@@ -306,16 +330,12 @@ function computeOvercharge(input: {
   if (!input.config.overcharge.enabled) {
     blockedReasons.push('overcharge_disabled');
   }
-  if (!input.peerIsMachineIntelligence) {
-    blockedReasons.push('peer_not_machine_intelligence');
-  }
-  if (!input.spend.spendsFatigue) {
-    blockedReasons.push('turn_does_not_spend_fatigue');
-  }
-  if (input.baseState !== 'hard_exhausted') {
-    blockedReasons.push('normal_allowance_not_exhausted');
-  }
-  if (!hasRecentHumanParticipation && !hasWorkIntentWrapup) {
+  blockedReasons.push(...resolveFatigueOverchargeDeterministicBlockedReasons({
+    peerIsMachineIntelligence: input.peerIsMachineIntelligence,
+    turnSpendsFatigue: input.spend.spendsFatigue,
+    baseState: input.baseState,
+  }));
+  if (!hasRecentHumanParticipation && !hasWorkIntentWrapup && !explicitPeerInvitation) {
     blockedReasons.push('no_qualifying_overcharge_trigger');
   }
 
@@ -333,6 +353,7 @@ function computeOvercharge(input: {
     reasons: [
       ...(hasRecentHumanParticipation ? ['recent_human_participation' as const] : []),
       ...(hasWorkIntentWrapup ? ['work_intent_wrapup' as const] : []),
+      ...(explicitPeerInvitation ? ['explicit_peer_invitation' as const] : []),
     ],
     blockedReasons: [],
     inputs,
@@ -371,6 +392,7 @@ export function evaluateFatiguePolicy(input: EvaluateFatiguePolicyInput): Fatigu
     recentHumanParticipation: input.recentHumanParticipation,
     baseState,
     intent: input.intent,
+    explicitPeerInvitation: input.explicitPeerInvitation,
   });
 
   return {

@@ -86,6 +86,7 @@ export async function createConcernFromDecision(input: {
   expiresAt?: string;
   formationVAD?: ActiveConcernVAD;
   sourceMessageId?: string;
+  originIcpRootInitiationId?: string;
 }): Promise<void> {
   const text = resolveConcernDecisionText(input.decision);
   const status = input.decision.concern?.status ?? 'active';
@@ -103,6 +104,9 @@ export async function createConcernFromDecision(input: {
     ...(input.contactId ? { contactId: input.contactId } : {}),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
     ...(input.formationVAD ? { formationVAD: input.formationVAD } : {}),
+    ...(input.originIcpRootInitiationId
+      ? { originIcpRootInitiationId: input.originIcpRootInitiationId }
+      : {}),
     ...(evidenceRefs.length > 0 ? { evidenceRefs } : {}),
   });
 }

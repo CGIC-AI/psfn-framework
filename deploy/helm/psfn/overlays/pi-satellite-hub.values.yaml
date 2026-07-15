@@ -1,4 +1,8 @@
-# Pi (single-node k3s, arm64) overlay: enable the PSFN-Satellite-Hub workload.
+# Public example for a single-node k3s arm64 Satellite Hub workload.
+#
+# Copy this file to an ignored *.local.values.yaml file before deployment and
+# replace every CHANGEME value, documentation-only address, device registry
+# entry, and CIDR with deployment-specific data. Never commit that local file.
 #
 # Usage (NEVER --reuse-values with a changed chart; always re-supply the full
 # values stack):
@@ -6,7 +10,7 @@
 #   helm upgrade psfn deploy/helm/psfn \
 #     --namespace psfn \
 #     -f <live-base-values>.yaml \
-#     -f deploy/helm/psfn/overlays/pi-satellite-hub.values.yaml \
+#     -f deploy/helm/psfn/overlays/pi-satellite-hub.local.values.yaml \
 #     --set-string secrets.values.satelliteHubApiKey="$(cat /path/to/hub-key)"
 #
 # SECRETS NEVER GO IN THIS FILE. Supply secrets.values.satelliteHubApiKey (and
@@ -42,47 +46,27 @@ satelliteHub:
   elevenLabsVoiceId: ""
   homeAssistant:
     enabled: true
-    baseUrl: http://192.168.1.205:8123
+    # Documentation-only address: override in an ignored private values file.
+    baseUrl: http://192.0.2.20:8123
     egressCIDRs:
-      - 192.168.1.205/32
+      - 192.0.2.20/32
     egressPort: 8123
     devices:
-      # Existing app registration retained until psfn-satelite-hub-p5h moves
-      # Companion UI out of the physical Office place model.
+      # Example app registration. Replace this placeholder digest in the
+      # ignored local values file with sha256(actual device credential).
       - deviceId: psfn-satellite-mobile-chat-app
         deviceName: PSFN Satellite Mobile Chat App
-        satelliteId: office
-        satelliteName: Office Companion UI
+        satelliteId: companion-ui
+        satelliteName: Companion UI
         endpointId: companion-ui
         claimType: text-only
-        credentialSha256: 5119cb48644369272907e63a9b988a143bee2109bb6c5b68a07d59374ded2a44
+        credentialSha256: 0000000000000000000000000000000000000000000000000000000000000000
         homeAssistantEntityIds: []
         maxCapabilities:
           input: [text]
           output: [text, subtitle, artifact, tool_activity]
           control: [interrupt, presence, session_attach, approvals, touch]
           safety: [confirmation_required, local_only]
-      - deviceId: purrsephone-bedroom
-        deviceName: Purrsephone Bedroom
-        satelliteId: bedroom
-        satelliteName: Bedroom
-        endpointId: waveshare-bedroom
-        claimType: voice-only
-        credentialSha256: d05cc7b446d7cd37e9ded3a64c9feb317315fe7e9c73309aba9d536a52e9ae85
-        homeAssistantEntityIds:
-          - light.main_bedroom
-          - fan.main_bedroom_2
-          - light.main_bathroom_light
-          - binary_sensor.motion_sensor_gen2_motion_detection_2
-          - switch.office_switch_1
-          - switch.lab_lightning_switch_1
-          - switch.studio_lighting_switch_1
-          - binary_sensor.motion_sensor_gen2_motion_detection
-        maxCapabilities:
-          input: [text, microphone_pcm, wake_event]
-          output: [text, subtitle, streamed_audio, tool_activity]
-          control: [interrupt, mute, sleep_wake, presence, session_attach]
-          safety: [action_allowlist, local_only]
 
 # LAN satellites (browsers/devices) connect to ws://<pi>:8787 directly, the
 # same single-node exposure mechanism the gateway API uses for its /v1 edge.
@@ -92,7 +76,7 @@ hostPorts:
     port: 8787
     sourceCIDRs:
       # Trusted LAN subnet that may reach the hub websocket.
-      - 192.168.1.0/24
+      - 192.0.2.0/24
 
 # The Traefik ingress host stays disabled on the Pi: LAN devices dial the raw
 # node port; there is no psfn-hub.local name on the LAN.
@@ -100,5 +84,4 @@ ingress:
   satelliteHub:
     enabled: false
 
-# The live cluster already runs with the chart-created CA Issuer (psfn-ca).
 # The hub client Certificate renders automatically from satelliteHub.enabled.

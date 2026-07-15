@@ -22,8 +22,11 @@ export interface ScanJournalMetadataOptions {
 
 export interface JournalFileMetadata {
   entryCount: number;
+  minId: number;
   maxId: number;
   messageCount: number;
+  compactionCount: number;
+  turnTombstoneCount: number;
   activeTurnTombstoneCount: number;
   activeTurnTombstoneIds: string[];
   lastTimestamp: number;
@@ -44,6 +47,26 @@ export interface ReadJournalTailResult {
   truncated: boolean;
 }
 
+export interface ReadJournalMatchingOptions {
+  limit: number;
+  matches: (entry: JournalEntry) => boolean;
+  /**
+   * Stop after this entry has supplied any pending integrity-chain boundary.
+   * Backward range readers use this once monotonically increasing entry IDs
+   * have passed below their requested window.
+   */
+  stopAfter?: (entry: JournalEntry) => boolean;
+}
+
+export interface JournalBackwardMatch {
+  entry: JournalEntry;
+  previousHmac: string | null;
+}
+
+export interface ReadJournalMatchingResult {
+  matches: JournalBackwardMatch[];
+  quarantined: QuarantinedJournalEntry[];
+}
 export interface JournalBoundedReadStats {
   bytesRead: number;
   readCalls: number;
@@ -56,11 +79,10 @@ export interface ReadJournalBeforeOptions {
   includeBoundaryEntry?: boolean;
   scanChunkBytes?: number;
   stats?: JournalBoundedReadStats;
-  /**
-   * Integrity-aware seek gate. Cursor metadata may exclude archive bytes only
-   * when the sampled row verifies against the immediately preceding HMAC.
-   */
+  /** A sampled id may exclude bytes only when its HMAC boundary is trusted. */
   trustSeekEntry?: (entry: JournalEntry, previousHmac: string | null) => boolean;
+  /** HMAC immediately preceding this physical file in the logical chain. */
+  previousFileHmac?: string | null;
 }
 
 export interface ReadJournalBeforeResult {

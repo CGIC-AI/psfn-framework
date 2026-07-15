@@ -7,8 +7,13 @@ dedicated satellite-scoped credential, the companion event relay bridge, and a
 cert-manager-managed client certificate staged for the satellite mTLS path.
 
 Chart reference: [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md)
-(section "Satellite Hub"). Overlay:
+(section "Satellite Hub"). Public overlay template:
 [`deploy/helm/psfn/overlays/pi-satellite-hub.values.yaml`](../deploy/helm/psfn/overlays/pi-satellite-hub.values.yaml).
+
+Before deployment, copy that template to the ignored
+`deploy/helm/psfn/overlays/pi-satellite-hub.local.values.yaml` and populate
+the local copy with the deployment's private addresses, CIDRs, credential
+digests, and device registry. The commands below refer to that ignored file.
 
 ## Topology And Design Decisions
 
@@ -203,7 +208,7 @@ values stack:
 helm upgrade psfn deploy/helm/psfn \
   --namespace psfn \
   -f <live-base-values>.yaml \
-  -f deploy/helm/psfn/overlays/pi-satellite-hub.values.yaml \
+  -f deploy/helm/psfn/overlays/pi-satellite-hub.local.values.yaml \
   --set satelliteHub.image.tag=0.1.0-kube-<sha12> \
   --set-string satelliteHub.image.digest=<sha256:... from ctr images ls> \
   --set-string secrets.values.satelliteHubApiKey="$HUB_KEY"

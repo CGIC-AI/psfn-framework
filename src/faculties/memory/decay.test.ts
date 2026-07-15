@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { SalienceDecay } from './decay.js';
+import { calculateEffectiveMemorySalience, SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
+import { computeRetrievalScore } from './retrieval/scoring.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -70,6 +71,36 @@ describe('SalienceDecay', () => {
     expect(updated).toHaveLength(1);
     // Episodic half-life is 7 days, so after 7 days salience should be ~0.5
     expect(updated[0].salience).toBeCloseTo(0.5, 1);
+  });
+
+  it('does not reapply the persisted decay window when retrieval reloads a swept memory', async () => {
+    const start = 1_800_000_000_000;
+    const halfLifeLater = start + 7 * 24 * 60 * 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const memory = makeMemory({
+      id: 'sweep-then-retrieve',
+      type: 'episodic',
+      salience: 1,
+      extractedAt: start,
+      lastAccessed: start,
+    });
+    store.insertMemory(memory, makeEmbedding());
+
+    nowSpy.mockReturnValue(halfLifeLater);
+    await decay.run();
+
+    const reloaded = store.getById(memory.id)!;
+    const retrievalScore = computeRetrievalScore(
+      { ...reloaded, similarity: 0.9 },
+      'sweep then retrieve',
+      { moodCongruenceWeight: 0 },
+    );
+
+    expect(reloaded.salience).toBeCloseTo(0.5, 10);
+    expect(reloaded.salienceDecayAnchorAt).toBe(halfLifeLater);
+    expect(calculateEffectiveMemorySalience(reloaded, halfLifeLater)).toBeCloseTo(0.5, 10);
+    expect(retrievalScore.effectiveSalience).toBeCloseTo(0.5, 10);
+    expect(retrievalScore.effectiveSalience).not.toBeCloseTo(0.25, 10);
   });
 
   it('never decays below floor', async () => {
@@ -496,5 +527,67 @@ describe('SalienceDecay', () => {
     await runPromise;
 
     expect(yieldedBeforeSecondPage).toBe(true);
+  });
+
+  it('produces the same persisted salience with minute and hourly sweep cadences', async () => {
+    const start = 1_800_000_000_000;
+    const memory = makeMemory({
+      id: 'cadence-independent',
+      type: 'episodic',
+      salience: 1,
+      extractedAt: start,
+      lastAccessed: start,
+    });
+    const createTrackedStore = () => {
+      let revision = 0;
+      let stored: PurrMemory | undefined;
+      const port = {
+        getSalienceMaintenanceRevision: () => revision,
+        listActiveMemories: vi.fn(() => stored ? [{ ...stored }] : []),
+        bulkUpdateSalience: vi.fn((updates: Array<{
+          id: string;
+          salience: number;
+          salienceDecayAnchorAt: number;
+        }>) => {
+          if (!stored || updates.length === 0) return 0;
+          stored = {
+            ...stored,
+            salience: updates[0]!.salience,
+            salienceDecayAnchorAt: updates[0]!.salienceDecayAnchorAt,
+          };
+          revision += 1;
+          return 1;
+        }),
+      } as unknown as MemoryStorePort;
+      return {
+        port,
+        insert: () => {
+          stored = { ...memory };
+          revision += 1;
+        },
+        salience: () => stored?.salience,
+      };
+    };
+    const minuteStore = createTrackedStore();
+    const hourlyStore = createTrackedStore();
+    const minuteDecay = new SalienceDecay(minuteStore.port);
+    const hourlyDecay = new SalienceDecay(hourlyStore.port);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(start);
+
+    await minuteDecay.run();
+    await hourlyDecay.run();
+    minuteStore.insert();
+    hourlyStore.insert();
+
+    for (let minute = 1; minute <= 6 * 60; minute += 1) {
+      nowSpy.mockReturnValue(start + minute * 60_000);
+      await minuteDecay.run();
+      if (minute % 60 === 0) {
+        await hourlyDecay.run();
+      }
+    }
+
+    expect(Math.abs(minuteStore.salience()! - hourlyStore.salience()!)).toBeLessThan(0.01);
+    expect(minuteStore.salience()).toBeLessThan(1);
   });
 });

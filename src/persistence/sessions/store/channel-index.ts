@@ -1,20 +1,21 @@
-import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readdirSync, renameSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import {
+  journalToSessionEntry,
+  journalToTurnTombstoneEntry,
   journalToMarkerEntry,
   fingerprintJournalArchive,
+  readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
   scanJournalFileMetadata,
 } from '../../journals/journal-utils.js';
+import { backfillLegacyTurnId } from '../../../core/turns/id.js';
+import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import type { JournalEntry } from '../../../core/session/types.js';
 import {
   CHANNEL_INDEX_FILENAME,
-  CHANNEL_INDEX_VERSION,
-  channelIndexEntryEquals,
   normalizeOptionalHmac,
   normalizeOptionalJournalType,
   normalizeOptionalMarker,
@@ -23,15 +24,13 @@ import {
   normalizeOptionalString,
   type ChannelCache,
   type ChannelIndexEntry,
-  type ChannelIndexFile,
 } from '../store-primitives.js';
 import {
-  READABLE_SESSION_FILENAME,
   encodedFilePath,
+  isReadableSessionJournalFilename,
   isSessionJournalFilename,
   legacyFilePath,
   makeReadableFilePath,
-  readChannelIdFromFile,
 } from './channel-filenames.js';
 import {
   deriveSessionIndexId,
@@ -39,6 +38,18 @@ import {
   resolvePrimarySessionId,
   sessionIdForChannelFile,
 } from './session-index-keys.js';
+import { discoverSessionFileChains } from './session-file-chains.js';
+import {
+  deleteChannelIndexEntryIfUnchanged,
+  upsertChannelIndex,
+} from './channel-index-storage.js';
+
+export {
+  loadChannelIndex,
+  parseChannelIndexEntry,
+  saveChannelIndex,
+  upsertChannelIndex,
+} from './channel-index-storage.js';
 
 const log = createComponentLogger('SessionStore');
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
@@ -51,134 +62,16 @@ function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CH
   return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
-export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const row = raw as Record<string, unknown>;
-  if (typeof row.filename !== 'string' || row.filename.length === 0) return null;
-
-  const entry: ChannelIndexEntry = {
-    filename: row.filename,
-  };
-
-  if (typeof row.channelId === 'string' && row.channelId.trim().length > 0) {
-    entry.channelId = row.channelId.trim();
-  }
-
-  const messageCount = normalizeOptionalNonNegativeNumber(row.messageCount);
-  if (messageCount !== undefined) entry.messageCount = messageCount;
-
-  const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(row.activeTurnTombstoneCount);
-  if (activeTurnTombstoneCount !== undefined) entry.activeTurnTombstoneCount = activeTurnTombstoneCount;
-
-  if (Array.isArray(row.activeTurnTombstoneIds)) {
-    entry.activeTurnTombstoneIds = [...new Set(row.activeTurnTombstoneIds
-      .filter((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)
-      .map(candidate => candidate.trim()))].sort();
-  }
-
-  const archiveFingerprint = normalizeOptionalString(row.archiveFingerprint);
-  if (archiveFingerprint !== undefined) entry.archiveFingerprint = archiveFingerprint;
-
-  const lastTimestamp = normalizeOptionalNonNegativeNumber(row.lastTimestamp);
-  if (lastTimestamp !== undefined) entry.lastTimestamp = lastTimestamp;
-
-  const lastMessageTimestamp = normalizeOptionalNonNegativeNumber(row.lastMessageTimestamp);
-  if (lastMessageTimestamp !== undefined) entry.lastMessageTimestamp = lastMessageTimestamp;
-
-  const lastMessageRole = normalizeOptionalSessionEntryRole(row.lastMessageRole);
-  if (lastMessageRole !== undefined) entry.lastMessageRole = lastMessageRole;
-
-  const lastMessageAuthorName = normalizeOptionalString(row.lastMessageAuthorName);
-  if (lastMessageAuthorName !== undefined) entry.lastMessageAuthorName = lastMessageAuthorName;
-
-  const lastMessagePreview = normalizeOptionalString(row.lastMessagePreview);
-  if (lastMessagePreview !== undefined) entry.lastMessagePreview = lastMessagePreview;
-
-  const maxId = normalizeOptionalNonNegativeNumber(row.maxId);
-  if (maxId !== undefined) entry.maxId = maxId;
-
-  const lastHmac = normalizeOptionalHmac(row.lastHmac);
-  if (lastHmac !== undefined) entry.lastHmac = lastHmac;
-
-  const lastExtractionCoveredUpTo = normalizeOptionalNonNegativeNumber(row.lastExtractionCoveredUpTo);
-  if (lastExtractionCoveredUpTo !== undefined) {
-    entry.lastExtractionCoveredUpTo = lastExtractionCoveredUpTo;
-  }
-
-  const lastJournalType = normalizeOptionalJournalType(row.lastJournalType);
-  if (lastJournalType) entry.lastJournalType = lastJournalType;
-
-  const lastMarker = normalizeOptionalMarker(row.lastMarker);
-  if (lastMarker) entry.lastMarker = lastMarker;
-
-  return entry;
-}
-
-export function loadChannelIndex(
-  channelIndexPath: string,
-  channelIndex: Map<string, ChannelIndexEntry>,
-): void {
-  if (!existsSync(channelIndexPath)) return;
-
-  try {
-    const raw = readFileSync(channelIndexPath, 'utf-8');
-    const parsed = JSON.parse(raw) as ChannelIndexFile;
-    const version = (parsed as { version?: unknown }).version;
-
-    if (
-      (version !== 1 && version !== 2 && version !== 3 && version !== CHANNEL_INDEX_VERSION)
-      || typeof parsed.channels !== 'object'
-    ) {
-      log.warn('Ignoring invalid channel index payload', {
-        path: channelIndexPath,
-        version,
-      });
-      return;
-    }
-
-    for (const [channelId, rawEntry] of Object.entries(parsed.channels)) {
-      const entry = parseChannelIndexEntry(rawEntry);
-      if (!entry) continue;
-      channelIndex.set(channelId, entry);
-    }
-  } catch (err) {
-    log.warn('Failed to parse channel index file; falling back to disk scan', {
-      path: channelIndexPath,
-      error: toErrorMessage(err),
-    });
-  }
-}
-
-export function saveChannelIndex(
-  channelIndexPath: string,
-  channelIndex: Map<string, ChannelIndexEntry>,
-): void {
-  const payload: ChannelIndexFile = {
-    version: CHANNEL_INDEX_VERSION,
-    channels: Object.fromEntries(channelIndex.entries()),
-  };
-  writeJsonAtomic(channelIndexPath, payload);
-}
-
-export function upsertChannelIndex(
-  channelId: string,
-  entry: ChannelIndexEntry,
-  channelIndexPath: string,
-  channelIndex: Map<string, ChannelIndexEntry>,
-): void {
-  const existing = channelIndex.get(channelId);
-  if (channelIndexEntryEquals(existing, entry)) return;
-  channelIndex.set(channelId, entry);
-  saveChannelIndex(channelIndexPath, channelIndex);
-}
-
 export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (!entry.filename) return false;
+  if (entry.filenames.length === 0 || entry.filenames.at(-1) !== entry.filename) return false;
   if (normalizeOptionalNonNegativeNumber(entry.messageCount) === undefined) return false;
   if (normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) === undefined) return false;
   const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) ?? 0;
   if ((entry.activeTurnTombstoneIds?.length ?? 0) !== activeTurnTombstoneCount) return false;
   if (!normalizeOptionalString(entry.archiveFingerprint)) return false;
+  if (!Array.isArray(entry.compactionFilenames)) return false;
+  if (entry.compactionFilenames.some(filename => !entry.filenames.includes(filename))) return false;
   if (normalizeOptionalNonNegativeNumber(entry.lastTimestamp) === undefined) return false;
 
   const maxId = normalizeOptionalNonNegativeNumber(entry.maxId);
@@ -200,6 +93,16 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (type === 'marker' && !normalizeOptionalMarker(entry.lastMarker)) return false;
 
   return true;
+}
+
+export function fingerprintArchivePaths(filePaths: readonly string[]): string | null {
+  const fingerprints: string[] = [];
+  for (const filePath of filePaths) {
+    const fingerprint = fingerprintJournalArchive(filePath);
+    if (!fingerprint) return null;
+    fingerprints.push(`${filePath}=${fingerprint}`);
+  }
+  return fingerprints.length > 0 ? fingerprints.join('|') : null;
 }
 
 function readLastMessageEntry(filePath: string): JournalEntry | null {
@@ -266,10 +169,12 @@ export function buildIndexEntry(
   return {
     channelId,
     filename,
+    filenames: [filename],
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
     activeTurnTombstoneIds: metadata.activeTurnTombstoneIds,
-    archiveFingerprint: fingerprintJournalArchive(filePath) ?? undefined,
+    archiveFingerprint: fingerprintArchivePaths([filePath]) ?? undefined,
+    compactionFilenames: metadata.compactionCount > 0 ? [filename] : [],
     lastTimestamp: metadata.lastTimestamp,
     lastMessageTimestamp: lastMessageEntry?.timestamp,
     lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry?.role) ?? null,
@@ -285,10 +190,90 @@ export function buildIndexEntry(
   };
 }
 
+export function buildIndexEntryChain(
+  channelId: string,
+  filePaths: readonly string[],
+  warnAboutQuarantinedEntries: (
+    channelId: string,
+    filePath: string,
+    quarantinedCount: number,
+    loadedCount: number,
+  ) => void,
+): ChannelIndexEntry {
+  if (filePaths.length === 0) {
+    throw new Error(`Cannot index L0 session ${channelId} without at least one file`);
+  }
+  const perFile = filePaths.map(filePath => (
+    buildIndexEntry(channelId, filePath, warnAboutQuarantinedEntries)
+  ));
+  const lastNonEmpty = [...perFile].reverse().find(entry => (entry.maxId ?? 0) > 0);
+  const lastWithMessage = [...perFile].reverse().find(entry => (entry.messageCount ?? 0) > 0);
+  const activeTurnTombstones = new Set<string>();
+  let tombstoneAwareMessageCount: number | null = null;
+  if (perFile.some(entry => (entry.activeTurnTombstoneCount ?? 0) > 0)) {
+    const messageCountsByTurn = new Map<string, number>();
+    for (const filePath of filePaths) {
+      const { entries } = readJournalFile(filePath, { persistQuarantine: false });
+      for (const rawEntry of entries) {
+        const message = journalToSessionEntry(rawEntry);
+        if (message) {
+          let turnId: string;
+          try {
+            turnId = resolveSessionEntryTurnContext(message).turnId;
+          } catch {
+            turnId = backfillLegacyTurnId(
+              `legacy-turn:${message.channelId}:${message.id}:${message.timestamp}:${message.role}`,
+            );
+          }
+          messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+        }
+        const tombstone = journalToTurnTombstoneEntry(rawEntry);
+        if (!tombstone) continue;
+        if (tombstone.action === 'redact') {
+          activeTurnTombstones.add(tombstone.targetId);
+        } else {
+          activeTurnTombstones.delete(tombstone.targetId);
+        }
+      }
+    }
+    tombstoneAwareMessageCount = 0;
+    for (const [turnId, count] of messageCountsByTurn.entries()) {
+      if (!activeTurnTombstones.has(turnId)) tombstoneAwareMessageCount += count;
+    }
+  }
+
+  return {
+    channelId,
+    filename: basename(filePaths.at(-1)!),
+    filenames: filePaths.map(filePath => basename(filePath)),
+    messageCount: tombstoneAwareMessageCount
+      ?? perFile.reduce((sum, entry) => sum + (entry.messageCount ?? 0), 0),
+    activeTurnTombstoneCount: activeTurnTombstones.size,
+    activeTurnTombstoneIds: [...activeTurnTombstones].sort(),
+    archiveFingerprint: fingerprintArchivePaths(filePaths) ?? undefined,
+    compactionFilenames: perFile
+      .filter(entry => (entry.compactionFilenames?.length ?? 0) > 0)
+      .map(entry => entry.filename),
+    lastTimestamp: lastNonEmpty?.lastTimestamp ?? 0,
+    lastMessageTimestamp: lastWithMessage?.lastMessageTimestamp ?? 0,
+    lastMessageRole: lastWithMessage?.lastMessageRole ?? null,
+    lastMessageAuthorName: lastWithMessage?.lastMessageAuthorName,
+    lastMessagePreview: lastWithMessage?.lastMessagePreview,
+    maxId: perFile.reduce((max, entry) => Math.max(max, entry.maxId ?? 0), 0),
+    lastHmac: lastNonEmpty?.lastHmac ?? null,
+    lastExtractionCoveredUpTo: perFile.reduce(
+      (max, entry) => Math.max(max, entry.lastExtractionCoveredUpTo ?? 0),
+      0,
+    ),
+    lastJournalType: lastNonEmpty?.lastJournalType,
+    lastMarker: lastNonEmpty?.lastMarker,
+  };
+}
+
 export function ensureChannelIndexEntry(params: {
   sessionId: string;
   channelId: string;
-  filePath: string;
+  filePaths: readonly string[];
   channelIndexPath: string;
   channelIndex: Map<string, ChannelIndexEntry>;
   warnAboutQuarantinedEntries: (
@@ -297,41 +282,50 @@ export function ensureChannelIndexEntry(params: {
     quarantinedCount: number,
     loadedCount: number,
   ) => void;
+  onEntryRebuilt?: (sessionId: string, entry: ChannelIndexEntry) => void;
 }): ChannelIndexEntry {
-  const filename = basename(params.filePath);
+  if (params.filePaths.length === 0) {
+    throw new Error(`Cannot ensure L0 session index entry ${params.sessionId} without files`);
+  }
+  const filenames = params.filePaths.map(filePath => basename(filePath));
+  const filename = filenames.at(-1)!;
   const existing = params.channelIndex.get(params.sessionId);
 
   if (
     existing
     && existing.filename === filename
+    && existing.filenames.length === filenames.length
+    && existing.filenames.every((candidate, index) => candidate === filenames[index])
     && indexedChannelId(params.sessionId, existing) === params.channelId
   ) {
-    if (isIndexEntryComplete(existing)) {
-      if (existing.archiveFingerprint === fingerprintJournalArchive(params.filePath)) {
-        return existing;
-      }
-    } else {
-      const enriched = enrichIndexEntryWithLastMessage(existing, params.filePath);
-      if (
-        isIndexEntryComplete(enriched)
-        && enriched.archiveFingerprint === fingerprintJournalArchive(params.filePath)
-      ) {
-        upsertChannelIndex(
-          params.sessionId,
-          enriched,
-          params.channelIndexPath,
-          params.channelIndex,
-        );
-        return enriched;
-      }
+    if (
+      isIndexEntryComplete(existing)
+      && existing.archiveFingerprint === fingerprintArchivePaths(params.filePaths)
+    ) {
+      return existing;
+    }
+
+    const enriched = enrichIndexEntryWithLastMessage(existing, params.filePaths.at(-1)!);
+    if (
+      isIndexEntryComplete(enriched)
+      && enriched.archiveFingerprint === fingerprintArchivePaths(params.filePaths)
+    ) {
+      upsertChannelIndex(
+        params.sessionId,
+        enriched,
+        params.channelIndexPath,
+        params.channelIndex,
+      );
+      return enriched;
     }
   }
 
-  const rebuilt = buildIndexEntry(
+  const rebuilt = buildIndexEntryChain(
     params.channelId,
-    params.filePath,
+    params.filePaths,
     params.warnAboutQuarantinedEntries,
   );
+  params.onEntryRebuilt?.(params.sessionId, rebuilt);
   upsertChannelIndex(
     params.sessionId,
     rebuilt,
@@ -347,10 +341,14 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
   return {
     channelId: cache.channelId,
     filename: basename(cache.resolvedPath),
+    filenames: cache.archivePaths.map(filePath => basename(filePath)),
     messageCount: cache.messageCount,
     activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
     activeTurnTombstoneIds: [...cache.turnTombstones].sort(),
     archiveFingerprint: cache.archiveFingerprint ?? undefined,
+    compactionFilenames: cache.archivePaths
+      .filter(filePath => cache.compactionArchivePaths.has(filePath))
+      .map(filePath => basename(filePath)),
     lastTimestamp: cache.lastTimestamp,
     lastMessageTimestamp: cache.lastMessageTimestamp,
     lastMessageRole: cache.lastMessageRole,
@@ -367,6 +365,7 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
 export interface ResolvedIndexedSession {
   sessionId: string;
   channelId: string;
+  filePaths: string[];
   filePath: string;
 }
 
@@ -378,11 +377,13 @@ export function resolveExistingSession(
   const primarySessionId = resolvePrimarySessionId(lookupKey, channelIndex) ?? lookupKey;
   const indexed = channelIndex.get(primarySessionId);
   if (indexed) {
-    const indexedPath = join(sessionsDir, indexed.filename);
-    if (existsSync(indexedPath)) {
+    const indexedPaths = indexed.filenames.map(filename => join(sessionsDir, filename));
+    const indexedPath = indexedPaths.at(-1)!;
+    if (indexedPaths.every(filePath => existsSync(filePath))) {
       return {
         sessionId: primarySessionId,
         channelId: indexedChannelId(primarySessionId, indexed),
+        filePaths: indexedPaths,
         filePath: indexedPath,
       };
     }
@@ -393,6 +394,7 @@ export function resolveExistingSession(
     return {
       sessionId: lookupKey,
       channelId: lookupKey,
+      filePaths: [encodedPath],
       filePath: encodedPath,
     };
   }
@@ -402,6 +404,7 @@ export function resolveExistingSession(
     return {
       sessionId: lookupKey,
       channelId: lookupKey,
+      filePaths: [legacyPath],
       filePath: legacyPath,
     };
   }
@@ -464,9 +467,13 @@ export function rehydrateLastJournalEntry(
 
 export function createLightweightCache(
   channelId: string,
-  filePath: string,
+  filePaths: readonly string[],
   indexEntry: ChannelIndexEntry,
 ): ChannelCache {
+  if (filePaths.length === 0) {
+    throw new Error(`Cannot create L0 cache ${channelId} without archive paths`);
+  }
+  const filePath = filePaths.at(-1)!;
   const maxId = normalizeOptionalNonNegativeNumber(indexEntry.maxId) ?? 0;
   const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   const lastTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastTimestamp) ?? 0;
@@ -476,12 +483,16 @@ export function createLightweightCache(
     channelId,
     entries: [],
     compactions: [],
+    compactionArchivePaths: new Set(
+      (indexEntry.compactionFilenames ?? []).map(filename => join(dirname(filePath), filename)),
+    ),
     turnTombstones: new Set(indexEntry.activeTurnTombstoneIds ?? []),
     activeTurnTombstoneCount: normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0,
     nextId: maxId + 1,
     lastHmac: normalizeOptionalHmac(indexEntry.lastHmac) ?? null,
     lastExtractionCoveredUpTo: normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0,
     lastJournalEntry: rehydrateLastJournalEntry(channelId, indexEntry),
+    archivePaths: [...filePaths],
     resolvedPath: filePath,
     messageCount,
     lastTimestamp,
@@ -490,7 +501,7 @@ export function createLightweightCache(
     lastMessageAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
     lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     fullyLoaded: false,
-    archiveFingerprint: null,
+    archiveFingerprint: indexEntry.archiveFingerprint ?? null,
     recentEntriesByLimit: new Map(),
   };
 }
@@ -510,7 +521,7 @@ export function migrateLegacyFilenames(params: {
     .filter(isSessionJournalFilename);
 
   for (const filename of files) {
-    if (READABLE_SESSION_FILENAME.test(filename)) continue;
+    if (isReadableSessionJournalFilename(filename)) continue;
 
     const oldPath = join(params.sessionsDir, filename);
     const firstEntry = readJournalFirstEntry(oldPath);
@@ -531,7 +542,7 @@ export function migrateLegacyFilenames(params: {
       const entry = ensureChannelIndexEntry({
         sessionId,
         channelId,
-        filePath: oldPath,
+        filePaths: [oldPath],
         channelIndexPath: params.channelIndexPath,
         channelIndex: params.channelIndex,
         warnAboutQuarantinedEntries: params.warnAboutQuarantinedEntries,
@@ -539,7 +550,12 @@ export function migrateLegacyFilenames(params: {
       if (entry.filename !== basename(oldPath) || indexedChannelId(sessionId, entry) !== channelId) {
         upsertChannelIndex(
           sessionId,
-          { ...entry, channelId, filename: basename(oldPath) },
+          {
+            ...entry,
+            channelId,
+            filename: basename(oldPath),
+            filenames: [basename(oldPath)],
+          },
           params.channelIndexPath,
           params.channelIndex,
         );
@@ -564,58 +580,79 @@ export function primeChannelIndexFromDisk(params: {
     quarantinedCount: number,
     loadedCount: number,
   ) => void;
+  onEntryRebuilt?: (sessionId: string, entry: ChannelIndexEntry) => void;
 }): void {
-  const scannedSessions = readdirSync(params.sessionsDir)
-    .filter(isSessionJournalFilename)
-    .map((filename) => {
-      const filePath = join(params.sessionsDir, filename);
-      const channelId = readChannelIdFromFile(filePath);
-      return channelId ? { filename, filePath, channelId } : null;
-    })
-    .filter((entry): entry is { filename: string; filePath: string; channelId: string } => entry !== null)
-    .sort((left, right) => left.filename.localeCompare(right.filename));
+  const indexedChannelByFilename = new Map<string, string>();
+  for (const [sessionId, entry] of params.channelIndex.entries()) {
+    const channelId = indexedChannelId(sessionId, entry);
+    for (const filename of entry.filenames) {
+      indexedChannelByFilename.set(filename, channelId);
+    }
+  }
+  const discovered = discoverSessionFileChains(params.sessionsDir, indexedChannelByFilename);
+  for (const incomplete of discovered.incompleteChains) {
+    log.warn('Ignoring incomplete L0 session segment chain during index rebuild', incomplete);
+  }
+  const groups = discovered.chains;
 
   const sessionCountsByChannel = new Map<string, number>();
-  for (const session of scannedSessions) {
-    sessionCountsByChannel.set(session.channelId, (sessionCountsByChannel.get(session.channelId) ?? 0) + 1);
+  for (const group of groups) {
+    sessionCountsByChannel.set(group.channelId, (sessionCountsByChannel.get(group.channelId) ?? 0) + 1);
   }
 
-  const indexedSessions = scannedSessions.map((session) => ({
-    ...session,
+  const indexedSessions = groups.map(group => ({
+    ...group,
     sessionId: sessionIdForChannelFile(
-      session.channelId,
-      session.filename,
-      (sessionCountsByChannel.get(session.channelId) ?? 0) > 1,
+      group.channelId,
+      group.rootFilename,
+      (sessionCountsByChannel.get(group.channelId) ?? 0) > 1,
     ),
   }));
 
   const expectedByFilename = new Map(
-    indexedSessions.map(session => [session.filename, session]),
+    indexedSessions.flatMap(session => (
+      session.filenames.map(filename => [filename, session] as const)
+    )),
   );
-  let removedStaleEntries = false;
   for (const [sessionId, entry] of [...params.channelIndex.entries()]) {
     const expected = expectedByFilename.get(entry.filename);
-    if (!expected || expected.sessionId !== sessionId || indexedChannelId(sessionId, entry) !== expected.channelId) {
-      params.channelIndex.delete(sessionId);
-      removedStaleEntries = true;
+    const filenamesMatch = expected
+      && entry.filenames.length === expected.filenames.length
+      && entry.filenames.every((filename, index) => filename === expected.filenames[index]);
+    if (
+      !expected
+      || !filenamesMatch
+      || expected.sessionId !== sessionId
+      || indexedChannelId(sessionId, entry) !== expected.channelId
+    ) {
+      deleteChannelIndexEntryIfUnchanged(
+        sessionId,
+        entry,
+        params.channelIndexPath,
+        params.channelIndex,
+      );
     }
-  }
-  if (removedStaleEntries) {
-    saveChannelIndex(params.channelIndexPath, params.channelIndex);
   }
 
   for (const session of indexedSessions) {
     const indexed = params.channelIndex.get(session.sessionId);
     if (
       indexed
-      && indexed.filename === session.filename
+      && indexed.filename === session.filenames.at(-1)
+      && indexed.filenames.length === session.filenames.length
+      && indexed.filenames.every((filename, index) => filename === session.filenames[index])
       && indexedChannelId(session.sessionId, indexed) === session.channelId
       && isIndexEntryComplete(indexed)
     ) {
       continue;
     }
 
-    const entry = buildIndexEntry(session.channelId, session.filePath, params.warnAboutQuarantinedEntries);
+    const entry = buildIndexEntryChain(
+      session.channelId,
+      session.filePaths,
+      params.warnAboutQuarantinedEntries,
+    );
+    params.onEntryRebuilt?.(session.sessionId, entry);
     upsertChannelIndex(session.sessionId, entry, params.channelIndexPath, params.channelIndex);
   }
 }

@@ -300,7 +300,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'contact',
     domain: 'contacts',
     exposure: 'core',
-    description: 'Canonical contact, trust, note, identity-link, channel-privacy, and blocking surface.',
+    description: 'Canonical contact, trust, relationship, note, identity-link, channel-privacy, blocking, and known-peer coarse-availability surface.',
     actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'set_relationship', 'propose_relationship', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -337,9 +337,9 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'self_status',
     domain: 'system',
     exposure: 'core',
-    description: 'Canonical companion-facing safe runtime self-status surface.',
-    actions: ['snapshot', 'diagnose', 'logs', 'conformance'],
-    capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
+    description: 'Canonical companion-facing safe runtime status and coarse availability-control surface.',
+    actions: ['snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },
   {
@@ -423,7 +423,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'notify',
     domain: 'notification',
     exposure: 'extended',
-    description: 'Canonical notification surface.',
+    description: 'Canonical notification and governed companion-outreach surface.',
     actions: ['brief', 'send', 'approval_request'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -495,7 +495,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
 // each domain. Non-canonical tools (plugins, channel extras) are unaudited
 // third-party surfaces; they rank at the very tail, after every first-party
 // domain including boundary/system, so the model's attention anchors on the
-// companion's own audited toolset before any plugin verb (psfn img2 audit).
+// companion's own audited toolset before any plugin verb (image-tools img2 audit).
 const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, number>> = {
   self_expression: 10,
   media: 20,

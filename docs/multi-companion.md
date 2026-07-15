@@ -1,6 +1,6 @@
 # Multi-Companion Substrate
 
-Last updated: 2026-07-13.
+Last updated: 2026-07-14.
 
 This is the canonical page for running more than one companion on a single PSFN
 cluster: the topology, the opt-in flag, the fleet manifest, and the fleet
@@ -303,6 +303,36 @@ Multi-companion layers on top of the single-companion locations/world surface
   charge `companion_room` budgets, human participation is free, and hard
   exhaustion suppresses the model call (see the fatigue section in
   [`docs/operations.md`](./operations.md)).
+- **Autonomous initiation (ICP) is shipped, same-cluster, and opt-in.** When
+  `scheduler.json > icpAutonomy.enabled` is true at process start, the local
+  source runtime may turn a bounded weighted-thought, intention, or co-location
+  signal into a private local candidate. The gateway broker then applies
+  canonical contact identity, bilateral trust/block, channel, provenance,
+  availability, quiet-hours, fatigue, charge, cost-breaker, capability, and
+  outstanding-invitation gates before issuing a short-lived single-use permit.
+  The target ordinary channel turn authors the peer-visible message; the source
+  cannot provide a message body or impersonate the peer. Candidates, permits,
+  and conversation episodes are recovery-safe Postgres state.
+- **Owner state and live state are distinct.** ICP enablement/candidate retry/
+  permit/availability cadence live only in `scheduler.json`; social quota,
+  continuation cost, fatigue/overcharge reserve, structured continuation
+  evidence, and the conversation cost breaker live only in
+  `charge-policy.json`. Unknown or malformed new fields reject. Owner edits are
+  reported as on-disk state and require restart; there is no environment shadow
+  authority. Garden emergency disable is the deliberate narrowing exception:
+  it immediately fences the running source, publishes operator DND, invalidates
+  outstanding permits through the shared store, and persists `enabled:false`
+  for the next start.
+- **Garden exposes a bounded control plane per companion.** `/autonomy` reads
+  `GET /api/admin/icp-autonomy` and shows the local coarse availability lease,
+  redacted local candidates, and only episodes/provenance, permit lifecycle,
+  fatigue aggregates, and cost decisions in which the local companion
+  participates. Bearer permit IDs remain withheld. It also reports breaker posture and
+  machine-readable reasons/failures. It never reads candidate motivation,
+  peer-contact IDs, transcripts, message bodies, private model reasoning, or
+  chain-of-thought. Audited mutations can cancel one local revision-checked
+  candidate, set local operator DND, or emergency-disable the local source. They
+  cannot target another companion or cluster.
 - **Private-room delivery is presence-windowed.** A place carries an optional
   `privacy` field (`PlacePrivacy = 'public' | 'private'`,
   `src/shared/contracts/places-registry.ts`; absent = `public`, byte-identical to
@@ -325,5 +355,8 @@ notes but are not wired in this branch:
 - Cross-cluster companion communication and cross-cluster world sync (one world =
   one cluster).
 - A "management" capability tier acting on other companions' settings.
+- Cross-companion message composition/puppeteering, private-reasoning or
+  transcript inspection, and fleet-wide autonomy controls. The shipped Garden
+  surface is local, control-plane-only, and deliberately cannot become these.
 - Voice subsystem rewrite.
 - Fatigue/charge and tool-error metrics on the fleet-status page.

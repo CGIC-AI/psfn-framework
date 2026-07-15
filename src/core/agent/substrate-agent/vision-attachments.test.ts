@@ -409,15 +409,17 @@ describe('buildTurnUserContent vision intake screening (htm9.8)', () => {
   });
 
   it('delivers a benign inline image with its labeled untrusted transcript alongside the block', async () => {
-    const { screener } = makeScreener(BENIGN);
+    const { screener, calls } = makeScreener(BENIGN);
     const result = await buildTurnUserContent({
       message: inlinePngMessage(),
       llmClient: {} as any,
       runtimeMode: 'gateway',
       logger: { warn: vi.fn(), debug: vi.fn() },
       visionIntakeScreener: screener,
+      imageRetentionScope: 'turn-retention-scope',
     });
 
+    expect(calls[0]?.requestScope).toBe('turn-retention-scope');
     expect(Array.isArray(result.content)).toBe(true);
     const parts = result.content as Array<{ type: string; text?: string; data?: string }>;
     expect(parts[0]?.type).toBe('text');

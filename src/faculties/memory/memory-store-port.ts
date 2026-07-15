@@ -309,21 +309,22 @@ export interface MemoryBulkUpdatePatch {
 export interface MemorySalienceUpdate {
   id: string;
   salience: number;
+  salienceDecayAnchorAt: number;
 }
 
 export function normalizeMemorySalienceUpdates(
   updates: readonly MemorySalienceUpdate[],
 ): MemorySalienceUpdate[] {
-  const byId = new Map<string, number>();
+  const byId = new Map<string, MemorySalienceUpdate>();
   for (const update of updates) {
     const id = update.id.trim();
     if (!id) continue;
-    if (!Number.isFinite(update.salience)) {
-      throw new Error('bulkUpdateSalience requires finite salience values');
+    if (!Number.isFinite(update.salience) || !Number.isFinite(update.salienceDecayAnchorAt)) {
+      throw new Error('bulkUpdateSalience requires finite salience and decay-anchor values');
     }
-    byId.set(id, update.salience);
+    byId.set(id, { ...update, id });
   }
-  return Array.from(byId, ([id, salience]) => ({ id, salience }));
+  return Array.from(byId.values());
 }
 
 export interface ScratchpadEntryCreateOptions {
@@ -360,6 +361,10 @@ export interface MemoryEmbeddingSample {
 type Awaitable<T> = T | Promise<T>;
 
 interface MemoryStorePortBackend extends ScratchpadProvider {
+  /** Monotonic in-process signal for mutations that can change salience decay work. */
+  getSalienceMaintenanceRevision?(): number;
+  /** Monotonic in-process signal for mutations that can change retrieval output. */
+  getRetrievalCorpusVersion?(): Awaitable<number>;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
   runInTransaction<T>(handler: () => T): Awaitable<T>;
@@ -451,6 +456,10 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
+  /** Postgres exposes this to let decay skip unchanged in-memory snapshots. */
+  getSalienceMaintenanceRevision?(): number;
+  /** Postgres exposes this to let active retrieval skip an unchanged corpus. */
+  getRetrievalCorpusVersion?(): Awaitable<number>;
   insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
   runInTransaction<T>(handler: () => T): Promise<T>;
@@ -541,6 +550,12 @@ export interface CoreMemoryStorePort {
 
 export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStorePort {
   return {
+    ...(store.getSalienceMaintenanceRevision
+      ? { getSalienceMaintenanceRevision: () => store.getSalienceMaintenanceRevision!() }
+      : {}),
+    ...(store.getRetrievalCorpusVersion
+      ? { getRetrievalCorpusVersion: async () => await store.getRetrievalCorpusVersion!() }
+      : {}),
     insertMemory: async (memory, embedding) => {
       await store.insertMemory(memory, embedding);
     },

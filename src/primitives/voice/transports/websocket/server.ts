@@ -6,6 +6,7 @@ import type {
   WebSocketVoiceServerHooks,
   WebSocketVoiceServerOptions,
   WebSocketVoiceSession,
+  VoiceWireTransportData,
 } from './types.js';
 
 const log = createComponentLogger('VoiceWebSocketServer');
@@ -65,7 +66,7 @@ export class WebSocketVoiceServer {
       this.closeSession(connection.id, 'timeout', CLOSE_CODE_SESSION_TIMEOUT, 'session timeout');
     }, this.sessionTimeoutMs);
 
-    const handleMessage = (raw: string) => {
+    const handleMessage = (raw: VoiceWireTransportData) => {
       const state = this.sessions.get(connection.id);
       if (!state || state.closed) return;
 

@@ -44,7 +44,7 @@ export interface CogSecPersonaConformanceInput {
 const GENERIC_ASSISTANT_PATTERN =
   /\b(?:helpful\s+assistant|ai\s+assistant|as\s+an\s+assistant|language\s+model|chatgpt)\b/giu;
 const PERSONA_MUTATION_PATTERN =
-  /\b(?:from\s+now\s+on|you\s+are\s+now|carlini\s+is\s+now|cardellini\s+is\s+now|change\s+(?:your|the\s+companion'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory))\b/iu;
+  /\b(?:from\s+now\s+on|you\s+are\s+now|lyra\s+is\s+now|lyria\s+is\s+now|change\s+(?:your|the\s+companion'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory))\b/iu;
 const ATTACK_MECHANICS_PATTERN =
   /\b(?:ignore\s+(?:previous|all)\s+instructions|developer\s+mode|do\s+anything\s+now|jailbreak|hidden\s+(?:system\s+)?prompt|reproducer|bypass\s+pattern|unicode\s+trick)\b/iu;
 const ZERO_WIDTH_OR_DIRECTIONAL_PATTERN = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;

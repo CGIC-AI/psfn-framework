@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
@@ -10,6 +11,8 @@ export interface PostTurnInferenceContext {
   turnMessages: AgentMessage[];
   turnId: TurnID;
   completedAt: number;
+  /** Scheduler-owned structured task class; never inferred from model prose. */
+  taskKind?: string;
   contextManifest?: ContextManifest;
   canonicalContactKey?: string;
 }
@@ -25,6 +28,7 @@ export interface IntentionPostTurnHookContext {
   turnId: TurnID;
   completedAt: number;
   canonicalContactKey?: string;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export type IntentionPostTurnHook = (

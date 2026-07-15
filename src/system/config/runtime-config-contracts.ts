@@ -198,6 +198,7 @@ export interface SubstrateConfig {
   wikiRetrievalGroupSimilarityThreshold?: number;
   extractionInterval: number;
   maintenanceIntervalMs: number;
+  salienceDecayIntervalMs: number;
   defaultContextWindow: number;
   extractionThresholdPct: number;
   compactionThresholdPct: number;
@@ -242,7 +243,7 @@ export interface SubstrateConfig {
   openRouterApiBaseUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
   /**
-   * OpenRouter server-tools web backend selection (bead psfn-framework-htm9.10),
+   * OpenRouter server-tools web backend selection (bead htm9.10),
    * projected from providers.json `openrouter.metadata.webTools`. When enabled,
    * the gateway routes web search/fetch through OpenRouter's built-in server
    * tools instead of the self-hosted crawler lane.

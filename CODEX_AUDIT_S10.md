@@ -4,7 +4,7 @@ Date: 2026-07-09
 
 Audited source: `origin/main` at `bbef11c5287d910c278292df341120a815f53b2c`
 
-Audit worktree: `/home/ada/ai/dev/worktrees/psfn-framework/audit-s10-main`
+Audit worktree: `~/ai/dev/worktrees/psfn-framework/audit-s10-main`
 
 Tracking bead: `psfn-framework-9kj9`
 

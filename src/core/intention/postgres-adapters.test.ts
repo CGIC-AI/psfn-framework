@@ -11,6 +11,7 @@ describe('postgres intention adapters', () => {
       text: 'Check hydration reminder',
       contactId: 'contact-a',
       source: 'agent',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(created.id).toBeTruthy();
 
@@ -23,6 +24,7 @@ describe('postgres intention adapters', () => {
       priority: 'medium',
       source: 'agent',
       status: 'active',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const duplicate = await ports.concernStore.create({
@@ -37,7 +39,14 @@ describe('postgres intention adapters', () => {
       priority: 'high',
       status: 'blocked',
       evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
+
+    await expect(ports.concernStore.create({
+      text: 'Check the hydration reminder again',
+      contactId: 'contact-a',
+      originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    })).rejects.toThrow('conflicting ICP roots');
 
     const resolved = await ports.concernStore.resolveConcern(created.id, {
       outcome: 'Handled already',
@@ -114,6 +123,7 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       dueAt: '2026-03-28T03:00:00.000Z',
     });
     expect(followUp).toMatchObject({
@@ -122,11 +132,19 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const pending = await ports.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);
     expect(pending[0]?.id).toBe(followUp.id);
+
+    const restartedPorts = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:30:00.000Z'),
+    });
+    await expect(restartedPorts.pendingFollowUpStore.peek(followUp.id)).resolves.toMatchObject({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
 
     const activated = await ports.pendingFollowUpStore.dequeue(followUp.id, {
       activationReason: 'post_turn_action',

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ship a PSFN build to the live psfn-shard k3s deployment, component-selectively.
+# Ship a PSFN build to an operator-selected k3s deployment, component-selectively.
 #
 #   scripts/ops/ship-kube-update.sh --components agent            # companion-core only
 #   scripts/ops/ship-kube-update.sh --components all              # full app stack
@@ -23,16 +23,21 @@
 # PSFN_NAMESPACE. Build platform (arm64/amd64) is probed from the target node,
 # the staging dir defaults to <remote home>/psfn-kube-runtime (override:
 # PSFN_REMOTE_DIR), and the companion source checkout path is
-# PSFN_SOURCE_CHECKOUT (default /mnt/psfn-nvme/psfn-source; absent dir = skip).
+# PSFN_SOURCE_CHECKOUT (optional; empty or absent remote dir = skip).
 #
 # Bead: psfn-framework-hpx6 (+w05a emosim). Proven procedure from the
 # 2026-07-06 deploys.
 set -euo pipefail
 
-HOST_ALIAS="${PSFN_HOST_ALIAS:-psfn-pi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ops/load-private-ops-config.sh
+source "$SCRIPT_DIR/load-private-ops-config.sh"
+load_private_ops_config "$SCRIPT_DIR"
+
+HOST_ALIAS="${PSFN_HOST_ALIAS:-}"
 NAMESPACE="${PSFN_NAMESPACE:-psfn}"
 REMOTE_DIR="${PSFN_REMOTE_DIR:-}"
-SOURCE_CHECKOUT="${PSFN_SOURCE_CHECKOUT:-/mnt/psfn-nvme/psfn-source}"
+SOURCE_CHECKOUT="${PSFN_SOURCE_CHECKOUT:-}"
 IMAGE_NAME="psfn-framework"
 EMOSIM_IMAGE_NAME="psfn-emosim"
 COMPONENTS=""
@@ -59,6 +64,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$COMPONENTS" ]] || { echo "--components is required (agent|gateway|garden|emosim|all, comma-separated)" >&2; exit 1; }
+require_private_ops_value HOST_ALIAS "--host" PSFN_HOST_ALIAS
 
 SHIP_EMOSIM=0
 if [[ "$COMPONENTS" == "all" ]]; then
@@ -85,8 +91,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 # Probe the target once: build platform must match the node's CPU, and the
-# staging dir lives under the remote user's home (psfn on the Pi, o_0 on
-# Carlini's miniforum01). Fail closed if the host is unreachable.
+# staging dir lives under the selected remote user's home. Fail closed if the
+# host is unreachable.
 REMOTE_ARCH_RAW="$(remote 'uname -m' | tr -d '[:space:]')" \
   || { echo "FAIL: cannot reach ${HOST_ALIAS} to probe architecture" >&2; exit 1; }
 case "$REMOTE_ARCH_RAW" in
@@ -271,7 +277,7 @@ if [[ $SKIP_GATE -eq 1 ]]; then
 fi
 
 echo "==> refreshing companion self-management copies (repo checkout + beads)"
-if remote "test -d ${SOURCE_CHECKOUT}/.git" 2>/dev/null; then
+if [[ -n "$SOURCE_CHECKOUT" ]] && remote "test -d ${SOURCE_CHECKOUT}/.git" 2>/dev/null; then
   git bundle create "$BUILD_DIR/repo.bundle" HEAD >/dev/null 2>&1
   scp "$BUILD_DIR/repo.bundle" "${HOST_ALIAS}:/tmp/psfn-repo-refresh.bundle"
   remote "sudo git -C ${SOURCE_CHECKOUT} fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C ${SOURCE_CHECKOUT} reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 ${SOURCE_CHECKOUT} && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"

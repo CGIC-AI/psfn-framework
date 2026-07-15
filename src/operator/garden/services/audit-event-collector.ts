@@ -191,6 +191,38 @@ export function registerAuditTimelineSources(options: {
     );
   });
 
+  eventBus.on('icp.conversation.cost.decision', (event) => {
+    appendAuditTimelineEntry(
+      'charge_decision',
+      event.outcome === 'blocked' ? 'denied' : 'allowed',
+      event.outcome === 'blocked'
+        ? 'ICP conversation cost breaker suppressed provider work.'
+        : event.outcome === 'warning'
+          ? 'ICP conversation cost breaker reserved the final closeout band.'
+          : 'ICP conversation cost breaker reserved provider work.',
+      [
+        `reason=${event.reason}`,
+        `costPurpose=${event.costPurpose}`,
+        `costOriginStage=${event.costOriginStage}`,
+        `provider=${event.provider}`,
+        `model=${event.model}`,
+        `conversationId=${event.conversationId}`,
+        `rootInitiationId=${event.rootInitiationId}`,
+        event.projectedRequestCostUsd !== undefined
+          ? `projectedRequestCostUsd=${event.projectedRequestCostUsd}`
+          : null,
+        event.projection
+          ? `projectedConversationCostUsd=${event.projection.projectedTotalCostUsd}`
+          : null,
+        event.projection ? `enforcementState=${event.projection.enforcementState}` : null,
+        event.projection
+          ? `attributedCompanionCount=${event.projection.attributedCompanionCount}`
+          : null,
+      ],
+      'companion',
+    );
+  });
+
   eventBus.on('memory.extraction.end', (event) => {
     const writeCount = event.writeCount ?? 0;
     const deduplicatedCount = event.deduplicatedCount ?? 0;

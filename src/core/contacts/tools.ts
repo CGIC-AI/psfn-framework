@@ -37,6 +37,12 @@ import { withCapabilityRequirement } from '../../system/capabilities/requirement
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
+import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
+import type {
+  AgentFacingIcpAutonomyRuntime,
+  KnownCompanionPeerAvailability,
+} from '../icp/agent-facing-autonomy.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 const CONTACT_ACTION_NAMES = [
   'list',
@@ -540,6 +546,7 @@ async function lookupContact(contactStore: ContactStorePort, id: string): Promis
 async function executeContactLookup(
   contactStore: ContactStorePort,
   params: { contactId?: string },
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const id = params.contactId?.trim();
   if (!id) {
@@ -560,6 +567,12 @@ async function executeContactLookup(
     ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
     .join(', ');
   const contactName = resolvePreferredContactName(contact) ?? contact.displayName;
+  let peer: KnownCompanionPeerAvailability | null = null;
+  const icpCorrelation = getRequestContext()?.icpCorrelation;
+  const mayReadPeerAvailability = !icpCorrelation || icpCorrelation.peerContactId === contact.id;
+  if (peerAvailability && mayReadPeerAvailability) {
+    peer = await peerAvailability.readKnownPeerAvailability(contact);
+  }
 
   return textResult(
     `Canonical ID: ${contact.id}\n`
@@ -567,6 +580,15 @@ async function executeContactLookup(
     + `Trust: ${contact.trustLevel}\n`
     + `Relationship: ${contact.relationshipType}\n`
     + (contact.isMachineIntelligence ? 'Machine intelligence: yes (peer companion/agent)\n' : '')
+    + (peer
+      ? `Companion peer ID: ${peer.peerCompanionId}\n`
+        + `Peer connection: ${peer.availability.connectionState}\n`
+        + `Peer availability eligible: ${peer.availability.eligible ? 'yes' : 'no'}\n`
+        + (peer.availability.reasonCode ? `Peer availability reason: ${peer.availability.reasonCode}\n` : '')
+        + (peer.availability.lease
+          ? `Peer availability: ${peer.availability.lease.state} (source=${peer.availability.lease.source}, expiresAtMs=${peer.availability.lease.expiresAtMs}, revision=${peer.availability.lease.revision})\n`
+          : '')
+      : '')
     + (identities ? `Identities: ${identities}\n` : '')
     + (channels ? `Channels: ${channels}\n` : '')
     + `First seen: ${contact.firstSeen}\n`
@@ -732,7 +754,9 @@ async function executeUnifiedContactAction(
   params: ContactToolParams = {},
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
+  permitInvalidation?: ContactBlockPermitInvalidationPort,
   getIntakeSinkGate?: () => IntakeSinkGate | null,
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
@@ -742,7 +766,7 @@ async function executeUnifiedContactAction(
     case 'search':
       return await executeContactSearch(contactStore, params);
     case 'lookup':
-      return await executeContactLookup(contactStore, params);
+      return await executeContactLookup(contactStore, params, peerAvailability);
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
@@ -760,7 +784,7 @@ async function executeUnifiedContactAction(
     case 'set_machine_intelligence':
       return await executeContactSetMachineIntelligence(contactStore, params);
     case 'block':
-      return await executeContactBlock(contactStore, blockList, params);
+      return await executeContactBlock(contactStore, blockList, permitInvalidation, params);
     case 'unblock':
       return await executeContactUnblock(contactStore, blockList, params);
   }
@@ -795,9 +819,25 @@ function collectContactBlockTargets(contact: Contact): Array<{ channel: string; 
   return [...targets.values()];
 }
 
+function isCompanionBlockChannel(channel: string): boolean {
+  return channel.trim().toLowerCase() === 'companion';
+}
+
+async function invalidatePendingPermitsForCompanionBlock(
+  targets: ReadonlyArray<{ channel: string }>,
+  permitInvalidation: ContactBlockPermitInvalidationPort | undefined,
+): Promise<void> {
+  if (!targets.some(target => isCompanionBlockChannel(target.channel))) return;
+  if (!permitInvalidation) {
+    throw new Error('Companion block permit invalidation is unavailable in this runtime');
+  }
+  await permitInvalidation.invalidatePendingInitiationPermitsForBlock();
+}
+
 async function executeContactBlock(
   contactStore: ContactStorePort,
   blockList: ContactBlockListStore | undefined,
+  permitInvalidation: ContactBlockPermitInvalidationPort | undefined,
   params: ContactToolParams,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   if (!blockList) {
@@ -820,6 +860,8 @@ async function executeContactBlock(
     const contact = params.contactId
       ? await lookupContact(contactStore, params.contactId.trim())
       : undefined;
+    const targets = [{ channel }];
+    await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
     blockList.block({
       channelType: channel,
       contactId: channelUserId,
@@ -829,6 +871,9 @@ async function executeContactBlock(
       ...(reason ? { reason } : {}),
       actor,
     });
+    // Drain permits issued after the first fence but before the block became
+    // visible to deterministic policy evaluation.
+    await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
     return textResult(
       `Blocked ${channel}:${channelUserId} (${mode} block, scope=${scope}). `
       + 'Reversible with action=unblock; the operator sees soft-block drops in the cogsec tab.',
@@ -854,6 +899,7 @@ async function executeContactBlock(
       true,
     );
   }
+  await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
   for (const target of targets) {
     blockList.block({
       channelType: target.channel,
@@ -866,6 +912,7 @@ async function executeContactBlock(
       actor,
     });
   }
+  await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
   const summary = targets.map((t) => `${t.channel}:${t.userId}`).join(', ');
   return textResult(
     `Blocked ${contact.displayName} (${contact.id}) across ${targets.length} identity(ies): ${summary}. `
@@ -976,10 +1023,18 @@ export interface CreateContactToolOptions {
    */
   blockList?: ContactBlockListStore;
   /**
+   * Gateway-owned ICP permit invalidation seam. Required when action=block
+   * targets a companion identity. A pre-write failure aborts persistence; a
+   * post-write failure is surfaced while the safer fail-closed block remains.
+   */
+  permitInvalidation?: ContactBlockPermitInvalidationPort;
+  /**
    * Intake sink gate provider (htm9.3): trust_mutation gate evaluated before
    * action=set_trust applies. Null/absent = firewall off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Coarse availability for canonical, already-known MI contacts only. */
+  peerAvailability?: Pick<AgentFacingIcpAutonomyRuntime, 'readKnownPeerAvailability'>;
 }
 
 export function createContactTool(
@@ -988,7 +1043,9 @@ export function createContactTool(
 ): SubstrateAgentTool {
   const proposalQueue = options.proposalQueue;
   const blockList = options.blockList;
+  const permitInvalidation = options.permitInvalidation;
   const getIntakeSinkGate = options.getIntakeSinkGate;
+  const peerAvailability = options.peerAvailability;
   const tool: SubstrateAgentTool = {
     name: 'contact',
     label: 'contact',
@@ -997,6 +1054,7 @@ export function createContactTool(
       + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
       + 'then action=lookup with exact contactId for details. Mutation actions such as action=note, action=set_trust, '
       + 'and action=set_relationship also require contactId. '
+      + 'Exact lookup of a canonical machine-intelligence contact includes coarse peer availability when the gateway mapping is valid. '
       + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
       + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
       + 'never changes trust directly. '
@@ -1101,7 +1159,15 @@ export function createContactTool(
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params, proposalQueue, blockList, getIntakeSinkGate);
+        return await executeUnifiedContactAction(
+          contactStore,
+          params,
+          proposalQueue,
+          blockList,
+          permitInvalidation,
+          getIntakeSinkGate,
+          peerAvailability,
+        );
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);

@@ -24,6 +24,7 @@ import type {
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
   createTurnRecordSharedStore,
   resolveTurnRecordToolDefinitions,
@@ -578,6 +579,15 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
+  const icpCorrelation = raw.icpCorrelation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(raw.icpCorrelation);
+  if (icpCorrelation
+    && (icpCorrelation.channelId !== channelId
+      || icpCorrelation.turnId !== turnId
+      || icpCorrelation.requestId !== requestId)) {
+    throw new Error('TurnRecord ICP correlation does not match its channel/turn/request binding');
+  }
   const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
   if (
     auditPrivacy?.contentSensitivityActor
@@ -617,6 +627,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
       ? { roleEnvelopeRefs }
       : {}),
     ...(observability ? { observability } : {}),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
   };
@@ -944,6 +955,77 @@ export function readRecentTurnRecordsAcrossSegments(
   }
 }
 
+function findTurnRecordOnce(
+  dir: string,
+  sanitized: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): TurnRecord | null {
+  const scannedFileIdentities = new Set<string>();
+  const scanOne = (path: string): TurnRecord | null => {
+    if (!existsSync(path)) return null;
+    let found: TurnRecord | null = null;
+    scanJsonlFileBackward(path, {
+      chunkBytes,
+      scannedFileIdentities,
+    }, (rawLine) => {
+      const line = rawLine.trim();
+      if (line.length === 0) return false;
+      try {
+        const record = normalizeTurnRecord(JSON.parse(line) as unknown, channelId);
+        if (record.turnId !== turnId) return false;
+        found = record;
+        return true;
+      } catch (error) {
+        quarantineTurnRecordLine(path, channelId, line, error);
+        return false;
+      }
+    });
+    return found;
+  };
+
+  const activeMatch = scanOne(join(dir, `${sanitized}.jsonl`));
+  if (activeMatch) return activeMatch;
+  const rotated = listRotatedSegments(dir, sanitized).sort(
+    (left, right) => right.segmentNumber - left.segmentNumber,
+  );
+  for (const segment of rotated) {
+    const match = scanOne(segment.path);
+    if (match) return match;
+  }
+  return null;
+}
+
+function findTurnRecordAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): TurnRecord | null {
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return findTurnRecordOnce(dir, sanitized, channelId, turnId, chunkBytes);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
+        throw new Error(
+          `Turn-record lookup for channel ${channelId} kept losing races with segment rotation `
+          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
+        );
+      }
+      log.warn('turn-record lookup raced a rotation; restarting from a fresh segment listing', {
+        channelId,
+        turnId,
+        attempt: attempt + 1,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+}
+
 /**
  * Append a turn record to the active segment, rotating first if the active file
  * has reached the size cap. Rotation hard-links the active file to the next
@@ -1009,6 +1091,15 @@ export function createFilesystemTurnRecordStorePort(
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
       return windowed.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
+    },
+    findTurnRecord: (channelId, turnId) => {
+      const record = findTurnRecordAcrossSegments(
+        sessionsDir,
+        channelId,
+        turnId,
+        scanChunkBytes,
+      );
+      return record ? resolveTurnRecordToolDefinitions(record, sharedStore) : null;
     },
   };
 }

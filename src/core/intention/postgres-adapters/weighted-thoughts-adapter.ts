@@ -13,6 +13,7 @@ import {
   type ThoughtWeight,
 } from '../weighted-thoughts.js';
 import { CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
+import { isRfc4122Uuid } from '../../../shared/utils/types.js';
 
 interface WeightedThoughtRow {
   id: string;
@@ -83,6 +84,12 @@ function parseProvenance(value: unknown): ThoughtProvenance {
   }
   const channelType = parseChannelType(raw.sourceChannelType);
   if (channelType) provenance.sourceChannelType = channelType;
+  if (typeof raw.coLocationRef === 'string' && raw.coLocationRef.trim()) {
+    provenance.coLocationRef = raw.coLocationRef.trim();
+  }
+  if (isRfc4122Uuid(raw.icpRootInitiationId)) {
+    provenance.icpRootInitiationId = raw.icpRootInitiationId;
+  }
   return provenance;
 }
 

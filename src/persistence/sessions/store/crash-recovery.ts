@@ -75,17 +75,17 @@ export function getUncleanShutdownChannels(params: {
   sessionsDir: string;
   channelIndex: Map<string, ChannelIndexEntry>;
   primeChannelIndexFromDisk: () => void;
-  ensureChannelIndexEntry: (channelId: string, filePath: string) => ChannelIndexEntry;
+  ensureChannelIndexEntry: (channelId: string, filePaths: readonly string[]) => ChannelIndexEntry;
   rehydrateLastJournalEntry: (channelId: string, indexEntry: ChannelIndexEntry) => JournalEntry | null;
 }): string[] {
   params.primeChannelIndexFromDisk();
   const channels: string[] = [];
 
   for (const [channelId, indexEntry] of params.channelIndex.entries()) {
-    const filePath = join(params.sessionsDir, indexEntry.filename);
-    if (!existsSync(filePath)) continue;
+    const filePaths = indexEntry.filenames.map(filename => join(params.sessionsDir, filename));
+    if (filePaths.some(filePath => !existsSync(filePath))) continue;
 
-    const ensured = params.ensureChannelIndexEntry(channelId, filePath);
+    const ensured = params.ensureChannelIndexEntry(channelId, filePaths);
     const lastEntry = params.rehydrateLastJournalEntry(channelId, ensured);
     if (!lastEntry) continue;
     if (isGracefulShutdownEntry(lastEntry)) continue;

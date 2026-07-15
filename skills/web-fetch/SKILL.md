@@ -1,6 +1,6 @@
 ---
 name: "web-fetch"
-description: "Fetch web content using the crawl4ai service at purrsephone.local"
+description: "Fetch web content through the configured web tool or crawler service"
 category: "tools"
 created: "2026-02-27T05:10:01.689Z"
 updated: "2026-02-27T05:10:01.689Z"
@@ -13,10 +13,9 @@ Prefer the top-level `web_fetch` tool for routine page reads.
 Use `lane: "default"` for normal web pages.
 Use `lane: "local_crawler"` only when you explicitly need the local crawler path.
 
-The raw crawl4ai endpoint below is backend detail and fallback only.
-
-## Service Location
-Base URL: `http://purrsephone.local.internal:11235/`
+The raw crawl4ai endpoint is deployment-specific backend detail. Never guess or
+hard-code an internal hostname; the operator must supply it through the
+gateway's private deployment configuration.
 
 ## Methods
 
@@ -48,7 +47,8 @@ Content-Type: application/json
 ## Usage
 When asked to read a URL or fetch web content:
 1. Prefer the top-level `web_fetch` tool
-2. Only fall back to the raw crawl4ai endpoint if the tool path is unavailable
+2. Only fall back to a raw crawl4ai endpoint when the operator has explicitly
+   supplied one for this deployment
 3. Return the fetched content to the user
 
 ## Notes

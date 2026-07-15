@@ -281,8 +281,8 @@ describe('intention runtime port hooks', () => {
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-1',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
-
     expect(concernStore.create).toHaveBeenCalledWith({
       text: 'Follow up on medication: Ping tomorrow morning',
       priority: 'high',
@@ -290,6 +290,7 @@ describe('intention runtime port hooks', () => {
       status: 'active',
       contactId: 'contact-a',
       evidenceRefs: [{ kind: 'message', ref: 'msg-1' }],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     await expect(hooks.onIntentionConcernDecision({
       decision: {
@@ -325,6 +326,7 @@ describe('intention runtime port hooks', () => {
       channelType: 'api',
       canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-follow-up',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     expect(followUpId).toBe('created-follow-up');
@@ -340,6 +342,7 @@ describe('intention runtime port hooks', () => {
       sourceMessageId: 'msg-follow-up',
       contextSummary: 'Medication follow-up context.',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     await expect(hooks.onIntentionFollowUpActivated({
       pendingFollowUpId: followUpId!,

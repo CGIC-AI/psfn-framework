@@ -5,9 +5,6 @@ import type { IntentionRuntimeProviders, IntentionRuntimeWiring } from '../core/
 import { createAgentPersistenceRuntime } from './runtime-factory.js';
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
-  sqliteMemoryStore: { kind: 'sqlite-memory-store' },
-  sqliteEpisodicStore: { kind: 'sqlite-episodic-store' },
-  sqliteReflectionStore: { kind: 'sqlite-reflection-store' },
   postgresMemoryStore: { kind: 'postgres-memory-store' },
   postgresEpisodicStore: { kind: 'postgres-episodic-store' },
   postgresReflectionMirror: { kind: 'postgres-reflection-mirror' },
@@ -17,12 +14,6 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
     pendingFollowUpStore: { kind: 'pending-store' },
     behavioralPatternTracker: { kind: 'behavioral-store' },
   },
-  sqliteCompanionStore: {
-    db: { close: vi.fn() },
-    memoryStore: { kind: 'sqlite-memory-store' },
-    reflectionStore: { kind: 'sqlite-reflection-store' },
-  },
-  createSqliteCompanionStore: vi.fn(() => runtimeFactoryMocks.sqliteCompanionStore),
   createPostgresMemoryStore: vi.fn(async () => runtimeFactoryMocks.postgresMemoryStore),
   createPostgresEpisodicStore: vi.fn(() => runtimeFactoryMocks.postgresEpisodicStore),
   createPostgresContactStore: vi.fn(async () => runtimeFactoryMocks.postgresContactStore),
@@ -40,9 +31,6 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
   ensurePostgresSchema: vi.fn(async () => undefined),
-  createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
-    return runtimeFactoryMocks.sqliteEpisodicStore;
-  }),
   createReflectionMetacognitionJournalStore: vi.fn(function ReflectionMetacognitionJournalStore(path: string, options: unknown) {
     return {
       kind: 'reflection-metacognition-journal-store',
@@ -52,17 +40,12 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock('./sqlite-companion-store.js', () => ({
-  createSqliteCompanionStore: runtimeFactoryMocks.createSqliteCompanionStore,
-}));
-
 vi.mock('../faculties/memory/postgres-store.js', () => ({
   createPostgresMemoryStore: runtimeFactoryMocks.createPostgresMemoryStore,
 }));
 
 vi.mock('../faculties/memory/episodic/index.js', () => ({
   createPostgresEpisodicStore: runtimeFactoryMocks.createPostgresEpisodicStore,
-  EpisodicStore: runtimeFactoryMocks.createSqliteEpisodicStore,
 }));
 
 vi.mock('../core/contacts/postgres-adapter.js', () => ({
@@ -114,7 +97,6 @@ vi.mock('./postgres.js', () => ({
 }));
 
 beforeEach(() => {
-  runtimeFactoryMocks.createSqliteCompanionStore.mockClear();
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
   runtimeFactoryMocks.createPostgresEpisodicStore.mockClear();
   runtimeFactoryMocks.createPostgresContactStore.mockClear();
@@ -122,7 +104,6 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresReflectionMirror.mockClear();
   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
   runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
-  runtimeFactoryMocks.createSqliteEpisodicStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
@@ -148,7 +129,6 @@ describe('createAgentPersistenceRuntime', () => {
       },
       embeddingDims: 1024,
     })).rejects.toThrow('requires config.persistenceBackend=postgres');
-    expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresEpisodicStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).not.toHaveBeenCalled();
@@ -193,8 +173,9 @@ describe('createAgentPersistenceRuntime', () => {
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
+      introspectionLandmarkStore: expect.any(Object),
+      weightedThoughtStore: undefined,
     });
-    expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       1536,
@@ -239,7 +220,7 @@ describe('createAgentPersistenceRuntime', () => {
     // pool anywhere was schema-pinned rather than "no pool at all".
     expect(runtimeFactoryMocks.ensurePostgresSchemaExists).not.toHaveBeenCalled();
     for (const call of runtimeFactoryMocks.createPostgresPool.mock.calls) {
-      expect(call[1]).not.toHaveProperty('schema');
+      expect(call[1]?.schema).toBeUndefined();
     }
     // Multi-companion flag off: the shared schema is never touched and no
     // presence store exists.

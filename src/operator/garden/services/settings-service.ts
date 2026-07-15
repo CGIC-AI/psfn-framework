@@ -60,6 +60,8 @@ import type {
   AdminVoiceProviderOption,
   ConfigUpdateResult,
   EffectiveChargeQuotaState,
+  EffectiveIcpAutonomySettingsState,
+  IcpAutonomyChargeOwnerProjection,
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
@@ -288,14 +290,14 @@ export function applyAdminSettingsMutation(options: {
     }
   }
 
-  if (domainSplit.maintenanceIntervalMs !== undefined) {
+  if (domainSplit.salienceDecayIntervalMs !== undefined) {
     try {
       const currentScheduler = configStore.loadScheduler();
       const savedScheduler = configStore.saveScheduler({
         ...currentScheduler,
-        salienceDecayIntervalMs: domainSplit.maintenanceIntervalMs,
+        salienceDecayIntervalMs: domainSplit.salienceDecayIntervalMs,
       });
-      config.maintenanceIntervalMs = savedScheduler.salienceDecayIntervalMs;
+      config.salienceDecayIntervalMs = savedScheduler.salienceDecayIntervalMs;
     } catch (error) {
       return {
         ok: false,
@@ -346,6 +348,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     config: SubstrateConfig;
     configStore: ConfigStorePort;
     getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
+    effectiveSchedulerConfig?: import('../../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
   }) {}
 
   private updateDivergences(
@@ -406,7 +409,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       configured ? '[set]' : '[not set]';
     return {
       salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
-      maintenanceIntervalMs: this.deps.config.maintenanceIntervalMs,
+      salienceDecayIntervalMs: this.deps.config.salienceDecayIntervalMs,
       discordToken: marker(presence.discordToken),
       apiKey: marker(presence.apiKey),
       adminToken: marker(presence.adminToken),
@@ -824,6 +827,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
+      effectiveIcpAutonomy: this.buildEffectiveIcpAutonomyState(editors),
       workspaceLayout: {
         mode: this.deps.config.multiCompanion === true ? 'fleet' : 'single',
         personalWorkspacePath: this.deps.config.workspacePath?.trim() || null,
@@ -853,6 +857,39 @@ export class AdminSettingsDataService implements AdminSettingsService {
       effectiveChargeQuotaByLane,
       onDiskChargeQuotaByLane,
       restartRequired,
+    };
+  }
+
+  private buildEffectiveIcpAutonomyState(
+    onDisk: Pick<SettingsConfigEditors, 'scheduler' | 'chargePolicy'>,
+  ): EffectiveIcpAutonomySettingsState {
+    const projectCharge = (policy: ChargePolicyConfig): IcpAutonomyChargeOwnerProjection => ({
+      companionSocialQuota: policy.runChargeQuotaByLane.companion_social,
+      companionSocialContinuationCost: policy.surfaceCosts.companionSocialContinuation,
+      fatigue: structuredClone(policy.fatigue),
+      costBreaker: structuredClone(policy.icpCostBreaker),
+    });
+    const effectiveScheduler = this.deps.effectiveSchedulerConfig?.icpAutonomy ?? null;
+    const onDiskScheduler = onDisk.scheduler.icpAutonomy;
+    const effectiveCharge = this.deps.config.chargePolicy
+      ? projectCharge(this.deps.config.chargePolicy)
+      : null;
+    const onDiskCharge = projectCharge(onDisk.chargePolicy);
+    return {
+      scheduler: {
+        ownerFile: 'scheduler.json',
+        effectiveValue: effectiveScheduler,
+        onDiskValue: onDiskScheduler,
+        restartRequired: effectiveScheduler !== null
+          && JSON.stringify(effectiveScheduler) !== JSON.stringify(onDiskScheduler),
+      },
+      chargePolicy: {
+        ownerFile: 'charge-policy.json',
+        effectiveValue: effectiveCharge,
+        onDiskValue: onDiskCharge,
+        restartRequired: effectiveCharge !== null
+          && JSON.stringify(effectiveCharge) !== JSON.stringify(onDiskCharge),
+      },
     };
   }
 
@@ -1085,7 +1122,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         }
         case 'scheduler': {
           const saved = this.deps.configStore.saveScheduler(parsed);
-          this.deps.config.maintenanceIntervalMs = saved.salienceDecayIntervalMs;
+          this.deps.config.salienceDecayIntervalMs = saved.salienceDecayIntervalMs;
           return { ok: true, message: 'scheduler.json saved' };
         }
         case 'capabilities': {
@@ -1102,8 +1139,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
             : { ok: false, message: result.message };
         }
         case 'charge-policy': {
-          const saved = this.deps.configStore.saveChargePolicy(parsed);
-          this.deps.config.chargePolicy = saved;
+          this.deps.configStore.saveChargePolicy(parsed);
           return { ok: true, message: 'charge-policy.json saved' };
         }
         case 'backup': {

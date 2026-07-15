@@ -305,14 +305,14 @@ describe('MemoryRetriever trust-gated filtering', () => {
   it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
     const current = makeMemory({
       id: 'workspace-current',
-      text: 'Current workspace is /home/ada/new.',
+      text: 'Current workspace is /home/user/new.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.96,
     });
     const previous = makeMemory({
       id: 'workspace-old',
-      text: 'Current workspace is /home/ada/old.',
+      text: 'Current workspace is /home/user/old.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.2,
@@ -337,21 +337,21 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('what changed in the workspace history?', 'api:test', 'primary');
 
-    expect(result).toContain('Current workspace is /home/ada/new.');
-    expect(result).toContain('Supersedes [semantic] Current workspace is /home/ada/old.');
+    expect(result).toContain('Current workspace is /home/user/new.');
+    expect(result).toContain('Supersedes [semantic] Current workspace is /home/user/old.');
   });
 
   it('does not expand evolution chains for non-useful retrieval prompts', async () => {
     const current = makeMemory({
       id: 'workspace-current',
-      text: 'Current workspace is /home/ada/new.',
+      text: 'Current workspace is /home/user/new.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.96,
     });
     const previous = makeMemory({
       id: 'workspace-old',
-      text: 'Current workspace is /home/ada/old.',
+      text: 'Current workspace is /home/user/old.',
       tags: ['current_state', 'workspace'],
       sensitivity: 'public',
       similarity: 0.2,
@@ -372,8 +372,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     const result = await retriever.retrieve('workspace status', 'api:test', 'primary');
 
-    expect(result).toContain('Current workspace is /home/ada/new.');
-    expect(result).not.toContain('Current workspace is /home/ada/old.');
+    expect(result).toContain('Current workspace is /home/user/new.');
+    expect(result).not.toContain('Current workspace is /home/user/old.');
     expect(store.getEvolutionLinksForSourceMemory).not.toHaveBeenCalled();
   });
 
@@ -1168,8 +1168,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.94,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
-        lastAccessed: now - 90 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 14 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 14 * 24 * 60 * 60 * 1000,
         accessCount: 1,
       }),
       makeMemory({
@@ -1178,7 +1178,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.88,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 14 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 2 * 60 * 60 * 1000,
         accessCount: 14,
       }),
@@ -1203,8 +1203,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.92,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
-        lastAccessed: now - 80 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 21 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 14 * 24 * 60 * 60 * 1000,
         accessCount: 6,
       }),
       makeMemory({
@@ -1213,7 +1213,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.9,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 21 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 60 * 60 * 1000,
         accessCount: 6,
       }),
@@ -1757,13 +1757,14 @@ describe('MemoryRetriever basic behavior', () => {
         text: 'I declined helping bypass paywalls and cracking paid subscriptions.',
         type: 'boundary',
         importance: 0.98,
-        salience: 0.95,
+        salience: 0.475,
         extractedAt: now - 120 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 120 * 24 * 60 * 60 * 1000,
+        salienceDecayAnchorAt: now,
         sourceRef: 'api:session-1|operation:extract',
         tags: ['boundary', 'refusal', 'paywall', 'bypass'],
         sensitivity: 'public',
-        similarity: 0.62,
+        similarity: 0.95,
       }),
       makeMemory({
         id: 'session1-semantic',

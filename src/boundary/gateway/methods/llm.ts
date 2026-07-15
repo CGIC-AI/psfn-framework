@@ -14,6 +14,7 @@ import type {
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import type {
+  ContextMessage,
   CorrelationMetadata,
   CompletionPurpose,
   LLMModelHint,
@@ -29,10 +30,15 @@ import {
   applyGatewayCapturedProviderCost,
   withGatewayLLMCostCapture,
 } from '../llm-cost-capture.js';
+import {
+  GatewayInlineImageRetentionMissError,
+  resolveGatewayInlineImageReferences,
+} from '../inline-image-retention.js';
 import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accounting-context.js';
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
@@ -46,14 +52,40 @@ async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T
         error.event,
       );
     }
+    if (error instanceof IcpConversationCostBreakerError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        error.event,
+      );
+    }
     throw error;
   }
+}
+
+async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
+  params: P,
+  runtime: GatewayMethodRuntime,
+): Promise<P> {
+  if (!params.icpCorrelation) return params;
+  if (!runtime.authorizeIcpConversationCorrelation) {
+    throw new JSONRPCErrorException(
+      'ICP conversation cost correlation authorization is unavailable',
+      GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+    );
+  }
+  return {
+    ...params,
+    icpCorrelation: await runtime.authorizeIcpConversationCorrelation(params.icpCorrelation),
+  };
 }
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
+      const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
@@ -77,7 +109,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.stream(
           {
             systemPrompt: params.systemPrompt,
-            messages: params.messages,
+            messages,
             ...(params.tools?.length ? { tools: params.tools } : {}),
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
@@ -131,9 +163,12 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
+      const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
       const modelHint = extractModelHintFromParams(params);
+      const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
         ...params,
         turnId: params.turnId,
@@ -153,9 +188,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.complete(
           {
             systemPrompt: params.systemPrompt,
-            messages: params.messages,
+            messages,
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
+            ...(accounting ? { accounting } : {}),
             correlation,
           },
           params.purpose,
@@ -271,6 +307,27 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
 
 export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
   registerAuditedDescriptors(runtime, llmDescriptors);
+}
+
+function resolveRetainedImageReferences(
+  params: LLMChatParams | LLMCompleteParams,
+  runtime: GatewayMethodRuntime,
+): ContextMessage[] {
+  try {
+    const resolved = resolveGatewayInlineImageReferences(
+      params.messages,
+      runtime.inlineImageRetention,
+      params.turnId,
+    );
+    // The gateway wire admits structured provider blocks while the legacy
+    // LLMContext contract still types `content` as text-only.
+    return resolved as unknown as ContextMessage[];
+  } catch (error) {
+    if (error instanceof GatewayInlineImageRetentionMissError) {
+      throw new JSONRPCErrorException(error.message, GatewayErrors.INLINE_IMAGE_RETENTION_MISS);
+    }
+    throw error;
+  }
 }
 
 function requireModelDiscovery(

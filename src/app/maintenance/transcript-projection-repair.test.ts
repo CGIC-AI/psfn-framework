@@ -55,6 +55,21 @@ class FakePostgresPool {
       } as QueryResult;
     }
 
+    if (normalized.startsWith('select channel_id, count(*) as message_count, max(message_id) as max_message_id')) {
+      const byChannel = new Map<string, number[]>();
+      for (const record of this.records) {
+        const messageIds = byChannel.get(record.channelId) ?? [];
+        messageIds.push(record.messageId);
+        byChannel.set(record.channelId, messageIds);
+      }
+      const rows = [...byChannel.entries()].map(([channelId, messageIds]) => ({
+        channel_id: channelId,
+        message_count: String(messageIds.length),
+        max_message_id: String(Math.max(...messageIds)),
+      }));
+      return { rows, command: 'SELECT', rowCount: rows.length, oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('select channel_id, reason, marked_at from session_projection_drift')) {
       const rows = [...this.drift.entries()].map(([channelId, drift]) => ({
         channel_id: channelId,

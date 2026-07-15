@@ -31,6 +31,7 @@ import {
   getRunChargeSnapshot,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
+import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
@@ -55,10 +56,9 @@ import {
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
-import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
-import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveDriftReviewCardsPath,
+  resolveChargeLedgerPath,
   resolveIntakeQuarantinePath,
   resolveIntrospectionValuesFindingsPath,
   resolveLegacyValuesJournalPath,
@@ -78,6 +78,7 @@ import { rehydratePersistedInternalState } from '../../core/self-model/internal-
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
@@ -87,6 +88,8 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
+import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import {
   bootstrapAgentCoreRuntime,
@@ -355,35 +358,13 @@ async function main(): Promise<void> {
     toolConformanceRunner,
   } = coreRuntime;
 
-  // Wire cross-companion presence into the turn path (same late-wiring pattern
-  // as memory/contacts providers). Null flag-off: turns are byte-identical.
-  agentLoop.companionPresence = companionPresenceRuntime;
-
-  // Co-location → room-entry note (W6): an observed arrival appends the W5
-  // system-only entry note to the place's companion-room channel session.
-  // Context only, never a triggered turn (no auto-greeting loops); flag-off
-  // the event never fires and nothing is registered.
-  if (companionPresenceRuntime) {
-    registerCompanionRoomEntryNotes({
-      eventBus,
-      sink: sessionManager,
-      placesRegistry: placesRegistryConfig,
-      coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
-    });
-    log.info('Companion room-entry notes wired to co-location events');
-
-    // Presence-windowed private-room delivery (psfn-framework-s10rm): the
-    // session layer serves a private companion-room channel only from this
-    // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
-    // never sees pre-join content in context. Public places and every other
-    // channel resolve unwindowed (byte-identical). Flag-off, the port is
-    // never set and the session layer is untouched.
-    sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
-      placesRegistry: placesRegistryConfig,
-      presence: companionPresenceRuntime,
-    }));
-    log.info('Presence-windowed room content gate wired to session manager');
-  }
+  wireCompanionPresenceContext({
+    agentLoop,
+    presenceRuntime: companionPresenceRuntime,
+    eventBus,
+    sessionManager,
+    placesRegistry: placesRegistryConfig,
+  });
 
   // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
   // Screens tool outputs at session-entry recording time so persisted context
@@ -479,6 +460,29 @@ async function main(): Promise<void> {
     socialGraphProposalStore,
     socialGraphWatermarkStore,
   });
+  const {
+    runtimeEnablement: icpRuntimeEnablement,
+    sourceRuntime: icpInitiationSourceRuntime,
+    weightedThoughtCandidateAdapter: icpWeightedThoughtCandidateAdapter,
+    intentionCandidateAdapter: icpIntentionCandidateAdapter,
+    unregisterCoLocationThoughtAdapter: unregisterIcpCoLocationThoughtAdapter,
+  } = wireIcpInitiationSources({
+    config: schedulerConfig.icpAutonomy,
+    localCompanionId: config.companionId,
+    candidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    peers: coreRuntime.icpAutonomyRuntime,
+    gateway,
+    isExternalCompanionAuthorized: () => capabilityRuntime.has('external.companion'),
+    llmProvider,
+    eventBus,
+    pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+    concernStore: intentionRuntime.concernStore,
+    presenceEnabled: companionPresenceRuntime !== null,
+    contactStore,
+    weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
+    lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+  });
+
   const introspectionAuditConfig = schedulerConfig.introspectionAudit
     ?? DEFAULT_INTROSPECTION_AUDIT_CONFIG;
   const introspectionAuditRuntime = new IntrospectionAuditRuntime({
@@ -763,6 +767,17 @@ async function main(): Promise<void> {
     channelsConfig.discord,
     resolveCoreCompanionIdFromConfig(config),
   );
+  // Hydrate and subscribe before any gateway callback can execute. Prompt and
+  // quota decisions must see the canonical rolling 24-hour balance even when
+  // the optional Garden transport is disabled.
+  const chargeLedger = new RunChargeLedger(
+    resolveChargeLedgerPath(pathSnapshot.companionDataDir),
+    eventBus,
+  );
+  agentLoop.setDurableChargeRecorder(
+    event => chargeLedger.commitChargeEvent(event).outcome,
+    event => chargeLedger.probeChargeEvent(event),
+  );
 
   const apiBackend = new AgentApiBackend({
     agentLoop,
@@ -813,7 +828,11 @@ async function main(): Promise<void> {
     channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,
+    chargeLedger,
     scheduler,
+    schedulerConfig,
+    icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
+    icpRuntimeEnablement,
     postTurnActions,
     outreachOutbox,
     episodicStore,
@@ -860,7 +879,10 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => persistenceRuntime.introspectionLandmarkStore.close(),
+    closeDatabase: async () => {
+      await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.introspectionLandmarkStore.close();
+    },
     scheduler,
     moduleLoader,
     memoryExtractor,
@@ -871,7 +893,16 @@ async function main(): Promise<void> {
     capabilityRuntime,
     lifecycleRuntimeContract,
     shutdownTargets,
+    postTurnActions,
+    ...(coreRuntime.icpAutonomyRuntime
+      ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
+      : {}),
+    ...(icpInitiationSourceRuntime ? { icpInitiationSourceRuntime } : {}),
   });
+  // Control-plane tools are registered after module loading. Validate them
+  // before restored durable actions can execute so a wiring-disabled notify
+  // surface is absent from the current registration-policy check.
+  agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
   const { lifecycleNotifier } = controlPlane;
   let apiBackendDisposed = false;
   const disposeApiBackend = () => {
@@ -881,6 +912,7 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     detachCompanionEventForwarder();
+    unregisterIcpCoLocationThoughtAdapter();
     detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
@@ -892,6 +924,11 @@ async function main(): Promise<void> {
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;
+  shutdownTargets.chargeLedger = chargeLedger;
+  if (coreRuntime.fatigueRegulationReservations) {
+    shutdownTargets.fatigueRegulationReservations =
+      coreRuntime.fatigueRegulationReservations;
+  }
   shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
@@ -1078,6 +1115,9 @@ async function main(): Promise<void> {
         llmProvider,
         characterName: card.data.name,
       }),
+      ...(icpWeightedThoughtCandidateAdapter
+        ? { icpCandidateAdapter: icpWeightedThoughtCandidateAdapter }
+        : {}),
       channelPolicy: {
         ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
         primaryChannelType: 'discord',
@@ -1207,8 +1247,10 @@ async function main(): Promise<void> {
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
+      onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      ...(icpIntentionCandidateAdapter ? { icpIntentionCandidateAdapter } : {}),
       scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,
       episodicSynthesizer,
@@ -1245,7 +1287,7 @@ async function main(): Promise<void> {
 
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
-  registerGatewayMessageHandlers({
+  const registeredGatewayMessageHandlers = registerGatewayMessageHandlers({
     gateway,
     agentLoop,
     shardManager,
@@ -1258,7 +1300,19 @@ async function main(): Promise<void> {
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });
+  const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
+    registeredGatewayMessageHandlers.icpTargetChannelInitiator,
+  );
+  const stopRegisteredRuntime = stopFn;
+  stopFn = async () => {
+    unregisterIcpTargetChannelInitiationCommand();
+    await stopRegisteredRuntime();
+  };
 
+  // Start only after every restored post-turn action kind has a handler and
+  // the target-channel command is registered. Otherwise the first scheduler
+  // tick can terminally discard a due durable action as `missing_handler`.
+  scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
 

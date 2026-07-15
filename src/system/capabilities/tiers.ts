@@ -48,6 +48,7 @@ const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
   'external.discord',
   'external.email',
   'external.web',
+  'external.companion',
   'git.read',
   'git.write',
   'issue.read',

@@ -144,7 +144,9 @@ function resolveContactRequirement(
       parameterNames.length === 0
       || (parameterNames.length === 1 && typeof params.contactId === 'string')
     );
-  if (legacyLookupShape || action === 'list' || action === 'lookup') return 'identity.read';
+  if (legacyLookupShape || action === 'list' || action === 'search' || action === 'lookup') {
+    return 'identity.read';
+  }
   if (actionIn(action, CONTACT_WRITE_ACTIONS)) return 'identity.write.runtime';
   return IDENTITY_READ_RUNTIME_WRITE;
 }
@@ -250,7 +252,12 @@ function resolveNotifyRequirement(
   if (action === 'brief' || action === 'notify_operator' || action === 'approval_request') {
     return 'external.web';
   }
+  if (action === 'consider' && params.target_kind === 'companion') {
+    return 'external.companion';
+  }
   if (action !== 'send') return NOTIFY_REQUIREMENTS;
+
+  if (params.target_kind === 'companion') return 'external.companion';
 
   const channel = typeof params.delivery_channel === 'string'
     ? params.delivery_channel.trim()
@@ -258,6 +265,22 @@ function resolveNotifyRequirement(
   if (channel === 'discord') return 'external.discord';
   if (channel === 'email') return 'external.email';
   return ['external.discord', 'external.email'];
+}
+
+const SELF_STATUS_READ_ACTIONS = new Set([
+  'snapshot',
+  'diagnose',
+  'logs',
+  'conformance',
+  'availability_read',
+  'availability_list_peers',
+]);
+const SELF_STATUS_WRITE_ACTIONS = new Set(['availability_publish', 'availability_clear']);
+
+function resolveSelfStatusRequirement(action: string | null): CapabilityRequirement {
+  if (action === null || actionIn(action, SELF_STATUS_READ_ACTIONS)) return 'internal.read';
+  if (actionIn(action, SELF_STATUS_WRITE_ACTIONS)) return 'external.companion';
+  return ['internal.read', 'external.companion'];
 }
 
 const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, UnifiedToolRequirementResolver>>> = {
@@ -281,6 +304,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   beads: (action) => resolveBeadsRequirement(action),
   world: (action) => resolveWorldRequirement(action),
   notify: resolveNotifyRequirement,
+  self_status: (action) => resolveSelfStatusRequirement(action),
   journal: (action) => resolveJournalRequirement(action),
 };
 
@@ -307,7 +331,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_close: 'issue.close',
   issue_sync: 'issue.close',
   settings_get: 'internal.read',
-  self_status: 'internal.read',
   response_control: 'identity.read',
   analysis_workbench: 'repl.execute',
   web: NO_CAPABILITY_REQUIREMENT,

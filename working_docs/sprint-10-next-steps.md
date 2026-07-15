@@ -1,8 +1,143 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13, the accounting completion status added as §0.6 on 2026-07-14, and the introspection-landmarks feature-branch completion added as §0.7 on 2026-07-13; **room-mechanics feature branch completed 2026-07-13** on `feat/room-mechanics` @ `a410a342` (review-approved). Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app, CompanionId, workspace/restore, room-mechanics, accounting, introspection-landmarks, Garden WAN-performance, ICP-autonomy, fleet-efficiency, and public-release-hardening feature status refreshed through 2026-07-15. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
+
+## Feature branch status — 2026-07-14
+
+- `feat/public-release-hardening`: `psfn-framework-upx0.3` is closed at implementation tip `fd817576` (`60fddadd` implementation plus `fd817576` review remediation). The final integrated gate passed 20 focused offline tests, `verify:public-sanitize`, Helm verification, four shell syntax checks, lint, proportional systemd parsing, and exact tracked-fingerprint greps. The branch is pushed but intentionally unmerged; parent epic `psfn-framework-upx0` remains open.
+- Report-only, non-blocking observations: the pre-existing repository-hygiene identity-allowlist backlog remains outside this bead; the completed review also noted lesser CIDR-pattern coverage and private config-locality considerations. These did not affect the core public-sanitization acceptance criteria and were not escalated into another review loop.
+
+## 2026-07-14 feature status — `feat/fleet-efficiency`
+
+- `psfn-framework-2z12.2` is closed at `0b741e01` (implementation `af9f4a33`,
+  bounded remediation `0b741e01`). Clean session appends now use a cached archive
+  fingerprint instead of rescanning the full journal; stale/unknown fingerprints
+  still take the lock-scoped full reconciliation path.
+- The remediation preserves exactly-once HMAC append semantics after a transient
+  post-commit fingerprint fault, invalidates the cache for the next write, and
+  keeps a missing archive fail-closed.
+- Final integrated gate: focused session suites 79/79, lint, ESM+DTS build, and
+  diff check all passed. The branch is pushed for backup and remains unmerged;
+  parent epic `psfn-framework-2z12` remains open for its other children.
+- `psfn-framework-2z12.5` is closed at `5dbc011b` (implementation `0dd8e7c6`,
+  bounded review remediation `5dbc011b`). PostgreSQL transcript projection boot
+  now retains aggregate count/max metadata per channel instead of every message
+  ID, and clean writes skip the no-op drift-row delete while tracked drift still
+  clears normally.
+- The independent review found queued insert/delete reconciliation could overwrite
+  newer replacement metadata. Per-channel epochs now discard superseded
+  reconciliation, with insert-gap-before-replace and missing-delete-before-replace
+  regressions proving cached counts match persisted replacement IDs.
+- Final integrated gate for `2z12.5`: projection/repair 15/15, store/journal
+  79/79, lint, ESM+DTS build, and worktree plus branch-range diff checks passed.
+- Material report-only observations: none.
+- `psfn-framework-2z12.8` is closed on integration merge `816253b7`
+  (memory implementation `f4d8f8f9`, guideline implementation `a86da443`,
+  bounded review remediation `8ae54b72`). Unchanged PostgreSQL decay cycles
+  now skip store/DB scans until the next meaningful exponential-curve threshold,
+  while memory mutations wake the loop; unchanged guideline cycles skip both
+  file reads and model calls until a new failure is appended.
+- The single independent review found that reconstructing decay state could
+  double-apply the already-persisted interval after restart. The bounded
+  remediation preserves a restart decay epoch and pins both no-discontinuity
+  and next-day exponential continuation. Generic/non-signaling eager behavior,
+  half-lives, and guideline semantics remain unchanged.
+- Final integrated gate for `2z12.8`: memory/guideline/restart 51/51 plus merged
+  projection/repair 15/15, lint, ESM+DTS build, and worktree plus branch-range
+  diff checks passed. The known full-suite dependency on the untracked
+  `<companion>/satellites.json` owner file remains report-only; no rerun was
+  needed for this bounded closeout.
+- `psfn-framework-2z12.7` is closed on integration merge `05ec2557`
+  (implementations `d311f9e0`, `a8561fe7`, `5d73270b`, and `ad0c37cc`; bounded
+  review remediation `75dc46aa`). Successfully screened inline images are now
+  retained behind opaque connection-local handles so the main-model call crosses
+  the gateway transport once on a retention hit. Screening/main behavior is
+  unchanged; retention is connection-, companion-, and turn-scoped with a 60s
+  TTL, entry/byte caps, disconnect/stop cleanup, exact-byte one-shot resend on a
+  miss, an unchanged URL-image path, and exact serialized transport counters.
+- The single independent review found two important issues: idle connections did
+  not physically prune expired partner bytes, and the gateway wire union omitted
+  `gateway_image_ref`. The bounded remediation added proactive unref'd expiry and
+  shutdown cleanup with regression coverage, and made the wire contract explicit.
+- Final integrated gate for `2z12.7`: image/privacy/transport 192/192 plus merged
+  gateway/server regressions 53/53, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. Material remaining image observations: none.
+- `psfn-framework-2z12.6` is closed on integration head `96c5ef34`
+  (active-refresh implementation `c30b3afe`, shared-query-embedding implementation
+  `0a6114c7`, bounded review remediation `96c5ef34`). Unchanged active-memory
+  refreshes now reuse the byte-identical snapshot without a new embed, vector
+  scan, or compositional rerank, and each turn can share one provenance-checked
+  query embedding between memory and wiki retrieval.
+- The single independent review found that cache identity omitted mutable
+  disclosure/room-visibility inputs and that a PostgreSQL rollback could rewind
+  the retrieval generation. The bounded remediation fingerprints the normalized
+  access-policy snapshot, disables reuse when that snapshot is unsafe, clears
+  retained context after access withdrawal, and keeps rollback generations
+  monotonic while preventing uncommitted retrieval snapshots. Evidence lives in
+  `src/faculties/memory/retrieval.ts`, `src/faculties/memory/postgres-store.ts`,
+  `src/shared/retrieval-query-embedding.ts`, and their focused regressions.
+- Final integrated gate for `2z12.6`: retrieval/cache/wiki/PostgreSQL 76/76,
+  memory-port/trust-policy support 87/87, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. The parent epic `psfn-framework-2z12` remains
+  open for its other children.
+- `psfn-framework-2z12.10` is closed on integration merge `65c79e38`
+  (implementation `4c70daac`, bounded review remediation `4acbd9b1`). Salience
+  decay now runs on its own scheduler-owned `salienceDecayIntervalMs` key
+  defaulting to hourly (previously a 60s-seeded key aliased with
+  `maintenanceIntervalMs`), the compaction-guideline review rides the gated
+  heartbeat lane instead of the decay key, and retrieval computes decay lazily
+  so scoring is cadence-independent. Seed, runtime-config contract, owner-file
+  settings contract, Garden admin UI, and docs moved in the same change.
+- Both independent adversarial reviews (Opus and Pi, blind to each other)
+  converged on one verified blocker: retrieval re-applied exponential decay on
+  top of sweep-persisted already-decayed salience (squared decay; a one-half-life
+  memory scored 0.25 instead of 0.5). The bounded remediation adds a dedicated
+  `salience_decay_anchor_at` column persisted atomically with swept salience in
+  both stores (legacy rows backfill from `last_accessed`), makes retrieval decay
+  only the residual since the anchor, routes duplicate reinforcement through
+  effective salience, and pins the gap with sweep-then-retrieve and 120-day
+  aged-memory regressions that the original tests could not see.
+- Final integrated gate for `2z12.10`: memory/scheduler/config/settings
+  focused suites 378/378, real-PostgreSQL store integration 6/6 (new anchor
+  column exercised against a live database), lint, and ESM+DTS build passed on
+  the integrated branch.
+- `psfn-framework-2z12.3` is closed on integration merge `215d028b`
+  (implementation `4d8807e1`). Idle keepalive now uses authenticated
+  transport heartbeats instead of an audited `discord.typing` RPC; real typing
+  remains audited and missing acknowledgements still close the connection.
+  Its single two-axis review passed without findings. Worker evidence was 178
+  targeted tests plus lint/build; the combined final gate below supersedes it.
+- `psfn-framework-2z12.9` is closed on integration merge `94234eab`
+  (implementation `642fcbd4`, single remediation `39a36a16`). The narrowed
+  six-item sweep landed recoverable directory caching, coherent archive
+  fingerprints, exact token-count reuse, chain-index boot fingerprints,
+  disk-load-only settings logging, and strict binary voice audio frames.
+  Sampling extraction was explicitly rejected because this branch has no
+  owner/config authority for that decision. The one important review finding
+  was a derived-index channel-id isolation hole; canonical journal identity is
+  now authoritative. Lesser fingerprint/test/voice-order observations remain
+  report-only.
+- `psfn-framework-2z12.4` is closed on merge `7ce11bd8` plus integration repair
+  `0985c297` (implementation `0964f4ad`, single remediation `183e375a`). The
+  validated 16 MiB turn-boundary rotation is integrated and general range,
+  compaction-summary, tombstoned recent, and tombstoned turn-record reads are
+  segment/byte bounded while preserving exact redaction. The one review found
+  two valid blockers: unverified leading rows could be treated as empty, and
+  unsigned index tombstone IDs could weaken partner-data redaction. Canonical
+  fallback and journal-authoritative tombstones now fail closed. Legacy
+  Garden/`t5z7.2` scope was explicitly cut from this lane; no Garden branch was
+  merged or resurrected.
+- Final integrated gate at pushed `feat/fleet-efficiency` head `0985c297`:
+  session/journal/repair 182/182, gateway/small-wins 288/288, lint, ESM+DTS
+  build, and diff check passed. The branch is clean and origin-equal.
+- Final tracker classification for the original nine-child wave: **9/9 closed**.
+  Three newer scheduler-census children (`2z12.10`-`.12`) were subsequently
+  attached and are not part of that original-wave ratio; `.10` is also closed.
+  `2z12.1` operational enablement/soak/pricing proof remains separately owned by
+  top-level validation bead `9hyv`. The parent epic remains open only for real
+  newer children/validation, not for the completed original wave.
 
 ## 2026-07-14 feature status — `feat/garden-wan-performance`
 
@@ -261,9 +396,10 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 
 ### 0.3 Corrections to the 2026-07-08 text below
 
-- §2c "W6 not started / last unbuilt workstream" is superseded: `s10mc.6` is
-  now a nine-child epic with a full implementation plan
-  ([`s10-icp-autonomy.md`](./s10-icp-autonomy.md)) and wired dependencies.
+- The earlier §2c status is superseded: `s10mc.6` is now a completed
+  nine-child epic, with the implementation and
+  certification trail recorded in
+  [`s10-icp-autonomy.md`](./s10-icp-autonomy.md) and the tracker.
 - The presence/locations branches (`mc/w5a-companion-presence`,
   `mc/vinz29-dual-presence`, `mc/vinz2021-presence-follow`) are **merged to
   main** — the locations threshold `s10mc` sequenced behind is met.
@@ -288,6 +424,107 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
   location rooms deliver only within the witnessed presence window.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
+
+### ICP implementation-wave status (2026-07-14)
+
+The first four ICP workstreams are complete on the isolated
+`feat/icp-autonomy` feature branch through `f864831a`: W1 contracts and durable
+state (`s10mc.6.1`), W2 availability and the permit broker (`s10mc.6.2`), W3
+target-channel initiation continuity (`s10mc.6.3`), and W4 semantic
+contact/availability/notify tooling (`s10mc.6.4`). Each closed workstream was
+validated locally and independently reviewed; the W4 fixed point passed 713
+test files / 8,217 tests, build, lint, settings-contract, repository-hygiene,
+and two independent reviews with no findings.
+
+W6 fatigue and social-charge regulation (`s10mc.6.6`) is implemented at
+`484072be` and hardened through `faae4fe5`. It extends the existing per-companion fatigue engine with decaying
+relationship pressure, causal-root anti-reset across DMs/rooms/episodes,
+progressive prompt-visible regulation, a real `companion_social` charge lane,
+bounded closeout reserve, and zero-model suppression. A shared Postgres
+reservation fence serializes the last charged/closeout slot across processes
+and restarts while preserving each companion's directional choice; decline,
+defer, and unanswered pressure decay continuously rather than resetting on a
+calendar day. Review remediation replaced wall-clock pending-turn reclamation
+with bounded Postgres session leases, added a durable `delivering` fence and
+restart-safe recovery, rebased runtime decisions on the authoritative locked
+snapshot before prompt assembly, and unified social surface cost with its
+marginal charge. Final remediation also validates every observation-only
+restart field before model, gateway, permit, or journal side effects and runs
+validated private candidates through a production, capability-gated `notify`
+scope that exists only for that candidate turn. Its end-to-end proof starts at
+the dispatcher registered by `buildAgentControlPlane`, uses the real adaptive
+tool runtime and scheduled tool loop, persists the deferred action, rechecks
+live policy, and reaches the target-channel command without forced test tool
+state or constant authorization. The `faae4fe5` fixed point passed build/DTS,
+lint, settings-contract, repository-hygiene, Fallow, all seven Postgres
+reservation integration tests, and the full suite (8,319 passed, 3 skipped).
+Subsequent hardening (`d47d4057..72238bc8`) added candidate notify scope/turn
+isolation, exclusive candidate-run reservation, and idle queue-ingress
+ownership. Both required fresh independent reviews **passed** on the unchanged
+code fixed point `72238bc8` (2026-07-13/14; see
+`working_docs/w6-review-1-record.md` and `w6-review-2-record.md`). The
+follow-up beads are resolved (2026-07-14): the full-suite `ENOENT
+*.jsonl.write-lock` teardown failure (`psfn-framework-k510`) was root-caused to
+detached subagent follow-up turns escaping `wait()`/`execute()` completion
+tracking and fixed by draining outstanding turns before terminal (`a0b25eac`,
+merged `1100b786`); the whisper-flush liveness gap (`psfn-framework-srr2`,
+`986a55d3`) and queue-ingress hardening with dedicated primitive unit tests
+(`psfn-framework-7eke`, `8d56ec5b`) landed with 13 new unit tests. The merged
+tree passed two consecutive full normal-mode suites (722 files / 8,357 passed /
+3 skipped, exit 0), lint, and build — the branch's first clean full-suite
+exits. `.6.6` is closed.
+
+W5 initiation sources (`s10mc.6.5`) is integrated with W6 at `2599c2f5` and
+pushed to `origin/feat/icp-autonomy`. Final merged-seam validation at that hash
+passed 32 focused test files / 609 tests, including the real Postgres autonomy,
+fatigue-reservation, schema-tenancy, intention-lifecycle, and retry-lifecycle
+integration suites; `npm run lint` and `npm run build` also passed. `.6.5` is
+closed. Two timing edges from the final W5 review remain report-only
+observations under the corrected severity standard, with no follow-up beads:
+`retryEligibleAtMs` is derived before awaited durable transition/lifecycle work,
+so a slow transition can shorten the effective cooldown; and expiry is not
+rechecked after slow deferred-to-pending or pending-to-permitted transitions.
+
+W7 conversation-scoped USD warning and runaway enforcement (`s10mc.6.7`) is
+complete at integrated head `8e219b7c`. The implementation fixed point
+`e65cec03` was independently reviewed; `3d05e68c` remediated descendant cost
+correlation and `8e219b7c` added conservative prompt-cache preflight. Final
+closeout passed 20 focused files / 466 tests, including 19 real-Postgres tests,
+plus settings-contract, lint, ESM+DTS build, and diff checks. Remaining review
+observations retain report-only disposition under the agreed severity standard;
+they did not affect acceptance and created no follow-up beads.
+
+W8 strict owner configuration, Garden controls, and explainable observability
+(`s10mc.6.8`) is complete at integrated head `79e8e80c`. The implementation
+line adds strict scheduler and charge-policy ownership, effective/on-disk and
+restart-required reporting, bounded redacted projections, audited local
+cancel/DND/emergency controls, safe permit invalidation, and the Garden
+Autonomy page. Its one independent review found an IMPORTANT tenant/privacy
+issue; `79e8e80c` remediates it by binding every projection to the local
+companion and excluding unrelated peer-to-peer candidates, lifecycle rows,
+costs, provenance, reasons, failures, and derived quiet/failure counts. The
+integrated closeout passed 9 focused files / 86 tests, the 2 Garden autonomy
+view tests, settings-contract, mandatory lint, root ESM+DTS build, Garden
+production build, and diff checks. The inherited repository-hygiene fixture
+finding (`psfn-framework-ecr5`) and Garden type-check diagnostics
+(`psfn-framework-qz9e`) remain separately tracked; the optional canonical-policy
+fallback observation remains report-only. No second review was performed.
+
+W9 (`s10mc.6.9`) and the parent ICP autonomy epic (`s10mc.6`) are closed on
+`feat/icp-autonomy` after final integrated verification at `d8dd6ba4`. The
+certification run passed 10 real-process cases plus 2 fixture cases, covering
+autonomous initiation, deterministic no-LLM gates, private-room windows,
+schema-local extraction and trust, compaction and both-agent restart, causal
+fatigue/reserve suppression, fleet-scoped warning and hard cost stops,
+delivery failure/retry and duplicate collapse, adversarial rollback, and
+feature-off single-companion parity. The proportional combined affected
+surface passed 12 files / 346 tests; settings-contract, mandatory lint,
+ESM+DTS build, backup/restore, and reachability checks also passed. The known
+public-sanitize fixtures tracked by `psfn-framework-ecr5`, six non-core
+identity-literal findings, and one certification EOF whitespace finding were
+operator-classified report-only. All nine direct children are closed with
+evidence. The feature branch is still intentionally unmerged to the release
+branch and has not been exercised against live infrastructure.
 
 ### 0.4 CompanionId dependency completed (2026-07-13)
 
@@ -573,9 +810,9 @@ In order — later steps assume earlier ones are done, except (b) and (a) can ru
 
 **(a) Full-runtime validation, flag off then flag on** — `psfn-framework-s10f8`, **P1, entry gate for everything else**. On a machine with real credentials: boot flag-off and run `smoke:chat` + `e2e` to prove single-companion inertness in an actual process (ideally through the `psfn-live-ops` validation gate); then boot flag-on with a two-entry `companions.json` against a scratch Postgres, two Discord bots in one channel, and confirm routed delivery plus a fatigue-bounded MI↔MI exchange with zero crossover alarms. This also closes the spike bead `psfn-framework-s10mc.8`. Nothing below should be treated as "done" until this runs — every merge to date is test-gated, not runtime-gated.
 
-**(b) Converge the remaining `s10-loc-*` branches** into `feat/multi-companion`. Locations work advanced past the `98e964eb` merge point independently (`s10-loc-emanation`, `s10-loc-enrollment`(-v2), `s10-loc-durable-state`). These touch the same seams multi-companion already extended (`places.json`, satellite binding, situated context) — merge conflicts are expected at the situated-presence and presence-registry layers, not just textual diff noise. Do this before further W5/W6 work lands, or the two lines of development re-diverge.
+**(b) Converge the remaining `s10-loc-*` branches** into `feat/multi-companion`. Locations work advanced past the `98e964eb` merge point independently (`s10-loc-emanation`, `s10-loc-enrollment`(-v2), `s10-loc-durable-state`). These touch the same seams multi-companion already extended (`places.json`, satellite binding, situated context) — merge conflicts are expected at the situated-presence and presence-registry layers, not just textual diff noise. Reconcile these lines before release integration so they do not re-diverge.
 
-**(c) W6 — same-cluster inter-companion channels** (`psfn-framework-s10mc.6`) — the last unbuilt workstream. The building blocks are already in place: `presence.companion.co_located` fires from `companion_presence` (merged @ `ac389e5b`), the `ChannelAdapterPort` abstraction already treats a companion-to-companion channel as "just another channel," and `companion_room`/`quiet_companion_room` fatigue budgets already exist in `charge-policy.seed.json`. What's missing is the wiring: peer-as-contact (`isMachineIntelligence`, operator-assigned trust tier), the IPC one-to-one shape, the ad-hoc many-to-many room shape, and extending `two-companion-loop.test.ts` through the real channel path (not just the engine).
+**(c) ICP autonomy — same-cluster inter-companion channels** (`psfn-framework-s10mc.6`) — **completed on `feat/icp-autonomy` through final integrated verification at `d8dd6ba4`.** All nine children are closed. The production-faithful certification proves the autonomous DM/room pipeline, persistence and restart continuity, privacy/trust isolation, fatigue/charge closure, canonical cost stops, failure recovery, and feature-off parity. Remaining work here is release-branch integration and the explicitly separate live exercise in (a)/(f), not implementation scope inside this epic.
 
 **(d) Flagship cutover off `public` schema + shard schema derivation** (remainder of `psfn-framework-s10mc.2`) — **hard gate: verify a restore round-trip of a real flagship snapshot first.** The cutover helper moves the flagship's live data out of the `public` schema into its own `companion_<uuid>` schema; doing that against production data without first proving restore works is the one step in this plan with irreversible-mistake risk. Restore functions are code-complete on `feat/fleet-workspace-isolation` (§0.5), but that is not the real-data proof: merge the branch, restore a flagship snapshot into a disposable Postgres + destination tree, verify it, then cut over.
 
@@ -613,13 +850,17 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 
 | Bead | One-line status |
 |---|---|
-| `psfn-framework-s10mc` | Epic. Substrate code-complete through `6608579f`; open remainder: flagship cutover, shard schema derivation, per-companion trust/charge/tier owners, W6 |
+| `psfn-framework-s10mc` | Epic. Substrate code-complete through `6608579f`; ICP autonomy child epic `s10mc.6` is closed on its feature branch; open remainder: flagship cutover, shard schema derivation, per-companion trust/charge/tier owners |
 | `psfn-framework-s10mc.1` | W1 gateway multiplexing — code-complete @ `bcca5c20` (+ per-account Discord @ `eda410a4`); remainder split into `s10f1`/`s10f2` |
 | `psfn-framework-s10mc.2` | W2 Postgres tenancy — schema plumbing @ `ee375e39`, backups @ `75abf583`; **open**: flagship cutover off `public`, shard schema derivation |
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | W6 inter-companion communication — **not started**, last unbuilt workstream (§2c) |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — **closed** 2026-07-14: all nine children closed; final integrated certification at `d8dd6ba4` passed 10 real-process + 2 fixture cases, 346 proportional tests, settings-contract, lint, ESM+DTS build, and backup/restore; not yet merged to the release branch or live-tested |
+| `psfn-framework-s10mc.6.5` | W5 initiation sources — **closed** 2026-07-14: integrated with W6 at `2599c2f5`; merged seam passed 32 focused files / 609 tests (including real Postgres integration), lint, and build |
+| `psfn-framework-s10mc.6.6` | W6 fatigue/social regulation — **closed** 2026-07-14: both fresh reviews passed at `72238bc8`, follow-up beads fixed, two clean full-suite exits on the merged tree |
+| `psfn-framework-s10mc.6.9` | W9 two-real-agent certification — **closed** 2026-07-14 at integrated verification point `d8dd6ba4`; 10 real-process + 2 fixture cases and 12 affected files / 346 tests passed; report-only hygiene/whitespace observations recorded in the close reason |
+| `psfn-framework-1lxi` | P1 post-restart recipient turn-record persistence — **closed** 2026-07-14 at `b4ff8709`; exact real-process regression, 362 proportional tests, lint, ESM+DTS build, and diff checks passed |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |
 | `psfn-framework-s10rm` | Room mechanics — feature branch complete and independently approved (`f7d5d55c` + `d9593b22` + `a410a342`); bead closed 2026-07-13 with build/lint and room/DM lifecycle evidence; branch pending operator merge to `main` (§2e) |
@@ -633,7 +874,7 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-c337` | Personal/Shared Workspace isolation + governed publication + seed/migration/preview containment — closed on `feat/fleet-workspace-isolation` @ `70068448`; both restore-security children are closed; final evidence includes 434/434 focused isolation/restore tests, 69/69 hygiene regressions, settings, full repository hygiene, lint, ESM+DTS build, backup verification, and diff checks (§0.5) |
 | `psfn-framework-wprg` | Restore rollback ownership — integrated, independently reviewed, remediated, final-check approved, and closed @ `078f7bfe` (§0.5) |
 | `psfn-framework-5s70` | Restore credential-channel hardening — integrated, independently reviewed, remediated, combined-check approved, and closed through merge `28c7cba4` (§0.5) |
-| `psfn-framework-g44z` | Separate live validation: lossless Personal Workspace migration, cross-Garden isolation proof using the existing Carlini leak corpus, and disposable real-flagship restore rehearsal before cutover; does not block c337 |
+| `psfn-framework-g44z` | Separate live validation: lossless Personal Workspace migration, cross-Garden isolation proof using the existing synthetic leak corpus, and disposable real-flagship restore rehearsal before cutover; does not block c337 |
 | `psfn-framework-s10d7` | Fleet restore functions — verified shipped with c337 and closed; real flagship restore rehearsal is tracked by `psfn-framework-g44z` and still hard-gates cutover (§2d) |
 | `psfn-framework-s10f1` | P2 open: Discord voice has no per-account lane, fails closed under multi-companion |
 | `psfn-framework-s10f2` | P3 open: Telegram multi-account support, mirroring the Discord accounts shape |

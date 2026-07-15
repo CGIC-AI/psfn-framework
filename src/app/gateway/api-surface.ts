@@ -54,7 +54,14 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   config: SubstrateConfig;
   env?: NodeJS.ProcessEnv;
   eligibilityGate: EligibilityGate;
-  gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
+  gateway: Pick<
+    GatewayServer,
+    | 'requestAgent'
+    | 'subscribeApiStream'
+    | 'requestAgentVoiceStream'
+    | 'invalidateIcpAutonomyForCompanion'
+    | 'isIcpAutonomyConfigured'
+  >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
   /**
@@ -162,7 +169,7 @@ function buildSatelliteClaimHeaders(
   const headers: IncomingMessage['headers'] = { ...request.headers };
   // Sprint-10 C1: certificate identity is derived from the TLS socket or an
   // authenticated trusted proxy BEFORE this map is built; caller-supplied
-  // X-PSFN-Client-Cert-* headers (and the proxy token) must never flow into
+  // Client-certificate forwarding headers (and the proxy token) must never flow into
   // claim resolution, and are never accepted via query parameters.
   stripClientCertHeaders(headers);
   const copy = (headerName: string, queryNames: string[], maxLength: number) => {
@@ -381,6 +388,14 @@ export async function startOptionalGatewayApiServer(
       : {},
     ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
     ...(companionRelay ? { companionRelay } : {}),
+    ...(options.gateway.isIcpAutonomyConfigured()
+      ? {
+          icpAutonomyOperator: {
+            cancelForCompanion: async companionId => await options.gateway
+              .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
+          },
+        }
+      : {}),
   });
   await apiServer.start();
   return apiServer;

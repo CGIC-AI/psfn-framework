@@ -2,6 +2,10 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { ResponseMetadata } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  deriveChildIcpConversationCostCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 
 export const CONTEXT_FEEDBACK_SIGNAL_KEYS = [
   'confabulation',
@@ -27,6 +31,7 @@ export interface ContextEvaluationInput {
   assistantResponse: string;
   responseMetadata: Pick<ResponseMetadata, 'model' | 'inputTokens' | 'outputTokens'>;
   userFollowUp?: string;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface ContextEvaluationResult {
@@ -177,6 +182,9 @@ export class ContextEvaluator {
   }
 
   async evaluate(input: ContextEvaluationInput): Promise<ContextEvaluationResult> {
+    const requestId = input.icpCorrelation
+      ? `${input.icpCorrelation.requestId}:context-feedback`
+      : input.turnId;
     const completion = await this.llmProvider.complete({
       systemPrompt: EVALUATOR_SYSTEM_PROMPT,
       messages: [{
@@ -184,13 +192,25 @@ export class ContextEvaluator {
         content: buildEvaluationPrompt(input),
       }],
       correlation: {
-        requestId: input.turnId,
+        requestId,
         turnId: input.turnId,
         channelId: input.channelId,
         callType: 'memory',
         originType: 'memory',
         originStage: 'context.feedback',
         purpose: 'context.feedback',
+        ...(input.icpCorrelation
+          ? {
+              icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                input.icpCorrelation,
+                {
+                  requestId,
+                  costPurpose: 'sidecar',
+                  costOriginStage: 'post_turn',
+                },
+              ),
+            }
+          : {}),
       },
     }, 'memory');
 

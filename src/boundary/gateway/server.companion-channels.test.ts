@@ -12,6 +12,7 @@ import {
 } from './companion-channels.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
+import { EventBus } from '../../shared/event-bus.js';
 
 // ── W6 inter-companion channel lane: gateway routing tests ──
 // The lane is the ONLY path between companions: sends resolve fail-closed
@@ -131,6 +132,7 @@ function createMinimalOptions(): GatewayServerOptions {
     policyConfig: { workspacePath: '/workspace' },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
+    eventBus: new EventBus(),
   };
 }
 

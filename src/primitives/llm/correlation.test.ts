@@ -146,6 +146,71 @@ describe('correlation helpers', () => {
       });
     });
 
+    it('validates and flattens trusted ICP conversation attribution', () => {
+      const icpCorrelation = {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        rootInitiationId: '99999999-9999-4999-8999-999999999999',
+        initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        peerContactId: 'contact-a',
+        channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+        messageId: 'message-1',
+        requestId: 'request-1',
+        chargeLane: 'companion_social' as const,
+        surface: 'companion_dm' as const,
+        costPurpose: 'summary' as const,
+        costOriginStage: 'post_turn' as const,
+        fatigueDecision: 'allow_overcharge' as const,
+      };
+
+      expect(resolveCorrelationMetadata({
+        callType: 'summary',
+        purpose: 'session.compaction.summary',
+        icpCorrelation,
+      }, undefined, 'summary')).toEqual(expect.objectContaining({
+        conversationId: icpCorrelation.conversationId,
+        rootInitiationId: icpCorrelation.rootInitiationId,
+        channelId: icpCorrelation.channelId,
+        turnId: icpCorrelation.turnId,
+        requestId: icpCorrelation.requestId,
+        chargeLane: 'companion_social',
+        icpCorrelation,
+      }));
+    });
+
+    it('rejects conflicting or malformed flattened ICP attribution', () => {
+      const icpCorrelation = {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        rootInitiationId: '99999999-9999-4999-8999-999999999999',
+        initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        peerContactId: 'contact-a',
+        channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+        messageId: 'message-1',
+        requestId: 'request-1',
+        chargeLane: 'companion_social' as const,
+        surface: 'companion_dm' as const,
+        costPurpose: 'conversation_turn' as const,
+        costOriginStage: 'reply' as const,
+        fatigueDecision: 'allow' as const,
+      };
+      expect(() => resolveCorrelationMetadata({
+        callType: 'chat',
+        purpose: 'chat',
+        conversationId: '55555555-5555-4555-8555-555555555555',
+        icpCorrelation,
+      }, undefined, 'chat')).toThrow(/ICP.*conversationId/i);
+      expect(() => resolveCorrelationMetadata({
+        callType: 'chat',
+        purpose: 'chat',
+        icpCorrelation: { conversationId: 'bad' } as never,
+      }, undefined, 'chat')).toThrow(/ICP conversation correlation/i);
+    });
+
     it('drops source identifiers from explicitly companion-private telemetry', () => {
       expect(resolveCorrelationMetadata({
         turnId: 'source-turn',

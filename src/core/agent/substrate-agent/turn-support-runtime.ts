@@ -49,6 +49,7 @@ import {
 } from './post-turn-actions.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
+import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
@@ -605,6 +606,7 @@ export class TurnSupportRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     contentOverride?: string,
+    actorKind: SessionActorKind = 'unknown',
   ): number | null {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
@@ -614,6 +616,7 @@ export class TurnSupportRuntime {
       trustLevel,
       continuityUserId,
       contentOverride,
+      actorKind,
     });
   }
 
@@ -648,6 +651,7 @@ export class TurnSupportRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
+    recoveryResponse?: AgentResponse,
     runtimeFallbackProvenance?: RuntimeFallbackProvenance,
   ): number | null {
     return recordAssistantMessageForTurn({
@@ -659,6 +663,7 @@ export class TurnSupportRuntime {
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      recoveryResponse,
       runtimeFallbackProvenance,
     });
   }

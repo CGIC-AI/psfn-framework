@@ -313,7 +313,7 @@ describe('group memory classifier', () => {
       systemAuthorIds: ['system-user'],
       apiPrincipalAuthorIds: ['api-principal'],
       recentEntries: [
-        entry(1, 'companion-bot', 'Carlini'),
+        entry(1, 'companion-bot', 'Lyra'),
         entry(2, 'music-bot', 'Music Bot'),
         entry(3, 'system-user', 'System'),
         entry(4, 'api-principal', 'API'),

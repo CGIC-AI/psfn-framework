@@ -44,6 +44,7 @@ type MockConnection = {
   sent: unknown[];
   _emit(message: unknown): void;
   _emitClose(): void;
+  _emitHeartbeat(): void;
 };
 
 function createMockConnection(
@@ -78,6 +79,9 @@ function createMockConnection(
     _emitClose(): void {
       emitter.emit('close');
     },
+    _emitHeartbeat(): void {
+      emitter.emit('heartbeat');
+    },
   };
 
   return {
@@ -85,6 +89,7 @@ function createMockConnection(
     sent,
     _emit: conn._emit,
     _emitClose: conn._emitClose,
+    _emitHeartbeat: conn._emitHeartbeat,
   };
 }
 
@@ -531,6 +536,148 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('refreshes only the sending companion from an unaudited transport heartbeat', async () => {
+    const auditAppend = vi.fn(async () => 30);
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+    auditAppend.mockClear();
+
+    const before = server.getFleetConnectionSnapshot();
+    const beforeA = before.connections.find(connection => connection.companionId === 'comp-a')!;
+    const beforeB = before.connections.find(connection => connection.companionId === 'comp-b')!;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    connA._emitHeartbeat();
+
+    const after = server.getFleetConnectionSnapshot();
+    const afterA = after.connections.find(connection => connection.companionId === 'comp-a')!;
+    const afterB = after.connections.find(connection => connection.companionId === 'comp-b')!;
+    expect(afterA.lastSeenAt).toBeGreaterThan(beforeA.lastSeenAt);
+    expect(afterB.lastSeenAt).toBe(beforeB.lastSeenAt);
+    expect(auditAppend).not.toHaveBeenCalled();
+
+    const realRpc = await invokeRpc(connA, 3, 'discord.typing', {
+      channelId: 'comp-a-channel',
+      companionId: 'comp-a',
+    });
+    expect(realRpc.result).toEqual({ success: true });
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'discord.typing',
+      decision: 'ALLOW',
+    }));
+  });
+
+  it('keeps retained inline images private to the authenticated companion connection', async () => {
+    const options = createMinimalOptions();
+    const stream = vi.mocked(options.llmProvider.stream);
+    const { connect } = await setupServer({
+      ...options,
+      visionIntake: {
+        screenImage: vi.fn(async () => ({
+          kind: 'screened' as const,
+          mode: 'enforce' as const,
+          flagged: false,
+          withheld: false,
+        })),
+      },
+      multiCompanion: multiCompanion({}),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+
+    const screened = await invokeRpc(connA, 3, 'intake.screen_image', {
+      companionId: 'comp-a',
+      imageBase64: 'aGVsbG8=',
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope: 'turn-a',
+    });
+    const handle = screened.result?.retainedImage?.handle as string | undefined;
+    expect(handle).toEqual(expect.any(String));
+
+    const legitimate = await invokeRpc(connA, 4, 'llm.chat', {
+      companionId: 'comp-a',
+      model: '',
+      provider: '',
+      systemPrompt: 'system',
+      turnId: 'turn-a',
+      messages: [{
+        role: 'user',
+        content: [{ type: 'gateway_image_ref', handle }],
+      }],
+    });
+    expect(legitimate.error).toBeUndefined();
+    expect(stream).toHaveBeenCalledTimes(1);
+
+    const crossover = await invokeRpc(connB, 5, 'llm.chat', {
+      companionId: 'comp-b',
+      model: '',
+      provider: '',
+      systemPrompt: 'system',
+      turnId: 'turn-a',
+      messages: [{
+        role: 'user',
+        content: [{ type: 'gateway_image_ref', handle }],
+      }],
+    });
+    expect(crossover.error?.code).toBe(GatewayErrors.INLINE_IMAGE_RETENTION_MISS);
+    expect(stream).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears retained inline images when the authenticated connection closes', async () => {
+    const options = createMinimalOptions();
+    const stream = vi.mocked(options.llmProvider.stream);
+    const { connect } = await setupServer({
+      ...options,
+      visionIntake: {
+        screenImage: vi.fn(async () => ({
+          kind: 'screened' as const,
+          mode: 'enforce' as const,
+          flagged: false,
+          withheld: false,
+        })),
+      },
+      multiCompanion: multiCompanion({}),
+    });
+    const original = await connect();
+    await identifyAgent(original, 'comp-a', 1);
+    const screened = await invokeRpc(original, 2, 'intake.screen_image', {
+      companionId: 'comp-a',
+      imageBase64: 'aGVsbG8=',
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope: 'turn-disconnected',
+    });
+    const handle = screened.result?.retainedImage?.handle as string;
+    original._emitClose();
+    await new Promise(r => setTimeout(r, 5));
+
+    const reconnected = await connect();
+    await identifyAgent(reconnected, 'comp-a', 3);
+    const afterReconnect = await invokeRpc(reconnected, 4, 'llm.chat', {
+      companionId: 'comp-a',
+      model: '',
+      provider: '',
+      systemPrompt: 'system',
+      turnId: 'turn-disconnected',
+      messages: [{
+        role: 'user',
+        content: [{ type: 'gateway_image_ref', handle }],
+      }],
+    });
+
+    expect(afterReconnect.error?.code).toBe(GatewayErrors.INLINE_IMAGE_RETENTION_MISS);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
   it('confines filesystem reads and writes to the authenticated Personal Workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-isolation-'));
     const personalA = join(root, 'personal', 'comp-a');

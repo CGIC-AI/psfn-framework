@@ -6,11 +6,12 @@ import { backfillLegacyTurnId } from '../../../core/turns/id.js';
 import {
   journalToCompactionSummary,
   journalToSessionEntry,
+  journalToTurnTombstoneEntry,
   type JournalIntegrityVerificationResult,
   resolveJournalIntegrityChainCandidates,
   wrapUnverifiedHistory,
 } from '../../journals/journal-utils.js';
-import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
+import type { CompactionSummary, JournalEntry, SessionEntry } from '../../../core/session/types.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import { isCogSecTombstoneSessionEntry } from '../../../core/cogsec/tombstones.js';
 import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
@@ -20,7 +21,13 @@ import type {
   SessionIntegrityProvider,
 } from '../store-primitives.js';
 import { applyJournalState } from './crash-recovery.js';
-import { snapshotIndexEntry } from './channel-index.js';
+import {
+  fingerprintJournalArchiveChain,
+  loadJournalArchiveChain,
+  readEntriesInRangeFromJournalArchiveChain,
+  readRecentEntriesFromJournalArchiveChain,
+  rewriteJournalArchiveChain,
+} from './journal-chain-runtime.js';
 import {
   createFilesystemSessionArchivePort,
   type JournalFileMetadata,
@@ -50,9 +57,9 @@ function applyTurnTombstonesToSessionEntries(
     try {
       turnId = resolveSessionEntryTurnContext(entry).turnId;
     } catch {
-      // Malformed metadata should not block deterministic replay filtering.
-      // Resolver already backfills for missing metadata; parse failures use deterministic seed.
-      turnId = backfillLegacyTurnId(`legacy-turn:${entry.channelId}:${entry.id}:${entry.timestamp}:${entry.role}`);
+      turnId = backfillLegacyTurnId(
+        `legacy-turn:${entry.channelId}:${entry.id}:${entry.timestamp}:${entry.role}`,
+      );
     }
     return !tombstones.has(turnId);
   });
@@ -62,7 +69,6 @@ export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
   private archivePort: SessionArchivePort;
   private transcriptProjectionFailureLogged = false;
-  private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(
@@ -100,6 +106,22 @@ export class SessionJournalRuntime {
 
   fingerprintArchive(archive: SessionArchiveHandle): string | null {
     return this.archivePort.fingerprintArchive(archive);
+  }
+
+  archiveByteLength(archive: SessionArchiveHandle): number {
+    return this.archivePort.archiveByteLength(archive);
+  }
+
+  fingerprintArchiveChain(archives: readonly SessionArchiveHandle[]): string | null {
+    return fingerprintJournalArchiveChain(this.archivePort, archives);
+  }
+
+  listPendingJournalChainRewriteRoots(sessionsDir: string): string[] {
+    return this.archivePort.listPendingJournalChainRewriteRoots(sessionsDir);
+  }
+
+  recoverJournalChainRewrite(rootPath: string): void {
+    this.archivePort.recoverJournalChainRewrite(rootPath);
   }
 
   verifyAndNormalizeEntry(
@@ -206,82 +228,15 @@ export class SessionJournalRuntime {
   }
 
   loadChannel(archive: SessionArchiveHandle): ChannelCache {
-    const filePath = this.archivePort.resolveArchivePath(archive);
-    const cache: ChannelCache = {
-      channelId: archive.channelId,
-      entries: [],
-      compactions: [],
-      turnTombstones: new Set(),
-      activeTurnTombstoneCount: 0,
-      nextId: 1,
-      lastHmac: null,
-      lastExtractionCoveredUpTo: 0,
-      lastJournalEntry: null,
-      resolvedPath: filePath,
-      messageCount: 0,
-      lastTimestamp: 0,
-      lastMessageTimestamp: 0,
-      lastMessageRole: null,
-      lastMessageAuthorName: undefined,
-      lastMessagePreview: '',
-      fullyLoaded: true,
-      archiveFingerprint: null,
-      recentEntriesByLimit: new Map(),
-    };
+    return this.loadChannelChain([archive]);
+  }
 
-    if (!existsSync(filePath)) return cache;
-
-    // Fingerprint BEFORE reading: an append that races the read leaves the
-    // fingerprint older than the file, so the next staleness check reloads
-    // (fail closed) instead of serving a cache missing the racing entry.
-    cache.archiveFingerprint = this.archivePort.fingerprintArchive(archive);
-    const { entries, maxId, quarantined } = this.archivePort.readJournalFile(archive);
-    if (quarantined.length > 0) {
-      this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
-    }
-
-    let previousHmacCandidates: Array<string | null> = [null];
-    for (const rawEntry of entries) {
-      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
-      previousHmacCandidates = normalized.nextHmacCandidates;
-      applyJournalState(cache, normalized.entry);
-
-      const message = journalToSessionEntry(normalized.entry);
-      if (message) {
-        cache.entries.push(message);
-        cache.messageCount += 1;
-        continue;
-      }
-
-      const compaction = journalToCompactionSummary(normalized.entry);
-      if (compaction) {
-        cache.compactions.push(compaction);
-      }
-    }
-
-    cache.nextId = maxId + 1;
-    cache.lastHmac = previousHmacCandidates[0] ?? null;
-    if (cache.turnTombstones.size > 0) {
-      cache.entries = applyTurnTombstonesToSessionEntries(cache.entries, cache.turnTombstones);
-      cache.messageCount = cache.entries.length;
-    }
-    const lastMessage = cache.entries.at(-1);
-    if (lastMessage) {
-      cache.lastMessageTimestamp = lastMessage.timestamp;
-      cache.lastMessageRole = lastMessage.role;
-      cache.lastMessageAuthorName = lastMessage.authorName;
-      const normalizedPreview = lastMessage.content.replace(/\s+/g, ' ').trim();
-      cache.lastMessagePreview = normalizedPreview.length > 120
-        ? `${normalizedPreview.slice(0, 117)}...`
-        : normalizedPreview;
-    } else {
-      cache.lastMessageTimestamp = 0;
-      cache.lastMessageRole = null;
-      cache.lastMessageAuthorName = undefined;
-      cache.lastMessagePreview = '';
-    }
-    cache.activeTurnTombstoneCount = cache.turnTombstones.size;
-    return cache;
+  loadChannelChain(archives: readonly SessionArchiveHandle[]): ChannelCache {
+    return loadJournalArchiveChain({
+      archivePort: this.archivePort,
+      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
+    }, archives);
   }
 
   readJournalEntries(archive: SessionArchiveHandle): JournalEntry[] {
@@ -295,21 +250,37 @@ export class SessionJournalRuntime {
   rewriteJournalEntries(archive: SessionArchiveHandle, entries: readonly JournalEntry[]): JournalEntry[] {
     const rewritten: JournalEntry[] = [];
     let previousHmac: string | null = null;
-
     for (const entry of entries) {
       const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
       if (!this.integrityProvider) {
         rewritten.push(unsigned);
         continue;
       }
-
       const signed = this.integrityProvider.sign(unsigned, previousHmac);
       rewritten.push(signed);
       previousHmac = signed._hmac ?? previousHmac;
     }
-
     this.archivePort.writeJournalFile(archive, rewritten);
     return rewritten;
+  }
+
+  rewriteJournalEntryChain(
+    archives: readonly SessionArchiveHandle[],
+    entriesByArchive: readonly (readonly JournalEntry[])[],
+    renewLease?: () => void,
+  ): JournalEntry[][] {
+    return rewriteJournalArchiveChain(
+      this.archivePort,
+      this.integrityProvider,
+      archives,
+      entriesByArchive,
+      renewLease,
+    );
+  }
+
+  readJournalEntryChain(archives: readonly SessionArchiveHandle[]): JournalEntry[][] {
+    this.archivePort.assertJournalChainReadable(archives);
+    return archives.map(archive => this.readJournalEntries(archive));
   }
 
   backfillTranscriptProjectionFromDisk(params: {
@@ -330,11 +301,19 @@ export class SessionJournalRuntime {
       }
       if (projectedCount === expectedCount) continue;
 
-      const filePath = join(params.sessionsDir, indexEntry.filename);
-      if (!existsSync(filePath)) continue;
+      const filePaths = indexEntry.filenames.map(filename => join(params.sessionsDir, filename));
+      if (filePaths.some(filePath => !existsSync(filePath))) {
+        params.transcriptProjection.markProjectionDrift(
+          channelId,
+          'One or more indexed L0 session segments are missing',
+        );
+        continue;
+      }
 
       try {
-        const loaded = this.loadChannel(this.openArchive(channelId, filePath));
+        const loaded = this.loadChannelChain(
+          filePaths.map(filePath => this.openArchive(indexEntry.channelId ?? channelId, filePath)),
+        );
         const expectedProjectedCount = loaded.entries.filter(entry => !isCogSecTombstoneSessionEntry(entry)).length;
         if (projectedCount === expectedProjectedCount) {
           continue;
@@ -375,8 +354,10 @@ export class SessionJournalRuntime {
     cache: ChannelCache;
     archive: SessionArchiveHandle;
     journal: JournalEntry;
-    upsertChannelIndex: (channelId: string, entry: ChannelIndexEntry) => void;
   }): void {
+    this.archivePort.assertJournalChainReadable(
+      params.cache.archivePaths.map(filePath => this.openArchive(params.cache.channelId, filePath)),
+    );
     const previousHmac = params.cache.lastHmac;
     let signed = params.journal;
     let nextHmac = previousHmac;
@@ -393,70 +374,230 @@ export class SessionJournalRuntime {
 
     this.archivePort.appendJournalEntry(params.archive, signed);
     applyJournalState(params.cache, signed);
-    params.cache.lastHmac = nextHmac;
-    // Every caller holds the cross-process journal write lock here, so the
-    // refreshed fingerprint cannot absorb a concurrent foreign append.
-    params.cache.archiveFingerprint = this.archivePort.fingerprintArchive(params.archive);
-    try {
-      params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
-    } catch (error) {
-      if (!this.channelIndexFailureLogged) {
-        this.channelIndexFailureLogged = true;
-        log.warn('Session channel index write failed after journal append; continuing without interruption', {
-          channelId: params.journal.channelId,
-          error: toErrorMessage(error),
-        });
-      }
+    if (signed.type === 'compaction') {
+      params.cache.compactionArchivePaths.add(this.archivePort.resolveArchivePath(params.archive));
     }
+    params.cache.lastHmac = nextHmac;
   }
 
-  readRecentEntriesFromTail(archive: SessionArchiveHandle, limit: number): SessionEntry[] {
-    const tail = this.archivePort.readJournalTailEntries(archive, {
-      messageLimit: limit,
-      includeBoundaryEntry: true,
+  readRecentEntriesFromTail(
+    archive: SessionArchiveHandle,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return this.readRecentEntriesFromTailChain([archive], limit, tombstones);
+  }
+
+  readRecentEntriesFromTailChain(
+    archives: readonly SessionArchiveHandle[],
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return readRecentEntriesFromJournalArchiveChain({
+      archivePort: this.archivePort,
+      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
+    }, archives, limit, tombstones);
+  }
+
+  readEntriesInRangeFromChain(
+    archives: readonly SessionArchiveHandle[],
+    startId: number,
+    endId: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return readEntriesInRangeFromJournalArchiveChain({
+      archivePort: this.archivePort,
+      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
+    }, archives, startId, endId, tombstones);
+  }
+
+  readTurnTombstoneAuthorityFromChain(
+    archives: readonly SessionArchiveHandle[],
+    conservativeBaseline: ReadonlySet<string> = new Set(),
+  ): { archiveFingerprint: string; tombstones: Set<string> } | null {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const beforeFingerprint = this.fingerprintArchiveChain(archives);
+      if (!beforeFingerprint) return null;
+      const actions: Array<{
+        id: number;
+        archiveIndex: number;
+        targetId: string;
+        action: 'redact' | 'restore';
+        verified: boolean;
+      }> = [];
+      let scanTrusted = true;
+
+      for (let archiveIndex = 0; archiveIndex < archives.length; archiveIndex += 1) {
+        const archive = archives[archiveIndex]!;
+        const previousArchiveHmac = archiveIndex > 0
+          ? this.archivePort.readJournalTailEntries(archives[archiveIndex - 1]!, {
+            messageLimit: 1,
+            includeBoundaryEntry: false,
+          }).entries.at(-1)?._hmac ?? null
+          : null;
+        const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+          limit: Number.MAX_SAFE_INTEGER,
+          matches: entry => journalToTurnTombstoneEntry(entry) !== null,
+        });
+        if (result.quarantined.length > 0) {
+          this.warnAboutQuarantinedEntries(
+            archive.channelId,
+            archive,
+            result.quarantined.length,
+            result.matches.length,
+          );
+          scanTrusted = false;
+          break;
+        }
+        for (const match of result.matches) {
+          const previousHmacCandidates = [match.previousHmac];
+          if (match.previousHmac === null && previousArchiveHmac !== null) {
+            previousHmacCandidates.push(previousArchiveHmac);
+          }
+          const normalized = this.verifyAndNormalizeEntry(match.entry, previousHmacCandidates);
+          const tombstone = journalToTurnTombstoneEntry(normalized.entry);
+          if (!tombstone) continue;
+          actions.push({
+            id: tombstone.id,
+            archiveIndex,
+            targetId: tombstone.targetId,
+            action: tombstone.action,
+            verified: normalized.verified,
+          });
+        }
+      }
+
+      const afterFingerprint = this.fingerprintArchiveChain(archives);
+      if (beforeFingerprint !== afterFingerprint) {
+        if (attempt === 0) continue;
+        throw new Error(
+          `L0 session ${archives.at(-1)?.channelId ?? 'unknown'} changed repeatedly while reading tombstone authority`,
+        );
+      }
+      if (!scanTrusted || !afterFingerprint) return null;
+
+      const tombstones = new Set(conservativeBaseline);
+      actions.sort((left, right) => left.id - right.id || left.archiveIndex - right.archiveIndex);
+      for (const action of actions) {
+        if (action.action === 'redact') {
+          // An invalid redaction may over-hide data, but must never reveal it.
+          tombstones.add(action.targetId);
+        } else if (action.verified) {
+          // Only an authenticated restore may remove privacy authority.
+          tombstones.delete(action.targetId);
+        }
+      }
+      return { archiveFingerprint: afterFingerprint, tombstones };
+    }
+    return null;
+  }
+
+  readCompactionSummariesFromChain(
+    archives: readonly SessionArchiveHandle[],
+    compactionArchivePaths: ReadonlySet<string>,
+  ): CompactionSummary[] {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const beforeFingerprint = this.fingerprintArchiveChain(archives);
+      const summaries: CompactionSummary[] = [];
+      let verificationFailed = false;
+      for (let archiveIndex = 0; archiveIndex < archives.length; archiveIndex += 1) {
+        const archive = archives[archiveIndex]!;
+        if (!compactionArchivePaths.has(this.archivePort.resolveArchivePath(archive))) continue;
+        const result = this.archivePort.readJournalFile(archive);
+        if (result.quarantined.length > 0) {
+          this.warnAboutQuarantinedEntries(
+            archive.channelId,
+            archive,
+            result.quarantined.length,
+            result.entries.length,
+          );
+        }
+        const previousHmac = archiveIndex > 0
+          ? this.archivePort.readJournalTailEntries(archives[archiveIndex - 1]!, {
+            messageLimit: 1,
+            includeBoundaryEntry: false,
+          }).entries.at(-1)?._hmac ?? null
+          : null;
+        let previousHmacCandidates: Array<string | null> = [previousHmac];
+        for (const rawEntry of result.entries) {
+          const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+          previousHmacCandidates = normalized.nextHmacCandidates;
+          verificationFailed ||= !normalized.verified;
+          const summary = journalToCompactionSummary(normalized.entry);
+          if (summary) summaries.push(summary);
+        }
+      }
+      const afterFingerprint = this.fingerprintArchiveChain(archives);
+      if (beforeFingerprint !== afterFingerprint) {
+        if (attempt === 0) continue;
+        throw new Error(
+          `L0 session ${archives.at(-1)?.channelId ?? 'unknown'} changed repeatedly while reading compactions`,
+        );
+      }
+      if (verificationFailed) return this.loadChannelChain(archives).compactions;
+      return summaries;
+    }
+    return [];
+  }
+
+  findLatestEntries(
+    archive: SessionArchiveHandle,
+    predicate: (entry: SessionEntry) => boolean,
+    limit: number,
+  ): SessionEntry[] | null {
+    const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+      limit,
+      matches: (entry) => {
+        const message = journalToSessionEntry(entry);
+        return message !== null && predicate(message);
+      },
     });
-
-    if (tail.entries.length === 0) return [];
-
-    const messageIndexes: number[] = [];
-    for (let index = 0; index < tail.entries.length; index++) {
-      if (tail.entries[index].type === 'message') {
-        messageIndexes.push(index);
-      }
+    if (result.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(archive.channelId, archive, result.quarantined.length, result.matches.length);
     }
-    if (messageIndexes.length === 0) return [];
-
-    const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - limit)];
-    let previousHmacCandidates: Array<string | null> = [null];
-    if (oldestMessageIndex > 0) {
-      const boundaryEntry = tail.entries[oldestMessageIndex - 1];
-      previousHmacCandidates = typeof boundaryEntry._hmac === 'string'
-        ? [boundaryEntry._hmac]
-        : [null];
-    }
-
-    const messages: SessionEntry[] = [];
-    let verificationFailed = false;
-    for (let index = oldestMessageIndex; index < tail.entries.length; index++) {
-      const rawEntry = tail.entries[index];
-      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
-      previousHmacCandidates = normalized.nextHmacCandidates;
-      verificationFailed = verificationFailed || !normalized.verified;
-
+    const found: SessionEntry[] = [];
+    for (const match of result.matches) {
+      const normalized = this.verifyAndNormalizeEntry(match.entry, [match.previousHmac]);
+      if (!normalized.verified) return null;
       const message = journalToSessionEntry(normalized.entry);
-      if (message) {
-        messages.push(message);
-      }
+      if (message && predicate(message)) found.push(message);
     }
+    return found;
+  }
 
-    if (verificationFailed && oldestMessageIndex > 0) {
-      const loaded = this.loadChannel(archive);
-      if (loaded.entries.length <= limit) return [...loaded.entries];
-      return loaded.entries.slice(-limit);
+  findEntriesInRange(
+    archive: SessionArchiveHandle,
+    startId: number,
+    endId: number,
+  ): SessionEntry[] | null {
+    const limit = Math.max(0, endId - startId + 1);
+    if (limit <= 0) return [];
+    const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
+      limit,
+      stopAfter: entry => entry.id < startId,
+      matches: (entry) => {
+        const message = journalToSessionEntry(entry);
+        return message !== null && message.id >= startId && message.id <= endId;
+      },
+    });
+    if (result.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        result.quarantined.length,
+        result.matches.length,
+      );
     }
-
-    if (messages.length <= limit) return messages;
-    return messages.slice(-limit);
+    const found: SessionEntry[] = [];
+    for (const match of result.matches) {
+      const normalized = this.verifyAndNormalizeEntry(match.entry, [match.previousHmac]);
+      if (!normalized.verified) return null;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message && message.id >= startId && message.id <= endId) found.push(message);
+    }
+    return found.sort((left, right) => left.id - right.id);
   }
 
   readEntriesBefore(

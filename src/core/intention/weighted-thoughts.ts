@@ -32,6 +32,10 @@ export interface ThoughtProvenance {
   sourceChannelId?: string;
   /** Channel type of the source channel. */
   sourceChannelType?: ChannelType;
+  /** Content-free co-location arrival identity for low-weight social thoughts. */
+  coLocationRef?: string;
+  /** Inherited autonomous conversation root when the thought came from ICP. */
+  icpRootInitiationId?: string;
 }
 
 export interface ThoughtContextMultipliers {

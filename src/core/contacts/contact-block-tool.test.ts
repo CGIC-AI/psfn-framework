@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContactStorePort } from './contact-store-port.js';
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { createContactTool } from './tools.js';
@@ -75,6 +75,98 @@ describe('contact tool blocking (htm9.16 companion agency)', () => {
     });
     expect(resultText(result)).toContain('Blocked discord:999');
     expect(blockList.evaluate({ channelType: 'discord', contactId: '999', isDirectMessage: true }).action).toBe('drop');
+  });
+
+  it('invalidates pending ICP permits before persisting a companion block', async () => {
+    const invalidatePendingInitiationPermitsForBlock = vi.fn(async () => {
+      if (invalidatePendingInitiationPermitsForBlock.mock.calls.length === 1) {
+        expect(blockList.get('companion', 'peer-companion')).toBeNull();
+      } else {
+        expect(blockList.get('companion', 'peer-companion')).toMatchObject({ mode: 'hard' });
+      }
+      return { revokedCount: 1 };
+    });
+    const tool = createContactTool(store, {
+      blockList,
+      permitInvalidation: { invalidatePendingInitiationPermitsForBlock },
+    });
+
+    const result = await tool.execute('b-companion', {
+      action: 'block',
+      channel: 'companion',
+      channelUserId: 'peer-companion',
+      blockMode: 'hard',
+    });
+
+    expect(result.details?.isError).not.toBe(true);
+    expect(invalidatePendingInitiationPermitsForBlock).toHaveBeenCalledTimes(2);
+    expect(blockList.get('companion', 'peer-companion')).toMatchObject({ mode: 'hard' });
+  });
+
+  it('invalidates on both sides of writing a canonical companion contact', async () => {
+    const contact = await store.upsert({ displayName: 'Peer', discordUserId: 'peer-discord' });
+    await store.linkChannelIdentity(contact.id, 'companion', 'peer-companion');
+    const invalidatePendingInitiationPermitsForBlock = vi.fn(async () => {
+      if (invalidatePendingInitiationPermitsForBlock.mock.calls.length === 1) {
+        expect(blockList.get('companion', 'peer-companion')).toBeNull();
+        expect(blockList.get('discord', 'peer-discord')).toBeNull();
+      } else {
+        expect(blockList.get('companion', 'peer-companion')).toMatchObject({ mode: 'hard' });
+        expect(blockList.get('discord', 'peer-discord')).toMatchObject({ mode: 'hard' });
+      }
+      return { revokedCount: 1 };
+    });
+    const tool = createContactTool(store, {
+      blockList,
+      permitInvalidation: { invalidatePendingInitiationPermitsForBlock },
+    });
+
+    const result = await tool.execute('b-canonical-companion', {
+      action: 'block',
+      contactId: contact.id,
+      blockMode: 'hard',
+    });
+
+    expect(result.details?.isError).not.toBe(true);
+    expect(invalidatePendingInitiationPermitsForBlock).toHaveBeenCalledTimes(2);
+    expect(blockList.get('companion', 'peer-companion')).toMatchObject({ mode: 'hard' });
+    expect(blockList.get('discord', 'peer-discord')).toMatchObject({ mode: 'hard' });
+  });
+
+  it('does not persist a companion block when permit invalidation fails', async () => {
+    const tool = createContactTool(store, {
+      blockList,
+      permitInvalidation: {
+        invalidatePendingInitiationPermitsForBlock: async () => {
+          throw new Error('gateway unavailable');
+        },
+      },
+    });
+
+    const result = await tool.execute('b-companion-failure', {
+      action: 'block',
+      channel: 'companion',
+      channelUserId: 'peer-companion',
+    });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('gateway unavailable');
+    expect(blockList.get('companion', 'peer-companion')).toBeNull();
+    expect(blockList.listAudit()).toEqual([]);
+  });
+
+  it('fails closed before persisting a companion block when permit invalidation is unwired', async () => {
+    const tool = createContactTool(store, { blockList });
+
+    const result = await tool.execute('b-companion-unwired', {
+      action: 'block',
+      channel: 'companion',
+      channelUserId: 'peer-companion',
+    });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('permit invalidation is unavailable');
+    expect(blockList.get('companion', 'peer-companion')).toBeNull();
   });
 
   it('fails closed when no block list is wired', async () => {

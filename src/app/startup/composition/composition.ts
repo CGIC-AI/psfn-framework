@@ -38,6 +38,7 @@ import {
   DeterministicFatigueBudgetPort,
   type FatigueBudgetPort,
 } from '../../../core/agent/fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from '../../../core/agent/fatigue/regulation-reservation.js';
 import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
@@ -206,8 +207,10 @@ export async function composeSessionRuntimeAsync(
   if (!databaseUrl) {
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }
+  const postgresSchema = options.config.postgresSchema?.trim();
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
+    ...(postgresSchema ? { schema: postgresSchema } : {}),
   });
   const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
   return createSessionComposition(options, sessionAdapters, sessionsDir, sessionTailCache);
@@ -262,6 +265,7 @@ export interface SubstrateAgentCompositionOptions {
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
@@ -288,6 +292,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
       ...(options.fatigueBudget ? { fatigueBudget: options.fatigueBudget } : {}),
+      ...(options.fatigueRegulationReservations
+        ? { fatigueRegulationReservations: options.fatigueRegulationReservations }
+        : {}),
       ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),

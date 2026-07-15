@@ -1032,8 +1032,10 @@ export class SubstrateAgent {
   }
 
   private async observeMessageUnderReservation(message: SubstrateMessage): Promise<void> {
-    await this.sessionManager.awaitPendingAutoCompaction(message.channelId);
-
+    // mmo9.4: observations record onto the last-committed session without
+    // blocking on pending auto-compaction. The durable compaction job commits
+    // atomically via append-only insertCompaction and does not conflict with a
+    // concurrently appended observation entry.
     const turnId = createTurnId();
     const requestId = message.id;
     const observationMetadata = JSON.stringify({

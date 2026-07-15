@@ -351,10 +351,24 @@ export async function prepareTurnIdentityState(input: {
   });
 
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
-  const compactionWaitStartedAt = performance.now();
-  await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
+  // mmo9.4: the foreground turn no longer blocks on pending auto-compaction.
+  // Compaction runs as a durable between-turns job that commits atomically
+  // (insertCompaction is an append-only synchronous mutation that deletes no
+  // entries; its only async gap — the LLM summarization — precedes the atomic
+  // insert). A concurrent foreground read therefore sees either the
+  // pre-compaction entries (already token-budgeted) or the committed
+  // summary+kept form — both internally consistent, no torn read reachable. The
+  // turn builds context on the last-committed revision and carries a
+  // compactionPending marker (buildContext -> compactionManifest.pending) so it
+  // knowingly reflects the pre-compaction form. Do NOT reintroduce a bounded
+  // wait here — that is a partial cliff plus nondeterminism; LLM admission /
+  // deadline is mmo9.5, not this bead (Law 12.4: no second budget system).
+  const compactionPending = runtime.sessionManager.hasPendingAutoCompaction(message.channelId);
   observability.emitPerformanceStage('compaction_wait', {
-    durationMs: Math.max(0, performance.now() - compactionWaitStartedAt),
+    durationMs: 0,
+    ...(compactionPending
+      ? { backgroundJobKind: 'auto_compaction' as const, backgroundJobState: 'running' as const }
+      : {}),
   });
 
   const privateTurnTrigger = message.routing?.privateTurnTrigger === true;

@@ -545,6 +545,7 @@ function createRuntime(params: {
   buildContext: ReturnType<typeof vi.fn>;
   scheduleAutoCompactionBetweenTurns: ReturnType<typeof vi.fn>;
   awaitPendingAutoCompaction: ReturnType<typeof vi.fn>;
+  hasPendingAutoCompaction?: ReturnType<typeof vi.fn>;
   recordUserMessage: ReturnType<typeof vi.fn>;
   recordSystemMessage?: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
@@ -609,6 +610,7 @@ function createRuntime(params: {
       findRecordedTurn: vi.fn(() => null),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
+      hasPendingAutoCompaction: params.hasPendingAutoCompaction ?? vi.fn(() => false),
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
       getRecentMessages: vi.fn(() => []),

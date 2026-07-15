@@ -2480,6 +2480,179 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Summary of old messages.');
   });
 
+  // mmo9.4 regression suite: the foreground pre-turn path no longer awaits
+  // pending auto-compaction (the old unbounded `awaitPendingAutoCompaction`
+  // wait). It now reads the synchronous `hasPendingAutoCompaction` seam that
+  // both the compaction_wait telemetry marker and buildContext's
+  // compactionManifest.pending consume, while the durable between-turns job runs
+  // to completion and commits atomically. These tests give that path its first
+  // verified executions (Test 1 non-blocking + consistent snapshot, Test 2
+  // forced-compaction first execution, Test 3 no-drop durability).
+  const makeDeferredCompactionLLM = (): { llm: LLMProviderPort; release: () => void } => {
+    let releaseCompaction: (() => void) | null = null;
+    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseCompaction = resolve;
+      });
+      return {
+        content: 'Summary of old messages.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+    const llm: LLMProviderPort = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete,
+    };
+    return { llm, release: () => releaseCompaction?.() };
+  };
+
+  // Drain the bounded microtask chain the scheduled compaction runs through so
+  // its LLM `complete` call is actually reached and blocking before we assert.
+  const flushUntilCompactionReachesLLM = async (): Promise<void> => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  it('mmo9.4: foreground turn never blocks on pending compaction and reads the last-committed snapshot', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    const { llm, release } = makeDeferredCompactionLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    // Durable compaction begins and blocks inside the summarization LLM call.
+    const compactionPromise = mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'Sys',
+      memoriesBlock: '',
+      llmProvider: llm,
+      userId: 'u1',
+    });
+    await flushUntilCompactionReachesLLM();
+
+    // The synchronous seam the pre-turn path now reads instead of awaiting.
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(true);
+    expect(llm.complete).toHaveBeenCalledTimes(1);
+
+    // A foreground build completes promptly (well before the blocked LLM
+    // resolves) on the last-committed pre-compaction entries, carrying the
+    // pending marker — proving no foreground await on compaction remains.
+    const timeoutSentinel = Symbol('timeout');
+    const raced = await Promise.race([
+      mgr.buildContext('ch1', 'Sys', ''),
+      new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), 50)),
+    ]);
+    expect(raced).not.toBe(timeoutSentinel);
+    const earlyContext = raced as Awaited<ReturnType<SessionManager['buildContext']>>;
+    expect(earlyContext.systemPrompt).not.toContain('Previous conversation summary');
+    expect(earlyContext.systemPrompt).not.toContain('Summary of old messages.');
+    expect(earlyContext.manifest?.compaction).toMatchObject({
+      pending: true,
+      mode: 'deferred',
+      triggered: false,
+    });
+    // Building context while pending must not itself invoke the LLM again.
+    expect(llm.complete).toHaveBeenCalledTimes(1);
+
+    // Releasing the LLM lets the durable job commit atomically; the marker
+    // clears and the next snapshot reflects the summarized form.
+    release();
+    await compactionPromise;
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(false);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
+    const afterContext = await mgr.buildContext('ch1', 'Sys', '');
+    expect(afterContext.systemPrompt).toContain('Summary of old messages.');
+  });
+
+  it('mmo9.4: forced tiny-context compaction runs end to end for its first verified execution', async () => {
+    // A tiny chat context window is the forced-compaction lever: with more than
+    // four entries, shouldCompact (totalTokens > contextWindow * threshold%)
+    // fires deterministically instead of never firing as it does in dev where
+    // context windows dwarf chat utilisation.
+    const config = makeConfig({
+      compactionThresholdPct: 70,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 1000 },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', `User ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
+    }
+
+    // Precondition: the compaction decision genuinely triggers (>4 entries and
+    // over budget) — this is not a no-op path.
+    const captured = mgr.captureAutoCompactionRecentEntries({ channelId: 'ch1', now: new Date() });
+    expect(captured.length).toBeGreaterThan(4);
+
+    await runScheduledCompaction(mgr, mockLLM);
+
+    // shouldCompact fired -> runAutoCompaction -> insertCompaction committed.
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(false);
+
+    // A subsequent read shows the summary plus the kept (recent) tail entries.
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
+    expect(ctx.systemPrompt).toContain('Summary of old messages.');
+    expect(ctx.messages.length).toBeGreaterThan(0);
+    expect(ctx.messages.length).toBeLessThan(20);
+  });
+
+  it('mmo9.4: a new turn arriving does not cancel or drop the in-flight compaction', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    const { llm, release } = makeDeferredCompactionLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    const compactionPromise = mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'Sys',
+      memoriesBlock: '',
+      llmProvider: llm,
+      userId: 'u1',
+    });
+    await flushUntilCompactionReachesLLM();
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(true);
+    expect(llm.complete).toHaveBeenCalledTimes(1);
+
+    // A new foreground turn arrives while compaction is mid-flight: it records
+    // and builds context without cancelling or awaiting the durable job.
+    mgr.recordUserMessage('ch1', 'new turn while compacting', 'u1', 'User');
+    await mgr.buildContext('ch1', 'Sys', '');
+
+    // The compaction is still pending — decoupling did not abandon it (mmo9.7).
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(true);
+    expect(llm.complete).toHaveBeenCalledTimes(1);
+
+    // It still runs to completion and commits exactly one summary.
+    release();
+    await compactionPromise;
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
+    expect(mgr.hasPendingAutoCompaction('ch1')).toBe(false);
+  });
+
   it('captures auto-compaction input at or before the durable source entry', () => {
     const mgr = new SessionManager(store, makeConfig());
     mgr.recordUserMessage('ch1', 'turn A user', 'u1', 'User');

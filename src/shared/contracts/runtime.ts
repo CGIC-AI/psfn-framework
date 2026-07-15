@@ -330,7 +330,7 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.

@@ -1,4 +1,6 @@
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+{{- $restoreVerifyDatabase := printf "%s_restore_verify" .Values.postgres.auth.database -}}
+{{- $restoreVerifyOwner := .Values.postgres.auth.username -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,6 +10,17 @@ metadata:
 data:
   00-pgvector.sql: |
     CREATE EXTENSION IF NOT EXISTS vector;
+    SELECT format(
+      'CREATE DATABASE %I OWNER %I',
+      '{{ $restoreVerifyDatabase | replace "'" "''" }}',
+      '{{ $restoreVerifyOwner | replace "'" "''" }}'
+    )
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_database
+      WHERE datname = '{{ $restoreVerifyDatabase | replace "'" "''" }}'
+    )
+    \gexec
 ---
 apiVersion: v1
 kind: Service

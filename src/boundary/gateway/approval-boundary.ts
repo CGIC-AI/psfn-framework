@@ -6,6 +6,8 @@ import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
+  ConfirmationExecutionContext,
+  ConfirmationResolverIdentity,
 } from '../../system/capabilities/confirmation-queue.js';
 import {
   ConfirmationQueue,
@@ -74,7 +76,7 @@ export interface ApprovalBoundaryGateOptions<P, R> {
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
-  resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }): Promise<{
+  resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
     message: string;
@@ -86,6 +88,7 @@ export interface ApprovalBoundaryService {
     execute: (
       params: Record<string, unknown>,
       entry: ConfirmationQueueEntry,
+      context: ConfirmationExecutionContext,
     ) => Promise<unknown>;
   }): Promise<ConfirmationQueueEntry>;
   gate<P, R>(options: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R>;
@@ -135,6 +138,7 @@ export function createGatewayApprovalBoundaryService(
             id: outcome.id,
             status: outcome.status,
             resolvedAt: outcome.resolvedAt,
+            executed: outcome.executed,
           }),
           timestamp: Date.now(),
         }).catch((error) => {
@@ -158,6 +162,7 @@ export function createGatewayApprovalBoundaryService(
     execute: (
       params: Record<string, unknown>,
       entry: ConfirmationQueueEntry,
+      context: ConfirmationExecutionContext,
     ) => Promise<unknown>;
   }): Promise<ConfirmationQueueEntry> => {
     if (!input.authenticatedCompanionId) {
@@ -185,7 +190,7 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
-    resolveConfirmation: (params) => confirmationQueue.resolve(params),
+    resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
       return async (rawParams: P) => {

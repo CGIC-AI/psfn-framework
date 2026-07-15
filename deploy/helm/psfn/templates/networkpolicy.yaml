@@ -57,6 +57,8 @@ spec:
       ports:
         - port: {{ .Values.ports.gatewayRpc }}
           protocol: TCP
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
   egress:
     - to:
         - namespaceSelector:
@@ -165,6 +167,8 @@ spec:
               {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.gatewayRpc }}
+          protocol: TCP
+        - port: {{ .Values.ports.gatewayApi }}
           protocol: TCP
     {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
     - to:

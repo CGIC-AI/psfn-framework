@@ -186,6 +186,7 @@ assertIncludes(defaultDenyPolicy, '- Egress', 'default deny egress');
 const agentPolicy = findDocument(rendered, 'psfn-agent');
 assertNotIncludes(agentPolicy, '0.0.0.0/0', 'agent policy broad egress');
 assertIncludes(agentPolicy, 'component: gateway', 'agent policy gateway flow');
+assertIncludes(agentPolicy, 'port: 10053', 'agent policy gateway operator API flow');
 assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow');
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
 assertNotIncludes(agentPolicy, 'component: litellm', 'agent policy LiteLLM direct egress');
@@ -348,6 +349,17 @@ assertIncludes(
   'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
   'agent companion role proof remains optional for single-companion installs',
 );
+assertIncludes(
+  agentDeployment,
+  'name: GATEWAY_OPERATOR_API_BASE_URL',
+  'agent gateway operator confirmation endpoint env',
+);
+assertIncludes(
+  agentDeployment,
+  'value: "http://psfn-gateway:10053/v1"',
+  'agent in-cluster gateway operator confirmation endpoint',
+);
+assertNotIncludes(agentDeployment, 'name: ADMIN_TOKEN', 'agent admin credential isolation');
 for (const [name, value] of [
   ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
@@ -492,6 +504,7 @@ assertIncludes(liteLlmDeployment, 'runAsUser: 999', 'LiteLLM numeric user');
 const gatewayPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-gateway');
 assertIncludes(gatewayPolicy, 'component: litellm', 'gateway policy LiteLLM egress');
 assertIncludes(gatewayPolicy, 'port: 4000', 'gateway policy LiteLLM port');
+assertIncludes(gatewayPolicy, 'port: 10053', 'gateway policy agent operator API ingress');
 
 const liteLlmPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-litellm');
 assertIncludes(liteLlmPolicy, 'component: litellm', 'LiteLLM policy selector');

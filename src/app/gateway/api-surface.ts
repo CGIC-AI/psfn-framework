@@ -61,6 +61,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'requestAgentVoiceStream'
     | 'invalidateIcpAutonomyForCompanion'
     | 'isIcpAutonomyConfigured'
+    | 'resolveOperatorApproval'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
@@ -396,6 +397,9 @@ export async function startOptionalGatewayApiServer(
           },
         }
       : {}),
+    confirmationOperator: {
+      resolve: async params => await options.gateway.resolveOperatorApproval(params),
+    },
   });
   await apiServer.start();
   return apiServer;

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import { KubeSelfManagementController } from './kube-self-management.js';
 
+const GARDEN_OPERATOR = { kind: 'operator' as const, id: 'garden-admin' };
+
 describe('KubeSelfManagementController', () => {
   it('denies an unknown action without enqueueing approval or executing it', async () => {
     const execute = vi.fn();
@@ -172,6 +174,7 @@ describe('KubeSelfManagementController', () => {
         method: 'kube.self_management',
         action: 'restart',
         scope: 'psfn-test/psfn',
+        resolutionAuthority: 'operator',
         params: {
           action: 'restart',
           namespace: 'psfn-test',
@@ -294,7 +297,7 @@ describe('KubeSelfManagementController', () => {
         targetImage: 'localhost/psfn-framework:0.1.0-kube-bbbbbbbbbbbb',
         helmRevision: 8,
       },
-    });
+    }, GARDEN_OPERATOR);
 
     expect(result).toMatchObject({ status: 'failed', executed: false });
     expect(execute).not.toHaveBeenCalled();
@@ -340,7 +343,10 @@ describe('KubeSelfManagementController', () => {
     });
 
     now = 1_101;
-    const result = await queue.resolve({ id: 'kube-stale', decision: 'approve' });
+    const result = await queue.resolve(
+      { id: 'kube-stale', decision: 'approve' },
+      GARDEN_OPERATOR,
+    );
 
     expect(result).toMatchObject({ status: 'expired', executed: false });
     expect(execute).not.toHaveBeenCalled();
@@ -376,8 +382,14 @@ describe('KubeSelfManagementController', () => {
       },
     });
 
-    const approved = await queue.resolve({ id: 'kube-once', decision: 'approve' });
-    const replayed = await queue.resolve({ id: 'kube-once', decision: 'approve' });
+    const approved = await queue.resolve(
+      { id: 'kube-once', decision: 'approve' },
+      GARDEN_OPERATOR,
+    );
+    const replayed = await queue.resolve(
+      { id: 'kube-once', decision: 'approve' },
+      GARDEN_OPERATOR,
+    );
 
     expect(approved).toMatchObject({ status: 'approved', executed: true });
     expect(replayed).toMatchObject({ status: 'not_found', executed: false });
@@ -389,7 +401,75 @@ describe('KubeSelfManagementController', () => {
       approvalId: 'kube-once',
       validationResult: 'passed',
       outcome: 'succeeded',
+      resolverKind: 'operator',
+      resolverId: 'garden-admin',
     }));
+  });
+
+  it('reports a committed mutation as executed when its result audit fails', async () => {
+    const queue = new ConfirmationQueue({ idFactory: () => 'kube-audit-failed' });
+    const execute = vi.fn(async () => ({
+      validationResult: 'passed' as const,
+      rollbackStatus: 'not_requested' as const,
+    }));
+    const audit = vi.fn(async (event: { phase: string; decision: string; outcome: string }) => {
+      if (event.phase === 'result'
+        && event.decision === 'ALLOW'
+        && event.outcome === 'succeeded') {
+        throw new Error('audit store unavailable');
+      }
+    });
+    const controller = new KubeSelfManagementController({
+      namespace: 'psfn-test',
+      release: 'psfn',
+      executor: { supports: () => true, execute },
+      audit,
+    });
+    await controller.invoke({
+      actor: 'companion',
+      params: {
+        action: 'restart',
+        namespace: 'psfn-test',
+        release: 'psfn',
+        sourceRevision: 'a'.repeat(40),
+        targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+        helmRevision: 7,
+        reason: 'Restart the reviewed release.',
+      },
+      approvals: {
+        enqueue: async (request, run) => queue.enqueue(request, run),
+      },
+    });
+
+    const result = await queue.resolve(
+      { id: 'kube-audit-failed', decision: 'approve' },
+      GARDEN_OPERATOR,
+    );
+    const replay = await queue.resolve(
+      { id: 'kube-audit-failed', decision: 'approve' },
+      GARDEN_OPERATOR,
+    );
+
+    expect(result).toEqual({
+      id: 'kube-audit-failed',
+      status: 'failed',
+      message: 'Kubernetes self-management action executed, but result audit failed; do not retry.',
+      executed: true,
+    });
+    expect(replay).toMatchObject({ status: 'not_found', executed: false });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: 'kube-audit-failed',
+        status: 'failed',
+        executed: true,
+        resolver: GARDEN_OPERATOR,
+      }),
+    ]);
+    expect(audit.mock.calls.flat().some(event => (
+      event.phase === 'result'
+      && event.errorCode === 'execution_failed'
+    ))).toBe(false);
   });
 
   it('audits execution failure without copying the executor error or reason', async () => {

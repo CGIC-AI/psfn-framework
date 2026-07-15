@@ -58,7 +58,15 @@ import type { AdminSharedWorkspaceService } from './services/shared-workspace-se
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
-  resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
+  resolveConfirmationQueue(
+    params: ConfirmationResolveParams,
+    auth?: ConfirmationOperatorAuthContext,
+  ): Promise<ConfirmationResolveResult>;
+}
+
+export interface ConfirmationOperatorAuthContext {
+  authorization?: string;
+  cookie?: string;
 }
 
 export interface AdaptiveToolsStateProvider {

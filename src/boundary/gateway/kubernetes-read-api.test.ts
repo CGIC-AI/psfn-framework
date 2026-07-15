@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createKubernetesReadApi } from './kubernetes-read-api.js';
+import {
+  createInClusterKubernetesReadApi,
+  createKubernetesReadApi,
+} from './kubernetes-read-api.js';
 
 describe('createKubernetesReadApi', () => {
   it('uses fixed read-only API paths and returns a bounded status projection', async () => {
@@ -64,5 +67,60 @@ describe('createKubernetesReadApi', () => {
     }]);
     expect(JSON.stringify({ deployment, pods })).not.toContain('must-not-escape');
     expect(JSON.stringify({ deployment, pods })).not.toContain('hidden');
+  });
+});
+
+describe('createInClusterKubernetesReadApi', () => {
+  it('reloads and validates the projected ServiceAccount token for every request', async () => {
+    const readToken = vi.fn()
+      .mockReturnValueOnce('token-one\n')
+      .mockReturnValueOnce('token-two\n');
+    const requestJson = vi.fn(async ({ path }: { path: string }) => {
+      if (path.includes('/deployments/')) {
+        return {
+          metadata: { name: 'psfn-agent', generation: 1 },
+          spec: { replicas: 1 },
+          status: {
+            observedGeneration: 1,
+            readyReplicas: 1,
+            updatedReplicas: 1,
+            availableReplicas: 1,
+          },
+        };
+      }
+      return { items: [] };
+    });
+    const api = createInClusterKubernetesReadApi({
+      KUBERNETES_SERVICE_HOST: 'kubernetes.default.svc',
+      KUBERNETES_SERVICE_PORT_HTTPS: '443',
+    }, {
+      readToken,
+      readCa: () => Buffer.from('test-ca'),
+      requestJson,
+    });
+
+    await api.getDeployment('psfn-test', 'psfn-agent');
+    await api.listPods('psfn-test', 'app.kubernetes.io/instance=psfn');
+
+    expect(readToken).toHaveBeenCalledTimes(2);
+    expect(requestJson.mock.calls.map(([options]) => options.token)).toEqual([
+      'token-one',
+      'token-two',
+    ]);
+  });
+
+  it('rejects a rotated token containing header-breaking whitespace', async () => {
+    const api = createInClusterKubernetesReadApi({
+      KUBERNETES_SERVICE_HOST: 'kubernetes.default.svc',
+      KUBERNETES_SERVICE_PORT_HTTPS: '443',
+    }, {
+      readToken: () => 'token-one\ntoken-two',
+      readCa: () => Buffer.from('test-ca'),
+      requestJson: vi.fn(),
+    });
+
+    await expect(api.getDeployment('psfn-test', 'psfn-agent')).rejects.toThrow(
+      'Kubernetes ServiceAccount token is missing or invalid.',
+    );
   });
 });

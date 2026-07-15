@@ -528,7 +528,10 @@ export class GatewayServer {
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
-      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params),
+      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params, {
+        kind: 'companion',
+        id: this.authenticatedCompanionId(conn) ?? 'unidentified-agent-rpc',
+      }),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
@@ -723,7 +726,21 @@ export class GatewayServer {
     id: string;
     decision: 'approve' | 'deny';
   }): Promise<ConfirmationResolveResult> {
-    return this.approvalBoundary.resolveConfirmation(params);
+    return this.approvalBoundary.resolveConfirmation(params, {
+      kind: 'companion',
+      id: 'companion-relay',
+    });
+  }
+
+  resolveOperatorApproval(params: {
+    id: string;
+    decision: 'approve' | 'deny' | 'modify';
+    modifiedParams?: Record<string, unknown>;
+  }): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmation(params, {
+      kind: 'operator',
+      id: 'garden-admin',
+    });
   }
 
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {

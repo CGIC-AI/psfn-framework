@@ -265,6 +265,8 @@ spec:
               value: {{ default .Values.psfnAppImage.digest .Values.workloads.garden.image.digest | quote }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
+            - name: GATEWAY_OPERATOR_API_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:

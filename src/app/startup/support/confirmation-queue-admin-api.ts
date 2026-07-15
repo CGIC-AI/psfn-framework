@@ -1,16 +1,18 @@
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ConfirmationQueueAdminApi } from '../../../operator/garden/admin-contract.js';
+import type { ConfirmationOperatorAuthContext } from '../../../operator/garden/admin-contract.js';
 import type { ConfirmationResolveResult } from '../../../system/capabilities/confirmation-queue.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
 } from '../../../boundary/gateway/protocol.js';
+import type { GatewayOperatorConfirmationClient } from './gateway-operator-confirmation-client.js';
 
 type LocalConfirmationQueue = Pick<ApprovalQueuePort, 'listPending' | 'resolve'>;
 type LocalConfirmationQueueWithLookup = Pick<ApprovalQueuePort, 'getPending' | 'listPending' | 'resolve'>;
 type GatewayConfirmationQueueClient = Pick<
   ConfirmationQueueAdminApi,
-  'listConfirmationQueue' | 'resolveConfirmationQueue'
+  'listConfirmationQueue'
 >;
 
 export function createLocalConfirmationQueueAdminApi(
@@ -29,6 +31,7 @@ export function createLocalConfirmationQueueAdminApi(
 export function createGatewayConfirmationQueueAdminApi(
   gateway: GatewayConfirmationQueueClient,
   localQueue: LocalConfirmationQueueWithLookup,
+  operatorClient?: GatewayOperatorConfirmationClient,
 ): ConfirmationQueueAdminApi {
   return {
     listConfirmationQueue: async (): Promise<ConfirmationListResult> => {
@@ -43,11 +46,15 @@ export function createGatewayConfirmationQueueAdminApi(
     },
     resolveConfirmationQueue: async (
       params: ConfirmationResolveParams,
+      auth: ConfirmationOperatorAuthContext = {},
     ): Promise<ConfirmationResolveResult> => {
       if (localQueue.getPending(params.id)) {
         return localQueue.resolve(params);
       }
-      return gateway.resolveConfirmationQueue(params);
+      if (!operatorClient) {
+        throw new Error('Gateway operator confirmation endpoint is not configured.');
+      }
+      return operatorClient.resolve(params, auth);
     },
   };
 }

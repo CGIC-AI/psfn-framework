@@ -1,8 +1,10 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type {
+  ConfirmationExecutionContext,
   ConfirmationQueueEntry,
   ConfirmationQueueRequest,
 } from '../capabilities/confirmation-queue.js';
+import { ConfirmationExecutionCommittedError } from '../capabilities/confirmation-queue.js';
 
 export const KUBE_SELF_MANAGEMENT_ACTIONS = [
   'diagnose',
@@ -32,6 +34,7 @@ export interface KubeSelfManagementApprovalQueue {
     execute: (
       params: Record<string, unknown>,
       entry: ConfirmationQueueEntry,
+      context: ConfirmationExecutionContext,
     ) => Promise<unknown>,
   ): Promise<ConfirmationQueueEntry>;
 }
@@ -51,6 +54,8 @@ export interface KubeSelfManagementAuditEvent {
   helmRevision?: number;
   approvalId?: string;
   errorCode?: string;
+  resolverKind?: 'operator';
+  resolverId?: string;
 }
 
 export type KubeSelfManagementReadAction = 'diagnose' | 'validate';
@@ -333,7 +338,19 @@ export class KubeSelfManagementController {
         scope: `${request.namespace}/${request.release}`,
         params: bindingParams(request),
         companionReason: request.reason,
-      }, async (approvedParams, entry) => {
+        resolutionAuthority: 'operator',
+      }, async (approvedParams, entry, context) => {
+        const resolver = context.resolver;
+        if (resolver?.kind !== 'operator') {
+          await this.options.audit(requestAuditEvent(input.actor, request, {
+            phase: 'result',
+            decision: 'DENY',
+            outcome: 'failed',
+            approvalId: entry.id,
+            errorCode: 'operator_resolution_required',
+          }));
+          throw new Error('Kubernetes self-management requires an authenticated operator resolution.');
+        }
         const approvedRequest = parseRequest({
           ...approvedParams,
           reason: request.reason,
@@ -347,10 +364,12 @@ export class KubeSelfManagementController {
             outcome: 'failed',
             approvalId: entry.id,
             errorCode: 'approval_mismatch',
+            resolverKind: 'operator',
+            resolverId: resolver.id,
           }));
           throw new Error('Kubernetes self-management approval does not match the queued action.');
         }
-        await this.executeApproved(input.actor, approvedRequest, entry.id);
+        await this.executeApproved(input.actor, approvedRequest, entry.id, resolver.id);
       });
     } catch {
       await this.options.audit(requestAuditEvent(input.actor, request, {
@@ -378,14 +397,38 @@ export class KubeSelfManagementController {
     actor: string,
     request: KubeSelfManagementRequest,
     approvalId?: string,
+    resolverId?: string,
   ): Promise<KubeSelfManagementResponse> {
     await this.options.audit(requestAuditEvent(actor, request, {
       decision: 'ALLOW',
       outcome: 'pending',
       ...(approvalId ? { approvalId } : {}),
+      ...(resolverId ? { resolverKind: 'operator', resolverId } : {}),
     }));
+    let result: KubeSelfManagementExecutionResult;
     try {
-      const result = await this.options.executor.execute(request);
+      result = await this.options.executor.execute(request);
+    } catch (executionError) {
+      try {
+        await this.options.audit(requestAuditEvent(actor, request, {
+          phase: 'result',
+          decision: 'DENY',
+          validationResult: 'failed',
+          outcome: 'failed',
+          errorCode: 'execution_failed',
+          ...(approvalId ? { approvalId } : {}),
+          ...(resolverId ? { resolverKind: 'operator', resolverId } : {}),
+        }));
+      } catch (auditError) {
+        throw new AggregateError(
+          [executionError, auditError],
+          'Kubernetes self-management execution and failure audit failed.',
+        );
+      }
+      throw new Error('Kubernetes self-management execution failed.', { cause: executionError });
+    }
+
+    try {
       await this.options.audit(requestAuditEvent(actor, request, {
         phase: 'result',
         decision: 'ALLOW',
@@ -393,21 +436,21 @@ export class KubeSelfManagementController {
         rollbackStatus: result.rollbackStatus,
         outcome: 'succeeded',
         ...(approvalId ? { approvalId } : {}),
+        ...(resolverId ? { resolverKind: 'operator', resolverId } : {}),
       }));
-      return {
-        status: 'completed',
-        ...result,
-      };
-    } catch {
-      await this.options.audit(requestAuditEvent(actor, request, {
-        phase: 'result',
-        decision: 'DENY',
-        validationResult: 'failed',
-        outcome: 'failed',
-        errorCode: 'execution_failed',
-        ...(approvalId ? { approvalId } : {}),
-      }));
-      throw new Error('Kubernetes self-management execution failed.');
+    } catch (auditError) {
+      if (isMutationRequest(request)) {
+        throw new ConfirmationExecutionCommittedError(
+          'Kubernetes self-management action executed, but result audit failed; do not retry.',
+          { cause: auditError },
+        );
+      }
+      throw new Error('Kubernetes self-management result audit failed.', { cause: auditError });
     }
+
+    return {
+      status: 'completed',
+      ...result,
+    };
   }
 }

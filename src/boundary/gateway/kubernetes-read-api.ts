@@ -14,6 +14,20 @@ const DNS_LABEL_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
 
+export interface InClusterKubernetesRequestOptions {
+  hostname: string;
+  port: number;
+  path: string;
+  ca: Buffer;
+  token: string;
+}
+
+export interface InClusterKubernetesReadApiDeps {
+  readToken?: (path: string) => string;
+  readCa?: (path: string) => Buffer;
+  requestJson?: (options: InClusterKubernetesRequestOptions) => Promise<unknown>;
+}
+
 export interface KubernetesJsonTransport {
   getJson(path: string): Promise<unknown>;
 }
@@ -138,58 +152,80 @@ function requireServicePort(env: NodeJS.ProcessEnv): number {
   return port;
 }
 
+function loadServiceAccountToken(readToken: (path: string) => string): string {
+  const token = readToken(SERVICE_ACCOUNT_TOKEN_PATH).trim();
+  if (!token || token.length > 16_384 || /\s|[\u0000-\u001f\u007f]/u.test(token)) {
+    throw new Error('Kubernetes ServiceAccount token is missing or invalid.');
+  }
+  return token;
+}
+
+function requestKubernetesJson(
+  options: InClusterKubernetesRequestOptions,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest({
+      hostname: options.hostname,
+      port: options.port,
+      path: options.path,
+      method: 'GET',
+      ca: options.ca,
+      rejectUnauthorized: true,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${options.token}`,
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      response.on('data', (chunk: Buffer) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_RESPONSE_BYTES) {
+          request.destroy(new Error('Kubernetes API response exceeded the size limit.'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`Kubernetes API read failed with HTTP ${response.statusCode ?? 'unknown'}.`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
+        } catch {
+          reject(new Error('Kubernetes API returned invalid JSON.'));
+        }
+      });
+    });
+    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      request.destroy(new Error('Kubernetes API read timed out.'));
+    });
+    request.once('error', reject);
+    request.end();
+  });
+}
+
 export function createInClusterKubernetesReadApi(
   env: NodeJS.ProcessEnv = process.env,
+  deps: InClusterKubernetesReadApiDeps = {},
 ): KubeReadApiPort {
   const hostname = requireServiceHost(env);
   const port = requireServicePort(env);
-  const token = readFileSync(SERVICE_ACCOUNT_TOKEN_PATH, 'utf8').trim();
-  const ca = readFileSync(SERVICE_ACCOUNT_CA_PATH);
-  if (!token || token.length > 16_384) {
-    throw new Error('Kubernetes ServiceAccount token is missing or invalid.');
-  }
+  const readToken = deps.readToken ?? (path => readFileSync(path, 'utf8'));
+  const ca = (deps.readCa ?? (path => readFileSync(path)))(SERVICE_ACCOUNT_CA_PATH);
+  const requestJson = deps.requestJson ?? requestKubernetesJson;
 
   return createKubernetesReadApi({
-    getJson: (path): Promise<unknown> => new Promise((resolve, reject) => {
-      const request = httpsRequest({
+    getJson: async (path): Promise<unknown> => {
+      const token = loadServiceAccountToken(readToken);
+      return await requestJson({
         hostname,
         port,
         path,
-        method: 'GET',
         ca,
-        rejectUnauthorized: true,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      }, (response) => {
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        response.on('data', (chunk: Buffer) => {
-          totalBytes += chunk.length;
-          if (totalBytes > MAX_RESPONSE_BYTES) {
-            request.destroy(new Error('Kubernetes API response exceeded the size limit.'));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        response.on('end', () => {
-          if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(`Kubernetes API read failed with HTTP ${response.statusCode ?? 'unknown'}.`));
-            return;
-          }
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
-          } catch {
-            reject(new Error('Kubernetes API returned invalid JSON.'));
-          }
-        });
+        token,
       });
-      request.setTimeout(REQUEST_TIMEOUT_MS, () => {
-        request.destroy(new Error('Kubernetes API read timed out.'));
-      });
-      request.once('error', reject);
-      request.end();
-    }),
+    },
   });
 }

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
+import { getCookieValue } from '../../channels/backplane/http/auth.js';
 import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
 import { buildAdminMemoryRoutes } from './api-routes-memory.js';
 import { parseAdminJsonBody } from './request-body.js';
@@ -1022,7 +1023,19 @@ export function buildAdminApiRoutes(options: {
             resolveParams.modifiedParams = payload.modifiedParams as Record<string, unknown>;
           }
 
-          confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
+          const authorization = typeof req.headers.authorization === 'string'
+            && req.headers.authorization.length <= 1_024
+            ? req.headers.authorization
+            : undefined;
+          const adminCookieToken = getCookieValue(req, 'psfn_token');
+          const cookie = adminCookieToken && adminCookieToken.length <= 512
+            ? `psfn_token=${encodeURIComponent(adminCookieToken)}`
+            : undefined;
+
+          confirmationQueueApi!.resolveConfirmationQueue(resolveParams, {
+            ...(authorization ? { authorization } : {}),
+            ...(cookie ? { cookie } : {}),
+          }).then(
             (result) => {
               appendAuditTimelineEntry?.(
                 'confirmation',

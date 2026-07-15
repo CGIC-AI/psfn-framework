@@ -51,6 +51,10 @@ if [ -z "${API_HOST:-}" ]; then
   export API_HOST=127.0.0.1
 fi
 
+if [ -z "${GATEWAY_OPERATOR_API_BASE_URL:-}" ]; then
+  export GATEWAY_OPERATOR_API_BASE_URL="http://127.0.0.1:${API_PORT}/v1"
+fi
+
 if [ -z "${API_KEY:-}" ] && [ -z "${ALLOW_INSECURE_LOCAL_API:-}" ]; then
   export ALLOW_INSECURE_LOCAL_API=true
 fi
@@ -185,6 +189,7 @@ build_agent_env() {
     EXTRACTION_DRAIN_TIMEOUT_MS \
     GATEWAY_SOCKET \
     GATEWAY_COMPANION_AUTH_TOKEN \
+    GATEWAY_OPERATOR_API_BASE_URL \
     GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN \
     HOME \
     LANG \

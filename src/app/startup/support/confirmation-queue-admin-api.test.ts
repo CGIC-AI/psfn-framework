@@ -58,7 +58,9 @@ describe('confirmation queue admin api helpers', () => {
           expiresAt: 4_000,
         }],
       })),
-      resolveConfirmationQueue: vi.fn(async () => ({
+    };
+    const operatorClient = {
+      resolve: vi.fn(async () => ({
         id: 'gateway-confirmation',
         status: 'approved' as const,
         message: 'gateway resolved',
@@ -66,7 +68,7 @@ describe('confirmation queue admin api helpers', () => {
       })),
     };
 
-    const api = createGatewayConfirmationQueueAdminApi(gateway, localQueue);
+    const api = createGatewayConfirmationQueueAdminApi(gateway, localQueue, operatorClient);
     const listed = await api.listConfirmationQueue();
     const localResolved = await api.resolveConfirmationQueue({
       id: 'local-confirmation',
@@ -75,6 +77,8 @@ describe('confirmation queue admin api helpers', () => {
     const gatewayResolved = await api.resolveConfirmationQueue({
       id: 'gateway-confirmation',
       decision: 'approve',
+    }, {
+      authorization: 'Bearer admin-secret',
     });
 
     expect(listed.entries.map((entry) => entry.id)).toEqual([
@@ -83,6 +87,11 @@ describe('confirmation queue admin api helpers', () => {
     ]);
     expect(localResolved.id).toBe('local-confirmation');
     expect(gatewayResolved.id).toBe('gateway-confirmation');
-    expect(gateway.resolveConfirmationQueue).toHaveBeenCalledTimes(1);
+    expect(operatorClient.resolve).toHaveBeenCalledWith({
+      id: 'gateway-confirmation',
+      decision: 'approve',
+    }, {
+      authorization: 'Bearer admin-secret',
+    });
   });
 });

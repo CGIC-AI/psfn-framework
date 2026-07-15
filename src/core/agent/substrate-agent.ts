@@ -76,6 +76,7 @@ import {
 } from '../../system/capabilities/gate.js';
 import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
 import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
+import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
 import {
   isEgressCapabilityToken,
   type IntakeSinkGate,
@@ -508,6 +509,7 @@ export class SubstrateAgent {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
     const configuredProviderFirstOutput = options?.streamRuntimeOptions?.onProviderFirstOutput;
+    const configuredProviderPayloadCaptured = options?.streamRuntimeOptions?.onProviderPayloadCaptured;
 
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
@@ -515,6 +517,10 @@ export class SubstrateAgent {
         onProviderFirstOutput: async (event) => {
           await this.eventBus.emit('agent.provider.first_output', event);
           await configuredProviderFirstOutput?.(event);
+        },
+        onProviderPayloadCaptured: async (event) => {
+          await this.eventBus.emit('agent.provider.payload_captured', event);
+          await configuredProviderPayloadCaptured?.(event);
         },
         transport: defaultStreamTransport,
       }),
@@ -791,6 +797,14 @@ export class SubstrateAgent {
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return this.toolRuntimeFacade.getToolCatalog();
+  }
+
+  /**
+   * Refresh the durable-usage presentation-ordering signal (psfn-framework-b0yl.5).
+   * Fed by the periodic tool-usage evaluator; presentation-only, never gates callability.
+   */
+  setToolUsageRanking(ranking: ToolUsageRanking | null): void {
+    this.toolRuntimeFacade.setToolUsageRanking(ranking);
   }
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {

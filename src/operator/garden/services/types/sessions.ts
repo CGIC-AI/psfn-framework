@@ -223,9 +223,13 @@ export interface AdminSessionService {
     sessionId: string,
     options?: AdminSessionMessagePaginationOptions,
   ): Promise<AdminSessionMessagesData>;
-  /** Canonical synchronous reader used by non-transport callers and fallback. */
-  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
-  getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData;
+  /**
+   * Canonical reader used by non-transport callers and fallback. Async because
+   * it resolves persisted retrieved-memory candidate refs against the live
+   * memory store at read time (bead psfn-framework-jsi9).
+   */
+  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): Promise<AdminSessionMessagesData>;
+  getSessionTurnDetail(sessionId: string, turnId: string): Promise<AdminSessionTurnDetailData>;
   searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;
   listSessionRoutes(): Promise<AdminSessionRouteListData>;
   resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;

@@ -271,6 +271,50 @@ describe('ShardManager', () => {
     resetRunChargeRollingWindowForTests();
   });
 
+  // Wiring proof (bead zet.7): operator-set shard concurrency/heartbeat
+  // settings in the owner file reach the live resolved limits. Composition
+  // passes the full SubstrateConfig as deps.config; spawn-blocking and stale
+  // eviction against these same resolved fields are covered by the existing
+  // behavior tests ("enforces concurrency limit", stale-eviction test).
+  it('resolves concurrency and heartbeat limits from owner-file settings (zet.7)', () => {
+    const base = {
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      parentSystemPrompt: 'test',
+    };
+
+    const fromSettings = new ShardManager({
+      ...base,
+      config: {
+        ...TEST_CONFIG,
+        shardMaxConcurrent: 2,
+        shardHeartbeatStaleAfterMs: 30_000,
+        shardHeartbeatDisconnectAfterMs: 90_000,
+      },
+    });
+    expect(fromSettings.maxConcurrentShards).toBe(2);
+    expect(fromSettings.heartbeatStaleThresholdMs).toBe(30_000);
+    expect(fromSettings.heartbeatDisconnectThresholdMs).toBe(90_000);
+
+    // Explicit deps override wins over the owner-file value.
+    const explicitOverride = new ShardManager({
+      ...base,
+      config: { ...TEST_CONFIG, shardMaxConcurrent: 9 },
+      maxConcurrent: 1,
+    });
+    expect(explicitOverride.maxConcurrentShards).toBe(1);
+
+    // Compiled defaults preserved exactly when the settings are absent:
+    // maxConcurrent 5, stale 60s, disconnect = stale x 3.
+    const compiledDefault = new ShardManager({ ...base, config: TEST_CONFIG });
+    expect(compiledDefault.maxConcurrentShards).toBe(5);
+    expect(compiledDefault.heartbeatStaleThresholdMs).toBe(60_000);
+    expect(compiledDefault.heartbeatDisconnectThresholdMs).toBe(180_000);
+  });
+
   it('uses the shard-owned compaction trajectory to capture confusion and review once', async () => {
     const shardConfig: SubstrateConfig = {
       ...TEST_CONFIG,

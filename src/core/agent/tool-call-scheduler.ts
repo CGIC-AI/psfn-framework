@@ -7,6 +7,13 @@ import {
   isToolValidationFailureError,
   recordToolValidationFailure,
 } from '../../shared/diagnostics/runtime-diagnostics.js';
+import {
+  buildMalformedArgumentsCorrection,
+  buildSchemaValidationCorrection,
+  buildUnknownToolCorrection,
+  isMalformedToolArguments,
+  type ToolCallCorrection,
+} from './tool-call-correction.js';
 
 export interface ToolCallSchedulerOptions {
   maxParallelToolCalls: number;
@@ -20,6 +27,14 @@ export interface ToolCallExecutionGuard {
   successfulSignatures: Set<string>;
   failureCountsBySignature: Map<string, number>;
   malformedArgumentFailuresByAction: Map<string, MissingArgumentRequirement[]>;
+  /**
+   * Tool names that produced a validate-and-reprompt correction earlier in this
+   * loop. Used to emit `agent.tools.correction.recovered` telemetry when the
+   * model reprompts the same tool with a fixed call that then succeeds, so a
+   * retried-then-succeeded call is observable instead of looking like a plain
+   * success (psfn-framework-b0yl.3).
+   */
+  correctedToolNames: Set<string>;
 }
 
 export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
@@ -28,6 +43,7 @@ export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
     successfulSignatures: new Set(),
     failureCountsBySignature: new Map(),
     malformedArgumentFailuresByAction: new Map(),
+    correctedToolNames: new Set(),
   };
 }
 
@@ -35,6 +51,7 @@ interface ToolCallDescriptor {
   toolCall: any;
   tool: AgentTool<any> | undefined;
   resolveTool: (toolName: string) => AgentTool<any> | undefined;
+  resolveAvailableToolNames: () => string[];
   metadata: ToolConcurrencyMeta;
   metadataIssue?: 'missing' | 'invalid';
 }
@@ -121,6 +138,7 @@ export async function executeToolCallsWithScheduler(
   const toolCalls = assistantMessage.content.filter((content: any) => content.type === 'toolCall');
   const resolveTools = typeof tools === 'function' ? tools : () => tools;
   const resolveTool = (toolName: string) => resolveTools()?.find((entry) => entry.name === toolName);
+  const resolveAvailableToolNames = () => (resolveTools() ?? []).map((entry) => entry.name);
   const descriptors = toolCalls.map((toolCall: any): ToolCallDescriptor => {
     const tool = resolveTool(toolCall.name);
     const resolved = resolveToolConcurrencyMetadata(tool);
@@ -128,6 +146,7 @@ export async function executeToolCallsWithScheduler(
       toolCall,
       tool,
       resolveTool,
+      resolveAvailableToolNames,
       metadata: resolved.metadata,
       metadataIssue: resolved.issue,
     };
@@ -336,45 +355,83 @@ async function executeSingleToolCall(
     args: toolCall.arguments,
   });
 
-  let result: { content: any[]; details: any };
+  let result: { content: any[]; details: any } | undefined;
   let isError = false;
   let cancelled = false;
+  // Validate-and-reprompt (psfn-framework-b0yl.3): a recoverable tool-call
+  // defect (unknown/retired name, malformed non-object arguments, or
+  // schema-invalid arguments) becomes a corrective tool result fed back to the
+  // model, never a dropped turn or a silently defaulted action.
+  let correction: ToolCallCorrection | undefined;
   try {
     if (!tool) {
-      throw new Error(`Tool ${toolCall.name} not found`);
-    }
-    const validatedArgs = validateToolArguments(
-      normalizeToolForPiAiValidation(tool, toolCall),
-      toolCall,
-    );
-    result = await tool.execute(toolCall.id, validatedArgs, context.signal, (partialResult) => {
-      context.stream.push({
-        type: 'tool_execution_update',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        args: toolCall.arguments,
-        partialResult,
+      correction = buildUnknownToolCorrection(
+        toolCall.name,
+        descriptor.resolveAvailableToolNames(),
+      );
+    } else if (isMalformedToolArguments(toolCall.arguments)) {
+      correction = buildMalformedArgumentsCorrection(toolCall.name, toolCall.arguments);
+    } else {
+      const validatedArgs = validateToolArguments(
+        normalizeToolForPiAiValidation(tool, toolCall),
+        toolCall,
+      );
+      result = await tool.execute(toolCall.id, validatedArgs, context.signal, (partialResult) => {
+        context.stream.push({
+          type: 'tool_execution_update',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          args: toolCall.arguments,
+          partialResult,
+        });
       });
-    });
-    isError = toolResultDetailsFlagError(result);
+      isError = toolResultDetailsFlagError(result);
+    }
   } catch (error) {
     if (isToolValidationFailureError(error)) {
-      recordToolValidationFailure({
-        toolName: toolCall.name,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      options.onTelemetry?.('agent.tools.validation.failed', {
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
-      });
+      correction = buildSchemaValidationCorrection(
+        toolCall.name,
+        error instanceof Error ? error.message : String(error),
+      );
+    } else {
+      cancelled = context.signal?.aborted === true
+        || (error instanceof Error && /abort(ed)?/i.test(error.message));
+      result = {
+        content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+        details: {},
+      };
+      isError = true;
     }
-    cancelled = context.signal?.aborted === true
-      || (error instanceof Error && /abort(ed)?/i.test(error.message));
+  }
+
+  if (correction) {
+    recordToolValidationFailure({
+      toolName: toolCall.name,
+      reason: `${correction.defectClass}: ${correction.text}`,
+    });
+    options.onTelemetry?.('agent.tools.validation.failed', {
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      defectClass: correction.defectClass,
+    });
+    options.onTelemetry?.('agent.tools.correction.reprompt', {
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      defectClass: correction.defectClass,
+      ...(correction.suggestion ? { suggestedTool: correction.suggestion } : {}),
+    });
+    guard?.correctedToolNames.add(toolCall.name);
     result = {
-      content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+      content: [{ type: 'text', text: correction.text }],
       details: {},
     };
     isError = true;
+  }
+
+  if (!result) {
+    // Fail closed: every branch above assigns a result. A missing result here
+    // is a runtime invariant break, not a droppable turn.
+    throw new Error(`Tool call for ${toolCall.name} produced no result`);
   }
 
   if (cancelled) {
@@ -394,6 +451,12 @@ async function executeSingleToolCall(
       recordMalformedArgumentFailure(guard, toolCall, result);
     } else {
       guard.successfulSignatures.add(signature);
+      if (guard.correctedToolNames.delete(toolCall.name)) {
+        options.onTelemetry?.('agent.tools.correction.recovered', {
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+        });
+      }
     }
   }
 

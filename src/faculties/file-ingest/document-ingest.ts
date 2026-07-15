@@ -45,6 +45,37 @@ export const DOCUMENT_MAX_BYTES = 16 * 1024 * 1024;
 export const TEXT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
 const PARSED_DOCUMENT_PROMPT_CHARS = 24_000;
 const PARSED_DOCUMENT_SIDECAR_CHARS = 240_000;
+
+/** Resolved per-ingest caps; compiled defaults unless owner-file settings override (zet.7). */
+export interface DocumentIngestLimits {
+  /** Max document attachment size in bytes. */
+  documentMaxBytes: number;
+  /** Max plain-text attachment size in bytes. */
+  textDocumentMaxBytes: number;
+  /** Char cap on parsed text injected into the prompt. */
+  parsedPromptChars: number;
+  /** Char cap on parsed text written to the sidecar file. */
+  parsedSidecarChars: number;
+}
+
+/**
+ * Derive the document ingest caps from owner-file settings (zet.7). Absent
+ * fields fall back to the compiled defaults; in production load-config always
+ * supplies them, so an operator-set value reaches every ingest channel.
+ */
+export function resolveDocumentIngestLimits(source?: {
+  documentIngestMaxBytes?: number;
+  documentIngestTextMaxBytes?: number;
+  documentIngestPromptChars?: number;
+  documentIngestSidecarChars?: number;
+}): DocumentIngestLimits {
+  return {
+    documentMaxBytes: source?.documentIngestMaxBytes ?? DOCUMENT_MAX_BYTES,
+    textDocumentMaxBytes: source?.documentIngestTextMaxBytes ?? TEXT_DOCUMENT_MAX_BYTES,
+    parsedPromptChars: source?.documentIngestPromptChars ?? PARSED_DOCUMENT_PROMPT_CHARS,
+    parsedSidecarChars: source?.documentIngestSidecarChars ?? PARSED_DOCUMENT_SIDECAR_CHARS,
+  };
+}
 const DOCUMENT_PROMPT_HEADER = [
   '[Runtime note]',
   'The following text was parsed from user-provided file attachment(s).',
@@ -127,6 +158,11 @@ export interface DocumentIngestContext {
    * download while no fetch port is configured fails closed into `failures`.
    */
   fetchResource?: DocumentResourceFetch;
+  /**
+   * Owner-file backed ingest caps (zet.7). Omitted → compiled defaults via
+   * {@link resolveDocumentIngestLimits}.
+   */
+  limits?: DocumentIngestLimits;
 }
 
 export interface DocumentIngestResult {
@@ -382,23 +418,24 @@ async function ingestDocumentAttachment(
   candidate: DocumentAttachmentCandidate,
   context: DocumentIngestContext,
 ): Promise<DocumentIngestResult | QuarantinedDocumentAttachment> {
-  if (candidate.sizeBytes > DOCUMENT_MAX_BYTES) {
-    throw new Error(`attachment is too large (${candidate.sizeBytes} bytes; max ${DOCUMENT_MAX_BYTES})`);
+  const limits = context.limits ?? resolveDocumentIngestLimits();
+  if (candidate.sizeBytes > limits.documentMaxBytes) {
+    throw new Error(`attachment is too large (${candidate.sizeBytes} bytes; max ${limits.documentMaxBytes})`);
   }
 
-  if (isTextDocument(candidate.contentType) && candidate.sizeBytes > TEXT_DOCUMENT_MAX_BYTES) {
-    throw new Error(`text attachment is too large (${candidate.sizeBytes} bytes; max ${TEXT_DOCUMENT_MAX_BYTES})`);
+  if (isTextDocument(candidate.contentType) && candidate.sizeBytes > limits.textDocumentMaxBytes) {
+    throw new Error(`text attachment is too large (${candidate.sizeBytes} bytes; max ${limits.textDocumentMaxBytes})`);
   }
 
   const maxDownloadBytes = isTextDocument(candidate.contentType)
-    ? TEXT_DOCUMENT_MAX_BYTES
-    : DOCUMENT_MAX_BYTES;
+    ? limits.textDocumentMaxBytes
+    : limits.documentMaxBytes;
   const bytes = await resolveCandidateBytes(candidate, context, maxDownloadBytes);
-  if (bytes.byteLength > DOCUMENT_MAX_BYTES) {
-    throw new Error(`downloaded attachment is too large (${bytes.byteLength} bytes; max ${DOCUMENT_MAX_BYTES})`);
+  if (bytes.byteLength > limits.documentMaxBytes) {
+    throw new Error(`downloaded attachment is too large (${bytes.byteLength} bytes; max ${limits.documentMaxBytes})`);
   }
-  if (isTextDocument(candidate.contentType) && bytes.byteLength > TEXT_DOCUMENT_MAX_BYTES) {
-    throw new Error(`downloaded text attachment is too large (${bytes.byteLength} bytes; max ${TEXT_DOCUMENT_MAX_BYTES})`);
+  if (isTextDocument(candidate.contentType) && bytes.byteLength > limits.textDocumentMaxBytes) {
+    throw new Error(`downloaded text attachment is too large (${bytes.byteLength} bytes; max ${limits.textDocumentMaxBytes})`);
   }
 
   const quarantineDecision = classifyAttachmentQuarantineRisk({
@@ -433,11 +470,11 @@ async function ingestDocumentAttachment(
   await writeFile(localPath, bytes);
 
   const parsedText = normalizeParsedText(await parseDocumentBytes(bytes, candidate.contentType));
-  const sidecarText = truncateText(parsedText, PARSED_DOCUMENT_SIDECAR_CHARS).text;
+  const sidecarText = truncateText(parsedText, limits.parsedSidecarChars).text;
   const parsedTextPath = `${localPath}.parsed.txt`;
   await writeFile(parsedTextPath, sidecarText, 'utf8');
 
-  const promptTruncation = truncateText(parsedText, PARSED_DOCUMENT_PROMPT_CHARS);
+  const promptTruncation = truncateText(parsedText, limits.parsedPromptChars);
   const promptText = promptTruncation.truncated
     ? `${promptTruncation.text}\n\n[Parsed attachment truncated for prompt; full parsed sidecar: ${parsedTextPath}]`
     : promptTruncation.text;

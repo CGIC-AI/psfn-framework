@@ -8,6 +8,7 @@ import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, Thinki
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
 import type {
   CorrelationMetadata,
+  LLMCapturedProviderWirePayload,
   LLMContext,
   LLMResponse,
   LLMStreamFirstOutputObservation,
@@ -66,10 +67,25 @@ export interface SubstrateStreamTransport {
 export interface SubstrateStreamRuntimeOptions {
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
+  onProviderPayloadCaptured?: (event: ProviderPayloadCapturedEvent) => void | Promise<void>;
   transport: SubstrateStreamTransport;
 }
 
 export type ProviderFirstOutputEvent = LLMStreamFirstOutputObservation
+  & Partial<CorrelationMetadata>
+  & {
+    provider: string;
+    model: string;
+  };
+
+/**
+ * The true provider wire body captured as-sent for one provider call
+ * (bead hgw3-80f6). Surfaced from the LLMResponse so the turn snapshot can carry
+ * the raw-wire view instead of the pre-call reconstructions.
+ */
+export type ProviderPayloadCapturedEvent = {
+  payload: LLMCapturedProviderWirePayload;
+}
   & Partial<CorrelationMetadata>
   & {
     provider: string;
@@ -136,6 +152,7 @@ export function createSubstrateStreamFn(
           correlationFields,
           logicalCallId,
           onProviderFirstOutput: runtimeOptions.onProviderFirstOutput,
+          onProviderPayloadCaptured: runtimeOptions.onProviderPayloadCaptured,
           nextPhysicalAttempt: () => {
             physicalAttempt += 1;
             return physicalAttempt;
@@ -194,6 +211,7 @@ interface ExecuteStreamCandidateParams {
   correlationFields: ReturnType<typeof toCorrelationLogFields>;
   logicalCallId: string;
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
+  onProviderPayloadCaptured?: (event: ProviderPayloadCapturedEvent) => void | Promise<void>;
   nextPhysicalAttempt: () => number;
 }
 
@@ -232,6 +250,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             retryOwner: 'caller',
           },
           onProviderFirstOutput: params.onProviderFirstOutput,
+          onProviderPayloadCaptured: params.onProviderPayloadCaptured,
         });
 
         for await (const rawEvent of stream) {
@@ -318,6 +337,7 @@ interface TransportEventStreamParams {
   transport: SubstrateStreamTransport;
   accounting: NonNullable<LLMContext['accounting']>;
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
+  onProviderPayloadCaptured?: (event: ProviderPayloadCapturedEvent) => void | Promise<void>;
 }
 
 function createTransportEventStream(
@@ -370,6 +390,20 @@ function createTransportEventStream(
             },
           },
         );
+
+        const capturedWirePayload = response.providerObservability?.capturedWirePayload;
+        if (capturedWirePayload && params.onProviderPayloadCaptured) {
+          void Promise.resolve(params.onProviderPayloadCaptured({
+            payload: capturedWirePayload,
+            ...(params.requestContext ?? {}),
+            provider: params.candidate.provider,
+            model: params.candidate.model,
+          })).catch(error => log.warn('Provider wire-payload capture observer failed', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: params.candidate.provider,
+            model: params.candidate.model,
+          }));
+        }
 
         applyTerminalResponse(state, response);
         enqueueThinkingEvents(queue, state, response.reasoning);

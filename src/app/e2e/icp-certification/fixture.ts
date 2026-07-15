@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
 import { createBootstrapStarterCard } from '../../../core/identity/loader.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import {
   resolveCompanionAdminTransportSocketPath,
 } from '../../../operator/garden/transport-paths.js';
@@ -75,22 +76,44 @@ function writeJson(path: string, value: unknown): void {
 }
 
 export function setIcpCertificationAutonomyEnabled(
-  fixture: Pick<IcpCertificationFixture, 'systemDataDir'>,
+  fixture: Pick<IcpCertificationFixture, 'systemDataDir' | 'companions'>,
   enabled: boolean,
 ): void {
-  const schedulerPath = join(fixture.systemDataDir, 'scheduler.json');
-  const scheduler = readJson(schedulerPath);
-  const icpAutonomy = scheduler.icpAutonomy;
-  if (!isRecord(icpAutonomy)) {
-    throw new Error('Certification scheduler owner is missing icpAutonomy');
+  // scheduler.json is a per-companion owner file (dnll.3): the runtime reads it
+  // from each companion's data dir. Update the companion copies plus the
+  // system-root template so every read is consistent.
+  const schedulerDirs = [
+    fixture.systemDataDir,
+    ...fixture.companions.map((companion) => companion.companionDataDir),
+  ];
+  for (const dir of schedulerDirs) {
+    const schedulerPath = join(dir, 'scheduler.json');
+    const scheduler = readJson(schedulerPath);
+    const icpAutonomy = scheduler.icpAutonomy;
+    if (!isRecord(icpAutonomy)) {
+      throw new Error('Certification scheduler owner is missing icpAutonomy');
+    }
+    icpAutonomy.enabled = enabled;
+    writeJson(schedulerPath, scheduler);
   }
-  icpAutonomy.enabled = enabled;
-  writeJson(schedulerPath, scheduler);
 }
 
 function copyCanonicalOwners(seedDir: string, systemDataDir: string): void {
   for (const owner of OWNER_NAMES) {
     cpSync(join(seedDir, `${owner}.seed.json`), join(systemDataDir, `${owner}.json`));
+  }
+}
+
+/**
+ * Per-companion owner files (capability-tier.json dnll.2, scheduler.json dnll.3)
+ * are rooted at companionDataDir, not the shared systemDataDir. Copy the
+ * fully-configured system-root copies into each companion root so the runtime,
+ * which now loads them from companionDataDir, boots. The systemDataDir copies are
+ * left in place as the configuration template these are derived from.
+ */
+function copyPerCompanionOwners(systemDataDir: string, companionDataDir: string): void {
+  for (const ownerFile of PER_COMPANION_OWNER_FILES) {
+    cpSync(join(systemDataDir, ownerFile), join(companionDataDir, ownerFile));
   }
 }
 
@@ -305,6 +328,9 @@ export function createIcpCertificationFixture(input: {
     input.autonomyEnabled ?? true,
     input.fatigueProfile ?? 'default',
   );
+  // Root the configured per-companion owner files at each companion's data dir.
+  copyPerCompanionOwners(systemDataDir, companionDataA);
+  copyPerCompanionOwners(systemDataDir, companionDataB);
   const modelsPath = join(systemDataDir, 'models.json');
   const models = readJson(modelsPath);
   const modelEntries = models.models as Array<Record<string, unknown>>;

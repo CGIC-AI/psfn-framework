@@ -73,7 +73,9 @@ export async function buildGatewayPrivilegedCore(
     companionId: input.config.companionId,
   });
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: input.startupHydration.systemDataDir,
+    // capability-tier.json is per-companion (dnll.2): root it at the companion
+    // data dir so each fleet companion holds its own maturation tier.
+    dataDir: input.startupHydration.companionDataDir,
   });
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,

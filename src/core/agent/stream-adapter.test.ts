@@ -344,6 +344,99 @@ describe('createSubstrateStreamFn', () => {
     });
   });
 
+  it('forwards the captured provider wire body from the transport response (bead hgw3-80f6)', async () => {
+    const config = makeConfig();
+    const onProviderPayloadCaptured = vi.fn();
+    const capturedWirePayload = {
+      api: 'anthropic-messages',
+      model: 'gateway-model',
+      capturedAtMs: 1_700_000_000_000,
+      byteLength: 128,
+      toolCount: 2,
+      body: { model: 'gateway-model', tools: [{ name: 'a' }, { name: 'b' }], messages: [] },
+    };
+    const transport = {
+      stream: vi.fn(async () => ({
+        content: 'ok',
+        toolCalls: [],
+        model: 'gateway-model',
+        inputTokens: 5,
+        outputTokens: 2,
+        stopReason: 'stop',
+        providerObservability: {
+          routeKind: 'registered_model' as const,
+          requestedProvider: 'openrouter',
+          requestedModel: 'deepseek/deepseek-v3.2',
+          backendProvider: 'openrouter',
+          backendModel: 'gateway-model',
+          backendApi: 'anthropic-messages',
+          systemRole: {
+            transport: 'anthropic_system' as const,
+            supportsSystemRole: true,
+            supportsDeveloperRole: false,
+            usesOutOfBandSystemPrompt: false,
+          },
+          promptCaching: { configured: false, engaged: false },
+          capturedWirePayload,
+        },
+      })),
+    };
+    const streamFn = createSubstrateStreamFn(config, {
+      transport,
+      onProviderPayloadCaptured,
+    });
+
+    await runWithRequestContext(
+      {
+        turnId: 'turn-wire-capture-1',
+        requestId: 'request-wire-capture-1',
+        channelId: 'discord:general',
+        channelType: 'discord',
+        callType: 'chat',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => {
+        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect(onProviderPayloadCaptured).toHaveBeenCalledOnce();
+    expect(onProviderPayloadCaptured).toHaveBeenCalledWith(expect.objectContaining({
+      payload: capturedWirePayload,
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v3.2',
+      turnId: 'turn-wire-capture-1',
+      requestId: 'request-wire-capture-1',
+    }));
+  });
+
+  it('does not fire the wire-capture hook when the transport response omits a capture', async () => {
+    const config = makeConfig();
+    const onProviderPayloadCaptured = vi.fn();
+    const transport = {
+      stream: vi.fn(async () => ({
+        content: 'ok',
+        toolCalls: [],
+        model: 'gateway-model',
+        inputTokens: 5,
+        outputTokens: 2,
+        stopReason: 'stop',
+      })),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport, onProviderPayloadCaptured });
+
+    await runWithRequestContext(
+      { requestId: 'r', channelId: 'discord:general', callType: 'chat', purpose: 'agent.turn.prompt' },
+      async () => {
+        const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+        await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect(onProviderPayloadCaptured).not.toHaveBeenCalled();
+  });
+
   it('normalizes pi-agent tool parameters to PSFN inputSchema before gateway transport', async () => {
     const config = makeConfig();
     const transport = {

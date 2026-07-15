@@ -244,21 +244,22 @@ async function authorityState(context: GatewayTestContext): Promise<{
   }
 }
 
-async function waitForBlockedBroker(context: GatewayTestContext): Promise<void> {
+async function waitForBlockedBroker(
+  context: GatewayTestContext,
+  expectedCount = 1,
+): Promise<void> {
   if (!harness) throw new Error('Postgres harness unavailable');
   const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
   try {
     for (let attempt = 0; attempt < 500; attempt += 1) {
-      const result = await admin.query<{ waiting: boolean }>(`
-        SELECT EXISTS (
-          SELECT 1
-          FROM pg_stat_activity
-          WHERE datname = $1
-            AND application_name = 'fleet-auth-broker'
-            AND wait_event_type = 'Lock'
-        ) AS waiting
+      const result = await admin.query<{ waiting: number }>(`
+        SELECT COUNT(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE datname = $1
+          AND application_name = 'fleet-auth-broker'
+          AND wait_event_type = 'Lock'
       `, [context.databaseName]);
-      if (result.rows[0]?.waiting === true) return;
+      if ((result.rows[0]?.waiting ?? 0) >= expectedCount) return;
       await delay(10);
     }
   } finally {
@@ -310,6 +311,65 @@ describe('gateway fleet-auth lifecycle publication', () => {
         if (result.status === 'fulfilled') await result.value.close();
       }));
     }
+  }, TIMEOUT_MS);
+
+  it('shares one recovery transition when replicas find a floor without a witness', async () => {
+    const context = await freshContext();
+    const initial = await startEnabled(context);
+    await initial.close();
+    await seedSession(context, 1);
+    const witness = new FleetAuthLifecycleWitnessStore(context.systemDataDir);
+    rmSync(witness.path);
+
+    const blockerPool = createPostgresPool(context.runtimeUrl, {
+      applicationName: 'fleet-auth-lifecycle-test-blocker',
+      max: 1,
+    });
+    const blocker = await blockerPool.connect();
+    let released = false;
+    let starts: PromiseSettledResult<GatewayFleetAuthPersistence>[] = [];
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT * FROM fleet_auth.authority_state WHERE singleton = TRUE FOR UPDATE');
+    const firstStart = startEnabled(context);
+    try {
+      await waitForBlockedBroker(context);
+      const secondStart = startEnabled(context);
+      await waitForBlockedBroker(context, 2);
+      await blocker.query('COMMIT');
+      released = true;
+
+      starts = await Promise.allSettled([firstStart, secondStart]);
+      expect(starts.filter(result => result.status === 'fulfilled')).toHaveLength(2);
+      expect(await sessionCount(context)).toBe(0);
+      expect(await authorityState(context)).toEqual({
+        authorityGeneration: 2,
+        globalAuthEpoch: 2,
+        restoreCheckpoint: 1,
+      });
+      expect(starts[0]?.status).toBe('fulfilled');
+      if (starts[0]?.status === 'fulfilled') {
+        expect(starts[0].value.authorityFloors.read().trustedHost).toMatchObject({
+          authorityGeneration: 2,
+          restoreCheckpoint: 1,
+          lastLifecycleTransitionId: expect.stringMatching(/^[0-9a-f]{64}$/),
+        });
+      }
+    } finally {
+      if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
+      await Promise.all(starts.map(async result => {
+        if (result.status === 'fulfilled') await result.value.close();
+      }));
+      blocker.release();
+      await blockerPool.end();
+    }
+
+    const retry = await startEnabled(context);
+    await retry.close();
+    expect(await authorityState(context)).toEqual({
+      authorityGeneration: 2,
+      globalAuthEpoch: 2,
+      restoreCheckpoint: 1,
+    });
   }, TIMEOUT_MS);
 
   it('lets disabled beat a stale startup and fences ephemerals on the next retry', async () => {

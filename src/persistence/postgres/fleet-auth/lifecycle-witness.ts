@@ -94,8 +94,9 @@ function nextRevision(revision: number): number {
 
 /**
  * A system-owned, non-secret witness that makes disable -> re-enable observable.
- * It is deliberately absent until fleet auth has completed its first enabled
- * startup, preserving never-enabled feature-off behavior.
+ * It is deliberately absent until fleet auth has either completed its first
+ * enabled startup or found an existing authority floor that requires recovery,
+ * preserving never-enabled feature-off behavior.
  */
 export class FleetAuthLifecycleWitnessStore {
   readonly path: string;
@@ -153,9 +154,19 @@ export class FleetAuthLifecycleWitnessStore {
         return preparationFor(current, current.transitionId);
       }
       // Missing witness beside an existing floor is treated as a recovery
-      // transition. This safely over-fences rather than guessing restart.
+      // transition. Reserve it durably under the witness lock so every replica
+      // advances the floor with the same token. A crash leaves a retryable
+      // disabled witness and therefore safely over-fences.
       if (!current && existingAuthorityLineageId) {
-        return preparationFor(undefined, nonce());
+        const recovery: FleetAuthLifecycleWitness = {
+          schemaVersion: 2,
+          revision: 1,
+          phase: 'disabled',
+          transitionId: nonce(),
+          authorityLineageId: existingAuthorityLineageId,
+        };
+        this.write(recovery);
+        return preparationFor(recovery, recovery.transitionId);
       }
       return preparationFor(current);
     });

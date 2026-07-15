@@ -90,6 +90,35 @@ describe('fleet auth lifecycle witness', () => {
     expect(replicaA.prepareEnable(lineage).lifecycleTransitionId).toBeUndefined();
   });
 
+  it('reserves one recovery transition when replicas find a floor without a witness', () => {
+    const { root, witness: replicaA } = store();
+    const replicaB = new FleetAuthLifecycleWitnessStore(root);
+    const lineage = 'f'.repeat(64);
+
+    const recoveryA = replicaA.prepareEnable(lineage);
+    const recoveryB = replicaB.prepareEnable(lineage);
+
+    expect(recoveryA).toMatchObject({
+      observedRevision: 1,
+      observedPhase: 'disabled',
+      observedAuthorityLineageId: lineage,
+    });
+    expect(recoveryA.lifecycleTransitionId).toMatch(/^[0-9a-f]{64}$/);
+    expect(recoveryB).toEqual(recoveryA);
+
+    replicaA.publishEnabled(
+      recoveryA,
+      lineage,
+      recoveryA.lifecycleTransitionId ?? null,
+    );
+    expect(() => replicaB.publishEnabled(
+      recoveryB,
+      lineage,
+      recoveryB.lifecycleTransitionId ?? null,
+    )).not.toThrow();
+    expect(replicaA.prepareEnable(lineage).lifecycleTransitionId).toBeUndefined();
+  });
+
   it('keeps never-enabled feature-off state-free even when its root is read-only', () => {
     const { root, witness } = store();
     chmodSync(root, 0o500);

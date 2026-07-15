@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
@@ -10,7 +11,22 @@ import {
   buildWikiContextBlock,
   mergeWikiSemanticMatches,
   resolveWikiRetrievalPlan,
+  type WikiRetrievalRequest,
 } from './retrieval.js';
+
+/**
+ * mmo9.7.4: the compute path (embed+search+build + telemetry) now lives behind
+ * `refreshWikiContextBlock`. This helper drives the refresh and returns the
+ * resolved block string so the existing behavioral assertions are preserved
+ * unchanged. A closed gate returns null → empty block, exactly as before.
+ */
+async function readWikiBlock(
+  service: WikiRetrievalService,
+  request: WikiRetrievalRequest,
+): Promise<string> {
+  const snapshot = await service.refreshWikiContextBlock(request);
+  return snapshot?.block ?? '';
+}
 
 function makeSettings(overrides: Partial<WikiRetrievalSettings> = {}): WikiRetrievalSettings {
   return {
@@ -236,7 +252,7 @@ describe('WikiRetrievalService', () => {
       eventBus: bus as any,
       getSettings: () => makeSettings({ enabled: false }),
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'anything',
       isDirectMessage: true,
@@ -254,7 +270,7 @@ describe('WikiRetrievalService', () => {
       eventBus: bus as any,
       getSettings: () => makeSettings(),
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'how do gateways relate to garden?',
       isDirectMessage: true,
@@ -277,7 +293,7 @@ describe('WikiRetrievalService', () => {
       eventBus: bus as any,
       getSettings: () => makeSettings(),
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -295,7 +311,7 @@ describe('WikiRetrievalService', () => {
       eventBus: bus as any,
       getSettings: () => makeSettings(),
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -315,7 +331,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       // getMultiCompanion omitted → off
     });
-    await service.retrieveContextBlock({
+    await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -334,7 +350,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    await service.retrieveContextBlock({
+    await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -352,7 +368,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    await service.retrieveContextBlock({
+    await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -385,7 +401,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'what is in the studio kitchen?',
       isDirectMessage: true,
@@ -429,8 +445,8 @@ describe('WikiRetrievalService', () => {
       focusActive: false,
       currentSiteId: 'studio',
     };
-    const blockWith = await withShared.retrieveContextBlock(request);
-    const blockWithout = await withoutShared.retrieveContextBlock(request);
+    const blockWith = await readWikiBlock(withShared, request);
+    const blockWithout = await readWikiBlock(withoutShared, request);
     expect(sharedProjection.search).not.toHaveBeenCalled();
     expect(blockWith).toBe(blockWithout);
     expect(bus.events[0]?.payload).toMatchObject({ outcome: 'ran' });
@@ -445,7 +461,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    await service.retrieveContextBlock({
+    await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -469,7 +485,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -489,7 +505,7 @@ describe('WikiRetrievalService', () => {
       getSettings: () => makeSettings(),
       getMultiCompanion: () => true,
     });
-    const block = await service.retrieveContextBlock({
+    const block = await readWikiBlock(service, {
       channelId: 'c1',
       queryText: 'query',
       isDirectMessage: true,
@@ -540,5 +556,136 @@ describe('mergeWikiSemanticMatches (union re-rank)', () => {
     );
     expect(merged).toHaveLength(1);
     expect(merged[0]?.chunkIndex).toBe(2);
+  });
+});
+
+describe('WikiRetrievalService cached snapshot (mmo9.7.4 — off the foreground path)', () => {
+  function countingProjection(matches: WikiSemanticMatch[]): WikiProjectionPort {
+    return {
+      syncDocument: vi.fn(),
+      removeDocument: vi.fn(),
+      rebuild: vi.fn(),
+      listProjectedShas: vi.fn(),
+      search: vi.fn(async () => matches),
+    } as unknown as WikiProjectionPort;
+  }
+
+  const request: WikiRetrievalRequest = {
+    channelId: 'c1',
+    queryText: 'how do gateways relate to garden?',
+    isDirectMessage: true,
+    focusActive: false,
+  };
+
+  it('getWikiContextBlock is a synchronous cached read: no embed, no search, cold miss returns null (AC a/b)', () => {
+    const projection = countingProjection([makeMatch()]);
+    const embedding = { ...fakeEmbedding, embed: vi.fn(fakeEmbedding.embed) };
+    const service = new WikiRetrievalService({
+      projection,
+      embedding,
+      getSettings: () => makeSettings(),
+    });
+    // Cold cache: an enabled lane with no prior refresh is a genuine miss.
+    expect(service.getWikiContextBlock(request)).toBeNull();
+    // Proof it never touched the foreground embed/search path.
+    expect(embedding.embed).not.toHaveBeenCalled();
+    expect((projection.search as any)).not.toHaveBeenCalled();
+  });
+
+  it('a closed gate is a ready empty snapshot, not a cold miss or a degradation (disabled)', () => {
+    const service = new WikiRetrievalService({
+      projection: countingProjection([makeMatch()]),
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings({ enabled: false }),
+    });
+    const snapshot = service.getWikiContextBlock(request);
+    expect(snapshot).toMatchObject({ refreshStatus: 'ready', block: '', contextClass: null });
+  });
+
+  it('refresh populates the cache; a warm read returns the byte-identical block (AC d)', async () => {
+    const match = makeMatch({ chunkText: 'Gateways are separate from Garden.' });
+    const service = new WikiRetrievalService({
+      projection: countingProjection([match]),
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+    });
+    const refreshed = await service.refreshWikiContextBlock(request);
+    expect(refreshed?.refreshStatus).toBe('ready');
+    // Byte-identical to the direct compute of the same matches under the DM cap.
+    const expected = buildWikiContextBlock([match], 1000);
+    expect(refreshed?.block).toBe(expected.block);
+    // The synchronous warm read serves exactly that cached block.
+    expect(service.getWikiContextBlock(request)?.block).toBe(expected.block);
+  });
+
+  it('a hard refresh failure degrades to last-good and never clobbers the block (AC c)', async () => {
+    let mode: 'ok' | 'boom' = 'ok';
+    const match = makeMatch({ chunkText: 'Warm cached reference.' });
+    const projection = {
+      syncDocument: vi.fn(),
+      removeDocument: vi.fn(),
+      rebuild: vi.fn(),
+      listProjectedShas: vi.fn(),
+      search: vi.fn(async () => {
+        if (mode === 'boom') throw new Error('pgvector down');
+        return [match];
+      }),
+    } as unknown as WikiProjectionPort;
+    const service = new WikiRetrievalService({
+      projection,
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+    });
+    // Warm the cache with a good refresh.
+    const warm = await service.refreshWikiContextBlock(request);
+    expect(warm?.block).toContain(WIKI_CONTEXT_BLOCK_HEADER);
+    const lastGood = warm!.block;
+    // Now the search hard-fails: the snapshot is marked degraded but keeps the block.
+    mode = 'boom';
+    const degraded = await service.refreshWikiContextBlock(request);
+    expect(degraded?.refreshStatus).toBe('degraded');
+    expect(degraded?.block).toBe(lastGood);
+    // The turn still reads the last-good block, not an empty one.
+    expect(service.getWikiContextBlock(request)?.block).toBe(lastGood);
+  });
+
+  it('coalesces concurrent refreshes for the same key onto one search', async () => {
+    const projection = countingProjection([makeMatch()]);
+    const service = new WikiRetrievalService({
+      projection,
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+    });
+    await Promise.all([
+      service.refreshWikiContextBlock(request),
+      service.refreshWikiContextBlock(request),
+    ]);
+    expect((projection.search as any)).toHaveBeenCalledTimes(1);
+  });
+
+  it('keys the cache on contextClass: a DM warm block is a cold miss for a group turn', async () => {
+    const service = new WikiRetrievalService({
+      projection: countingProjection([makeMatch({ chunkText: 'DM-scoped reference.' })]),
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+    });
+    await service.refreshWikiContextBlock(request);
+    expect(service.getWikiContextBlock(request)?.block).toContain(WIKI_CONTEXT_BLOCK_HEADER);
+    // Same channel, different class → different lane → cold until its own refresh.
+    const groupRequest: WikiRetrievalRequest = { ...request, isDirectMessage: false };
+    expect(service.getWikiContextBlock(groupRequest)).toBeNull();
+  });
+
+  it('the turn hot path reads the sync snapshot and fires refresh — never awaits embed+search (AC a)', () => {
+    const preTurnSource = readFileSync(
+      new URL('../../core/agent/substrate-agent/turn-execution/pre-turn-state.ts', import.meta.url),
+      'utf8',
+    );
+    // The serial foreground await is gone.
+    expect(preTurnSource).not.toContain('await runtime.wikiRetrieval.retrieveContextBlock');
+    expect(preTurnSource).not.toContain('.retrieveContextBlock(');
+    // Synchronous cached read + fire-and-forget refresh (mirroring active-memory).
+    expect(preTurnSource).toContain('getWikiContextBlock(wikiRequest)');
+    expect(preTurnSource).toContain('void wikiRetrieval.refreshWikiContextBlock(wikiRequest)');
   });
 });

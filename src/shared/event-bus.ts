@@ -665,6 +665,23 @@ export interface EventMap {
     error?: string;
     timestamp: number;
   } & EventCorrelationFields;
+  /**
+   * mmo9.7.4: a foreground turn proceeded without a fresh wiki cached snapshot.
+   * Mirrors `memory.active_context.turn_degraded`: degradation is explicit,
+   * never silent. The turn serves the last-good block (possibly empty) while
+   * the off-path refresh catches up. A closed deterministic gate (disabled) is
+   * `ready` and emits nothing here.
+   */
+  'wiki.retrieval.turn_degraded': {
+    channelId: string;
+    key: string;
+    reason: 'not_ready' | 'refresh_failed' | 'stale';
+    refreshStatus: 'refreshing' | 'degraded' | null;
+    turnId: string;
+    requestId: string;
+    lastRefreshError?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'memory.active_context.refresh': {
     channelId: string;
     key: string;

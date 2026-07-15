@@ -334,7 +334,7 @@ describe('shared per-turn retrieval embedding', () => {
 
     const [sharedMemoryResult, sharedWikiResult] = await Promise.all([
       sharedRetriever.refreshActiveMemoryContext(memoryRequest),
-      sharedWiki.retrieveContextBlock(wikiRequest),
+      sharedWiki.refreshWikiContextBlock(wikiRequest),
     ]);
 
     const baselineFixture = makeStore([recalled]);
@@ -360,7 +360,7 @@ describe('shared per-turn retrieval embedding', () => {
         trustLevel: 'regular',
         canonicalContactId: 'contact-a',
       }),
-      baselineWiki.retrieveContextBlock({
+      baselineWiki.refreshWikiContextBlock({
         channelId: 'api:test',
         queryText,
         isDirectMessage: true,
@@ -379,7 +379,7 @@ describe('shared per-turn retrieval embedding', () => {
     );
     expect(sharedMemoryResult?.contextBlock).toBe(baselineMemoryResult?.contextBlock);
     expect(sharedMemoryResult?.selectedMemoryIds).toEqual(baselineMemoryResult?.selectedMemoryIds);
-    expect(sharedWikiResult).toBe(baselineWikiResult);
+    expect(sharedWikiResult?.block).toBe(baselineWikiResult?.block);
     expect(baselineEmbedding.embed).toHaveBeenCalledTimes(2);
   });
 });

@@ -17,6 +17,7 @@ import type {
   ActiveMemoryContextRequest,
   ActiveMemoryContextSnapshot,
 } from '../../faculties/memory/active-context.js';
+import type { WikiContextSnapshot } from '../../faculties/wiki/active-context.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import type { SessionEntry } from '../session/types.js';
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
@@ -73,26 +74,45 @@ export interface EmbeddingProviderPort {
  * E8.3: supplemental wiki RAG surface consumed by turn execution. Held on the
  * agent as an optional provider (null until wired); pre-turn assembly calls it
  * AFTER memory context is resolved and appends the returned block as its own
- * labeled section. Implementations fail closed (return '') rather than throw.
+ * labeled section. Implementations fail closed (empty block) rather than throw.
+ *
+ * mmo9.7.4: the turn hot path reads a synchronous last-good snapshot via
+ * {@link getWikiContextBlock} and schedules a fire-and-forget
+ * {@link refreshWikiContextBlock} — it never awaits embed+search. This mirrors
+ * active-memory's `getActiveMemoryContext`/`refreshActiveMemoryContext`.
  */
+export interface WikiRetrievalRequest {
+  channelId: string;
+  queryText: string;
+  isDirectMessage: boolean | undefined;
+  focusActive: boolean;
+  turnId?: string;
+  requestId?: string;
+  companionId?: string;
+  canonicalContactId?: string;
+  retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
+  /**
+   * W5b: companion's current site (from the situated place seam). Consulted
+   * only under multi-companion mode to add the site's shared-world scope.
+   */
+  currentSiteId?: string | undefined;
+  correlation?: Partial<CorrelationMetadata>;
+}
+
 export interface WikiRetrievalPort {
-  retrieveContextBlock(request: {
-    channelId: string;
-    queryText: string;
-    isDirectMessage: boolean | undefined;
-    focusActive: boolean;
-    turnId?: string;
-    requestId?: string;
-    companionId?: string;
-    canonicalContactId?: string;
-    retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
-    /**
-     * W5b: companion's current site (from the situated place seam). Consulted
-     * only under multi-companion mode to add the site's shared-world scope.
-     */
-    currentSiteId?: string | undefined;
-    correlation?: Partial<CorrelationMetadata>;
-  }): Promise<string>;
+  /**
+   * Synchronous last-good read for the turn hot path. Never issues embed or
+   * search. Returns null on a genuine cold cache miss for an enabled lane
+   * (caller serves an empty block and emits a typed turn-degraded event); a
+   * closed deterministic gate returns a `ready`, empty, non-degraded snapshot.
+   */
+  getWikiContextBlock(request: WikiRetrievalRequest): WikiContextSnapshot | null;
+  /**
+   * Off-path refresh (fire-and-forget from the turn). Runs embed+search,
+   * updates the keyed cache, preserves the `wiki.retrieval` telemetry, and
+   * degrades to last-good on a hard failure.
+   */
+  refreshWikiContextBlock(request: WikiRetrievalRequest): Promise<WikiContextSnapshot | null>;
 }
 
 export interface RetrievalVADInput {

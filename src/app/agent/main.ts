@@ -418,6 +418,7 @@ async function main(): Promise<void> {
   );
   await hydrateStartupContinuity({
     memoryProvider: agentLoop.memoryProvider,
+    wikiRetrieval: agentLoop.wikiRetrieval,
     sessionManager,
   });
 

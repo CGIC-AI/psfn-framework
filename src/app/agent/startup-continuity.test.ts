@@ -26,6 +26,7 @@ describe('hydrateStartupContinuity', () => {
         retrieve: vi.fn(),
         refreshActiveMemoryContext: vi.fn().mockRejectedValue(new Error('embedding unavailable')),
       },
+      wikiRetrieval: null,
       sessionManager,
     })).rejects.toThrow(
       'Startup continuity hydration failed: active memory [discord:restored: embedding unavailable]',
@@ -60,13 +61,55 @@ describe('hydrateStartupContinuity', () => {
       renderActiveCoreMemoryBlock,
     };
 
+    const refreshWikiContextBlock = vi.fn().mockResolvedValue({
+      key: 'channel:discord:restored|class:dm|scope:',
+      block: '## Reference Wiki',
+      refreshStatus: 'ready',
+    });
+
     await expect(hydrateStartupContinuity({
       memoryProvider: { retrieve: vi.fn(), refreshActiveMemoryContext },
+      wikiRetrieval: {
+        getWikiContextBlock: vi.fn(() => null),
+        refreshWikiContextBlock,
+      },
       sessionManager,
     })).resolves.toBeUndefined();
 
     expect(refreshActiveMemoryContext).toHaveBeenCalledOnce();
     expect(renderActiveCoreMemoryBlock).toHaveBeenCalledWith('discord:restored');
+    expect(refreshWikiContextBlock).toHaveBeenCalledOnce();
+  });
+
+  it('does not abort startup when only wiki hydration degrades (supplemental, best-effort)', async () => {
+    const refreshActiveMemoryContext = vi.fn().mockResolvedValue({
+      contextBlock: '<memory>restored</memory>',
+    });
+    const sessionManager = {
+      resolveStartupSessionMetadata: vi.fn(() => ({
+        sessionId: 'discord:restored',
+        channelType: 'discord' as const,
+        timestamp: 1,
+      })),
+      listRecentSessions: vi.fn(() => []),
+      getRecentMessages: vi.fn(() => [{
+        id: 1,
+        channelId: 'discord:restored',
+        role: 'user' as const,
+        content: 'Restore my context.',
+        timestamp: 1,
+      }]),
+      renderActiveCoreMemoryBlock: vi.fn(() => '<core-memory>restored</core-memory>'),
+    };
+
+    await expect(hydrateStartupContinuity({
+      memoryProvider: { retrieve: vi.fn(), refreshActiveMemoryContext },
+      wikiRetrieval: {
+        getWikiContextBlock: vi.fn(() => null),
+        refreshWikiContextBlock: vi.fn().mockRejectedValue(new Error('pgvector down')),
+      },
+      sessionManager,
+    })).resolves.toBeUndefined();
   });
 
   it('aborts startup when active core-memory hydration degrades', async () => {
@@ -87,6 +130,7 @@ describe('hydrateStartupContinuity', () => {
 
     await expect(hydrateStartupContinuity({
       memoryProvider: null,
+      wikiRetrieval: null,
       sessionManager,
     })).rejects.toThrow(
       'Startup continuity hydration failed: active core memory [discord:restored: core-memory store unreadable]',

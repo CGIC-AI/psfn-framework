@@ -212,6 +212,7 @@ async function summarizeSessionSearch(params: {
   channelId: string;
   query: string;
   hits: SessionSearchHitResult[];
+  signal?: AbortSignal;
 }): Promise<string> {
   const fallback = fallbackSessionSearchSummary(params.query, params.hits);
   if (params.hits.length === 0 || !params.llmProvider) return fallback;
@@ -236,10 +237,16 @@ async function summarizeSessionSearch(params: {
       originStage: 'session.search.summary',
       maxRetries: 1,
       baseDelayMs: 150,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     const normalized = summary.replace(/\s+/g, ' ').trim();
     return normalized || fallback;
   } catch (error) {
+    if (params.signal?.aborted) {
+      throw params.signal.reason instanceof Error
+        ? params.signal.reason
+        : new Error('Session search summary was aborted');
+    }
     // Non-blocking by contract: search results still return with the
     // deterministic fallback summary, but the failure is never silent.
     log.warn('Session search summary failed; using deterministic fallback', {
@@ -262,6 +269,7 @@ export async function runSessionSearch(params: {
   targetChannelId?: string;
   viewer?: SessionSearchViewerContext;
   sessionRouteState?: SessionSearchRouteStateProvider | null;
+  signal?: AbortSignal;
 }): Promise<SessionSearchResult> {
   const normalizedQuery = params.query.trim();
   if (!normalizedQuery || !params.transcriptSearch) {
@@ -314,6 +322,7 @@ export async function runSessionSearch(params: {
       channelId: scopedChannelId ?? params.viewer?.channelId ?? SESSION_SEARCH_CORRELATION_CHANNEL,
       query: normalizedQuery,
       hits,
+      ...(params.signal ? { signal: params.signal } : {}),
     })
     : fallbackSessionSearchSummary(normalizedQuery, hits);
 

@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -285,6 +285,7 @@ export function buildTurnRecord(input: {
   assistantMessageContent?: string;
   turnMessages: AgentMessage[];
   status?: TurnRecord['status'];
+  continuationStop?: ParentTurnContinuationStop;
   promptMode: MessagePromptOverrideMode;
   promptText: string;
   contextMessageCount: number;
@@ -340,6 +341,7 @@ export function buildTurnRecord(input: {
     startedAt: input.startedAt,
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
+    ...(input.continuationStop ? { continuationStop: { ...input.continuationStop } } : {}),
     ...(location ? { location } : {}),
     auditPrivacy: resolveTurnRecordAuditPrivacy(
       input.message,

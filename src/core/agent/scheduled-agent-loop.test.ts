@@ -3,6 +3,7 @@ import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-l
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
   AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+  ParentTurnContinuationBudgetExceededError,
 } from './turn-limits.js';
 
 const ZERO_USAGE = {
@@ -361,11 +362,19 @@ describe('scheduled-agent-loop stream result contract', () => {
     expect(checkInMessages).toHaveLength(1);
     expect(checkInMessages[0]?.message?.content?.[0]?.text)
       .toContain(`used ${AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT} assistant steps`);
-    const finalAssistant = [...events].reverse().find(
-      (event) => event.type === 'message_end' && event.message?.role === 'assistant',
-    )?.message;
-    expect(finalAssistant?.errorMessage).toBe('agent_loop_step_limit_exceeded');
-    expect(finalAssistant?.content?.[0]?.text)
-      .toContain(`Turn stopped after ${AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN} assistant steps`);
+    const terminalError = events.find((event) => event.type === 'agent_error')?.error;
+    expect(terminalError).toBeInstanceOf(ParentTurnContinuationBudgetExceededError);
+    expect(terminalError).toMatchObject({
+      stop: {
+        reason: 'prompt_entry_limit',
+        promptEntries: AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+        maxPromptEntries: AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+      },
+    });
+    expect(events.some((event) => (
+      event.type === 'message_end'
+      && event.message?.role === 'assistant'
+      && event.message?.errorMessage === 'agent_loop_step_limit_exceeded'
+    ))).toBe(false);
   });
 });

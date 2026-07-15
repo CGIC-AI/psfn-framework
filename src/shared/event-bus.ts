@@ -3,6 +3,7 @@ import type {
   AgentResponse,
   IntentionalNoReplyMetadata,
   ModelBudgetBlockedEvent,
+  ParentTurnContinuationStop,
   TurnUsage,
   InferredPostTurnAction,
   CorrelationMetadata,
@@ -154,6 +155,14 @@ export interface EventMap {
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
   'agent.turn.snapshot': { snapshot: TurnSnapshot } & EventCorrelationFields;
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse } & EventCorrelationFields;
+  /** Content-free terminal event emitted when the parent-turn emergency fuse opens. */
+  'agent.turn.continuation_stopped': {
+    turnId: string;
+    requestId: string;
+    channelId: string;
+    stop: ParentTurnContinuationStop;
+    timestamp: number;
+  } & EventCorrelationFields;
   'session.route.reset': {
     sourceChannelId: string;
     oldLogicalSessionId: string;

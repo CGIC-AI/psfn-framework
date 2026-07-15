@@ -26,6 +26,7 @@ import {
 import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
 import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { ParentTurnContinuationBudgetExceededError } from '../../core/agent/turn-limits.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -607,6 +608,45 @@ describe('registerGatewayMessageHandlers', () => {
       '[System delivery error] The runtime could not complete that turn. Please retry your message.',
     );
     expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a continuation-budget failure and processes the next queued message', async () => {
+    const handleMessage = vi.fn()
+      .mockRejectedValueOnce(new ParentTurnContinuationBudgetExceededError({
+        schemaVersion: 1,
+        reason: 'wall_clock_limit',
+        promptEntries: 9,
+        maxPromptEntries: 36,
+        elapsedMs: 300_000,
+        maxWallTimeMs: 300_000,
+      }))
+      .mockResolvedValueOnce(makeResponse('next turn completed'));
+    const harness = createHarness({ handleMessage });
+
+    await harness.onDiscordMessage(makeMessage({
+      id: 'msg-budget-stopped',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    }));
+    await harness.onDiscordMessage(makeMessage({
+      id: 'msg-after-budget-stop',
+      channelId: 'discord:other',
+      channelType: 'discord',
+      routing: undefined,
+    }));
+
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith(
+        'discord:general',
+        '[System delivery error] The runtime could not complete that turn. Please retry your message.',
+      );
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith(
+        'discord:other',
+        'next turn completed',
+      );
+    });
   });
 
   it('keeps a discord message retryable when agent handling fails', async () => {

@@ -1,0 +1,224 @@
+import type { AssistantMessage, Model, UserMessage } from '@mariozechner/pi-ai';
+import { describe, expect, it, vi } from 'vitest';
+import { Agent } from '../../boundary/pi-agent/index.js';
+import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
+import {
+  ParentTurnContinuationBudgetExceededError,
+} from './turn-limits.js';
+
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistantMessage(
+  content: AssistantMessage['content'],
+  stopReason: AssistantMessage['stopReason'],
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    content,
+    api: 'openai-completions',
+    provider: 'test',
+    model: 'test-model',
+    usage: ZERO_USAGE,
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+function userMessage(content: string): UserMessage {
+  return { role: 'user', content, timestamp: Date.now() };
+}
+
+function createModel(): Model<'openai-completions'> {
+  return {
+    id: 'test-model',
+    name: 'Test Model',
+    api: 'openai-completions',
+    provider: 'test',
+    baseUrl: 'http://127.0.0.1.invalid',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 4096,
+    maxTokens: 1024,
+  };
+}
+
+describe('parent-turn continuation fuse', () => {
+  it('aborts a long awaited tool inside repeated tool-use continuation and releases prompt admission', async () => {
+    let providerCall = 0;
+    let recoveryRun = false;
+    const streamFn = vi.fn(async () => {
+      providerCall += 1;
+      const finalMessage = recoveryRun
+        ? assistantMessage([{ type: 'text', text: 'fresh turn completed' }], 'stop')
+        : assistantMessage([{
+            type: 'toolCall',
+            id: `search-${providerCall}`,
+            name: 'session_search_summary',
+            arguments: { query: `continuation-${providerCall}` },
+          }], 'toolUse');
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(finalMessage) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(finalMessage),
+      };
+    });
+    let toolCall = 0;
+    const execute = vi.fn(async (
+      _toolCallId: string,
+      _args: unknown,
+      signal?: AbortSignal,
+    ) => {
+      toolCall += 1;
+      if (toolCall < 3) {
+        return {
+          content: [{ type: 'text' as const, text: `summary-${toolCall}` }],
+          details: {},
+        };
+      }
+      await new Promise<never>((_resolve, reject) => {
+        const rejectAborted = (): void => reject(signal?.reason ?? new Error('aborted'));
+        if (signal?.aborted) {
+          rejectAborted();
+          return;
+        }
+        signal?.addEventListener('abort', rejectAborted, { once: true });
+      });
+    });
+    const agent = new Agent({
+      initialState: { model: createModel() },
+      streamFn: streamFn as never,
+    });
+    agent.state.tools = [{
+      name: 'session_search_summary',
+      label: 'session_search_summary',
+      description: 'Summarize session search results.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false,
+      },
+      execute,
+      wiringMeta: {
+        concurrency: {
+          class: 'read_only',
+          maxParallel: 1,
+          exclusivityKeyPolicy: 'none',
+          interruptibility: 'cooperative',
+          eligibility: { foreground: true, background: true },
+        },
+      },
+    } as never];
+    installAgentToolSchedulerPatch(
+      agent,
+      { maxParallelToolCalls: 1 },
+      undefined,
+      { maxWallTimeMs: 40, maxPromptEntries: 12 },
+    );
+
+    let failure: unknown;
+    try {
+      await agent.prompt(userMessage('search until you have enough evidence'));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ParentTurnContinuationBudgetExceededError);
+    expect(failure).toMatchObject({
+      stop: {
+        schemaVersion: 1,
+        reason: 'wall_clock_limit',
+        maxWallTimeMs: 40,
+        maxPromptEntries: 12,
+        promptEntries: 3,
+      },
+    });
+    expect(streamFn).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(agent.state.isStreaming).toBe(false);
+
+    recoveryRun = true;
+    await expect(agent.prompt(userMessage('ordinary follow-up'))).resolves.toBeUndefined();
+    expect(agent.state.isStreaming).toBe(false);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'fresh turn completed' }],
+    });
+  });
+
+  it('stops repeated prompt entry even when every tool returns promptly', async () => {
+    let providerCall = 0;
+    const streamFn = vi.fn(async () => {
+      providerCall += 1;
+      const finalMessage = assistantMessage([{
+        type: 'toolCall',
+        id: `loop-${providerCall}`,
+        name: 'loop_tool',
+        arguments: { iteration: providerCall },
+      }], 'toolUse');
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(finalMessage) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(finalMessage),
+      };
+    });
+    const agent = new Agent({
+      initialState: { model: createModel() },
+      streamFn: streamFn as never,
+    });
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'continue' }],
+      details: {},
+    }));
+    agent.state.tools = [{
+      name: 'loop_tool',
+      label: 'loop_tool',
+      description: 'Return continuation evidence.',
+      parameters: {
+        type: 'object',
+        properties: { iteration: { type: 'number' } },
+        required: ['iteration'],
+        additionalProperties: false,
+      },
+      execute,
+      wiringMeta: {
+        concurrency: {
+          class: 'read_only',
+          maxParallel: 1,
+          exclusivityKeyPolicy: 'none',
+          interruptibility: 'cooperative',
+          eligibility: { foreground: true, background: true },
+        },
+      },
+    } as never];
+    installAgentToolSchedulerPatch(
+      agent,
+      { maxParallelToolCalls: 1 },
+      undefined,
+      { maxWallTimeMs: 5_000, maxPromptEntries: 3 },
+    );
+
+    await expect(agent.prompt(userMessage('keep going forever'))).rejects.toMatchObject({
+      stop: {
+        reason: 'prompt_entry_limit',
+        promptEntries: 3,
+        maxPromptEntries: 3,
+      },
+    });
+    expect(streamFn).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(agent.state.isStreaming).toBe(false);
+  });
+});

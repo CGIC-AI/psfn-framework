@@ -342,6 +342,7 @@ export interface SessionSearchActionParams {
 export async function executeSessionSearchAction(
   options: SessionSearchActionOptions,
   params: SessionSearchActionParams,
+  signal?: AbortSignal,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const query = (params.query ?? '').trim();
   if (!query) {
@@ -359,6 +360,7 @@ export async function executeSessionSearchAction(
     viewer: resolveViewerContextFromRequest(),
     sessionRouteState: options.sessionRouteState
       ?? asSessionRouteStateProvider(options.transcriptSearch),
+    ...(signal ? { signal } : {}),
   });
   return textResult(JSON.stringify(result, null, 2));
 }

@@ -62,6 +62,7 @@ import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
+import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -2322,7 +2323,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       .mockImplementation((evaluation, input) => originalRecord(evaluation, input));
     let durableResponse: AgentResponse | undefined;
     const recordAssistantMessage = vi.fn((...args: unknown[]) => {
-      durableResponse = args.at(-1) as AgentResponse;
+      durableResponse = args[7] as AgentResponse;
       return 2;
     });
     const reserve = vi.fn(async () => ({
@@ -3777,6 +3778,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'contact-123',
       null,
       undefined,
+      undefined,
     );
     expect(buildContext.mock.calls[0]?.[4]).toBe('contact-123');
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
@@ -4565,6 +4567,7 @@ describe('handleMessageForTurn failure persistence', () => {
       startedAt: input.startedAt,
       completedAt: input.completedAt,
       status: input.status ?? 'completed',
+      ...(input.continuationStop ? { continuationStop: input.continuationStop } : {}),
       userMessage: {
         role: input.speakerRole,
         content: input.message.content,
@@ -4589,40 +4592,44 @@ describe('handleMessageForTurn failure persistence', () => {
       provenanceRefs: [],
     }));
     runtime.buildTurnRecord = buildTurnRecord as unknown as TurnExecutionRuntime['buildTurnRecord'];
-    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
-        role: 'assistant',
-        api: 'openai-responses',
-        provider: 'openrouter',
-        model: 'openrouter/moonshotai/kimi-k2.5',
-        usage: {
-          input: 120,
-          output: 15,
+    const failedAssistant = {
+      role: 'assistant',
+      api: 'openai-responses',
+      provider: 'openrouter',
+      model: 'openrouter/moonshotai/kimi-k2.5',
+      usage: {
+        input: 120,
+        output: 15,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 135,
+        cost: {
+          input: 0,
+          output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: 135,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
+          total: 0,
         },
-        stopReason: 'toolUse',
-        timestamp: 1_700_000_100_100,
-        content: [
-          { type: 'thinking', thinking: 'Need the memory tool first.' },
-          {
-            type: 'toolCall',
-            id: 'call-2',
-            name: 'memory_write',
-            arguments: { text: 'secret value' },
-            thoughtSignature: 'sig-2',
-          },
-        ],
-      });
+      },
+      stopReason: 'toolUse',
+      timestamp: 1_700_000_100_100,
+      content: [
+        { type: 'text', text: 'Partial response before tool failure.' },
+        { type: 'thinking', thinking: 'Need the memory tool first.' },
+        {
+          type: 'toolCall',
+          id: 'call-2',
+          name: 'memory_write',
+          arguments: { text: 'secret value' },
+          thoughtSignature: 'sig-2',
+        },
+      ],
+    };
+    runtime.getLatestAssistantMessage = vi.fn(() => failedAssistant as never);
+    runtime.extractResponseText = vi.fn(() => 'Partial response before tool failure.');
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push(failedAssistant);
       (runtime.agent.state.messages as any[]).push({
         role: 'toolResult',
         toolCallId: 'call-2',
@@ -4641,6 +4648,7 @@ describe('handleMessageForTurn failure persistence', () => {
       status: 'failed',
       model: 'test-model',
       assistantSessionEntryId: null,
+      assistantMessageContent: 'Partial response before tool failure.',
       turnMessages: expect.arrayContaining([
         expect.objectContaining({ role: 'assistant' }),
         expect.objectContaining({ role: 'toolResult', toolName: 'memory_write' }),
@@ -4649,6 +4657,108 @@ describe('handleMessageForTurn failure persistence', () => {
     expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
     }));
+  });
+
+  it('records and emits a content-free typed stop when the parent continuation fuse opens', async () => {
+    const eventBus = new EventBus();
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.getLatestAssistantMessage = vi.fn(() => ({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'stale assistant text from the prior turn' }],
+    }) as never);
+    runtime.extractResponseText = vi.fn(() => 'stale assistant text from the prior turn');
+    const buildTurnRecord = vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
+      schemaVersion: 1 as const,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      status: input.status ?? 'completed',
+      ...(input.continuationStop ? { continuationStop: input.continuationStop } : {}),
+      userMessage: {
+        role: input.speakerRole,
+        content: input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: input.model ?? 'test-model' },
+      provenanceRefs: [],
+    }));
+    runtime.buildTurnRecord = buildTurnRecord as unknown as TurnExecutionRuntime['buildTurnRecord'];
+    runtime.agent.prompt = vi.fn(async () => {
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'search-3',
+          name: 'session_search_summary',
+          arguments: { query: 'private partner content must not enter telemetry' },
+        }],
+        stopReason: 'toolUse',
+      });
+      throw new ParentTurnContinuationBudgetExceededError({
+        schemaVersion: 1,
+        reason: 'wall_clock_limit',
+        promptEntries: 3,
+        maxPromptEntries: 36,
+        elapsedMs: 300_000,
+        maxWallTimeMs: 300_000,
+      });
+    });
+
+    await expect(handleMessageForTurn(
+      runtime,
+      createMessage('msg-continuation-budget'),
+    )).rejects.toMatchObject({
+      code: 'parent_turn_continuation_budget_exceeded',
+    });
+
+    const expectedStop = {
+      schemaVersion: 1,
+      reason: 'wall_clock_limit',
+      outcome: 'failed',
+      promptEntries: 3,
+      maxPromptEntries: 36,
+      elapsedMs: 300_000,
+      maxWallTimeMs: 300_000,
+    };
+    expect(buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      continuationStop: expectedStop,
+    }));
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      continuationStop: expectedStop,
+    }));
+    expect(runtime.extractResponseText).not.toHaveBeenCalled();
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.turn.continuation_stopped',
+      expect.objectContaining({
+        requestId: 'msg-continuation-budget',
+        channelId: 'ch1',
+        stop: expectedStop,
+      }),
+    );
+    const telemetryPayload = (runtime.emitTelemetry as ReturnType<typeof vi.fn>).mock.calls
+      .find(([eventName]) => eventName === 'agent.turn.continuation_stopped')?.[1];
+    expect(JSON.stringify(telemetryPayload)).not.toContain('private partner content');
   });
 });
 

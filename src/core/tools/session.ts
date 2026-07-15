@@ -528,7 +528,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
               ...(typeof params.summarize === 'boolean' ? { summarize: params.summarize } : {}),
-            });
+            }, signal);
           case 'grep':
             return executeSessionGrepAction(grepOptions, {
               pattern: typeof params.pattern === 'string' ? params.pattern : '',

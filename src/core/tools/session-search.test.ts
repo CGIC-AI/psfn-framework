@@ -284,6 +284,65 @@ describe('session search tools', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
+  it('propagates turn cancellation through a running session-search summary', async () => {
+    store.append({
+      channelId: 'api:abortable-search',
+      role: 'assistant',
+      content: 'Needle for a deliberately long session summary.',
+      timestamp: 5_000,
+      channelVisibility: 'private',
+    });
+
+    let markCompletionStarted: () => void = () => {};
+    const completionStarted = new Promise<void>((resolve) => {
+      markCompletionStarted = resolve;
+    });
+    const llmProvider = {
+      complete: vi.fn(async (
+        _context: unknown,
+        _purpose: unknown,
+        options?: { signal?: AbortSignal },
+      ) => {
+        markCompletionStarted();
+        await new Promise<never>((_resolve, reject) => {
+          const rejectAborted = (): void => reject(
+            options?.signal?.reason ?? new Error('summary aborted'),
+          );
+          if (options?.signal?.aborted) {
+            rejectAborted();
+            return;
+          }
+          options?.signal?.addEventListener('abort', rejectAborted, { once: true });
+        });
+      }),
+    } as any;
+    const tool = makeTool(llmProvider);
+    const controller = new AbortController();
+    const budgetError = new Error('parent turn continuation budget exhausted');
+
+    const resultPromise = runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:abortable-search',
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-search-abort', {
+        action: 'search',
+        query: 'deliberately long',
+        summarize: true,
+      }, controller.signal),
+    );
+
+    await completionStarted;
+    controller.abort(budgetError);
+
+    await expect(resultPromise).rejects.toBe(budgetError);
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    expect(llmProvider.complete.mock.calls[0]?.[2]).toEqual({ signal: controller.signal });
+  });
+
   it('session_search requires a non-empty query through the canonical surface', async () => {
     const llmProvider = {
       complete: vi.fn(),

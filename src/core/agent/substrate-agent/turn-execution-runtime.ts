@@ -33,7 +33,7 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
-import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, FatiguePendingSpendMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, FatiguePendingSpendMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
@@ -122,6 +122,7 @@ import {
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
+import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -436,6 +437,7 @@ export interface TurnExecutionRuntime {
     assistantMessageContent?: string;
     turnMessages: AgentMessage[];
     status?: TurnRecord['status'];
+    continuationStop?: ParentTurnContinuationStop;
     promptMode: MessagePromptOverrideMode;
     promptText: string;
     contextMessageCount: number;
@@ -1696,21 +1698,40 @@ export async function handleMessageForTurn(
       durableFatigueReservation = null;
     }
     const err = error instanceof Error ? error : new Error(String(error));
+    const continuationStopSnapshot = error instanceof ParentTurnContinuationBudgetExceededError
+      ? error.stop
+      : null;
     const observedFailureTurnMessages = invocationState.turnMessages.length > 0
       ? invocationState.turnMessages
       : invocationState.turnStartMessageIndex == null
         ? []
         : runtime.agent.state.messages.slice(invocationState.turnStartMessageIndex);
     let assistantMessageContent: string | undefined;
-    try {
-      const extracted = runtime.extractResponseText().trim();
-      if (extracted.length > 0) {
-        assistantMessageContent = extracted;
+    const latestUserFacingAssistant = runtime.getLatestAssistantMessage();
+    const assistantBelongsToFailedTurn = latestUserFacingAssistant !== null
+      && observedFailureTurnMessages.includes(latestUserFacingAssistant);
+    if (assistantBelongsToFailedTurn) {
+      try {
+        const extracted = runtime.extractResponseText().trim();
+        if (extracted.length > 0) {
+          assistantMessageContent = extracted;
+        }
+      } catch (extractionError) {
+        log.debug('No outward assistant text available while recording failed turn', {
+          turnId,
+          requestId,
+          error: toErrorMessage(extractionError),
+        });
+        assistantMessageContent = undefined;
       }
-    } catch {
-      assistantMessageContent = undefined;
     }
     const failedCompletedAt = Date.now();
+    const continuationStop: ParentTurnContinuationStop | null = continuationStopSnapshot
+      ? {
+          ...continuationStopSnapshot,
+          outcome: assistantMessageContent ? 'partial' : 'failed',
+        }
+      : null;
     if (deferSessionEntryPersistence && userSessionEntryId == null) {
       try {
         userSessionEntryId = recordDeferredSessionEntry(persistedUserMessageContent);
@@ -1735,6 +1756,7 @@ export async function handleMessageForTurn(
         ...(assistantMessageContent ? { assistantMessageContent } : {}),
         turnMessages: observedFailureTurnMessages,
         status: 'failed',
+        ...(continuationStop ? { continuationStop } : {}),
         model: runtime.agent.state.model.id,
         promptMode,
         promptText: fullPrompt,
@@ -1754,6 +1776,16 @@ export async function handleMessageForTurn(
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
       }),
     );
+    if (continuationStop) {
+      runtime.emitTelemetry('agent.turn.continuation_stopped', {
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.continuation_stopped'),
+        turnId,
+        requestId,
+        channelId: message.channelId,
+        stop: continuationStop,
+        timestamp: failedCompletedAt,
+      });
+    }
     await runtime.eventBus.emit('agent.error', {
       message,
       error: err,

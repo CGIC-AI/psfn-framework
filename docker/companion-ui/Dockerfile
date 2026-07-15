@@ -19,6 +19,10 @@ WORKDIR /build/companion-ui
 # constraint.
 ARG VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=ws://psfn-hub.local:8787/
 ENV VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=${VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL}
+# The build helper passes the commit SHA here. Vite injects it into sw.js so a
+# new image always installs a new cache generation in returning browsers.
+ARG SOURCE_REVISION=unknown
+ENV COMPANION_UI_BUILD_REVISION=${SOURCE_REVISION}
 
 COPY companion-ui/package.json companion-ui/package-lock.json ./
 RUN npm ci

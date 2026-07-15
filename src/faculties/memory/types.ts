@@ -234,6 +234,8 @@ export interface PurrMemory {
   emotionalValence: number;
   formationVAD?: MemoryFormationVAD;
   salience: number;
+  /** Epoch at which the stored salience snapshot was calculated. */
+  salienceDecayAnchorAt?: number;
   embedding?: Float32Array;
   sourceRef: string;
   sourceType?: MemorySourceType;

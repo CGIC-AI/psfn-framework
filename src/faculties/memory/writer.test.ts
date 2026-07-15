@@ -398,7 +398,7 @@ describe('MemoryWriter', () => {
       // Should have bumped salience and access count
       expect(store.updateMemory).toHaveBeenCalledWith('existing-001', expect.objectContaining({
         accessCount: 4,
-        salience: Math.min(1, 0.6 + MEMORY_CONFIG.salienceBumpOnAccess),
+        salience: expect.closeTo(Math.min(1, 0.6 + MEMORY_CONFIG.salienceBumpOnAccess), 4),
       }));
 
       // Should NOT have inserted a new memory

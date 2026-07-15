@@ -309,21 +309,22 @@ export interface MemoryBulkUpdatePatch {
 export interface MemorySalienceUpdate {
   id: string;
   salience: number;
+  salienceDecayAnchorAt: number;
 }
 
 export function normalizeMemorySalienceUpdates(
   updates: readonly MemorySalienceUpdate[],
 ): MemorySalienceUpdate[] {
-  const byId = new Map<string, number>();
+  const byId = new Map<string, MemorySalienceUpdate>();
   for (const update of updates) {
     const id = update.id.trim();
     if (!id) continue;
-    if (!Number.isFinite(update.salience)) {
-      throw new Error('bulkUpdateSalience requires finite salience values');
+    if (!Number.isFinite(update.salience) || !Number.isFinite(update.salienceDecayAnchorAt)) {
+      throw new Error('bulkUpdateSalience requires finite salience and decay-anchor values');
     }
-    byId.set(id, update.salience);
+    byId.set(id, { ...update, id });
   }
-  return Array.from(byId, ([id, salience]) => ({ id, salience }));
+  return Array.from(byId.values());
 }
 
 export interface ScratchpadEntryCreateOptions {

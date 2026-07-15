@@ -223,7 +223,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -386,13 +386,14 @@ class PostgresMemoryStore implements MemoryStorePort {
     await this.executeWrite(`
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
+        salience_decay_anchor_at,
         source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
         superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::vector
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -402,6 +403,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         emotional_valence = EXCLUDED.emotional_valence,
         formation_vad = EXCLUDED.formation_vad,
         salience = EXCLUDED.salience,
+        salience_decay_anchor_at = EXCLUDED.salience_decay_anchor_at,
         source_ref = EXCLUDED.source_ref,
         source_type = EXCLUDED.source_type,
         provenance_json = EXCLUDED.provenance_json,
@@ -432,6 +434,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       row.emotional_valence,
       serializeJsonValue(row.formation_vad),
       row.salience,
+      row.salience_decay_anchor_at,
       row.source_ref,
       row.source_type,
       serializeJsonValue(row.provenance_json),
@@ -551,12 +554,16 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
-    await this.runWrite(() => this.upsertMemoryRow(memory, embedding));
-    this.memories.set(memory.id, memory);
+    const anchoredMemory = {
+      ...memory,
+      salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
+    };
+    await this.runWrite(() => this.upsertMemoryRow(anchoredMemory, embedding));
+    this.memories.set(memory.id, anchoredMemory);
     this.embeddings.set(memory.id, embedding);
     this.markSalienceMaintenanceChanged();
     this.markRetrievalCorpusChanged();
-    this.journal?.onInsert(memory);
+    this.journal?.onInsert(anchoredMemory);
   }
 
   async persistMemoryWrite(input: MemoryWriteCommit): Promise<void> {
@@ -647,7 +654,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -711,6 +718,9 @@ class PostgresMemoryStore implements MemoryStorePort {
     const next = { ...existing };
     if (updates.salience !== undefined) next.salience = updates.salience;
     if (updates.lastAccessed !== undefined) next.lastAccessed = updates.lastAccessed;
+    if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
+      next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
+    }
     if (updates.accessCount !== undefined) next.accessCount = updates.accessCount;
     if (updates.supersededBy !== undefined) next.supersededBy = updates.supersededBy;
     if (updates.sensitivity !== undefined) next.sensitivity = updates.sensitivity;
@@ -811,7 +821,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -1303,16 +1313,18 @@ class PostgresMemoryStore implements MemoryStorePort {
 
     const values: unknown[] = [];
     const rows = normalizedUpdates.map((update, index) => {
-      const idParam = index * 2 + 1;
+      const idParam = index * 3 + 1;
       const salienceParam = idParam + 1;
-      values.push(update.id, update.salience);
-      return `($${idParam}::text, $${salienceParam}::numeric)`;
+      const anchorParam = salienceParam + 1;
+      values.push(update.id, update.salience, update.salienceDecayAnchorAt);
+      return `($${idParam}::text, $${salienceParam}::numeric, $${anchorParam}::bigint)`;
     });
 
     const result = await this.persist(() => executeQuery(this.pool, `
       UPDATE l2_memories AS memory
-      SET salience = updates.salience
-      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience)
+      SET salience = updates.salience,
+          salience_decay_anchor_at = updates.salience_decay_anchor_at
+      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience, salience_decay_anchor_at)
       WHERE memory.id = updates.id
         AND memory.deleted_at IS NULL
         AND memory.superseded_by IS NULL
@@ -1326,7 +1338,11 @@ class PostgresMemoryStore implements MemoryStorePort {
       if (!updatedIds.has(update.id)) continue;
       const existing = this.memories.get(update.id);
       if (!existing || existing.deletedAt) continue;
-      this.memories.set(update.id, { ...existing, salience: update.salience });
+      this.memories.set(update.id, {
+        ...existing,
+        salience: update.salience,
+        salienceDecayAnchorAt: update.salienceDecayAnchorAt,
+      });
     }
 
     if (updatedIds.size > 0) {

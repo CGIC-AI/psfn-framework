@@ -12,6 +12,7 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
       emotional_valence REAL NOT NULL DEFAULT 0.0,
       formation_vad TEXT,
       salience REAL NOT NULL DEFAULT 0.5,
+      salience_decay_anchor_at INTEGER NOT NULL,
       source_ref TEXT NOT NULL,
       source_type TEXT NOT NULL DEFAULT 'unknown',
       provenance_json TEXT NOT NULL DEFAULT '{}',
@@ -144,6 +145,15 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
 }
 
 export function migrateMemoryStoreSchema(db: Database.Database): void {
+  if (!hasColumn(db, 'l2_memories', 'salience_decay_anchor_at')) {
+    db.exec(`ALTER TABLE l2_memories ADD COLUMN salience_decay_anchor_at INTEGER`);
+  }
+  db.exec(`
+    UPDATE l2_memories
+    SET salience_decay_anchor_at = last_accessed
+    WHERE salience_decay_anchor_at IS NULL
+  `);
+
   // Preserve the historical ALTER TABLE idempotency behavior for sensitivity/consent.
   try {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'personal'`);

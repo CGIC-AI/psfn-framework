@@ -207,6 +207,7 @@ export function mapMemoryRow(row: MemoryRow): PurrMemory {
     emotionalValence: row.emotional_valence,
     formationVAD,
     salience: row.salience,
+    salienceDecayAnchorAt: row.salience_decay_anchor_at,
     sourceRef: row.source_ref,
     sourceType: normalizeMemorySourceType(row.source_type, inferMemorySourceTypeFromSourceRef(row.source_ref)),
     ...(provenance ? { provenance } : {}),

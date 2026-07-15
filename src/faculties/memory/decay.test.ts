@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryStore } from './store.js';
-import { SalienceDecay } from './decay.js';
+import { calculateEffectiveMemorySalience, SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
+import { computeRetrievalScore } from './retrieval/scoring.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -76,6 +77,36 @@ describe('SalienceDecay', () => {
     expect(updated).toHaveLength(1);
     // Episodic half-life is 7 days, so after 7 days salience should be ~0.5
     expect(updated[0].salience).toBeCloseTo(0.5, 1);
+  });
+
+  it('does not reapply the persisted decay window when retrieval reloads a swept memory', async () => {
+    const start = 1_800_000_000_000;
+    const halfLifeLater = start + 7 * 24 * 60 * 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const memory = makeMemory({
+      id: 'sweep-then-retrieve',
+      type: 'episodic',
+      salience: 1,
+      extractedAt: start,
+      lastAccessed: start,
+    });
+    store.insertMemory(memory, makeEmbedding());
+
+    nowSpy.mockReturnValue(halfLifeLater);
+    await decay.run();
+
+    const reloaded = store.getById(memory.id)!;
+    const retrievalScore = computeRetrievalScore(
+      { ...reloaded, similarity: 0.9 },
+      'sweep then retrieve',
+      { moodCongruenceWeight: 0 },
+    );
+
+    expect(reloaded.salience).toBeCloseTo(0.5, 10);
+    expect(reloaded.salienceDecayAnchorAt).toBe(halfLifeLater);
+    expect(calculateEffectiveMemorySalience(reloaded, halfLifeLater)).toBeCloseTo(0.5, 10);
+    expect(retrievalScore.effectiveSalience).toBeCloseTo(0.5, 10);
+    expect(retrievalScore.effectiveSalience).not.toBeCloseTo(0.25, 10);
   });
 
   it('never decays below floor', async () => {
@@ -519,9 +550,17 @@ describe('SalienceDecay', () => {
       const port = {
         getSalienceMaintenanceRevision: () => revision,
         listActiveMemories: vi.fn(() => stored ? [{ ...stored }] : []),
-        bulkUpdateSalience: vi.fn((updates: Array<{ id: string; salience: number }>) => {
+        bulkUpdateSalience: vi.fn((updates: Array<{
+          id: string;
+          salience: number;
+          salienceDecayAnchorAt: number;
+        }>) => {
           if (!stored || updates.length === 0) return 0;
-          stored = { ...stored, salience: updates[0]!.salience };
+          stored = {
+            ...stored,
+            salience: updates[0]!.salience,
+            salienceDecayAnchorAt: updates[0]!.salienceDecayAnchorAt,
+          };
           revision += 1;
           return 1;
         }),

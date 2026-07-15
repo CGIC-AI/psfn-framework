@@ -2192,6 +2192,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(plan.toolDefinitions).toMatchObject([{ name: 'contact' }]);
     const inputSections = promptContext?.inputSections as Array<{ id: string; content: string }> | undefined;
     expect(inputSections?.find(section => section.id === 'memory_context')?.content).toContain('Retrieved memory block');
+    const finalSystemSections = promptContext?.finalSystemSections as Array<{
+      id: string;
+      tokenCount: number;
+    }> | undefined;
+    expect(finalSystemSections?.find(section => section.id === 'session_context')?.tokenCount).toBe(
+      plan.blocks.find(block => block.id === 'session_context')?.tokensEst,
+    );
+    expect(finalSystemSections?.find(section => section.id === 'runtime.current_datetime')?.tokenCount).toBe(
+      plan.blocks.find(block => block.id === 'runtime.current_datetime')?.tokensEst,
+    );
     expect(promptContext?.currentTurnInput).toBe('Hello there');
     expect(promptContext?.response).toMatchObject({
       content: 'assistant reply',

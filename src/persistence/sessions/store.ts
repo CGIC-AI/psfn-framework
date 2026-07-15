@@ -606,11 +606,15 @@ export class SessionStore implements TranscriptSearchPort {
       cache.recentEntriesByLimit.clear();
     }
   }
-  private readCachedRecentEntries(cache: ChannelCache, limit: number): SessionEntry[] | null {
+  private readCachedRecentEntries(
+    cache: ChannelCache,
+    limit: number,
+    archiveFingerprint: string | null,
+  ): SessionEntry[] | null {
     const cached = cache.recentEntriesByLimit.get(limit);
     if (!cached) return null;
     if (cached.fingerprint !== this.buildRecentEntriesFingerprint(cache)) return null;
-    if (cached.archiveFingerprint !== this.fingerprintArchive(cache)) return null;
+    if (cached.archiveFingerprint !== archiveFingerprint) return null;
     return [...cached.entries];
   }
   private writeCachedRecentEntries(
@@ -801,11 +805,13 @@ export class SessionStore implements TranscriptSearchPort {
       if (full.entries.length <= limit) return [...full.entries];
       return full.entries.slice(-limit);
     }
-    const recentCacheHit = cached ? this.readCachedRecentEntries(cached, limit) : null;
+    const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
+    const recentCacheHit = cached
+      ? this.readCachedRecentEntries(cached, limit, archiveFingerprintBeforeRead)
+      : null;
     if (recentCacheHit) {
       return recentCacheHit;
     }
-    const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
     const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
     if (cached) {
       this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);

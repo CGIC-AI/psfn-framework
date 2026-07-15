@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serializeVoiceWireFrame } from './serializer.js';
 import { WebSocketVoiceServer } from './server.js';
-import { VOICE_WIRE_PROTOCOL, type WebSocketVoiceConnection } from './types.js';
+import {
+  VOICE_WIRE_PROTOCOL,
+  type VoiceWireTransportData,
+  type WebSocketVoiceConnection,
+} from './types.js';
 
 class FakeConnection implements WebSocketVoiceConnection {
   readonly id: string;
@@ -12,14 +16,14 @@ class FakeConnection implements WebSocketVoiceConnection {
   readonly send = vi.fn();
 
   closedWith: { code?: number; reason?: string } | null = null;
-  private readonly messageHandlers = new Set<(data: string) => void>();
+  private readonly messageHandlers = new Set<(data: VoiceWireTransportData) => void>();
   private readonly closeHandlers = new Set<() => void>();
 
   constructor(id: string) {
     this.id = id;
   }
 
-  onMessage(handler: (data: string) => void): () => void {
+  onMessage(handler: (data: VoiceWireTransportData) => void): () => void {
     this.messageHandlers.add(handler);
     return () => this.messageHandlers.delete(handler);
   }
@@ -29,7 +33,7 @@ class FakeConnection implements WebSocketVoiceConnection {
     return () => this.closeHandlers.delete(handler);
   }
 
-  emitMessage(data: string): void {
+  emitMessage(data: VoiceWireTransportData): void {
     for (const handler of [...this.messageHandlers]) {
       handler(data);
     }
@@ -73,7 +77,7 @@ describe('WebSocketVoiceServer', () => {
       type: 'audio.chunk',
       sessionId: 'conn-1',
       seq: 1,
-      audioBase64: 'ZGF0YQ==',
+      audio: new TextEncoder().encode('data'),
     }));
     connection.emitMessage(serializeVoiceWireFrame({
       wire: VOICE_WIRE_PROTOCOL,
@@ -96,7 +100,7 @@ describe('WebSocketVoiceServer', () => {
         type: 'audio.chunk',
         sessionId: 'conn-1',
         seq: 1,
-        audioBase64: 'ZGF0YQ==',
+        audio: new TextEncoder().encode('data'),
       }),
     );
     expect(onFrame).toHaveBeenNthCalledWith(

@@ -8,7 +8,9 @@ import type {
 } from '../../connectors/tts/types.js';
 import type { VoiceRuntimeStage } from '../../policy/reliability.js';
 
-export const VOICE_WIRE_PROTOCOL = 'voice-wire-v1' as const;
+export const VOICE_WIRE_PROTOCOL = 'voice-wire-v2' as const;
+
+export type VoiceWireTransportData = string | Uint8Array;
 
 export interface VoiceWireFrameBase {
   wire: typeof VOICE_WIRE_PROTOCOL;
@@ -23,7 +25,7 @@ export interface VoiceSessionStartFrame extends VoiceWireFrameBase {
 export interface VoiceAudioChunkFrame extends VoiceWireFrameBase {
   type: 'audio.chunk';
   seq: number;
-  audioBase64: string;
+  audio: Uint8Array;
 }
 
 export interface VoiceSessionEndFrame extends VoiceWireFrameBase {
@@ -52,7 +54,7 @@ export interface VoiceTranscriptFrame extends VoiceWireFrameBase {
 export interface VoicePlaybackFrame extends VoiceWireFrameBase {
   type: 'playback.chunk';
   seq: number;
-  audioBase64: string;
+  audio: Uint8Array;
 }
 
 export interface VoicePongFrame extends VoiceWireFrameBase {
@@ -90,9 +92,9 @@ export interface WebSocketVoiceSession {
 
 export interface WebSocketVoiceConnection {
   id: string;
-  send(data: string): void;
+  send(data: VoiceWireTransportData): void;
   close(code?: number, reason?: string): void;
-  onMessage(handler: (data: string) => void): () => void;
+  onMessage(handler: (data: VoiceWireTransportData) => void): () => void;
   onClose(handler: () => void): () => void;
 }
 

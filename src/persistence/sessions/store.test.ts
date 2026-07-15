@@ -1289,17 +1289,20 @@ describe('SessionStore', () => {
 
     const archivePort = createFilesystemSessionArchivePort();
     const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const fingerprintSpy = vi.spyOn(archivePort, 'fingerprintArchive');
     const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
     tailSpy.mockClear();
 
     expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
     expect(tailSpy).toHaveBeenCalledTimes(1);
+    fingerprintSpy.mockClear();
 
     const journalPath = findSessionJournalPath(dir, 'tail-cache-parse');
     writeFileSync(journalPath, `${readFileSync(journalPath, 'utf-8')}{bad\n`, 'utf-8');
 
     expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
     expect(tailSpy).toHaveBeenCalledTimes(2);
+    expect(fingerprintSpy).toHaveBeenCalledTimes(2);
     const tailResult = tailSpy.mock.results.at(-1)?.value as { quarantined?: Array<{ raw: string }> } | undefined;
     expect(tailResult?.quarantined).toEqual([expect.objectContaining({ raw: '{bad' })]);
   });

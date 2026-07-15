@@ -398,6 +398,118 @@ test("authenticated Voxta interruption detaches stalled TTS before admitting a r
   }
 });
 
+test("Voxta interrupt during a pending replyChunk send excludes the cancelled assistant reply from history", async () => {
+  const agent = new BlockingVoxtaAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  const originalSend = WebSocket.prototype.send;
+  let delayedFirstReplyChunk = false;
+  let notifyReplyChunkSendStarted: () => void = () => undefined;
+  const replyChunkSendStarted = new Promise<void>((resolve) => {
+    notifyReplyChunkSendStarted = resolve;
+  });
+  let releaseReplyChunkSend: () => void = () => undefined;
+  const replyChunkSendRelease = new Promise<void>((resolve) => {
+    releaseReplyChunkSend = resolve;
+  });
+  type SendCallback = (error?: Error) => void;
+  const delayedSend = function (
+    this: WebSocket,
+    data: Parameters<WebSocket["send"]>[0],
+    optionsOrCallback?: Parameters<WebSocket["send"]>[1] | SendCallback,
+    callback?: SendCallback,
+  ): void {
+    const sendCallback = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;
+    const isFirstReplyChunk = (
+      !delayedFirstReplyChunk
+      && typeof sendCallback === "function"
+      && data.toString().includes('"$type":"replyChunk"')
+    );
+    if (!isFirstReplyChunk) {
+      Reflect.apply(originalSend, this, [data, optionsOrCallback, callback]);
+      return;
+    }
+    delayedFirstReplyChunk = true;
+    notifyReplyChunkSendStarted();
+    const delayedCallback: SendCallback = (error) => {
+      void replyChunkSendRelease.then(() => sendCallback(error));
+    };
+    if (typeof optionsOrCallback === "function") {
+      Reflect.apply(originalSend, this, [data, delayedCallback]);
+      return;
+    }
+    Reflect.apply(originalSend, this, [data, optionsOrCallback, delayedCallback]);
+  };
+  WebSocket.prototype.send = delayedSend as WebSocket["send"];
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-delayed-chunk", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-delayed-chunk");
+    socket.send(encodeFrame(invocation("start-delayed-chunk", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-delayed-chunk");
+
+    socket.send(encodeFrame(invocation("send-cancelled-chunk", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "cancel while sending",
+    })));
+    const cancelledChunk = await waitForVoxta(
+      frames,
+      "replyChunk",
+      (payload) => payload.text === "reply:cancel while sending",
+    );
+    await replyChunkSendStarted;
+
+    socket.send(encodeFrame(invocation("interrupt-delayed-chunk", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-delayed-chunk");
+    socket.send(encodeFrame(invocation("send-after-delayed-chunk", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+    releaseReplyChunkSend();
+
+    await waitForVoxta(
+      frames,
+      "replyCancelled",
+      (payload) => payload.messageId === cancelledChunk.messageId,
+    );
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-after-delayed-chunk");
+
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "cancel while sending",
+      "replacement",
+    ]);
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === cancelledChunk.messageId && payload.$type === "replyEnd"
+      )),
+      [],
+    );
+  } finally {
+    releaseReplyChunkSend();
+    WebSocket.prototype.send = originalSend;
+    socket?.close();
+    await server.close();
+  }
+});
+
 test("Voxta facade normalizes VaM slash-command context before PSFN routing", async () => {
   const agent = new FakeAgent();
   const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });

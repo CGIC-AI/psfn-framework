@@ -890,7 +890,6 @@ class VoxtaConnection {
       replyAbortController.signal,
     );
     this.assertReplyActive(replyId, replyAbortController);
-    this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
     const wireResponseText = sanitizeVoxtaWireText(responseText);
     this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
@@ -908,6 +907,7 @@ class VoxtaConnection {
       timestamp: new Date().toISOString(),
     });
     this.assertReplyActive(replyId, replyAbortController);
+    this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
     await this.sendReceive({
       $type: "replyEnd",
       sessionId: this.sessionId,

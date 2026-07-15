@@ -57,6 +57,7 @@ import {
 } from './mapping.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+import { compareAndSetGenericUpsertTrust } from './trust-concurrency.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -138,7 +139,6 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         nextDiscordUserId ?? null,
         nextDisplayName,
         nextNickname ?? null,
-        nextTrustLevel,
       ];
       const trailingValues = [
         nextEmotion,
@@ -155,13 +155,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               SET discord_user_id = COALESCE(discord_user_id, $1),
                   display_name = $2,
                   nickname = $3,
-                  trust_level = $4,
-                  relationship_type = $5,
-                  emotional_baseline = $6,
-                  last_seen = $7,
-                  notes = COALESCE($8, notes),
-                  timezone = $9
-              WHERE id = $10 AND relationship_type = $11
+                  relationship_type = $4,
+                  emotional_baseline = $5,
+                  last_seen = $6,
+                  notes = COALESCE($7, notes),
+                  timezone = $8
+              WHERE id = $9 AND relationship_type = $10
               RETURNING id
             `,
             [...commonValues, nextRelationshipType, ...trailingValues, target.relationshipType],
@@ -195,16 +194,22 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             SET discord_user_id = COALESCE(discord_user_id, $1),
                 display_name = $2,
                 nickname = $3,
-                trust_level = $4,
-                emotional_baseline = $5,
-                last_seen = $6,
-                notes = COALESCE($7, notes),
-                timezone = $8
-            WHERE id = $9
+                emotional_baseline = $4,
+                last_seen = $5,
+                notes = COALESCE($6, notes),
+                timezone = $7
+            WHERE id = $8
           `,
           [...commonValues, ...trailingValues],
         );
       }
+
+      const trustLevelChanged = await compareAndSetGenericUpsertTrust(
+        this.pool,
+        target.id,
+        previousTrustLevel,
+        nextTrustLevel,
+      );
 
       for (const identity of identities) {
         await this.upsertIdentityLinkRecord(
@@ -217,9 +222,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         );
       }
 
-      if (nextTrustLevel === 'primary' && previousTrustLevel !== 'primary') {
+      if (trustLevelChanged && nextTrustLevel === 'primary') {
         await this.appendPrimaryTrustAudit(target.id, previousTrustLevel, 'upsert', 'allowed', options.actor);
-      } else if (previousTrustLevel !== nextTrustLevel) {
+      } else if (trustLevelChanged) {
         await this.appendMutationAuditEntry(target.id, 'trust_level', previousTrustLevel, nextTrustLevel, options.actor);
       }
       if (target.displayName !== nextDisplayName) {
@@ -510,28 +515,26 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
   async mergeContacts(sourceContactId: string, targetContactId: string): Promise<boolean> {
     if (sourceContactId === targetContactId) return true;
     return await withPostgresClient(this.pool, async (client) => {
-      const sourceRow = await queryOne<ContactRow>(
-        this.pool,
-        `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
-          FROM contacts
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [sourceContactId],
-      );
-      const targetRow = await queryOne<ContactRow>(
-        this.pool,
-        `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
-          FROM contacts
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [targetContactId],
-      );
+      // SAFETY: Lock both contacts in deterministic ID order and derive the
+      // merged trust from those locked rows. This prevents a stale merge from
+      // overwriting an explicit trust mutation and avoids AB-BA deadlocks.
+      const lockedRows = new Map<string, ContactRow>();
+      for (const contactId of [sourceContactId, targetContactId].sort()) {
+        const result = await client.query<ContactRow>(
+          `
+            SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+                   emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
+            FROM contacts
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [contactId],
+        );
+        if (result.rowCount !== 1) return false;
+        lockedRows.set(contactId, result.rows[0]);
+      }
+      const sourceRow = lockedRows.get(sourceContactId);
+      const targetRow = lockedRows.get(targetContactId);
       if (!sourceRow || !targetRow) return false;
 
       await client.query('UPDATE contact_channel_ids SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);

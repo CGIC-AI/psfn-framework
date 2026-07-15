@@ -61,6 +61,102 @@ describe('PostgresContactStore', () => {
     await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'regular' });
   });
 
+  it.each(['trusted', 'primary'] as const)(
+    'does not let a stale profile upsert overwrite a concurrent operator promotion to %s',
+    async (promotedTrustLevel) => {
+      const pool = new FakePostgresPool();
+      const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+        pool: pool as unknown as Pool,
+      });
+      const contact = await store.upsert({
+        displayName: 'Concurrent Promotion Target',
+        trustLevel: 'regular',
+      });
+      let promotionApplied = false;
+      pool.beforeNextContactProfileUpdate = async () => {
+        promotionApplied = await store.setTrustLevel(
+          contact.id,
+          promotedTrustLevel,
+          'operator:test',
+          {
+            mutationSource: 'manual',
+            ...(promotedTrustLevel === 'primary' ? { allowPrimaryTrustAssignment: true } : {}),
+          },
+        );
+      };
+
+      const updated = await store.upsert({
+        id: contact.id,
+        displayName: 'Concurrent Promotion Target Renamed',
+        trustLevel: 'public',
+      });
+
+      expect(promotionApplied).toBe(true);
+      expect(updated.displayName).toBe('Concurrent Promotion Target Renamed');
+      expect(updated.trustLevel).toBe(promotedTrustLevel);
+    },
+  );
+
+  it('does not let a stale profile upsert undo a concurrent operator demotion', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert(
+      { displayName: 'Concurrent Demotion Target', trustLevel: 'trusted' },
+      { actor: 'operator:test' },
+    );
+    let demotionApplied = false;
+    pool.beforeNextContactProfileUpdate = async () => {
+      demotionApplied = await store.setTrustLevel(
+        contact.id,
+        'regular',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+    };
+
+    const updated = await store.upsert({
+      id: contact.id,
+      displayName: 'Concurrent Demotion Target Renamed',
+    });
+
+    expect(demotionApplied).toBe(true);
+    expect(updated.displayName).toBe('Concurrent Demotion Target Renamed');
+    expect(updated.trustLevel).toBe('regular');
+  });
+
+  it('rejects a stale low-tier trust mutation after a concurrent operator promotion', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Concurrent Explicit Trust Target',
+      trustLevel: 'regular',
+    });
+    let promotionApplied = false;
+    pool.beforeNextContactTrustUpdate = async () => {
+      promotionApplied = await store.setTrustLevel(
+        contact.id,
+        'trusted',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+    };
+
+    const staleMutationApplied = await store.setTrustLevel(
+      contact.id,
+      'public',
+      'agent:contact-tool',
+      { mutationSource: 'autonomous' },
+    );
+
+    expect(promotionApplied).toBe(true);
+    expect(staleMutationApplied).toBe(false);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'trusted' });
+  });
+
   it('preserves autonomous low-tier trust continuity', async () => {
     const pool = new FakePostgresPool();
     const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {

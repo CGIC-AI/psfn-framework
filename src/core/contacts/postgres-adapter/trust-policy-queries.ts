@@ -6,6 +6,7 @@ import { evaluateLowTierTrustDriftSuggestion, isManualHighTierTrustMutationAutho
 import { isPrimaryIdentity } from '../store/identity-utils.js';
 import type { collectUpsertIdentities } from '../store/upsert.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+import { compareAndSetExplicitTrust } from './trust-concurrency.js';
 
 const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   async appendPrimaryTrustAudit(
@@ -144,7 +145,8 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
       return false;
     }
 
-    await this.pool.query('UPDATE contacts SET trust_level = $1 WHERE id = $2', [trustLevel, id]);
+    const updated = await compareAndSetExplicitTrust(this.pool, id, contact.trustLevel, trustLevel);
+    if (!updated) return false;
     if (trustLevel === 'primary') {
       await this.appendPrimaryTrustAudit(id, contact.trustLevel, 'set_trust_level', 'allowed', actor);
     } else {

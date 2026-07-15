@@ -8,7 +8,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
     const service = new AdminAdaptiveToolsDataService({ eventBus });
 
     await eventBus.emit('agent.toolcall.end', {
-      channelId: 'discord:dm:carlini',
+      channelId: 'discord:dm:lyra',
       contentIndex: 0,
       toolCallId: 'contact-call-1',
       toolName: 'contact',
@@ -21,7 +21,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
       requestId: 'request-1',
     });
     await eventBus.emit('agent.tool.end', {
-      channelId: 'discord:dm:carlini',
+      channelId: 'discord:dm:lyra',
       toolCallId: 'contact-call-1',
       toolName: 'contact',
       isError: false,
@@ -35,7 +35,7 @@ describe('AdminAdaptiveToolsDataService invocation audit', () => {
         toolName: 'contact',
         action: 'lookup',
         status: 'ok',
-        channelId: 'discord:dm:carlini',
+        channelId: 'discord:dm:lyra',
         toolCallId: 'contact-call-1',
         turnId: 'turn-1',
         requestId: 'request-1',

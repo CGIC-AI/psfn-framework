@@ -668,7 +668,7 @@ describe('tool-call-scheduler', () => {
         };
       }
       return {
-        content: [{ type: 'text', text: 'Journal note created: carlini-notes.md' }],
+        content: [{ type: 'text', text: 'Journal note created: lyra-notes.md' }],
         details: {},
       };
     });
@@ -711,7 +711,7 @@ describe('tool-call-scheduler', () => {
     );
     const valid = await executeToolCallsWithScheduler(
       [journal],
-      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Carlini notes', content: 'body' } }]),
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Lyra notes', content: 'body' } }]),
       undefined,
       { stream: { push: () => undefined } },
       options,
@@ -727,7 +727,7 @@ describe('tool-call-scheduler', () => {
     ]);
     expect((valid.toolResults[0] as ToolResultMessage).isError).toBe(false);
     expect((valid.toolResults[0] as ToolResultMessage).content).toEqual([
-      { type: 'text', text: 'Journal note created: carlini-notes.md' },
+      { type: 'text', text: 'Journal note created: lyra-notes.md' },
     ]);
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.scheduler.skipped',
@@ -742,7 +742,7 @@ describe('tool-call-scheduler', () => {
 
   it('classifies TypeBox required-property validation failures for repeated malformed skips', async () => {
     const execute = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'Journal note created: carlini-notes.md' }],
+      content: [{ type: 'text', text: 'Journal note created: lyra-notes.md' }],
       details: {},
     }));
     const journal = makeTool(
@@ -777,7 +777,7 @@ describe('tool-call-scheduler', () => {
     );
     const repeatedMalformed = await executeToolCallsWithScheduler(
       [journal],
-      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Carlini notes' } }]),
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Lyra notes' } }]),
       undefined,
       { stream: { push: () => undefined } },
       options,

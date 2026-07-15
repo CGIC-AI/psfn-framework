@@ -301,11 +301,11 @@ describe('observed group memory scheduler', () => {
         salience: { minCandidateScore: 0.7 },
       }),
       sessionReader: makeReader([
-        makeEntry(1, { content: 'Carlini, remember I prefer short updates.' }),
+        makeEntry(1, { content: 'Lyra, remember I prefer short updates.' }),
       ]),
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });
     await expect(directMentionScheduler.observeMessage(makeMessage())).resolves.toMatchObject({
@@ -323,7 +323,7 @@ describe('observed group memory scheduler', () => {
       ]),
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });
     await expect(highSalienceScheduler.observeMessage(makeMessage())).resolves.toMatchObject({

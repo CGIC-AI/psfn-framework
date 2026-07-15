@@ -49,7 +49,7 @@ async function context(entries: SessionEntry[]) {
 describe('structured group fact routing', () => {
   it('routes source speaker from source message metadata', async () => {
     const routingContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'Carlini, remember that I hate blue cheese.'),
+      entry(1, 'dragon', 'MrDragonFox', 'Lyra, remember that I hate blue cheese.'),
       entry(2, 'vega', 'Vega', 'lol'),
     ]);
 
@@ -62,7 +62,7 @@ describe('structured group fact routing', () => {
       }),
       routingContext,
       undefined,
-      { companionNames: ['Carlini'] },
+      { companionNames: ['Lyra'] },
     );
 
     expect(decision).toMatchObject({
@@ -95,7 +95,7 @@ describe('structured group fact routing', () => {
       }),
       routingContext,
       undefined,
-      { companionNames: ['Carlini'] },
+      { companionNames: ['Lyra'] },
     );
 
     expect(decision).toMatchObject({
@@ -126,7 +126,7 @@ describe('structured group fact routing', () => {
       }),
       routingContext,
       undefined,
-      { companionNames: ['Carlini'] },
+      { companionNames: ['Lyra'] },
     );
 
     expect(decision).toEqual({
@@ -152,7 +152,7 @@ describe('structured group fact routing', () => {
       }),
       routingContext,
       undefined,
-      { companionNames: ['Carlini'] },
+      { companionNames: ['Lyra'] },
     );
 
     expect(decision).toMatchObject({
@@ -217,13 +217,13 @@ describe('structured group fact routing', () => {
 
   it('classifies mention, reply, and explicit system/api address modes', async () => {
     const mentionContext = await context([
-      entry(1, 'dragon', 'MrDragonFox', 'I think Carlini should stream later.'),
+      entry(1, 'dragon', 'MrDragonFox', 'I think Lyra should stream later.'),
     ]);
     expect(resolveFactRouting(
       fact({ attribution: { sourceMessageIds: [1] } }),
       mentionContext,
       undefined,
-      { companionNames: ['Carlini'] },
+      { companionNames: ['Lyra'] },
     )).toMatchObject({ status: 'route', addressMode: 'mention_of_companion' });
 
     const replyContext = await context([

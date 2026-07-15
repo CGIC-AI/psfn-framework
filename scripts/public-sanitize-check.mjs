@@ -36,9 +36,11 @@ const TEXT_RULES = [
     regex: /\b(?:mfa\.)?[A-Za-z\d_-]{24}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27}\b/g,
   },
   { name: 'live-host-alias', regex: /\bpsfn-(?:shard|pi)\b/gi },
+  { name: 'private-cluster-host', regex: /\bcarlini\b/gi },
   { name: 'tailnet-address', regex: /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2}\b(?!\/)/g },
   { name: 'internal-local-hostname', regex: /\b[a-z0-9.-]+\.local\.internal\b/gi },
   { name: 'live-service-home-path', regex: /\/home\/psfn(?:\/|\b)/g },
+  { name: 'operator-home-path', regex: /\/home\/ada(?:\/|\b)/g },
   { name: 'live-storage-mount-path', regex: /\/mnt\/psfn-nvme(?:\/|\b)/g },
   { name: 'private-node-name', regex: /\bminiforum\d+\b/gi },
   {

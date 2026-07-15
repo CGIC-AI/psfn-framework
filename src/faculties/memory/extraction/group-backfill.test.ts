@@ -159,7 +159,7 @@ function makeExtractor(): GroupMemoryBackfillExtractorPort & {
 describe('GroupMemoryBackfillRunner', () => {
   it('dry-runs a bounded configured window without writing or advancing the watermark', async () => {
     const entries = makeEntries(120);
-    entries[9] = makeEntry(10, 'Carlini, remember I prefer jasmine tea.');
+    entries[9] = makeEntry(10, 'Lyra, remember I prefer jasmine tea.');
     entries[79] = makeEntry(80, 'My favorite coffee is cardamom latte.');
     const extractor = makeExtractor();
     const watermarkStore = new FakeWatermarkStore();
@@ -168,7 +168,7 @@ describe('GroupMemoryBackfillRunner', () => {
       sessionReader: makeReader(entries),
       watermarkStore,
       memoryExtractor: extractor,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     const result = await runner.run(CHANNEL_ID, {
@@ -197,7 +197,7 @@ describe('GroupMemoryBackfillRunner', () => {
 
   it('live-runs through the extractor and advances the watermark only after success', async () => {
     const entries = makeEntries(60);
-    entries[9] = makeEntry(10, 'Carlini, remember I prefer jasmine tea.');
+    entries[9] = makeEntry(10, 'Lyra, remember I prefer jasmine tea.');
     const extractor = makeExtractor();
     const watermarkStore = new FakeWatermarkStore();
     const runner = new GroupMemoryBackfillRunner({
@@ -205,7 +205,7 @@ describe('GroupMemoryBackfillRunner', () => {
       sessionReader: makeReader(entries),
       watermarkStore,
       memoryExtractor: extractor,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
       nowMs: () => 9_000,
     });
 

@@ -148,7 +148,7 @@ describe('AdminGroupMemoryDataService', () => {
     const eventBus = new EventBus();
     const settings = makeSettings();
     const entries = [
-      makeEntry(1, 'alice', 'Alice', 'Carlini, remember I prefer jasmine tea.'),
+      makeEntry(1, 'alice', 'Alice', 'Lyra, remember I prefer jasmine tea.'),
       makeEntry(2, 'bob', 'Bob', 'My brother Vega is helping with moderation.'),
       makeEntry(3, 'alice', 'Alice', 'lol'),
     ];
@@ -192,7 +192,7 @@ describe('AdminGroupMemoryDataService', () => {
       contactStore: makeContactStore(contacts),
       watermarkStore: makeWatermarkStore(),
       eventBus,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     await eventBus.emit('memory.extraction.end', {
@@ -277,12 +277,12 @@ describe('AdminGroupMemoryDataService', () => {
     const service = new AdminGroupMemoryDataService({
       groupMemory: settings,
       sessionStore: makeSessionStore([
-        makeEntry(1, 'alice', 'Alice', 'Carlini, remember I prefer jasmine tea.'),
+        makeEntry(1, 'alice', 'Alice', 'Lyra, remember I prefer jasmine tea.'),
       ]),
       memoryStore: makeMemoryStore([], {}),
       contactStore: makeContactStore([makeContact('contact-alice', 'Alice')]),
       watermarkStore: makeWatermarkStore(),
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     await expect(service.getGroupMemoryChannelDiagnostics(CHANNEL_ID)).resolves.toBeNull();

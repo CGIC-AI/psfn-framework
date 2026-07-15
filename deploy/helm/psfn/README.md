@@ -386,7 +386,7 @@ Build the image with the repo-owned Dockerfile and the hub checkout as the
 Docker context:
 
 ```bash
-SATELLITE_HUB_SOURCE=/home/ada/psfn-framework/PSFN-Satellite-Hub \
+SATELLITE_HUB_SOURCE="$HOME/psfn-framework/PSFN-Satellite-Hub" \
 SATELLITE_HUB_SOURCE_REF=<full hub git commit> \
 SATELLITE_HUB_IMAGE_REPOSITORY=localhost/psfn-satellite-hub \
 SATELLITE_HUB_PLATFORM=linux/amd64 \

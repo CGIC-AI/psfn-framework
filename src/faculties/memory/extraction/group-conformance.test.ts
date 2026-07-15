@@ -35,7 +35,7 @@ import {
 } from './orchestrator.js';
 import type { ExtractionSourceSpeaker } from './speaker-routing.js';
 
-const CHANNEL_ID = 'discord:carlini-room';
+const CHANNEL_ID = 'discord:lyra-room';
 
 const HUMANS = [
   { authorId: 'dragon', authorName: 'MrDragonFox', contactId: 'contact-dragon' },
@@ -228,14 +228,14 @@ function buildExtractionOptions(params: {
       recoveredEntries: params.entries,
       resolveSourceSpeakerContactId: resolveContactId,
       resolveParticipantNames: () => ({
-        companionName: 'Carlini',
+        companionName: 'Lyra',
       }),
       llmClient: {
         complete: llmComplete,
       } as ExtractionRunOptions['llmClient'],
       sessionManager: {
         getRecentMessages: vi.fn(),
-        characterName: 'Carlini',
+        characterName: 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       memoryStore: {
         getMemoriesByChannel: vi.fn().mockReturnValue([]),
@@ -312,7 +312,7 @@ function makeObservedMessage(): SubstrateMessage {
     channelType: 'discord',
     authorId: 'dragon',
     authorName: 'MrDragonFox',
-    content: 'Carlini, remember I prefer concise summaries.',
+    content: 'Lyra, remember I prefer concise summaries.',
     timestamp: new Date('2026-06-28T12:00:00.000Z'),
     routing: {
       source: 'discord',
@@ -324,7 +324,7 @@ function makeObservedMessage(): SubstrateMessage {
 describe('group-room memory conformance', () => {
   it('extracts useful memories from a configured 50-message online room window', async () => {
     const entries = makeGroupFixture(50);
-    replaceEntry(entries, 8, 0, 'Carlini, remember that I prefer concise deployment summaries.');
+    replaceEntry(entries, 8, 0, 'Lyra, remember that I prefer concise deployment summaries.');
     replaceEntry(entries, 24, 0, 'My friend Vega is helping run moderation tonight.');
     replaceEntry(entries, 45, 2, 'Please do not share my school schedule outside this room.');
     const settings = groupSettings({
@@ -344,7 +344,7 @@ describe('group-room memory conformance', () => {
     const salience = selectGroupMemorySalienceCandidates({
       chunk: plan.chunks[0],
       settings,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     expect(plan.chunks).toHaveLength(1);
@@ -455,7 +455,7 @@ describe('group-room memory conformance', () => {
 
   it('honors a configured 100-message online room window without a hidden 50-message extraction ceiling', async () => {
     const entries = makeGroupFixture(100);
-    replaceEntry(entries, 15, 1, 'Carlini, remember that my favorite coffee is cardamom latte.');
+    replaceEntry(entries, 15, 1, 'Lyra, remember that my favorite coffee is cardamom latte.');
     replaceEntry(entries, 88, 3, 'I will bring the moderation checklist tomorrow.');
     const settings = groupSettings({
       onlineExtraction: {
@@ -496,7 +496,7 @@ describe('group-room memory conformance', () => {
     });
     expect(llmComplete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining(
-        '[message_id:15] Vega: Carlini, remember that my favorite coffee is cardamom latte.',
+        '[message_id:15] Vega: Lyra, remember that my favorite coffee is cardamom latte.',
       ),
     }), 'extraction');
     expect(processFact).toHaveBeenCalledWith(
@@ -514,7 +514,7 @@ describe('group-room memory conformance', () => {
 
   it('processes larger room history only through bounded backfill chunks with resume', async () => {
     const entries = makeGroupFixture(500);
-    replaceEntry(entries, 90, 0, 'Carlini, remember I prefer summaries with explicit dates.');
+    replaceEntry(entries, 90, 0, 'Lyra, remember I prefer summaries with explicit dates.');
     replaceEntry(entries, 150, 1, 'My brother Marco is helping test moderation tonight.');
     replaceEntry(entries, 190, 2, 'Please never share my streaming schedule outside this room.');
     const settings = groupSettings({
@@ -536,7 +536,7 @@ describe('group-room memory conformance', () => {
       sessionReader: makeReader(entries),
       watermarkStore,
       memoryExtractor: extractor,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     const result = await runner.run(CHANNEL_ID, {
@@ -598,7 +598,7 @@ describe('group-room memory conformance', () => {
     const salience = selectGroupMemorySalienceCandidates({
       chunk: plan.chunks[0],
       settings,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
     const watermarkStore = new FakeWatermarkStore();
     const extractor = makeBackfillExtractor();
@@ -607,7 +607,7 @@ describe('group-room memory conformance', () => {
       sessionReader: makeReader(entries),
       watermarkStore,
       memoryExtractor: extractor,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
       nowMs: () => 12_000,
     });
 
@@ -632,7 +632,7 @@ describe('group-room memory conformance', () => {
 
   it('keeps observed group extraction off the response path', async () => {
     const entries = makeGroupFixture(50);
-    replaceEntry(entries, 1, 0, 'Carlini, remember I prefer concise summaries.');
+    replaceEntry(entries, 1, 0, 'Lyra, remember I prefer concise summaries.');
     const settings = groupSettings({
       onlineExtraction: {
         observedMessageTriggerCount: 50,
@@ -648,7 +648,7 @@ describe('group-room memory conformance', () => {
       sessionReader: makeReader(entries),
       watermarkStore: new FakeWatermarkStore(),
       memoryExtractor: extractor,
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });
     const responseHandler = vi.fn();
@@ -677,8 +677,8 @@ describe('group-room memory conformance', () => {
       {
         ...makeEntry(2, 'I will remember that.', 1),
         role: 'assistant' as const,
-        authorId: 'carlini',
-        authorName: 'Carlini',
+        authorId: 'lyra',
+        authorName: 'Lyra',
       },
       makeEntry(3, 'I also like chess.', 0),
     ];
@@ -703,7 +703,7 @@ describe('group-room memory conformance', () => {
       } as ExtractionRunOptions['llmClient'],
       sessionManager: {
         getRecentMessages,
-        characterName: 'Carlini',
+        characterName: 'Lyra',
       } as ExtractionRunOptions['sessionManager'],
       memoryStore: {
         getMemoriesByChannel: vi.fn().mockReturnValue([]),

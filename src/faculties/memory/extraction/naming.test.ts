@@ -174,31 +174,31 @@ describe('normalizeExtractedFactParticipantNames', () => {
     const result = normalizeExtractedFactParticipantNames(factWithText(
       '{{char}} {{char}} keeps clear guardrails.',
     ), {
-      companionName: 'Carlini',
+      companionName: 'Lyra',
     });
 
     expect(result.accepted).toBe(true);
     if (!result.accepted) throw new Error('expected duplicate macros to resolve');
-    expect(result.fact.text).toBe('Carlini keeps clear guardrails.');
+    expect(result.fact.text).toBe('Lyra keeps clear guardrails.');
   });
 
   it('collapses adjacent duplicate participant names and possessive forms', () => {
     const plain = normalizeExtractedFactParticipantNames(factWithText(
-      'Carlini Carlini needs livestream guardrails.',
+      'Lyra Lyra needs livestream guardrails.',
     ), {
-      companionName: 'Carlini',
+      companionName: 'Lyra',
     });
     const possessive = normalizeExtractedFactParticipantNames(factWithText(
-      "Carlini Carlini's livestream needs guardrails.",
+      "Lyra Lyra's livestream needs guardrails.",
     ), {
-      companionName: 'Carlini',
+      companionName: 'Lyra',
     });
 
     expect(plain.accepted).toBe(true);
     expect(possessive.accepted).toBe(true);
     if (!plain.accepted || !possessive.accepted) throw new Error('expected duplicate names to normalize');
-    expect(plain.fact.text).toBe('Carlini needs livestream guardrails.');
-    expect(possessive.fact.text).toBe("Carlini's livestream needs guardrails.");
+    expect(plain.fact.text).toBe('Lyra needs livestream guardrails.');
+    expect(possessive.fact.text).toBe("Lyra's livestream needs guardrails.");
   });
 
   it('rejects unresolved raw participant macros', () => {
@@ -234,13 +234,13 @@ describe('normalizeExtractedFactParticipantNames', () => {
 describe('normalizeDurableMemoryText', () => {
   it('applies generic adjacent proper-name hygiene for profile summaries', () => {
     const result = normalizeDurableMemoryText(
-      "Carlini Carlini's profile should not preserve duplicated names.",
+      "Lyra Lyra's profile should not preserve duplicated names.",
       {},
     );
 
     expect(result).toEqual({
       accepted: true,
-      text: "Carlini's profile should not preserve duplicated names.",
+      text: "Lyra's profile should not preserve duplicated names.",
       changed: true,
     });
   });

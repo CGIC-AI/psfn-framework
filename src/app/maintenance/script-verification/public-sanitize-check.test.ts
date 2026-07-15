@@ -93,6 +93,28 @@ describe('public-sanitize check', () => {
     ]);
   });
 
+  it('detects private cluster/host aliases and operator home paths', () => {
+    const clusterHost = ['car', 'lini'].join('');
+    const operatorHomePath = ['', 'home', 'ada', 'psfn-framework'].join('/');
+    const result = scanPublicSanitizeTrackedFiles(
+      ['deploy/helm/psfn/README.md'],
+      {
+        localBlocklist: {
+          localPath: 'workspace/sanitize/local-blocklist.json',
+          forbiddenPathRegex: [],
+          textRuleRegex: [],
+          loaded: false,
+        },
+        readTextFile: () => `Cluster host: ${clusterHost}\nSource: ${operatorHomePath}\n`,
+      },
+    );
+
+    expect(result.violations.map((violation) => violation.rule).sort()).toEqual([
+      'operator-home-path',
+      'private-cluster-host',
+    ]);
+  });
+
   it('does not scan excluded beads history log content', () => {
     const tokenValue = buildOpenAiLikeToken();
     const reads: string[] = [];

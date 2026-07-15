@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source_dir="${SATELLITE_HUB_SOURCE:-${1:-/home/ada/psfn-framework/PSFN-Satellite-Hub}}"
+source_dir="${SATELLITE_HUB_SOURCE:-${1:-$HOME/psfn-framework/PSFN-Satellite-Hub}}"
 repository="${SATELLITE_HUB_IMAGE_REPOSITORY:-localhost/psfn-satellite-hub}"
 platform="${SATELLITE_HUB_PLATFORM:-linux/amd64}"
 required_ref="${SATELLITE_HUB_SOURCE_REF:-}"

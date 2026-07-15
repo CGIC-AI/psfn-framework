@@ -393,6 +393,7 @@ async function main(): Promise<void> {
           config: startup.config,
           configStore: createOwnerFileConfigStore({
             dataDir: startup.pathSnapshot.systemDataDir,
+            companionDataDir: startup.pathSnapshot.companionDataDir,
             seedDir: process.env.CONFIG_DIR,
             defaultContextWindow: startup.config.defaultContextWindow,
           }),

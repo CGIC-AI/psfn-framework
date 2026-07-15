@@ -186,7 +186,9 @@ assertIncludes(defaultDenyPolicy, '- Egress', 'default deny egress');
 const agentPolicy = findDocument(rendered, 'psfn-agent');
 assertNotIncludes(agentPolicy, '0.0.0.0/0', 'agent policy broad egress');
 assertIncludes(agentPolicy, 'component: gateway', 'agent policy gateway flow');
-assertIncludes(agentPolicy, 'port: 10053', 'agent policy gateway operator API flow');
+// x5rt.10: the agent no longer reaches the gateway API (operator confirmation
+// relay removed); the Garden operator process holds that egress instead.
+assertNotIncludes(agentPolicy, 'port: 10053', 'agent has no gateway operator API egress');
 assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow');
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
 assertNotIncludes(agentPolicy, 'component: litellm', 'agent policy LiteLLM direct egress');
@@ -349,15 +351,12 @@ assertIncludes(
   'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
   'agent companion role proof remains optional for single-companion installs',
 );
-assertIncludes(
+// x5rt.10: the operator confirmation endpoint (and the ADMIN_TOKEN it carries)
+// lives in the Garden operator process, never the agent.
+assertNotIncludes(
   agentDeployment,
   'name: GATEWAY_OPERATOR_API_BASE_URL',
-  'agent gateway operator confirmation endpoint env',
-);
-assertIncludes(
-  agentDeployment,
-  'value: "http://psfn-gateway:10053/v1"',
-  'agent in-cluster gateway operator confirmation endpoint',
+  'agent has no gateway operator confirmation endpoint env',
 );
 assertNotIncludes(agentDeployment, 'name: ADMIN_TOKEN', 'agent admin credential isolation');
 for (const [name, value] of [
@@ -394,6 +393,24 @@ assertNotIncludes(
   gardenCredentialBoundaryDeployment,
   '- name: POSTGRES_DATABASE_URL\n',
   'Garden raw Postgres credential env',
+);
+// x5rt.10: the Garden operator process resolves operator-only confirmations
+// directly against the gateway API, carrying ADMIN_TOKEN so it never traverses
+// the agent.
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'name: GATEWAY_OPERATOR_API_BASE_URL',
+  'Garden operator confirmation endpoint env',
+);
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'value: "http://psfn-gateway:10053/v1"',
+  'Garden in-cluster gateway operator confirmation endpoint',
+);
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'name: ADMIN_TOKEN',
+  'Garden operator owns ADMIN_TOKEN for operator confirmation resolution',
 );
 
 const workloadImageOverrides = [
@@ -504,7 +521,15 @@ assertIncludes(liteLlmDeployment, 'runAsUser: 999', 'LiteLLM numeric user');
 const gatewayPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-gateway');
 assertIncludes(gatewayPolicy, 'component: litellm', 'gateway policy LiteLLM egress');
 assertIncludes(gatewayPolicy, 'port: 4000', 'gateway policy LiteLLM port');
-assertIncludes(gatewayPolicy, 'port: 10053', 'gateway policy agent operator API ingress');
+// x5rt.10: operator confirmation resolution ingress comes from the Garden
+// operator process, not the agent.
+assertIncludes(gatewayPolicy, 'component: garden', 'gateway policy garden operator API ingress');
+assertIncludes(gatewayPolicy, 'port: 10053', 'gateway policy garden operator API ingress port');
+
+const gardenPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-garden');
+assertIncludes(gardenPolicy, 'component: agent', 'garden policy agent admin transport egress');
+assertIncludes(gardenPolicy, 'component: gateway', 'garden policy gateway operator API egress');
+assertIncludes(gardenPolicy, 'port: 10053', 'garden policy gateway operator API egress port');
 
 const liteLlmPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-litellm');
 assertIncludes(liteLlmPolicy, 'component: litellm', 'LiteLLM policy selector');

@@ -1,12 +1,10 @@
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ConfirmationQueueAdminApi } from '../../../operator/garden/admin-contract.js';
-import type { ConfirmationOperatorAuthContext } from '../../../operator/garden/admin-contract.js';
 import type { ConfirmationResolveResult } from '../../../system/capabilities/confirmation-queue.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
 } from '../../../boundary/gateway/protocol.js';
-import type { GatewayOperatorConfirmationClient } from './gateway-operator-confirmation-client.js';
 
 type LocalConfirmationQueue = Pick<ApprovalQueuePort, 'listPending' | 'resolve'>;
 type LocalConfirmationQueueWithLookup = Pick<ApprovalQueuePort, 'getPending' | 'listPending' | 'resolve'>;
@@ -31,7 +29,6 @@ export function createLocalConfirmationQueueAdminApi(
 export function createGatewayConfirmationQueueAdminApi(
   gateway: GatewayConfirmationQueueClient,
   localQueue: LocalConfirmationQueueWithLookup,
-  operatorClient?: GatewayOperatorConfirmationClient,
 ): ConfirmationQueueAdminApi {
   return {
     listConfirmationQueue: async (): Promise<ConfirmationListResult> => {
@@ -46,15 +43,22 @@ export function createGatewayConfirmationQueueAdminApi(
     },
     resolveConfirmationQueue: async (
       params: ConfirmationResolveParams,
-      auth: ConfirmationOperatorAuthContext = {},
     ): Promise<ConfirmationResolveResult> => {
       if (localQueue.getPending(params.id)) {
         return localQueue.resolve(params);
       }
-      if (!operatorClient) {
-        throw new Error('Gateway operator confirmation endpoint is not configured.');
-      }
-      return operatorClient.resolve(params, auth);
+      // Operator-owned (gateway) confirmations are never resolvable from the
+      // less-trusted agent process. Resolving them requires the operator
+      // ADMIN_TOKEN, which must never traverse the agent (x5rt.10): the
+      // independently authenticated Garden operator process resolves them
+      // directly against the gateway. Fail closed here — the entry stays
+      // pending rather than the agent capturing/replaying a credential.
+      return {
+        id: params.id,
+        status: 'not_found',
+        message: 'Confirmation is not resolvable by the agent; operator authority is required.',
+        executed: false,
+      };
     },
   };
 }

@@ -48,6 +48,10 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import {
+  slimTurnRecordSessionEntriesForAppend,
+  resolveTurnRecordSessionEntries,
+} from './turn-record-session-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -1073,11 +1077,26 @@ export class SessionStore implements TranscriptSearchPort {
     );
   }
   appendTurnRecord(record: TurnRecord): void {
-    this.turnRecordStore.appendTurnRecord(record);
+    // Replace the verbatim raw session-entry arrays with L0 id references (bead
+    // psfn-framework-9ree) before the record is persisted. Pure projection; the
+    // journal stays the durable source and redaction can never be resurrected.
+    this.turnRecordStore.appendTurnRecord(slimTurnRecordSessionEntriesForAppend(record));
+  }
+  /**
+   * Reconstruct L0-referenced session entries and redaction-gate the rendered
+   * view (bead psfn-framework-9ree) at the persistence read boundary, so every
+   * consumer above the store sees fully inline, journal-current records.
+   */
+  private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
+    return resolveTurnRecordSessionEntries(
+      record,
+      (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
+    );
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    return this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    const record = this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    return record ? this.resolveTurnRecordSessionRefs(record) : null;
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
@@ -1092,7 +1111,8 @@ export class SessionStore implements TranscriptSearchPort {
       }
       : null);
     if (!resolved) {
-      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
     }
     const indexEntry = this.ensureChannelIndexEntry(
       resolved.sessionId,
@@ -1108,8 +1128,12 @@ export class SessionStore implements TranscriptSearchPort {
       filePaths: resolved.filePaths,
       cache: cached ?? undefined,
     });
-    if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
-    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
+    if (tombstones.size === 0) {
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
+    }
+    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   /**
    * Bounded iterative overscan for tombstone-filtered turn-record reads:
@@ -1156,7 +1180,8 @@ export class SessionStore implements TranscriptSearchPort {
     });
     const end = Math.max(0, filtered.length - offset);
     const start = Math.max(0, end - limit);
-    return filtered.slice(start, end);
+    return filtered.slice(start, end)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   isSourceTurnRecordEligible(
     sourceChannelId: string,

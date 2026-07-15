@@ -149,7 +149,14 @@ export async function executeAccountReapproval(
     await client.query('COMMIT');
     return parsed;
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'Rollback failed after reapproval transaction error',
+      );
+    }
     throw error;
   } finally {
     client.release();

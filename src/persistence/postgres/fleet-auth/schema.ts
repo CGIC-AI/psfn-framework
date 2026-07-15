@@ -41,6 +41,10 @@ const FORBIDDEN_ROLE_ATTRIBUTES = [
 interface RoleAttributeRow {
   current_user: string;
   rolcanlogin: boolean;
+  rolinherit: boolean;
+  credential_not_expired: boolean;
+  rolconnlimit: number;
+  owns_current_database: boolean;
   rolsuper: boolean;
   rolcreaterole: boolean;
   rolcreatedb: boolean;
@@ -79,6 +83,10 @@ const FLEET_AUTH_MUTABLE_TABLES = [
   'passkey_credentials',
   ...FLEET_AUTH_EPHEMERAL_TABLES,
 ] as const;
+
+const FLEET_AUTH_RUNTIME_MUTABLE_TABLES = FLEET_AUTH_MUTABLE_TABLES.filter(
+  table => table !== 'authority_state',
+);
 
 const FLEET_AUTH_IMMUTABLE_TABLES = [
   'provider_subject_history',
@@ -134,6 +142,14 @@ async function assertCurrentRole(
     SELECT
       current_user,
       rol.rolcanlogin,
+      rol.rolinherit,
+      (rol.rolvaliduntil IS NULL OR rol.rolvaliduntil > clock_timestamp())
+        AS credential_not_expired,
+      rol.rolconnlimit,
+      EXISTS (
+        SELECT 1 FROM pg_database
+        WHERE datname = current_database() AND datdba = rol.oid
+      ) AS owns_current_database,
       rol.rolsuper,
       rol.rolcreaterole,
       rol.rolcreatedb,
@@ -149,6 +165,18 @@ async function assertCurrentRole(
   if (!row.rolcanlogin) {
     throw new Error(`${authority} PostgreSQL role ${expectedRole} must be a LOGIN role`);
   }
+  // Exact credential posture: the authority roles are dedicated, non-owning,
+  // non-inheriting logins with a finite connection cap and a currently valid
+  // credential. NOINHERIT is defense in depth; the membership check below also
+  // rejects SET ROLE into every other role, including predefined server-file
+  // and server-program roles.
+  if (row.rolinherit || !row.credential_not_expired || row.rolconnlimit < 1
+    || row.owns_current_database) {
+    throw new Error(
+      `${authority} PostgreSQL role ${expectedRole} must be NOINHERIT, credential-valid, `
+      + 'finite CONNECTION LIMIT >= 1, and must not own the target database',
+    );
+  }
   const forbiddenAttributes = FORBIDDEN_ROLE_ATTRIBUTES
     .filter(attribute => row[attribute.column])
     .map(attribute => attribute.label);
@@ -158,14 +186,18 @@ async function assertCurrentRole(
       + forbiddenAttributes.join(', '),
     );
   }
-  const forbiddenMemberships = Object.values(roles).filter(role => role !== expectedRole);
   const memberships = await pool.query<{ role_name: string }>(`
-    SELECT role_name
-    FROM unnest($1::text[]) AS role_name
-    WHERE pg_has_role(current_user, role_name, 'MEMBER')
-  `, [forbiddenMemberships]);
+    SELECT candidate.rolname AS role_name
+    FROM pg_roles AS candidate
+    WHERE candidate.rolname <> current_user
+      AND pg_has_role(current_user, candidate.oid, 'MEMBER')
+    ORDER BY candidate.rolname
+  `);
   if (memberships.rows.length > 0) {
-    throw new Error(`${authority} PostgreSQL role must not inherit or SET ROLE into another fleet auth authority`);
+    throw new Error(
+      `${authority} PostgreSQL role must have no role memberships or SET ROLE targets: `
+      + memberships.rows.map(row => row.role_name).join(', '),
+    );
   }
   const protectedRoles = Object.values(roles);
   const inverseMemberships = await pool.query<{
@@ -207,7 +239,15 @@ async function applyRoleGrants(
   await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC, ${runtime}, ${backup}`);
   await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtime}, ${backup}`);
   await client.query(
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_RUNTIME_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
+  );
+  // The restorable database copy of the non-restored authority floor is
+  // observable by the broker, never directly mutable by its ordinary SQL
+  // credential. Startup/restore reconciliation uses the coordinator role;
+  // trusted-host reapproval changes the epoch only inside the constrained
+  // SECURITY DEFINER procedure.
+  await client.query(
+    `GRANT SELECT ON ${qualifiedTable('authority_state')} TO ${runtime}`,
   );
   // The runtime broker may invalidate pending trusted-host ceremonies during
   // reconciliation (DELETE) and observe them (SELECT), but it must never author
@@ -428,6 +468,9 @@ async function assertExactDml(
   const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
   const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
     if (mutable.has(tableName)) {
+      if (expectedRole === roles.runtime && tableName === 'authority_state') {
+        return new Set(['SELECT']);
+      }
       // The runtime broker cannot author or tamper with trusted-host ceremonies;
       // it may only SELECT/DELETE them. The backup/restore coordinator retains
       // full DML on every mutable table and never receives reapproval EXECUTE.

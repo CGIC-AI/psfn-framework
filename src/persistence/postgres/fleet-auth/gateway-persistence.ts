@@ -264,7 +264,16 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         ? { lifecycleTransitionId: lifecyclePreparation.lifecycleTransitionId }
         : {}),
     });
-    await reconcileFleetAuthAuthorityState(pool, floor, randomUUID());
+    const reconciliationPool = createPostgresPool(secrets.database.backupRestoreUrl, {
+      applicationName: 'fleet-auth-authority-reconciliation',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      await reconcileFleetAuthAuthorityState(reconciliationPool, floor, randomUUID());
+    } finally {
+      await reconciliationPool.end();
+    }
     lifecycleWitness.publishEnabled(
       lifecyclePreparation,
       floor.trustedHost.lineageId,

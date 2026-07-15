@@ -256,7 +256,7 @@ async function waitForBlockedBroker(
         SELECT COUNT(*)::int AS waiting
         FROM pg_stat_activity
         WHERE datname = $1
-          AND application_name = 'fleet-auth-broker'
+          AND application_name = 'fleet-auth-authority-reconciliation'
           AND wait_event_type = 'Lock'
       `, [context.databaseName]);
       if ((result.rows[0]?.waiting ?? 0) >= expectedCount) return;
@@ -274,7 +274,7 @@ beforeAll(async () => {
   try {
     for (const role of Object.values(ROLES)) {
       await admin.query(
-        `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${PASSWORDS[role]}'`,
+        `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${PASSWORDS[role]}'`,
       );
     }
   } finally {
@@ -321,10 +321,13 @@ describe('gateway fleet-auth lifecycle publication', () => {
     const witness = new FleetAuthLifecycleWitnessStore(context.systemDataDir);
     rmSync(witness.path);
 
-    const blockerPool = createPostgresPool(context.runtimeUrl, {
-      applicationName: 'fleet-auth-lifecycle-test-blocker',
-      max: 1,
-    });
+    const blockerPool = createPostgresPool(
+      roleUrl(context.runtimeUrl, ROLES.backupRestore),
+      {
+        applicationName: 'fleet-auth-lifecycle-test-blocker',
+        max: 1,
+      },
+    );
     const blocker = await blockerPool.connect();
     let released = false;
     let starts: PromiseSettledResult<GatewayFleetAuthPersistence>[] = [];
@@ -378,10 +381,13 @@ describe('gateway fleet-auth lifecycle publication', () => {
     await initial.close();
     await seedSession(context, 1);
 
-    const blockerPool = createPostgresPool(context.runtimeUrl, {
-      applicationName: 'fleet-auth-lifecycle-test-blocker',
-      max: 1,
-    });
+    const blockerPool = createPostgresPool(
+      roleUrl(context.runtimeUrl, ROLES.backupRestore),
+      {
+        applicationName: 'fleet-auth-lifecycle-test-blocker',
+        max: 1,
+      },
+    );
     const blocker = await blockerPool.connect();
     let released = false;
     await blocker.query('BEGIN');
@@ -459,11 +465,14 @@ describe('gateway fleet-auth lifecycle publication', () => {
       databaseHasDurableAuthority: true,
       lifecycleTransitionId: afterDatabase.lifecycleTransitionId,
     });
-    const runtime = createPostgresPool(context.runtimeUrl, { max: 1 });
+    const coordinator = createPostgresPool(
+      roleUrl(context.runtimeUrl, ROLES.backupRestore),
+      { max: 1 },
+    );
     try {
-      await reconcileFleetAuthAuthorityState(runtime, reconciledFloor, randomUUID());
+      await reconcileFleetAuthAuthorityState(coordinator, reconciledFloor, randomUUID());
     } finally {
-      await runtime.end();
+      await coordinator.end();
     }
     // Simulated crash: floor and DB are fenced, but the witness is still
     // disabled. Retry must publish without advancing the transition again.

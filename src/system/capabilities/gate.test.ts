@@ -787,8 +787,8 @@ describe('capability tool gating', () => {
   it('evaluates toolset capability requirements by action', async () => {
     const toolsetModule = await import('../../core/agent/substrate-agent/adaptive-tools-runtime.js');
     const toolset = toolsetModule.createToolsetTool({
+      getCoreTools: () => [],
       getExtendedTools: () => [],
-      getExtendedToolAutoloadPolicy: () => null,
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset'],
@@ -796,7 +796,6 @@ describe('capability tool gating', () => {
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
-        loadedExtendedTools: [],
         activeTools: [
           { toolName: 'tool_search', source: 'core' },
           { toolName: 'toolset', source: 'core' },
@@ -824,16 +823,6 @@ describe('capability tool gating', () => {
         message: 'ok',
       }),
       applyActiveToolsToAgent: () => {},
-      activateExtendedTools: () => ({
-        requestedTools: [],
-        activatedTools: [],
-        alreadyActiveTools: [],
-        missingTools: [],
-      }),
-      resolveSessionChannelId: (channelId: string) => channelId,
-      withAdaptiveCorrelation: () => ({}),
-      emitAdaptiveToolDecision: () => {},
-      emitTelemetry: () => {},
     });
 
     const deniedPinEligibility = evaluateToolCapabilityEligibility(

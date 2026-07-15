@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
  * Why this exists: outbound replies to a channel can originate from more than
  * one independent turn execution. The Discord inbound pump
  * (`src/app/agent/gateway-message-handlers.ts`) delivers the primary reply, and
- * a separate deferred-tool-handoff *continuation* turn
+ * a separate internal continuation turn
  * (`src/core/scheduler/heartbeat-post-turn-runtime.ts`) can run afterwards and
  * deliver its own model-generated reply to the same channel. Those two paths
  * share no dedupe state, so when the continuation regenerates text identical to

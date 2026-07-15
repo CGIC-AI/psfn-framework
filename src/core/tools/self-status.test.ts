@@ -105,15 +105,10 @@ function makeRuntime(overrides: Partial<SelfStatusToolRuntime> = {}): SelfStatus
       promotedToolsConfigured: ['north_star'],
       promotedToolsActive: ['north_star'],
       promotedToolsSkipped: [],
-      loadedExtendedTools: [{
-        toolName: 'media',
-        source: 'extended_loaded',
-        activatedAt: 1_700_000_010_000,
-        lastActivatedAt: 1_700_000_020_000,
-      }],
       activeTools: [
         { toolName: 'self_status', source: 'core' },
-        { toolName: 'north_star', source: 'promoted' },
+        { toolName: 'north_star', source: 'extended' },
+        { toolName: 'media', source: 'extended' },
       ],
       lastSnapshot: null,
     }),
@@ -204,12 +199,13 @@ describe('createSelfStatusTool', () => {
     });
     expect(payload.tools.activeTools).toEqual([
       { toolName: 'self_status', source: 'core' },
-      { toolName: 'north_star', source: 'promoted' },
+      { toolName: 'north_star', source: 'extended' },
+      { toolName: 'media', source: 'extended' },
     ]);
     expect(payload.tools.counts).toMatchObject({
       core: 4,
       extended: 2,
-      active: 2,
+      active: 3,
     });
     expect(payload.charge.lanes.interactive).toMatchObject({
       quota: 10,

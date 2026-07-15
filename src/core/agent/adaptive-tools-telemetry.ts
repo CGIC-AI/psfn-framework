@@ -1,21 +1,13 @@
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import type { ObservabilityCallType } from '../../shared/contracts/runtime.js';
 
-export type AdaptiveToolActivationSource =
+export type AdaptiveToolCatalogSource =
   | 'core'
-  | 'promoted'
-  | 'extended_loaded'
-  | 'autoload'
-  | 'deferred';
+  | 'extended';
 
-export type AdaptiveToolActivationDecision =
+export type AdaptiveToolCatalogDecision =
   | 'active'
-  | 'activated'
-  | 'already_active'
-  | 'skipped'
-  | 'queued'
-  | 'executed'
-  | 'failed';
+  | 'skipped';
 
 export interface AdaptiveToolTelemetryCorrelation {
   turnId?: string;
@@ -28,8 +20,8 @@ export interface AdaptiveToolTelemetryCorrelation {
 export interface AdaptiveToolDecisionTelemetry extends AdaptiveToolTelemetryCorrelation {
   timestamp: number;
   toolName: string;
-  source: AdaptiveToolActivationSource;
-  decision: AdaptiveToolActivationDecision;
+  source: AdaptiveToolCatalogSource;
+  decision: AdaptiveToolCatalogDecision;
   reason?: string;
   missingTokens?: CapabilityToken[];
   taskKind?: string | null;
@@ -38,22 +30,19 @@ export interface AdaptiveToolDecisionTelemetry extends AdaptiveToolTelemetryCorr
 
 export interface AdaptiveToolSnapshotTool {
   toolName: string;
-  source: AdaptiveToolActivationSource;
+  source: AdaptiveToolCatalogSource;
 }
 
 export interface AdaptiveToolSnapshotSkip {
   toolName: string;
-  source: Exclude<AdaptiveToolActivationSource, 'core'>;
+  source: 'extended';
   reason: string;
   missingTokens?: CapabilityToken[];
 }
 
 export interface AdaptiveToolSnapshotCounts {
   core: number;
-  promoted: number;
-  extendedLoaded: number;
-  autoload: number;
-  deferred: number;
+  extended: number;
   total: number;
 }
 
@@ -66,13 +55,6 @@ export interface AdaptiveToolSnapshotTelemetry extends AdaptiveToolTelemetryCorr
   intent?: string | null;
 }
 
-export interface AdaptiveLoadedExtendedToolState {
-  toolName: string;
-  source: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>;
-  activatedAt: number;
-  lastActivatedAt: number;
-}
-
 export interface AdaptiveToolRuntimeState {
   generatedAt: number;
   coreTools: string[];
@@ -80,7 +62,6 @@ export interface AdaptiveToolRuntimeState {
   promotedToolsConfigured: string[];
   promotedToolsActive: string[];
   promotedToolsSkipped: AdaptiveToolSnapshotSkip[];
-  loadedExtendedTools: AdaptiveLoadedExtendedToolState[];
   activeTools: AdaptiveToolSnapshotTool[];
   lastSnapshot: AdaptiveToolSnapshotTelemetry | null;
 }

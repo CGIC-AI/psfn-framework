@@ -90,14 +90,7 @@ import {
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
 } from './tool-wiring-validator.js';
-import {
-  type ExtendedToolAutoloadPolicy,
-  type ExtendedToolTurnClass,
-} from './extended-tool-autoload-policy.js';
-import type {
-  AdaptiveLoadedExtendedToolState,
-  AdaptiveToolRuntimeState,
-} from './adaptive-tools-telemetry.js';
+import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
 import { createTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
@@ -159,16 +152,9 @@ import {
   type ResolvedAuthorContext,
   type UserRuntimeProfile,
 } from './substrate-agent/runtime-context.js';
-import {
-  type ExtendedToolActivationOptions,
-  type ExtendedToolActivationResult,
-} from './substrate-agent/adaptive-tools-runtime.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
-import {
-  type BackgroundContinuationTaskRecord,
-} from './substrate-agent/background-continuation-runtime.js';
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
@@ -215,10 +201,6 @@ export type {
   IntentionPostTurnHookContext,
   IntentionPostTurnHook,
 } from './substrate-agent/post-turn-actions.js';
-export type {
-  ExtendedToolActivationOptions,
-  ExtendedToolActivationResult,
-} from './substrate-agent/adaptive-tools-runtime.js';
 export type {
   PromotedToolMutationErrorCode,
   PromotedToolMutationResult,
@@ -560,14 +542,11 @@ export class SubstrateAgent {
       agent: this.agent,
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       withCapabilityGates: (tools) => this.withCapabilityGates(tools),
-      withCorrelationPurpose: (correlation, purpose) => this.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
       withAdaptiveCorrelation: (correlation, purpose) => this.turnSupportRuntime.withAdaptiveCorrelation(correlation, purpose),
       emitAdaptiveToolDecision: (payload) => this.turnSupportRuntime.emitAdaptiveToolDecision(payload),
       emitTelemetry: (event, payload) => this.turnSupportRuntime.emitTelemetry(event, payload),
-      resolveSessionChannelId: (channelId) => this.turnSupportRuntime.resolveSessionChannelId(channelId),
       getActiveTurnCorrelation: () => this.turnSupportRuntime.getActiveTurnCorrelation(),
       getActiveTurnTaskKind: () => this.turnSupportRuntime.getActiveTurnTaskKind(),
-      getActiveTurnIntent: () => this.turnSupportRuntime.getActiveTurnIntent(),
     });
     installAgentToolSchedulerPatch(this.agent, {
       maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
@@ -790,14 +769,6 @@ export class SubstrateAgent {
     this.toolRuntimeFacade.registerTool(tool, category);
   }
 
-  private getCapabilityEligiblePromotedToolNames(): Set<string> {
-    return this.toolRuntimeFacade.getCapabilityEligiblePromotedToolNames();
-  }
-
-  private classifyExtendedToolForTurn(toolName: string) {
-    return this.toolRuntimeFacade.classifyExtendedToolForTurn(toolName);
-  }
-
   getPromotedExtendedToolsLimit(): number {
     return this.toolRuntimeFacade.getPromotedExtendedToolsLimit();
   }
@@ -834,27 +805,12 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getToolCatalogSnapshot();
   }
 
-  getExtendedToolTurnClass(toolName: string): ExtendedToolTurnClass {
-    return this.toolRuntimeFacade.classifyExtendedToolForTurn(toolName);
-  }
-
   getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {
     return this.toolRuntimeFacade.getToolHealthStatusByName();
   }
 
   setCompanionSubstrateHealthContext(context: CompanionSubstrateHealthContext | null): void {
     this.companionSubstrateHealthContext = context;
-  }
-
-  getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
-    return this.turnSupportRuntime.getBackgroundContinuationTasks();
-  }
-
-  activateExtendedTools(
-    toolNames: readonly string[],
-    options: ExtendedToolActivationOptions = {},
-  ): ExtendedToolActivationResult {
-    return this.toolRuntimeFacade.activateExtendedTools(toolNames, options);
   }
 
   validateToolWiring(
@@ -874,10 +830,6 @@ export class SubstrateAgent {
     this.capabilityRuntime = runtime;
     this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
     this.refreshCapabilityRuntime();
-  }
-
-  setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
-    this.toolRuntimeFacade.setExtendedToolAutoloadPolicy(policy);
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -1613,9 +1565,6 @@ export class SubstrateAgent {
       .getAdaptiveToolRuntimeState()
       .activeTools
       .some(entry => entry.toolName === 'analysis_workbench');
-    const loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>(
-      this.toolRuntimeFacade.getLoadedExtendedTools(),
-    );
     const extendedTools = [...this.toolRuntimeFacade.getExtendedTools()];
     const coreToolNames = new Set(
       this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name),
@@ -1649,9 +1598,6 @@ export class SubstrateAgent {
       activeToolCounts,
       extendedTools,
       coreToolNames,
-      loadedExtended,
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-      promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
       activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
@@ -1730,9 +1676,6 @@ export class SubstrateAgent {
       activeToolCounts,
       extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
       coreToolNames: new Set(this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name)),
-      loadedExtended: new Map(this.toolRuntimeFacade.getLoadedExtendedTools()),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-      promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),

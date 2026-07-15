@@ -32,7 +32,7 @@ import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import {
   isDeferredCompanionOutreachExecutionAuthorized,
   registerDeferredCompanionOutreachRuntime,
-  resolveCompanionOutreachOriginActivationSource,
+  resolveCompanionOutreachOriginCatalogSource,
   type DeferredCompanionOutreachAuthorizationRuntime,
 } from '../../core/tools/notify-companion-handoff.js';
 import {
@@ -118,20 +118,13 @@ export function buildAgentControlPlane(
     isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
       tool => tool.name === 'notify',
     ),
-    isNotifyOverlayEligible: () => agentLoop.getExtendedToolTurnClass('notify') === 'overlay',
-    getNotifyActivationSource: () => {
-      const active = agentLoop.getAdaptiveToolRuntimeState().activeTools.find(
-        tool => tool.toolName === 'notify',
-      );
-      return active && active.source !== 'core' ? active.source : null;
-    },
   };
   const unregisterDeferredCompanionOutreach = icpAutonomyRuntime
     ? registerDeferredCompanionOutreachRuntime({
         agentLoop,
         postTurnActions,
         runtime: icpAutonomyRuntime,
-        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+        resolveOriginCatalogSource: () => resolveCompanionOutreachOriginCatalogSource(
           deferredCompanionOutreachAuthorizationRuntime,
         ),
         isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
@@ -145,7 +138,7 @@ export function buildAgentControlPlane(
         agentLoop,
         postTurnActions,
         runtime: icpInitiationSourceRuntime,
-        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+        resolveOriginCatalogSource: () => resolveCompanionOutreachOriginCatalogSource(
           deferredCompanionOutreachAuthorizationRuntime,
         ),
         isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
@@ -251,7 +244,7 @@ export function buildAgentControlPlane(
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
     companionCandidateEnabled: icpInitiationSourceRuntime !== undefined,
     isCompanionCandidateAuthorized: () => (
-      resolveCompanionOutreachOriginActivationSource(
+      resolveCompanionOutreachOriginCatalogSource(
         deferredCompanionOutreachAuthorizationRuntime,
       ) !== null
     ),
@@ -264,9 +257,8 @@ export function buildAgentControlPlane(
             throw new Error('ICP candidate dispatcher lost its validated internal origin');
           }
           if (!deferredCompanionOutreachAuthorizationRuntime.hasExternalCompanionCapability()
-            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyToolRegistered()
-            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyOverlayEligible()) {
-            throw new Error('ICP candidate notify turn activation is no longer authorized');
+            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyToolRegistered()) {
+            throw new Error('ICP candidate notify turn is no longer authorized');
           }
           return await agentLoop.handleIcpAutonomyCandidateTurn(message);
         },

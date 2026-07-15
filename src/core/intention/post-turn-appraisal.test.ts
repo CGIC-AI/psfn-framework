@@ -19,9 +19,9 @@ describe('createSignalWisePostTurnAppraiser', () => {
           dedupeKey: 'heartbeat.run_template:musing',
           payload: { templateId: 'shadowed' },
         }, {
-          kind: 'tool_handoff.continue',
-          dedupeKey: 'tool_handoff.continue:msg-1',
-          payload: { toolNames: ['extended_probe_tool'] },
+          kind: 'custom.follow_up',
+          dedupeKey: 'custom.follow_up:msg-1',
+          payload: { topic: 'diagnostics' },
         }],
       },
     ]);
@@ -33,9 +33,9 @@ describe('createSignalWisePostTurnAppraiser', () => {
       dedupeKey: 'heartbeat.run_template:musing',
       payload: { templateId: 'musing' },
     }, {
-      kind: 'tool_handoff.continue',
-      dedupeKey: 'tool_handoff.continue:msg-1',
-      payload: { toolNames: ['extended_probe_tool'] },
+      kind: 'custom.follow_up',
+      dedupeKey: 'custom.follow_up:msg-1',
+      payload: { topic: 'diagnostics' },
     }]);
   });
 

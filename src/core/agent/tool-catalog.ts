@@ -133,7 +133,7 @@ function resolveBundleMembership(
   if (isToolsetControlToolName(toolName)) {
     bundles.push('toolset.control');
   } else if (scope === 'extended') {
-    bundles.push('toolset.managed');
+    bundles.push('toolset.extended');
   }
   const canonical = getCanonicalToolSurface(toolName);
   if (canonical) {

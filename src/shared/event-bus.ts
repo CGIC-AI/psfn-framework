@@ -245,44 +245,11 @@ export interface EventMap {
     error?: string;
     timestamp: number;
   };
-  'agent.tool_handoff.telemetry': {
-    actionId: string;
-    dedupeKey: string;
-    channelId: string;
-    sourceMessageId: string;
-    toolNames: string[];
-    intendedAction: string;
-    phase: 'queued' | 'activated' | 'executed' | 'failed';
-    attempt?: number;
-    maxAttempts?: number;
-    timestamp: number;
-    error?: string;
-  };
   'agent.completion_handoff': {
     handoff: CompletionHandoffRecord;
     targetChannelId?: string;
     noticeBuffered?: boolean;
     timestamp: number;
-  } & EventCorrelationFields;
-  'agent.tools.autoload': {
-    channelId: string;
-    intent: string;
-    taskKind: string | null;
-    boundedMax: number;
-    candidates: string[];
-    activated: string[];
-    alreadyActive: string[];
-    skippedDenied: Array<{ toolName: string; missingTokens: string[] }>;
-    unavailable: string[];
-  } & EventCorrelationFields;
-  'agent.tools.autoload.skipped': {
-    channelId: string;
-    intent: string;
-    taskKind: string | null;
-    toolName: string;
-    reason: 'not_registered' | 'capability_denied';
-    missingTokens?: string[];
-    tier?: string;
   } & EventCorrelationFields;
   'agent.tools.legacy_alias': {
     timestamp: number;
@@ -398,6 +365,13 @@ export interface EventMap {
   };
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
   'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
+  'agent.tools.documentation_search': {
+    timestamp: number;
+    query: string | null;
+    limit: number;
+    totalMatches: number;
+    matchedTools: string[];
+  };
   'agent.turn.stage': {
     turnId: string;
     channelId: string;

@@ -3,7 +3,8 @@ import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Agent } from '../../boundary/pi-agent/index.js';
+import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
+import { resolveInstalledAgentTurnTools } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { LLMProviderPort as LLMProvider } from '../../core/agent/contracts.js';
@@ -18,12 +19,19 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SubagentFaculty } from './faculty.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import {
+  withCapabilityRequirement,
+  type CapabilityRequirementInput,
+} from '../../system/capabilities/requirements.js';
+import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
 let mockSubagentDelayMs = 0;
+let mockFirstPromptTools: AgentTool<any>[] = [];
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
+  mockFirstPromptTools = [...resolveInstalledAgentTurnTools(this)];
   if (mockSubagentError) throw mockSubagentError;
   if (mockSubagentDelayMs > 0) {
     await new Promise(resolve => setTimeout(resolve, mockSubagentDelayMs));
@@ -60,6 +68,20 @@ function mockLLM(): LLMProvider {
     stream: vi.fn(async () => response),
     complete: vi.fn(async () => response),
   };
+}
+
+function makeCatalogTool(name: string, requirement: CapabilityRequirementInput) {
+  const execute = vi.fn(async () => ({
+    content: [{ type: 'text' as const, text: `${name} ok` }],
+    details: { toolName: name },
+  }));
+  const tool = withCapabilityRequirement({
+    name,
+    description: `${name} test tool`,
+    parameters: {},
+    execute,
+  } as AgentTool<any>, requirement);
+  return { tool, execute };
 }
 
 function createEntry(
@@ -164,6 +186,7 @@ describe('SubagentFaculty', () => {
     mockSubagentContent = 'subagent response';
     mockSubagentError = null;
     mockSubagentDelayMs = 0;
+    mockFirstPromptTools = [];
     promptSpy.mockClear();
     resetCompletionHandoffDedupeForTests();
   });
@@ -215,6 +238,94 @@ describe('SubagentFaculty', () => {
     });
     expect(entries[0]?.content).toBe('[SYSTEM: SubagentTask] inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
+  });
+
+  it.each<{
+    tier: CapabilityTier;
+    callable: string[];
+  }>([
+    {
+      tier: 'nursery',
+      callable: ['core_identity_read', 'extended_git_read'],
+    },
+    {
+      tier: 'apprentice',
+      callable: [
+        'core_identity_read',
+        'core_issue_write',
+        'extended_git_read',
+        'extended_world_read',
+      ],
+    },
+    {
+      tier: 'autonomous',
+      callable: [
+        'core_identity_read',
+        'core_issue_write',
+        'extended_git_read',
+        'extended_world_read',
+        'extended_companion_notify',
+      ],
+    },
+  ])('assembles the full non-recursive catalog on the first $tier turn and capability-gates calls', async ({
+    tier,
+    callable,
+  }) => {
+    const definitions = [
+      { scope: 'core' as const, name: 'core_identity_read', requirement: 'identity.read' as const },
+      { scope: 'core' as const, name: 'core_issue_write', requirement: 'issue.write' as const },
+      { scope: 'extended' as const, name: 'extended_git_read', requirement: 'git.read' as const },
+      { scope: 'extended' as const, name: 'extended_world_read', requirement: 'world.read' as const },
+      { scope: 'extended' as const, name: 'extended_companion_notify', requirement: 'external.companion' as const },
+    ].map(definition => ({
+      ...definition,
+      ...makeCatalogTool(definition.name, definition.requirement),
+    }));
+    const blockedRecursive = makeCatalogTool('subagent', 'identity.read');
+    const auditTrail = { append: vi.fn() };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: tier },
+      parentSystemPrompt: 'test prompt',
+      toolCatalogProvider: () => ({
+        core: [
+          ...definitions.filter(definition => definition.scope === 'core').map(definition => definition.tool),
+          blockedRecursive.tool,
+        ],
+        extended: definitions
+          .filter(definition => definition.scope === 'extended')
+          .map(definition => definition.tool),
+      }),
+      auditTrail,
+    });
+
+    await faculty.execute({ name: `${tier}-catalog`, task: 'exercise the first-turn catalog' });
+
+    const catalogNames = definitions.map(definition => definition.name);
+    const firstTurnTools = new Map(
+      mockFirstPromptTools
+        .filter(tool => catalogNames.includes(tool.name))
+        .map(tool => [tool.name, tool] as const),
+    );
+    expect([...firstTurnTools.keys()]).toEqual(expect.arrayContaining(catalogNames));
+    expect(mockFirstPromptTools.map(tool => tool.name)).not.toContain('subagent');
+    expect(auditTrail.append).toHaveBeenCalledWith('subagent.tools.injected', expect.objectContaining({
+      tier,
+      tools: catalogNames,
+    }));
+
+    for (const definition of definitions) {
+      const result = await firstTurnTools.get(definition.name)!.execute(`call-${definition.name}`, {});
+      const authorized = callable.includes(definition.name);
+      expect((result.details as { capabilityDenied?: boolean }).capabilityDenied === true)
+        .toBe(!authorized);
+      expect(definition.execute).toHaveBeenCalledTimes(authorized ? 1 : 0);
+    }
+    expect(blockedRecursive.execute).not.toHaveBeenCalled();
   });
 
   it('caps explicit multi-turn subagent requests at the shared agent loop ceiling', async () => {

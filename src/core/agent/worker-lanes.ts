@@ -220,9 +220,6 @@ export function resolveRuntimeLaneClassForModelCall(input: {
   ) {
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
   }
-  if (originStage === 'tool_handoff.continue') {
-    return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
-  }
   return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
 }
 
@@ -232,9 +229,6 @@ export function resolveRuntimeLaneClassForPostTurnActionKind(
   const normalized = actionKind.trim();
   if (!normalized) {
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
-  }
-  if (normalized === 'tool_handoff.continue') {
-    return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
   }
   if (
     normalized === 'heartbeat.run_template'

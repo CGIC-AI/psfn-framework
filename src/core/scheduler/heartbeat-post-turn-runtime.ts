@@ -2,12 +2,6 @@ import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import {
-  buildDeferredToolHandoffMessage,
-  DEFERRED_TOOL_HANDOFF_ACTION_KIND,
-  normalizeDeferredToolHandoffPayload,
-  type DeferredToolHandoffPayload,
-} from '../agent/deferred-tool-handoff.js';
-import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
 } from '../agent/deferred-post-turn-inference.js';
@@ -35,7 +29,6 @@ import {
 import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
-  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
   POST_TURN_APPRAISAL_RUNTIME_CLASS,
 } from '../agent/worker-lanes.js';
@@ -76,7 +69,6 @@ export function wireHeartbeatPostTurnRuntime(
   const {
     scheduler,
     agentLoop,
-    sender,
     templateRuntime,
     runtimeOptions = {},
   } = options;
@@ -86,8 +78,6 @@ export function wireHeartbeatPostTurnRuntime(
   }
 
   const telemetryEventBus = runtimeOptions.eventBus;
-  const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
-  const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
   const lastIntentionFollowUpActivationByChannel = new Map<string, number>();
   const shouldUseCompositionalAppraisal = (channelId: string): boolean => (
     evaluateCompositionalPolicyForChannelId({
@@ -423,66 +413,6 @@ export function wireHeartbeatPostTurnRuntime(
     }
   };
 
-  const emitDeferredToolHandoffTelemetry = (
-    payload: {
-      actionId: string;
-      dedupeKey: string;
-      channelId: string;
-      sourceMessageId: string;
-      toolNames: string[];
-      intendedAction: string;
-      phase: 'queued' | 'activated' | 'executed' | 'failed';
-      attempt?: number;
-      maxAttempts?: number;
-      error?: string;
-    },
-  ): void => {
-    if (!telemetryEventBus) return;
-    telemetryEventBus.emit('agent.tool_handoff.telemetry', {
-      ...payload,
-      timestamp: Date.now(),
-    }).catch((error) => {
-      log.warn('Deferred tool-handoff telemetry emit failed', {
-        actionId: payload.actionId,
-        phase: payload.phase,
-        error: String(error),
-      });
-    });
-    const adaptiveDecision = payload.phase === 'queued'
-      ? 'queued'
-      : payload.phase === 'executed'
-        ? 'executed'
-        : payload.phase === 'failed'
-          ? 'failed'
-          : null;
-    if (!adaptiveDecision) return;
-    for (const toolName of payload.toolNames) {
-      telemetryEventBus.emit('agent.tools.adaptive.decision', {
-        turnId: payload.sourceMessageId || payload.actionId,
-        requestId: payload.actionId,
-        channelId: payload.channelId,
-        callType: 'tool',
-        purpose: 'agent.tools.adaptive.decision',
-        timestamp: Date.now(),
-        toolName,
-        source: 'deferred',
-        decision: adaptiveDecision,
-        reason: payload.phase === 'failed'
-          ? 'deferred_tool_handoff_failed'
-          : 'deferred_tool_handoff',
-        taskKind: 'deferred_tool_handoff',
-        intent: 'deferred_tool_handoff',
-      }).catch((error) => {
-        log.warn('Deferred adaptive tool telemetry emit failed', {
-          actionId: payload.actionId,
-          toolName,
-          phase: payload.phase,
-          error: String(error),
-        });
-      });
-    }
-  };
-
   type PostTurnInfererContext = Parameters<PostTurnActionInferer>[0];
 
   const buildConversationTrajectory = (context: Pick<PostTurnInfererContext, 'message' | 'response'>) => {
@@ -760,155 +690,6 @@ export function wireHeartbeatPostTurnRuntime(
       }
     })();
   };
-
-  telemetryEventBus?.on('agent.post_turn.action.telemetry', (telemetry) => {
-    if (telemetry.actionKind !== DEFERRED_TOOL_HANDOFF_ACTION_KIND) {
-      return;
-    }
-
-    const payload = deferredToolHandoffPayloads.get(telemetry.dedupeKey);
-    if (!payload) {
-      return;
-    }
-
-    if (telemetry.phase === 'queued') {
-      emitDeferredToolHandoffTelemetry({
-        actionId: telemetry.actionId,
-        dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId ?? payload.turn.channelId,
-        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
-        toolNames: payload.toolNames,
-        intendedAction: payload.intendedAction,
-        phase: 'queued',
-        attempt: telemetry.attempt,
-        maxAttempts: telemetry.maxAttempts,
-      });
-    } else if (telemetry.phase === 'failed') {
-      emitDeferredToolHandoffTelemetry({
-        actionId: telemetry.actionId,
-        dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId ?? payload.turn.channelId,
-        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
-        toolNames: payload.toolNames,
-        intendedAction: payload.intendedAction,
-        phase: 'failed',
-        attempt: telemetry.attempt,
-        maxAttempts: telemetry.maxAttempts,
-        ...(telemetry.error ? { error: telemetry.error } : {}),
-      });
-      deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
-      deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
-    } else if (telemetry.phase === 'succeeded') {
-      deferredToolHandoffExecutionState.delete(telemetry.dedupeKey);
-      deferredToolHandoffPayloads.delete(telemetry.dedupeKey);
-    }
-  });
-
-  runtimeOptions.postTurnActions.registerHandler(
-    DEFERRED_TOOL_HANDOFF_ACTION_KIND,
-    async (action) => {
-      const payload = normalizeDeferredToolHandoffPayload(action.payload);
-      if (!payload) {
-        throw new Error(`Deferred tool handoff action "${action.id}" is missing required payload fields`);
-      }
-      deferredToolHandoffPayloads.set(action.dedupeKey, payload);
-
-      const executionState = deferredToolHandoffExecutionState.get(action.dedupeKey) ?? {
-        activated: false,
-        executed: false,
-      };
-
-      if (!executionState.activated) {
-        const activation = agentLoop.activateExtendedTools?.(payload.toolNames, {
-          source: 'deferred',
-          correlation: {
-            turnId: action.sourceMessageId || action.id,
-            requestId: action.id,
-            channelId: action.channelId,
-            callType: 'tool',
-            purpose: 'agent.tools.adaptive.decision',
-          },
-          taskKind: 'deferred_tool_handoff',
-          intent: 'deferred_tool_handoff',
-        });
-        if (!activation) {
-          throw new Error('Agent loop does not support deferred tool activation');
-        }
-        if (activation.activatedTools.length === 0) {
-          throw new Error(
-            `Deferred tool handoff action "${action.id}" could not activate tools: ${payload.toolNames.join(', ')}`,
-          );
-        }
-        executionState.activated = true;
-        emitDeferredToolHandoffTelemetry({
-          actionId: action.id,
-          dedupeKey: action.dedupeKey,
-          channelId: action.channelId,
-          sourceMessageId: action.sourceMessageId,
-          toolNames: payload.toolNames,
-          intendedAction: payload.intendedAction,
-          phase: 'activated',
-        });
-        deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
-      }
-
-      if (executionState.executed) {
-        return;
-      }
-
-      const response = await agentLoop.handleMessage(buildDeferredToolHandoffMessage(action.id, payload));
-      const responseText = response.content.trim();
-      if (responseText && !payload.turn.channelId.startsWith('internal:')) {
-        // Primary mechanism fix for psfn-framework-mdxu: this continuation turn
-        // runs a fresh LLM turn and can regenerate text near-identical to the
-        // reply the primary turn already delivered ("I replay after a tool
-        // failure"). It shares no dedupe state with the inbound reply pump, so
-        // without this check the operator receives the same message twice, one
-        // turn apart. Defer to the already-delivered reply instead of blindly
-        // re-emitting — loudly, never silently.
-        const duplicate = runtimeOptions.outboundReplyGuard?.evaluate({
-          channelId: payload.turn.channelId,
-          content: responseText,
-        });
-        if (duplicate) {
-          log.warn('Suppressed duplicate deferred-tool-handoff reply; identical text already delivered to channel', {
-            actionId: action.id,
-            dedupeKey: action.dedupeKey,
-            channelId: payload.turn.channelId,
-            sourceMessageId: action.sourceMessageId,
-            priorSourceTurnId: duplicate.priorSourceTurnId,
-            priorSenderKind: duplicate.priorSenderKind,
-            priorReplyAgeMs: duplicate.ageMs,
-            contentHash: duplicate.hash,
-          });
-        } else {
-          await sender.send(payload.turn.channelId, responseText);
-          runtimeOptions.outboundReplyGuard?.noteDelivered({
-            channelId: payload.turn.channelId,
-            content: responseText,
-            sourceTurnId: action.sourceMessageId || payload.turn.turnId,
-            senderKind: 'deferred_tool_handoff',
-          });
-        }
-      }
-
-      executionState.executed = true;
-      deferredToolHandoffExecutionState.set(action.dedupeKey, executionState);
-      emitDeferredToolHandoffTelemetry({
-        actionId: action.id,
-        dedupeKey: action.dedupeKey,
-        channelId: action.channelId,
-        sourceMessageId: action.sourceMessageId,
-        toolNames: payload.toolNames,
-        intendedAction: payload.intendedAction,
-        phase: 'executed',
-      });
-    },
-    {
-      executionMode: 'background',
-      runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
-    },
-  );
 
   runtimeOptions.postTurnActions.registerHandler(
     DEFERRED_HEARTBEAT_ACTION_KIND,
@@ -1384,17 +1165,11 @@ export function wireHeartbeatPostTurnRuntime(
           message,
           turnMessages,
           deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
-          onDeferredToolHandoffPayload: (dedupeKey, payload) => {
-            deferredToolHandoffPayloads.set(dedupeKey, payload);
-          },
         })
         : inferDeferredPostTurnActionsFromMessages({
           message,
           turnMessages,
           deferredHeartbeatActionKind: DEFERRED_HEARTBEAT_ACTION_KIND,
-          onDeferredToolHandoffPayload: (dedupeKey, payload) => {
-            deferredToolHandoffPayloads.set(dedupeKey, payload);
-          },
         });
       // Heavy sleeptime work is intentionally absent here: no code path from
       // turn cadence may reach consolidation, arc weaving, or the dream pass.

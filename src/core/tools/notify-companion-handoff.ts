@@ -13,7 +13,6 @@ import {
   parseIcpAutonomyCandidateOrigin,
   resolveIcpAutonomyCandidateSchedulerOrigin,
 } from '../icp/candidate-scheduler-origin.js';
-import type { AdaptiveToolActivationSource } from '../agent/adaptive-tools-telemetry.js';
 import { textResult, textResultWithError } from './results.js';
 
 export const COMPANION_NOTIFY_TARGET_KIND = 'companion' as const;
@@ -27,16 +26,13 @@ export interface CompanionNotifyParams {
   initiation_permit: string;
 }
 
-export type CompanionNotifyOverlayActivationSource = Exclude<
-  AdaptiveToolActivationSource,
-  'core'
->;
+export type CompanionNotifyCatalogSource = 'extended';
 
 export interface DeferredCompanionOutreachAuthorizationEvidence {
-  version: 1;
+  version: 2;
   toolName: 'notify';
   toolScope: 'extended';
-  activationSource: CompanionNotifyOverlayActivationSource;
+  catalogSource: 'extended';
   requiredCapability: 'external.companion';
   originToolCallId: string;
   originTurnId: string;
@@ -45,8 +41,6 @@ export interface DeferredCompanionOutreachAuthorizationEvidence {
 export interface DeferredCompanionOutreachAuthorizationRuntime {
   hasExternalCompanionCapability(): boolean;
   isNotifyToolRegistered(): boolean;
-  isNotifyOverlayEligible(): boolean;
-  getNotifyActivationSource(): CompanionNotifyOverlayActivationSource | null;
 }
 
 interface DeferredCompanionOutreachPayload {
@@ -55,13 +49,6 @@ interface DeferredCompanionOutreachPayload {
   candidateOrigin?: IcpAutonomyCandidateOrigin;
   authorization: DeferredCompanionOutreachAuthorizationEvidence;
 }
-
-const COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES: ReadonlySet<string> = new Set([
-  'promoted',
-  'extended_loaded',
-  'autoload',
-  'deferred',
-]);
 
 function isExactNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
@@ -76,7 +63,7 @@ export function parseDeferredCompanionOutreachAuthorizationEvidence(
       'version',
       'toolName',
       'toolScope',
-      'activationSource',
+      'catalogSource',
       'requiredCapability',
       'originToolCallId',
       'originTurnId',
@@ -84,21 +71,20 @@ export function parseDeferredCompanionOutreachAuthorizationEvidence(
   } catch {
     return null;
   }
-  if (value.version !== 1
+  if (value.version !== 2
     || value.toolName !== 'notify'
     || value.toolScope !== 'extended'
-    || typeof value.activationSource !== 'string'
-    || !COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES.has(value.activationSource)
+    || value.catalogSource !== 'extended'
     || value.requiredCapability !== 'external.companion'
     || !isExactNonEmptyString(value.originToolCallId)
     || !isExactNonEmptyString(value.originTurnId)) {
     return null;
   }
   return {
-    version: 1,
+    version: 2,
     toolName: 'notify',
     toolScope: 'extended',
-    activationSource: value.activationSource as CompanionNotifyOverlayActivationSource,
+    catalogSource: 'extended',
     requiredCapability: 'external.companion',
     originToolCallId: value.originToolCallId,
     originTurnId: value.originTurnId,
@@ -109,24 +95,22 @@ function isCurrentDeferredExecutionPolicyAuthorized(
   runtime: DeferredCompanionOutreachAuthorizationRuntime,
 ): boolean {
   return runtime.hasExternalCompanionCapability()
-    && runtime.isNotifyToolRegistered()
-    && runtime.isNotifyOverlayEligible();
+    && runtime.isNotifyToolRegistered();
 }
 
-export function resolveCompanionOutreachOriginActivationSource(
+export function resolveCompanionOutreachOriginCatalogSource(
   runtime: DeferredCompanionOutreachAuthorizationRuntime,
-): CompanionNotifyOverlayActivationSource | null {
+): 'extended' | null {
   if (!isCurrentDeferredExecutionPolicyAuthorized(runtime)) return null;
-  return runtime.getNotifyActivationSource();
+  return 'extended';
 }
 
 export function isDeferredCompanionOutreachExecutionAuthorized(
   evidence: unknown,
   runtime: DeferredCompanionOutreachAuthorizationRuntime,
 ): boolean {
-  // `loadedExtended`/active overlay state is turn-local and intentionally empty
-  // after restart. Exact persisted origin evidence proves prior activation;
-  // current capability, registration, and overlay policy remain live revocation
+  // Exact persisted origin evidence proves the authorized catalog source;
+  // current capability and registration remain live revocation
   // points and are rechecked again immediately before the W3 target command.
   return parseDeferredCompanionOutreachAuthorizationEvidence(evidence) !== null
     && isCurrentDeferredExecutionPolicyAuthorized(runtime);
@@ -228,9 +212,9 @@ function isSuccessfulCompanionNotifyResult(message: AgentMessage): boolean {
 
 export function inferDeferredCompanionOutreachActions(
   context: PostTurnInferenceContext,
-  originActivationSource: CompanionNotifyOverlayActivationSource | null = null,
+  originCatalogSource: CompanionNotifyCatalogSource | null = null,
 ): PostTurnActionCandidate[] {
-  if (!originActivationSource) return [];
+  if (!originCatalogSource) return [];
   const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(context.message);
   if (candidateOrigin && candidateOrigin.continuationTaskKind !== context.taskKind) {
     throw new Error('ICP candidate scheduler task kind lost its typed origin binding');
@@ -249,10 +233,10 @@ export function inferDeferredCompanionOutreachActions(
           permitId: params.initiation_permit,
           ...(candidateOrigin ? { candidateOrigin } : {}),
           authorization: {
-            version: 1,
+            version: 2,
             toolName: 'notify',
             toolScope: 'extended',
-            activationSource: originActivationSource,
+            catalogSource: originCatalogSource,
             requiredCapability: 'external.companion',
             originToolCallId: content.id,
             originTurnId: context.turnId,
@@ -288,11 +272,11 @@ export function registerDeferredCompanionOutreachRuntime(input: {
   };
   postTurnActions: PostTurnActionRuntime;
   runtime: AgentFacingIcpAutonomyRuntime;
-  resolveOriginActivationSource(): CompanionNotifyOverlayActivationSource | null;
+  resolveOriginCatalogSource(): CompanionNotifyCatalogSource | null;
   isExecutionAuthorized(evidence: DeferredCompanionOutreachAuthorizationEvidence): boolean;
 }): () => void {
   const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.((context) => (
-    inferDeferredCompanionOutreachActions(context, input.resolveOriginActivationSource())
+    inferDeferredCompanionOutreachActions(context, input.resolveOriginCatalogSource())
   )) ?? (() => undefined);
   const unregisterHandler = input.postTurnActions.registerHandler(
     DEFERRED_COMPANION_OUTREACH_ACTION_KIND,

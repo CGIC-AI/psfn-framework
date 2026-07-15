@@ -333,15 +333,14 @@ async function main(): Promise<void> {
     eligibilityGate: startup.eligibilityGate,
     intervalMs: 1,
   });
-  const fixedNotifyActivationSource = 'extended_loaded' as const;
+  const fixedNotifyCatalogSource = 'extended' as const;
   const unregisterInitiationCandidates = sourceRuntime
     ? registerIcpInitiationCandidatePostTurnRuntime({
         agentLoop: agent,
         postTurnActions,
         runtime: sourceRuntime,
-        resolveOriginActivationSource: () => fixedNotifyActivationSource,
-        isExecutionAuthorized: evidence => evidence.activationSource === fixedNotifyActivationSource
-          && runtimeEnablement.isEnabled()
+        resolveOriginCatalogSource: () => fixedNotifyCatalogSource,
+        isExecutionAuthorized: () => runtimeEnablement.isEnabled()
           && startup.capabilityRuntime.has('external.companion'),
       })
     : () => undefined;
@@ -543,7 +542,7 @@ async function main(): Promise<void> {
             ] as never,
             turnId: turnId as never,
             completedAt: Date.now(),
-          }, fixedNotifyActivationSource);
+          }, fixedNotifyCatalogSource);
           const [action] = toInferredPostTurnActions(candidates, message);
           await startup.eventBus.emit('agent.post_turn.actions.inferred', {
             message,

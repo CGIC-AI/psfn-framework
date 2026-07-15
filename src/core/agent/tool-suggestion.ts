@@ -2,18 +2,11 @@ import type { CapabilityAccess } from '../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import type { RuntimeToolCatalogEntry } from './tool-catalog.js';
 import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
-import type {
-  ExtendedToolAutoloadPolicy,
-  ExtendedToolTurnClass,
-  TurnIntent,
-} from './extended-tool-autoload-policy.js';
 
 export type ToolSuggestionAvailabilityStatus =
   | 'active'
-  | 'requires_activation'
-  | 'background_only'
   | 'capability_denied'
-  | 'not_active';
+  | 'unavailable_this_turn';
 
 export interface ToolSuggestionRecommendation {
   toolName: string;
@@ -31,7 +24,6 @@ export interface ToolSuggestionResult {
   total: number;
   recommendations: ToolSuggestionRecommendation[];
   advisoryOnly: true;
-  autoloadIntent?: TurnIntent;
   message?: string;
 }
 
@@ -41,8 +33,6 @@ interface SuggestToolsInput {
   catalog: readonly RuntimeToolCatalogEntry[];
   runtimeState: AdaptiveToolRuntimeState;
   access: CapabilityAccess;
-  autoloadPolicy: ExtendedToolAutoloadPolicy | null;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
 }
 
 interface CandidateScore {
@@ -234,10 +224,8 @@ const ACTION_HINTS: Readonly<Partial<Record<string, readonly string[]>>> = {
 
 const AVAILABILITY_RANK_WEIGHT: Readonly<Record<ToolSuggestionAvailabilityStatus, number>> = {
   active: 18,
-  requires_activation: 6,
   capability_denied: -8,
-  background_only: -10,
-  not_active: -16,
+  unavailable_this_turn: -16,
 };
 
 function normalizeLimit(value: unknown): number {
@@ -371,7 +359,6 @@ function resolveAvailability(input: {
   action: string | undefined;
   runtimeState: AdaptiveToolRuntimeState;
   access: CapabilityAccess;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
 }): Pick<RankedCandidate, 'availabilityStatus' | 'availabilityNote' | 'missingTokens'> {
   const missingTokens = resolveActionCapabilities(input.entry, input.action)
     .filter(token => !input.access.has(token));
@@ -391,24 +378,9 @@ function resolveAvailability(input: {
     };
   }
 
-  if (input.entry.scope === 'core') {
-    return {
-      availabilityStatus: 'not_active',
-      availabilityNote: 'Registered core tool, but not active in the current turn.',
-    };
-  }
-
-  const turnClass = input.classifyExtendedToolForTurn(input.entry.name);
-  if (turnClass !== 'overlay') {
-    return {
-      availabilityStatus: 'background_only',
-      availabilityNote: 'Registered extended tool, but not callable in-turn.',
-    };
-  }
-
   return {
-    availabilityStatus: 'requires_activation',
-    availabilityNote: 'Registered extended overlay tool; activate it with toolset action="activate" before use.',
+    availabilityStatus: 'unavailable_this_turn',
+    availabilityNote: 'Registered tool is unavailable in this turn because a turn policy or runtime dependency removed it.',
   };
 }
 
@@ -453,8 +425,6 @@ function buildReason(input: {
   action?: string;
   toolMatches: readonly string[];
   actionMatches: readonly string[];
-  autoloadIntent?: TurnIntent;
-  autoloadBoosted: boolean;
 }): string {
   const matched = uniqueStrings([
     ...input.toolMatches,
@@ -466,22 +436,7 @@ function buildReason(input: {
   const matchText = matched.length > 0
     ? `matched ${matched.map(term => `"${term}"`).join(', ')}`
     : 'matched catalog metadata';
-  const autoloadText = input.autoloadBoosted && input.autoloadIntent
-    ? `; autoload classifies this as ${input.autoloadIntent}`
-    : '';
-  return `${target} ${matchText}${autoloadText}.`;
-}
-
-function resolveAutoloadIntent(
-  policy: ExtendedToolAutoloadPolicy | null,
-  intent: string,
-): TurnIntent | undefined {
-  if (!policy) return undefined;
-  return policy.classifyIntent({
-    channelId: 'toolset:suggest',
-    channelType: 'api',
-    content: intent,
-  });
+  return `${target} ${matchText}.`;
 }
 
 export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionResult {
@@ -500,18 +455,11 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
 
   const normalizedIntent = normalizeText(intent);
   const intentTokens = new Set(tokenize(intent));
-  const autoloadIntent = resolveAutoloadIntent(input.autoloadPolicy, intent);
-  const autoloadCandidateNames = autoloadIntent
-    ? new Set(input.autoloadPolicy?.getCandidatesForIntent(autoloadIntent) ?? [])
-    : new Set<string>();
-
   const candidates: RankedCandidate[] = [];
   for (const entry of input.catalog) {
     const toolScore = scoreTool(entry, normalizedIntent, intentTokens);
     const bestAction = bestActionForEntry(entry, normalizedIntent, intentTokens);
-    const autoloadBoosted = entry.scope === 'extended' && autoloadCandidateNames.has(entry.name);
-    const autoloadScore = autoloadBoosted ? 10 : 0;
-    const matchScore = toolScore.score + bestAction.actionScore + autoloadScore;
+    const matchScore = toolScore.score + bestAction.actionScore;
     if (matchScore < MIN_CONFIDENT_MATCH_SCORE) continue;
 
     const availability = resolveAvailability({
@@ -519,7 +467,6 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
       action: bestAction.action,
       runtimeState: input.runtimeState,
       access: input.access,
-      classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
     });
     const confidence = confidenceFromScore(matchScore);
     candidates.push({
@@ -531,8 +478,6 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
         action: bestAction.action,
         toolMatches: toolScore.matchedTerms,
         actionMatches: bestAction.matchedTerms,
-        autoloadIntent,
-        autoloadBoosted,
       }),
       matchScore,
       rankScore: matchScore + AVAILABILITY_RANK_WEIGHT[availability.availabilityStatus],
@@ -563,7 +508,6 @@ export function suggestToolsForIntent(input: SuggestToolsInput): ToolSuggestionR
     total: candidates.length,
     recommendations,
     advisoryOnly: true,
-    ...(autoloadIntent ? { autoloadIntent } : {}),
     ...(recommendations.length === 0
       ? { message: 'No confident tool suggestion. Use toolset action="describe" to inspect available tool schemas.' }
       : {}),

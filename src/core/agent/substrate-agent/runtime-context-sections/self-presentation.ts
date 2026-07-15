@@ -4,7 +4,6 @@
 // a declared input; appearance is projected from the session template
 // variables.
 
-import type { AdaptiveLoadedExtendedToolState } from '../../adaptive-tools-telemetry.js';
 import { unwrapPromptSectionBody } from './section-format.js';
 
 const SELF_IMAGE_TOOL_NAMES = ['selfie_create'] as const;
@@ -23,13 +22,11 @@ export function resolveAppearanceContextFromTemplateVariables(
 
 function hasActiveSelfImageTool(input: {
   coreToolNames: ReadonlySet<string>;
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
-  promotedExtendedToolNames: Set<string>;
+  extendedToolNames: ReadonlySet<string>;
 }): boolean {
   for (const toolName of SELF_IMAGE_TOOL_NAMES) {
     if (input.coreToolNames.has(toolName)) return true;
-    if (input.promotedExtendedToolNames.has(toolName)) return true;
-    if (input.loadedExtended.has(toolName)) return true;
+    if (input.extendedToolNames.has(toolName)) return true;
   }
   return false;
 }
@@ -39,8 +36,7 @@ export function buildSelfPresentationPromptVariables(input: {
   templateVariables?: Record<string, string>;
   skillsContext?: string;
   coreToolNames: ReadonlySet<string>;
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
-  promotedExtendedToolNames: Set<string>;
+  extendedToolNames: ReadonlySet<string>;
 }): Record<string, string> {
   const appearanceContextBody = input.internalTurn
     ? ''
@@ -50,8 +46,7 @@ export function buildSelfPresentationPromptVariables(input: {
     runtime_appearance_context_body: appearanceContextBody,
     runtime_self_image_tool_active: String(hasActiveSelfImageTool({
       coreToolNames: input.coreToolNames,
-      loadedExtended: input.loadedExtended,
-      promotedExtendedToolNames: input.promotedExtendedToolNames,
+      extendedToolNames: input.extendedToolNames,
     })),
   };
 }

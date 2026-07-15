@@ -46,9 +46,6 @@ import type {
   TurnPromptSnapshot,
   TurnSnapshot,
 } from '../../turns/snapshot.js';
-import {
-  parseDeferredToolHandoffActionId,
-} from '../deferred-tool-handoff.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
@@ -66,14 +63,7 @@ import {
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
-import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
-import type {
-  BackgroundContinuationCompletionSignal,
-  PendingBackgroundContinuationDelivery,
-} from './background-continuation-runtime.js';
-import {
-  resolveRuntimeLaneClassForTurn,
-} from '../worker-lanes.js';
+import type { ToolTurnOutcome } from './tool-runtime-contracts.js';
 import {
   listPendingPaidDeliverables,
   runWithPaidDeliverableTracking,
@@ -200,10 +190,6 @@ export interface TurnExecutionRuntime {
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
-  pinDeferredContinuationSessionContext: (
-    deferredContinuationId: string | null,
-    channelId: string,
-  ) => () => void;
   awaitPostTurnDrain: (input: {
     channelId: string;
     turnId: TurnID;
@@ -372,11 +358,10 @@ export interface TurnExecutionRuntime {
     templateVariables?: Record<string, string>,
   ) => string | null;
   resolveContextWindow: () => number;
-  preloadExtendedToolsForTurn: (
+  resolveToolTurnOutcome: (
     message: SubstrateMessage,
     taskKind: string | undefined,
-    correlation: CorrelationMetadata,
-  ) => AutoloadTurnOutcome;
+  ) => ToolTurnOutcome;
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
   getActiveTurnTools: () => readonly AgentTool<any>[];
   applyActiveToolsToAgentForTurn: (
@@ -384,7 +369,7 @@ export interface TurnExecutionRuntime {
     taskKind: string | undefined,
     callType: ObservabilityCallType,
     correlation: CorrelationMetadata,
-    autoloadOutcome: AutoloadTurnOutcome,
+    toolTurnOutcome: ToolTurnOutcome,
   ) => void;
   setActiveTurnContext: (
     correlation: CorrelationMetadata,
@@ -451,21 +436,6 @@ export interface TurnExecutionRuntime {
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
   }) => TurnRecord;
-  queueBackgroundContinuationCompletion: (
-    deferredContinuationId: string,
-    message: SubstrateMessage,
-    response: AgentResponse,
-    taskKind: string | null,
-    intent: string | null,
-  ) => BackgroundContinuationCompletionSignal;
-  emitBackgroundContinuationEvent: (
-    eventName: 'agent.background.continuation.completed' | 'agent.background.continuation.post_turn_delivery',
-    payload: Record<string, unknown>,
-  ) => Promise<void>;
-  dequeueBackgroundContinuationDeliveries: (
-    deliverySessionId: string,
-    limit?: number,
-  ) => PendingBackgroundContinuationDelivery[];
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
   consumeIntentionalNoReplyDecision: (turnId: TurnID) => AgentResponse['metadata']['noReply'] | null;
   runIntentionPostTurnHooks: (context: {
@@ -732,7 +702,6 @@ export async function handleMessageForTurn(
       )
     : deterministicReplyTurnId ?? createTurnId();
   if (!turnId) throw new Error('Private ICP target turn requires a UUIDv7 turnId');
-  const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
   const temporalRetrievalMode: 'temporal' | undefined = isTemporalContextBudgetTurn(turnBudgetCharacteristics)
@@ -742,12 +711,6 @@ export async function handleMessageForTurn(
     ? { retrievalMode: temporalRetrievalMode }
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
-  const turnRuntimeClass = resolveRuntimeLaneClassForTurn({
-    callType: turnCallType,
-    channelId: message.channelId,
-    ...(taskKind ? { taskKind } : {}),
-    ...(deferredContinuationId ? { deferredContinuationId } : {}),
-  });
   let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   const performanceCompanionId = turnCorrelationBase.companionId
     ?? runtime.config.companionId?.trim();
@@ -796,10 +759,6 @@ export async function handleMessageForTurn(
     });
   });
   const startTime = Date.now();
-  const restorePinnedSessionContext = runtime.pinDeferredContinuationSessionContext(
-    deferredContinuationId,
-    message.channelId,
-  );
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
   const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
   // A fresh inbound companion correlation is not trusted until it has been
@@ -1097,13 +1056,13 @@ export async function handleMessageForTurn(
     memoryContextBlock = preTurnState.memoryContextBlock;
     wikiContextBlock = preTurnState.wikiContextBlock;
     memoryContextChars = preTurnState.memoryContextChars;
-    const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
+    const toolTurnOutcome = runtime.resolveToolTurnOutcome(message, taskKind);
     runtime.applyActiveToolsToAgentForTurn(
       message,
       taskKind,
       turnCallType,
       turnCorrelationBase,
-      autoloadOutcome,
+      toolTurnOutcome,
     );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
     // htm9.18: off mode is genuinely inert — no marker in the prompt and no
@@ -1173,7 +1132,7 @@ export async function handleMessageForTurn(
           turnCorrelationBase,
           viewerRequestContext,
           baseVisionToolRequestContext,
-          autoloadOutcome,
+          toolTurnOutcome,
           turnSnapshot,
           templateVariables: promptAssembly.templateVariables,
           speakerRole,
@@ -1234,7 +1193,6 @@ export async function handleMessageForTurn(
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
       runtimeFallbackProvenance,
-      turnIntent,
     } = invocationResult;
     // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
     // applied where the model's turn text is accepted so persistence,
@@ -1624,11 +1582,8 @@ export async function handleMessageForTurn(
       firstTokenAt,
       turnUsage,
       context: promptAssembly.context,
-      deferredContinuationId,
       turnCallType,
-      turnRuntimeClass,
       taskKind,
-      turnIntent,
       turnCorrelationBase,
       userSessionEntryId,
       assistantSessionEntryId,
@@ -1794,6 +1749,5 @@ export async function handleMessageForTurn(
     throw err;
   } finally {
     observability.unsubscribe();
-    restorePinnedSessionContext();
   }
 }

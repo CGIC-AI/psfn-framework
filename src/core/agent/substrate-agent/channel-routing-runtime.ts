@@ -5,7 +5,6 @@ import {
   type SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
-import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../../icp/candidate-scheduler-origin.js';
 import {
   normalizeTurnModelOverride,
@@ -68,9 +67,6 @@ export function resolveTaskKind(
       throw new Error('ICP continuation task kind is invalid');
     }
     return taskKind;
-  }
-  if (isDeferredToolHandoffMessageId(message.id)) {
-    return 'deferred_tool_handoff';
   }
   const channelDock = resolveChannelPromptDock(message, channelRegistry);
   const adapterTaskKind = channelDock?.prompt?.resolveTaskKind?.(message);

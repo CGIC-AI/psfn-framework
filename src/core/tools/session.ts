@@ -215,10 +215,7 @@ function isBackgroundContinuationContext(): boolean {
   if (requestContext.callType === 'background') {
     return true;
   }
-  const purpose = typeof requestContext.purpose === 'string'
-    ? requestContext.purpose.trim().toLowerCase()
-    : '';
-  return purpose.includes('deferred_tool_handoff');
+  return false;
 }
 
 function rejectBackgroundSessionMutation(action: 'new' | 'resume') {

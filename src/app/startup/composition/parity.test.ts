@@ -7,18 +7,14 @@ import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
-import { createDefaultExtendedToolAutoloadPolicy } from '../../../core/agent/extended-tool-autoload-policy.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../core/self-model/state.js';
 import {
   wireFilesystemToolsRuntime,
-  wireExtendedToolAutoloadPolicy,
   wireHeartbeatRuntime,
   wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
 } from './parity.js';
-import { wirePostTurnActionRuntime } from './post-turn-actions.js';
-import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../../../core/agent/deferred-tool-handoff.js';
 import {
   resolveHeartbeatPolicyPath,
   resolveReflectionJournalPath,
@@ -217,36 +213,6 @@ describe('wireFilesystemToolsRuntime', () => {
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);
     expect(calls.every(([, category]) => category === 'core')).toBe(true);
-  });
-});
-
-describe('wireExtendedToolAutoloadPolicy', () => {
-  it('applies default autoload policy when no override is provided', () => {
-    const target = {
-      setExtendedToolAutoloadPolicy: vi.fn(),
-    };
-
-    wireExtendedToolAutoloadPolicy(target);
-
-    expect(target.setExtendedToolAutoloadPolicy).toHaveBeenCalledTimes(1);
-    const policy = target.setExtendedToolAutoloadPolicy.mock.calls[0]?.[0];
-    expect(policy.maxPreloadCount).toBeGreaterThan(0);
-    expect(policy.classifyIntent({
-      channelId: 'discord-dev',
-      channelType: 'discord',
-      content: 'check git diff',
-    })).toBe('dev');
-  });
-
-  it('uses caller-provided policy override', () => {
-    const target = {
-      setExtendedToolAutoloadPolicy: vi.fn(),
-    };
-    const customPolicy = createDefaultExtendedToolAutoloadPolicy(1);
-
-    wireExtendedToolAutoloadPolicy(target, customPolicy);
-
-    expect(target.setExtendedToolAutoloadPolicy).toHaveBeenCalledWith(customPolicy);
   });
 });
 
@@ -855,7 +821,7 @@ describe('wireHeartbeatRuntime', () => {
       },
     );
 
-    expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(2);
+    expect(postTurnActions.registerHandler).toHaveBeenCalledTimes(1);
     const heartbeatRegisterCall = postTurnActions.registerHandler.mock.calls.find(
       (call) => call[0] === 'heartbeat.run_template',
     );
@@ -943,25 +909,27 @@ describe('wireHeartbeatRuntime', () => {
     });
     const duplicateTurnMessages = [{
       role: 'toolResult',
-      toolName: 'load_tools',
+      toolName: 'schedule',
       result: {
         details: {
-          deferredToolHandoff: {
-            toolNames: ['extended_probe_tool'],
-            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-            maxRetries: 1,
+          deferredAction: {
+            kind: 'heartbeat.run_template',
+            payload: { templateId: 'daily-review' },
+            dedupeKey: 'heartbeat.run_template:daily-review',
+            maxRetries: 2,
           },
         },
       },
     }, {
       role: 'toolResult',
-      toolName: 'load_tools',
+      toolName: 'schedule',
       result: {
         details: {
-          deferredToolHandoff: {
-            toolNames: ['extended_probe_tool'],
-            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-            maxRetries: 1,
+          deferredAction: {
+            kind: 'heartbeat.run_template',
+            payload: { templateId: 'daily-review' },
+            dedupeKey: 'heartbeat.run_template:daily-review',
+            maxRetries: 2,
           },
         },
       },
@@ -981,12 +949,6 @@ describe('wireHeartbeatRuntime', () => {
       const agentLoop = {
         handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
         waitForIdle: vi.fn().mockResolvedValue(undefined),
-        activateExtendedTools: vi.fn().mockReturnValue({
-          requestedTools: ['extended_probe_tool'],
-          activatedTools: ['extended_probe_tool'],
-          alreadyActiveTools: [],
-          missingTools: [],
-        }),
         registerPostTurnActionInferer,
       };
       const sender = {
@@ -1132,383 +1094,6 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('infers deferred tool-handoff actions from late load_tools discovery payloads', async () => {
-    const eventBus = new EventBus();
-    const scheduler = new Scheduler(eventBus, {
-      tickIntervalMs: 100,
-      heartbeatIntervalMs: 1_000,
-    });
-    const target = {
-      registerTool: vi.fn(),
-    };
-    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
-    const agentLoop = {
-      handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
-      waitForIdle: vi.fn().mockResolvedValue(undefined),
-      activateExtendedTools: vi.fn().mockReturnValue({
-        requestedTools: ['extended_probe_tool'],
-        activatedTools: ['extended_probe_tool'],
-        alreadyActiveTools: [],
-        missingTools: [],
-      }),
-      registerPostTurnActionInferer,
-    };
-    const sender = {
-      send: vi.fn().mockResolvedValue(undefined),
-    };
-    const postTurnActions = {
-      registerHandler: vi.fn().mockReturnValue(() => {}),
-      listQueued: vi.fn().mockReturnValue([]),
-      getStatus: vi.fn(),
-    };
-
-    wireHeartbeatRuntime(
-      target,
-      scheduler,
-      agentLoop,
-      sender,
-      tempDir,
-      undefined,
-      {
-        eventBus,
-        postTurnActions,
-      },
-    );
-
-    const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
-      context: {
-        message: {
-          id: string;
-          channelId: string;
-          channelType: 'terminal';
-          authorId: string;
-          authorName: string;
-          content: string;
-          timestamp: Date;
-        };
-        response: { content: string };
-        turnMessages: unknown[];
-      },
-    ) => Promise<Array<{
-      kind: string;
-      payload?: {
-        toolNames?: string[];
-        intendedAction?: string;
-        turn?: {
-          turnId?: string;
-          requestId?: string;
-          channelId?: string;
-          channelType?: string;
-          callType?: string;
-        };
-      };
-      dedupeKey?: string;
-      maxRetries?: number;
-    }>>;
-    const inferredActions = await inferer({
-      message: {
-        id: 'msg-1',
-        channelId: 'test-channel',
-        channelType: 'terminal',
-        authorId: 'user-1',
-        authorName: 'Test User',
-        content: 'hello',
-        timestamp: new Date(),
-      },
-      response: { content: 'ok' },
-      turnMessages: [{
-        role: 'toolResult',
-        toolName: 'load_tools',
-        result: {
-          details: {
-            deferredToolHandoff: {
-              toolNames: ['extended_probe_tool'],
-              intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-              maxRetries: 1,
-            },
-          },
-        },
-      }],
-    });
-
-    expect(inferredActions).toHaveLength(1);
-    expect(inferredActions[0]).toMatchObject({
-      kind: DEFERRED_TOOL_HANDOFF_ACTION_KIND,
-      maxRetries: 1,
-      payload: {
-        toolNames: ['extended_probe_tool'],
-        intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-        turn: {
-          turnId: 'msg-1',
-          requestId: 'msg-1',
-          channelId: 'test-channel',
-          channelType: 'terminal',
-          callType: 'chat',
-        },
-      },
-    });
-    expect(inferredActions[0]?.dedupeKey).toContain(`${DEFERRED_TOOL_HANDOFF_ACTION_KIND}:msg-1:`);
-  });
-
-  it('continues deferred tool handoff in background and emits queued/activated/executed telemetry', async () => {
-    const eventBus = new EventBus();
-    const scheduler = new Scheduler(eventBus, {
-      tickIntervalMs: 100,
-      heartbeatIntervalMs: 1_000,
-    });
-    const target = {
-      registerTool: vi.fn(),
-    };
-    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
-    const agentLoop = {
-      handleMessage: vi.fn().mockResolvedValue({ content: 'Deferred continuation output' }),
-      waitForIdle: vi.fn().mockResolvedValue(undefined),
-      activateExtendedTools: vi.fn().mockReturnValue({
-        requestedTools: ['extended_probe_tool'],
-        activatedTools: ['extended_probe_tool'],
-        alreadyActiveTools: [],
-        missingTools: [],
-      }),
-      registerPostTurnActionInferer,
-    };
-    const sender = {
-      send: vi.fn().mockResolvedValue(undefined),
-    };
-    const postTurnActions = wirePostTurnActionRuntime({
-      eventBus,
-      scheduler,
-      agentLoop,
-      intervalMs: 1,
-    });
-
-    wireHeartbeatRuntime(
-      target,
-      scheduler,
-      agentLoop,
-      sender,
-      tempDir,
-      undefined,
-      {
-        eventBus,
-        postTurnActions,
-      },
-    );
-
-    const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
-      context: {
-        message: {
-          id: string;
-          channelId: string;
-          channelType: 'terminal';
-          authorId: string;
-          authorName: string;
-          content: string;
-          timestamp: Date;
-        };
-        response: { content: string };
-        turnMessages: unknown[];
-      },
-    ) => Promise<Array<any>>;
-    const message = {
-      id: 'msg-load-tools-1',
-      channelId: 'test-channel',
-      channelType: 'terminal' as const,
-      authorId: 'user-1',
-      authorName: 'Test User',
-      content: 'hello',
-      timestamp: new Date(),
-    };
-    const inferredActions = await inferer({
-      message,
-      response: { content: 'ok' },
-      turnMessages: [{
-        role: 'toolResult',
-        toolName: 'load_tools',
-        result: {
-          details: {
-            deferredToolHandoff: {
-              toolNames: ['extended_probe_tool'],
-              intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-              maxRetries: 1,
-            },
-          },
-        },
-      }],
-    });
-
-    const phases: string[] = [];
-    eventBus.on('agent.tool_handoff.telemetry', ({ phase }) => {
-      phases.push(phase);
-    });
-
-    await eventBus.emit('agent.post_turn.actions.inferred', {
-      message,
-      response: {
-        content: 'ok',
-        channelId: message.channelId,
-        metadata: {
-          model: 'mock-model',
-          inputTokens: 1,
-          outputTokens: 1,
-          durationMs: 1,
-        },
-      },
-      actions: inferredActions,
-    });
-
-    await scheduler.tick();
-
-    expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
-    expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
-    expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(
-      ['extended_probe_tool'],
-      expect.objectContaining({
-        source: 'deferred',
-        correlation: expect.objectContaining({
-          callType: 'tool',
-          purpose: 'agent.tools.adaptive.decision',
-        }),
-        taskKind: 'deferred_tool_handoff',
-        intent: 'deferred_tool_handoff',
-      }),
-    );
-    expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
-    expect(sender.send).toHaveBeenCalledWith('test-channel', 'Deferred continuation output');
-    expect(phases).toEqual(['queued', 'activated', 'executed']);
-  });
-
-  it('bounds deferred tool-handoff retries and emits failed telemetry once exhausted', async () => {
-    const nowSpy = vi.spyOn(Date, 'now');
-    try {
-      nowSpy.mockReturnValue(1_700_000_000_000);
-
-      const eventBus = new EventBus();
-      const scheduler = new Scheduler(eventBus, {
-        tickIntervalMs: 100,
-        heartbeatIntervalMs: 1_000,
-      });
-      const target = {
-        registerTool: vi.fn(),
-      };
-      const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
-      const agentLoop = {
-        handleMessage: vi.fn().mockRejectedValue(new Error('continuation failed')),
-        waitForIdle: vi.fn().mockResolvedValue(undefined),
-        activateExtendedTools: vi.fn().mockReturnValue({
-          requestedTools: ['extended_probe_tool'],
-          activatedTools: ['extended_probe_tool'],
-          alreadyActiveTools: [],
-          missingTools: [],
-        }),
-        registerPostTurnActionInferer,
-      };
-      const sender = {
-        send: vi.fn().mockResolvedValue(undefined),
-      };
-      const postTurnActions = wirePostTurnActionRuntime({
-        eventBus,
-        scheduler,
-        agentLoop,
-        intervalMs: 1,
-        baseRetryDelayMs: 10,
-        maxRetryDelayMs: 10,
-      });
-
-      wireHeartbeatRuntime(
-        target,
-        scheduler,
-        agentLoop,
-        sender,
-        tempDir,
-        undefined,
-        {
-          eventBus,
-          postTurnActions,
-        },
-      );
-
-      const inferer = registerPostTurnActionInferer.mock.calls[0]?.[0] as (
-        context: {
-          message: {
-            id: string;
-            channelId: string;
-            channelType: 'terminal';
-            authorId: string;
-            authorName: string;
-            content: string;
-            timestamp: Date;
-          };
-          response: { content: string };
-          turnMessages: unknown[];
-        },
-      ) => Promise<Array<any>>;
-      const message = {
-        id: 'msg-load-tools-fail-1',
-        channelId: 'test-channel',
-        channelType: 'terminal' as const,
-        authorId: 'user-1',
-        authorName: 'Test User',
-        content: 'hello',
-        timestamp: new Date(),
-      };
-      const inferredActions = await inferer({
-        message,
-        response: { content: 'ok' },
-        turnMessages: [{
-          role: 'toolResult',
-          toolName: 'load_tools',
-          result: {
-            details: {
-              deferredToolHandoff: {
-                toolNames: ['extended_probe_tool'],
-                intendedAction: 'Use extended_probe_tool to collect diagnostics.',
-                maxRetries: 1,
-              },
-            },
-          },
-        }],
-      });
-
-      const phases: string[] = [];
-      eventBus.on('agent.tool_handoff.telemetry', ({ phase }) => {
-        phases.push(phase);
-      });
-
-      nowSpy.mockReturnValue(1_700_000_000_101);
-      await eventBus.emit('agent.post_turn.actions.inferred', {
-        message,
-        response: {
-          content: 'ok',
-          channelId: message.channelId,
-          metadata: {
-            model: 'mock-model',
-            inputTokens: 1,
-            outputTokens: 1,
-            durationMs: 1,
-          },
-        },
-        actions: inferredActions,
-      });
-
-      await scheduler.tick();
-      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
-      expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
-
-      nowSpy.mockReturnValue(1_700_000_000_150);
-      await scheduler.tick();
-      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
-
-      nowSpy.mockReturnValue(1_700_000_000_250);
-      await scheduler.tick();
-      expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-      expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
-      expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
-      expect(sender.send).not.toHaveBeenCalled();
-      expect(phases).toEqual(['queued', 'activated', 'failed']);
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
 
   it('defers scheduled template runs when the agent is busy and executes after idle', async () => {
     const eventBus = new EventBus();

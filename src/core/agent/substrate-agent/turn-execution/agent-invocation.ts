@@ -27,7 +27,7 @@ import { monotonicEpochNowMs } from '../../../../shared/telemetry/turn-performan
 import type { TurnSnapshot, TurnPromptResponseSnapshot } from '../../../turns/snapshot.js';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
 import type { SystemNoteMessage } from '../../messages.js';
-import type { AutoloadTurnOutcome } from '../adaptive-tools-runtime.js';
+import type { ToolTurnOutcome } from '../tool-runtime-contracts.js';
 import { resolveModel } from '../../stream-adapter.js';
 import {
   cloneObservedAdaptiveToolSnapshot,
@@ -419,7 +419,7 @@ export async function invokeAgentForTurn(input: {
     userMessageText: string;
     imageAttachmentUrls: string[];
   };
-  autoloadOutcome: AutoloadTurnOutcome;
+  toolTurnOutcome: ToolTurnOutcome;
   turnSnapshot: TurnSnapshot;
   templateVariables: Record<string, string>;
   speakerRole: 'user' | 'system';
@@ -444,7 +444,7 @@ export async function invokeAgentForTurn(input: {
     turnCorrelationBase,
     viewerRequestContext,
     baseVisionToolRequestContext,
-    autoloadOutcome,
+    toolTurnOutcome,
     turnSnapshot,
     templateVariables,
     speakerRole,
@@ -460,7 +460,7 @@ export async function invokeAgentForTurn(input: {
   let runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
   let runtimeFallbackProvenance: RuntimeFallbackProvenance | undefined;
   let runtimeContradictionDiagnostic: RuntimeContradictionDiagnostic | undefined;
-  const turnIntent: string | null = autoloadOutcome.intent;
+  const turnIntent: string | null = toolTurnOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
   const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
   let providerRequestAt: number | null = null;
@@ -613,7 +613,7 @@ export async function invokeAgentForTurn(input: {
     originStage: 'agent.turn.prompt',
     purpose: 'agent.turn.prompt',
   });
-  runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
+  runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
   let initialBridgeActive = true;
   const clearInitialPromptContext = (): void => {
     if (!initialBridgeActive) return;
@@ -794,7 +794,7 @@ export async function invokeAgentForTurn(input: {
       originStage: 'agent.turn.runtime_contradiction_retry',
       purpose: 'agent.turn.runtime_contradiction_retry',
     });
-    runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
+    runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
     try {
       await runWithVisionTurnTimeout({
         channelId: message.channelId,

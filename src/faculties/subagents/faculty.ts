@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type {
   CapabilityTier,
-  ShardToolsetConfig,
   SubstrateConfig,
 } from '../../system/config/runtime-config-contracts.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -60,20 +59,6 @@ const DEFAULT_MAX_CONCURRENT = 8;
 const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_RECENT_RESULT_LIMIT = 25;
 const DEFAULT_SUBAGENT_CAPABILITIES = ['general'] as const;
-const SUBAGENT_TOOLSET_ALL = '*';
-export const DEFAULT_SUBAGENT_TOOLSET = [
-  'memory',
-  'contact',
-  'repo',
-] as const;
-
-const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {
-  nursery: DEFAULT_SUBAGENT_TOOLSET,
-  apprentice: DEFAULT_SUBAGENT_TOOLSET,
-  autonomous: [SUBAGENT_TOOLSET_ALL],
-  custom: [SUBAGENT_TOOLSET_ALL],
-};
-const APPRENTICE_SUBAGENT_TOOL_EXTRAS = [] as const;
 
 const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
   'subagent',
@@ -125,7 +110,6 @@ export interface SubagentFacultyDeps {
   config: SubstrateConfig;
   parentSystemPrompt: string;
   maxConcurrent?: number;
-  taskToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => SubagentToolCatalog;
   auditTrail?: SubagentAuditTrail;
   runtimeMode?: RuntimeMode;
@@ -1001,31 +985,7 @@ export class SubagentFaculty implements SubagentControlPort {
       }
     }
 
-    const toolNames = this.resolveToolNamesForTier(this.resolveCapabilityTier());
-    const includeAll = toolNames.includes(SUBAGENT_TOOLSET_ALL);
-    if (includeAll) {
-      return [...availableByName.values()];
-    }
-    return toolNames
-      .map(name => availableByName.get(name))
-      .filter((tool): tool is AgentTool<any> => tool !== undefined);
-  }
-
-  private resolveToolNamesForTier(tier: CapabilityTier): string[] {
-    const configured = this.deps.taskToolsets;
-    const nursery = normalizeToolNames(configured?.nursery, DEFAULT_SUBAGENT_TOOLSETS_BY_TIER.nursery);
-
-    if (tier === 'nursery') return nursery;
-
-    if (tier === 'apprentice') {
-      const apprentice = normalizeToolNames(configured?.apprentice);
-      if (apprentice.length > 0) return apprentice;
-      return [...nursery, ...APPRENTICE_SUBAGENT_TOOL_EXTRAS.filter(name => !nursery.includes(name))];
-    }
-
-    const tierConfig = normalizeToolNames(configured?.[tier] ?? configured?.autonomous);
-    if (tierConfig.length > 0) return tierConfig;
-    return [...DEFAULT_SUBAGENT_TOOLSETS_BY_TIER[tier]];
+    return [...availableByName.values()];
   }
 
   private resolveCapabilityTier(): CapabilityTier {
@@ -1144,13 +1104,6 @@ function normalizeCapabilityTokens(
     }
   }
   return [...normalized];
-}
-
-function normalizeToolNames(
-  names: readonly string[] | undefined,
-  fallback: readonly string[] = [],
-): string[] {
-  return normalizeCapabilityTokens(names, fallback);
 }
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {

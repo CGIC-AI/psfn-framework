@@ -151,7 +151,7 @@ export const SESSION_HISTORY_MIN_MESSAGES = 5;
 export const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
 
 export const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
-const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance', 'deferred_tool_handoff']);
+const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance']);
 const COMPANION_CONTEXT_TASK_KIND_SET = new Set(['heartbeat', 'reflection']);
 const CHANNEL_TASK_TYPE_SET = new Set(['terminal', 'internal']);
 const TEMPORAL_NOW_PATTERN = /\b(now|right now|current time|local time|what time(?: is it)?|what(?:'s| is) the time|time is it|time now|what day(?: is it)?|what date(?: is it)?|date(?: and time)?|current date)\b/i;

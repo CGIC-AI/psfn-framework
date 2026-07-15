@@ -47,8 +47,8 @@ Notes:
 
 - Duplicate suppression happens at two layers: inbound dedupe/bundling in the
   pump, and `OutboundReplyDeduper` (`src/system/lifecycle/outbound-reply-dedupe.ts`)
-  which lets the deferred-tool-handoff continuation recognize a reply the
-  operator already received (psfn-framework-mdxu).
+  which lets internal retry/continuation paths recognize a reply the operator
+  already received (psfn-framework-mdxu).
 - The adapter-side "empty response without a suppression marker" WARN fires
   on every queued dispatch and is noise in split mode; do not read it as a
   dropped reply.

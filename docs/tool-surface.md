@@ -44,7 +44,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 
 The current runtime exposes canonical first-party tool names for the domains covered by this contract. Split helper names are not an acceptable compatibility lane: they must not be registered, returned from discovery, pinned, autoloaded, or documented as callable tools.
 
-Always-on adaptive control:
+Always-on catalog control:
 
 - `tool_search`
 - `toolset`
@@ -78,26 +78,27 @@ Unified top-level direct tools in the current runtime:
 
 Important current-state notes:
 
-- `load_tools` and `promoted_tools_*` are no longer live runtime control tools. Discovery, activation, pinning, and catalog inspection run through `tool_search` and `toolset`.
+- `load_tools` and `promoted_tools_*` are no longer live runtime control tools. Documentation lookup and catalog inspection run through `tool_search`; persisted ordering preferences run through `toolset` pin/unpin.
 - `fs_list`, `fs_read`, `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`, `vault_*`, `issue_*`, `settings_get`, `self_restart`, `self_rebuild`, and `notify_operator` are historical or action-alias names, not model-facing control paths.
 - Transcript lookup stays on `session`; memory and scratchpad mutation stay on `memory` and `scratchpad`; contact mutation stays on `contact`; values and concerns stay on `orient`.
 - Safe companion-facing runtime introspection stays on `self_status`; guarded runtime settings and lifecycle actions stay on `system`.
 - `response_control action="no_reply"` is the explicit no-response disposition surface. It is for intentional non-replies, not hidden failure.
-- Generic image generation, editing, and analysis stay on `generate_image` (registered core, presented before admin/dev tooling); `selfie_create` stays separate as the first-class core self-expression image tool. The old `media` name is retired: activation attempts fail with an error naming `generate_image`.
+- Generic image generation, editing, and analysis stay on `generate_image` (registered core, presented before admin/dev tooling); `selfie_create` stays separate as the first-class core self-expression image tool. The old `media` name is retired: documentation and pin attempts name `generate_image` as the replacement.
 - `journal` is a core durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
 - `shard` is currently a reserved extended registry entry for future long-horizon shard lifecycle control. Shard execution internals, fold-review lineage, and satellite delegation exist, but bounded model-facing worker control is currently `subagent`.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
 
-## Canonical Discovery Surface
+## Canonical Catalog Surface
 
-`tool_search` and `toolset` are always-on adaptive-control tools.
+`tool_search` and `toolset` are always-on catalog tools. They do not control callability.
 
-- `tool_search` searches non-default canonical tools by purpose and description.
-- `toolset action="list"` reports active, loaded, available, and pinned canonical tools.
-- `toolset action="suggest"` proposes canonical tools for the current task without loading them.
+- `tool_search` looks up long-form documentation for core and extended canonical tools by name, purpose, action, or parameter. It is read-only and cannot load, activate, grant, or otherwise change tool callability.
+- `toolset action="list"` reports the callable catalog and persisted presentation-order pins.
+- `toolset action="suggest"` proposes canonical tools for the current task without mutating tool state.
 - `toolset action="describe"` returns canonical action schemas, required parameters, capability requirements, reversibility, interruptibility/concurrency metadata, and bundle membership.
-- `toolset action="activate"` loads canonical extended tools for the current turn.
-- `toolset action="pin"` and `toolset action="unpin"` mutate the small pinned overlay.
+- `toolset action="pin"` and `toolset action="unpin"` mutate a small, persisted presentation-order preference. Unpinned tools remain callable.
+
+On ordinary turns, every registered core and extended tool enters `params.tools` on the first turn. Capability, trust, maintenance, worker-context, satellite, service-availability, and exact ICP candidate policies run after catalog assembly and still fail closed. There is no search-then-activate state, intent autoload, or same-turn activation continuation.
 
 These tools follow the Hermes-inspired rule: discovery can describe capabilities and bundles in detail, but it must not multiply callable names for actions that already belong to a canonical surface.
 
@@ -406,16 +407,15 @@ remote Docker/Kubernetes/SSH executor; that remains target work.
 - heartbeat plumbing that should not be model-selected directly
 - maintenance workers
 - operator/debug surfaces
-- autoload bookkeeping
 
 ## Runtime Prompt Presentation
 
-The companion-facing runtime prompt should describe the active stack for the turn, not the implementation mechanics behind it or an aspirational fully-collapsed taxonomy.
+The companion-facing runtime prompt should describe the policy-constrained catalog for the turn, not retired loading mechanics or an aspirational fully-collapsed taxonomy.
 
-- Treat the currently loaded tools as the active stack for the turn; prefer calling a direct tool that already fits the task.
-- Mention `tool_search` and `toolset` as the discovery/control path for non-default overlays, but do not spend prompt budget on active counts, per-tool activation sources, or suffixes such as promoted/autoload/deferred.
-- Hide internal/background-only tools from ordinary direct turns unless the current turn is scheduled, deferred, or otherwise explicitly about that background workflow.
-- Keep richer activation/source/debug detail on admin and observability surfaces rather than in the companion prompt.
+- Treat the tools present in the turn schema as directly callable unless their execution result reports a policy denial.
+- Mention `tool_search` only as optional documentation lookup and `toolset` pin/unpin only as presentation ordering.
+- Hide internal/background-only tools from ordinary direct turns unless the current turn is scheduled or explicitly about that background workflow.
+- Keep policy/source/debug detail on admin and observability surfaces rather than in the companion prompt.
 
 ## Naming Rules
 
@@ -458,12 +458,12 @@ The table below maps current or retired first-party tool names to the canonical 
 | `character_card_update` | `identity` | hidden | Historical prompt/persona mutation name; use `identity action="update_persona"`. |
 | `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |
 | `settings_get` | `system` | hidden | Historical top-level name; runtime-setting reads use `system action="read"`. |
-| `tool_search` | `tool_search` | always-on | Primary discovery surface for non-default tools; pair it with `toolset` for activation or pinning. |
+| `tool_search` | `tool_search` | always-on | Read-only long-form documentation lookup for tools already present in the turn schema. |
 | `promoted_tools_list` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="list"`. |
 | `promoted_tools_add` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="pin"`. |
 | `promoted_tools_remove` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="unpin"`. |
 | `promoted_tools_swap` | `toolset` | hidden | Legacy slot-reorder helper is no longer model-facing. |
-| `load_tools` | `toolset` | hidden | `load_tools` no longer ships as a live runtime control tool on this branch; use `toolset action="activate"` for discovery-driven activation. |
+| `load_tools` | `toolset` | hidden | Retired loading surface. Registered tools are already callable; use `tool_search` for documentation or `toolset` pin/unpin for ordering. |
 | `fs_read` | `fs` | hidden | Historical top-level name; use `fs action="read"`. |
 | `fs_list` | `fs` | hidden | Historical top-level name; use `fs action="list"`. |
 | `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `analysis_workbench` helper remains bounded and secondary. |
@@ -507,7 +507,7 @@ The table below maps current or retired first-party tool names to the canonical 
 | `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"` only for the external Obsidian bridge. |
 | `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"` only for the external Obsidian bridge. |
 | `vault_daily` | `vault` | hidden | Historical top-level name; use `vault action="daily"` only for the external Obsidian bridge. |
-| `media` | `generate_image` | retired | Renamed: the `media` name was too vague to route against `selfie_create`. Activation of the old name fails with an error naming `generate_image`. |
+| `media` | `generate_image` | retired | Renamed: the `media` name was too vague to route against `selfie_create`. Documentation and pin attempts name `generate_image` as the replacement. |
 | `image_create` | `generate_image` | retired | Use `generate_image action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
 | `image_edit` | `generate_image` | retired | Use `generate_image action="edit"` on the same surface. |
 | `image_analyze` | `generate_image` | retired | Use `generate_image action="analyze"` on the same surface. |
@@ -521,13 +521,13 @@ The table below maps current or retired first-party tool names to the canonical 
 
 ## Configuration Guidance
 
-- Keep `promotedExtendedTools` small. It is a short-term exposure mechanism, not the long-term taxonomy.
+- Keep `promotedExtendedTools` small. Despite the retained serialized key, its current contract is presentation ordering only; it never grants availability or capability.
 - Do not add more micro-tool-specific config keys as a substitute for `toolset`.
-- Treat `tool_search` as the first discovery step for non-default tools and `toolset` as the semantic control plane for activating, pinning, and unpinning them.
+- Treat `tool_search` as optional documentation lookup and `toolset` as the presentation-order control plane for pinning and unpinning.
 - Keep `shardToolsets` shard-specific. It should not become a general companion tool-selection mechanism.
 - Preserve `north_star` as a dedicated semantic surface rather than folding it into `identity` or `orient`.
 - Leave `analysis_workbench` available for large-context analysis, but do not use it to hide missing tool taxonomy or routine direct-tool gaps.
 
 ## Practical Rule Of Thumb
 
-If the task is world execution, use a primitive. If it is companion state, use a semantic companion tool. If it is workflow strategy, encode it in a skill. If it is long-tail or special-case tool selection, use `tool_search`/`toolset`. Use `analysis_workbench` only when the material is too large or multi-stage for normal context without crowding out the conversation.
+If the task is world execution, use a primitive. If it is companion state, use a semantic companion tool. If it is workflow strategy, encode it in a skill. Call the matching registered tool directly; use `tool_search` only when its long-form instructions are needed. Use `analysis_workbench` only when the material is too large or multi-stage for normal context without crowding out the conversation.

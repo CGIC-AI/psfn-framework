@@ -84,7 +84,7 @@ export const MACRO_GROUP_META: Record<PromptRuntimeMacroGroup, PromptRuntimeMacr
   },
   tooling: {
     label: 'Tooling & Self-Image',
-    rationale: 'Tool counts, appearance context, self-image activation, and extended-tool directory macros.',
+    rationale: 'Tool counts, appearance context, self-image availability, and extended-tool directory macros.',
   },
 };
 

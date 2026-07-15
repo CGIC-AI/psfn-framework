@@ -18,19 +18,11 @@ describe('resolveActiveTools', () => {
     const result = resolveActiveTools({
       coreTools: [makeTool('zeta_tool'), makeTool('alpha_tool')],
       extendedTools: [makeTool('mu_tool')],
-      loadedExtended: new Map([
-        ['mu_tool', {
-          toolName: 'mu_tool',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-      ]),
       promotedResolution: {
         activeNames: new Set<string>(),
+        orderedNames: [],
         skipped: [],
       },
-      classifyExtendedToolForTurn: () => 'overlay',
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(['alpha_tool', 'mu_tool', 'zeta_tool']);
@@ -41,32 +33,38 @@ describe('resolveActiveTools', () => {
     const result = resolveActiveTools({
       coreTools: [makeTool('shared_tool'), makeTool('beta_tool')],
       extendedTools: [makeTool('shared_tool'), makeTool('alpha_tool')],
-      loadedExtended: new Map([
-        ['shared_tool', {
-          toolName: 'shared_tool',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-        ['alpha_tool', {
-          toolName: 'alpha_tool',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-      ]),
       promotedResolution: {
         activeNames: new Set<string>(),
+        orderedNames: [],
         skipped: [],
       },
-      classifyExtendedToolForTurn: () => 'overlay',
     });
 
     expect(result.tools.map((tool) => tool.name)).toEqual(['alpha_tool', 'beta_tool', 'shared_tool']);
     expect(result.snapshotTools).toEqual([
-      { toolName: 'alpha_tool', source: 'autoload' },
+      { toolName: 'alpha_tool', source: 'extended' },
       { toolName: 'beta_tool', source: 'core' },
       { toolName: 'shared_tool', source: 'core' },
     ]);
+  });
+
+  it('uses persisted pins for ordering only and keeps every unpinned tool callable', () => {
+    const result = resolveActiveTools({
+      coreTools: [makeTool('alpha_tool')],
+      extendedTools: [makeTool('zeta_tool'), makeTool('mu_tool')],
+      promotedResolution: {
+        activeNames: new Set(['zeta_tool']),
+        orderedNames: ['zeta_tool'],
+        skipped: [],
+      },
+    });
+
+    expect(result.tools.map(tool => tool.name)).toEqual(['zeta_tool', 'alpha_tool', 'mu_tool']);
+    expect(result.snapshotTools).toEqual([
+      { toolName: 'zeta_tool', source: 'extended' },
+      { toolName: 'alpha_tool', source: 'core' },
+      { toolName: 'mu_tool', source: 'extended' },
+    ]);
+    expect(result.counts).toEqual({ core: 1, extended: 2, total: 3 });
   });
 });

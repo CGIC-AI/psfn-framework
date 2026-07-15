@@ -128,7 +128,7 @@ export function createPromotedToolsListTool(
   return {
     name: 'promoted_tools_list',
     label: 'promoted_tools_list',
-    description: 'List promoted extended tools that stay active every turn.',
+    description: 'List persisted extended-tool presentation-order pins. Pins do not change callability.',
     parameters: Type.Object({}),
     execute: async (): Promise<AgentToolResult<{ isError?: boolean }>> => {
       return textResult(
@@ -148,9 +148,9 @@ export function createPromotedToolsAddTool(
   return {
     name: 'promoted_tools_add',
     label: 'promoted_tools_add',
-    description: 'Add an extended tool to promoted slots (max 4, capability-safe).',
+    description: 'Pin an extended tool near the front of the catalog presentation order (max 4).',
     parameters: Type.Object({
-      tool: Type.String({ description: 'Extended tool name to promote.' }),
+      tool: Type.String({ description: 'Extended tool name to pin for presentation ordering.' }),
     }),
     execute: async (
       _toolCallId: string,
@@ -171,9 +171,9 @@ export function createPromotedToolsRemoveTool(
   return {
     name: 'promoted_tools_remove',
     label: 'promoted_tools_remove',
-    description: 'Remove a promoted extended tool by name.',
+    description: 'Remove an extended-tool presentation-order pin by name.',
     parameters: Type.Object({
-      tool: Type.String({ description: 'Promoted tool name to remove.' }),
+      tool: Type.String({ description: 'Pinned extended tool name to remove.' }),
     }),
     execute: async (
       _toolCallId: string,
@@ -194,7 +194,7 @@ export function createPromotedToolsSwapTool(
   return {
     name: 'promoted_tools_swap',
     label: 'promoted_tools_swap',
-    description: 'Swap two promoted tool slots using 1-based slot indices.',
+    description: 'Swap two presentation-order pin slots using 1-based indices.',
     parameters: Type.Object({
       fromSlot: Type.Integer({ description: '1-based source slot index.' }),
       toSlot: Type.Integer({ description: '1-based destination slot index.' }),

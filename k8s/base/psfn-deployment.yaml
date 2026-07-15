@@ -119,6 +119,17 @@ spec:
                 secretKeyRef:
                   name: psfn-secrets
                   key: ADMIN_TOKEN
+            - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+            - name: GATEWAY_COMPANION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: GATEWAY_COMPANION_AUTH_TOKEN
+                  optional: true
             - name: POSTGRES_DATABASE_URL_FILE
               value: /var/run/secrets/psfn-postgres/database-url
             - name: CONTINUITY_WATCHDOG_ENDPOINT

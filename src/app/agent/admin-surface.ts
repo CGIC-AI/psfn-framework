@@ -25,7 +25,6 @@ import type {
   EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
-import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
 import {
   resolveAdminTransportMode,
   resolveAdminTransportServerEndpoint,
@@ -146,12 +145,13 @@ export async function startOptionalAdminTransportServer(
     memoryExtractor: options.coreRuntime.memoryExtractor,
     ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
     companionAuthorIds: options.config.discordBotId ? [options.config.discordBotId] : [],
+    // Operator-only gateway confirmations (e.g. kube self-management) are
+    // resolved directly by the Garden operator process; the agent never holds
+    // the operator gateway client or the ADMIN_TOKEN it would need (x5rt.10).
+    // This surface resolves agent-local confirmations only.
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,
       options.cardProposalQueue,
-      env.GATEWAY_OPERATOR_API_BASE_URL?.trim()
-        ? createGatewayOperatorConfirmationClient(env.GATEWAY_OPERATOR_API_BASE_URL)
-        : undefined,
     ),
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,

@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
-import { getCookieValue } from '../../channels/backplane/http/auth.js';
 import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
 import { buildAdminMemoryRoutes } from './api-routes-memory.js';
 import { parseAdminJsonBody } from './request-body.js';
@@ -1023,19 +1022,11 @@ export function buildAdminApiRoutes(options: {
             resolveParams.modifiedParams = payload.modifiedParams as Record<string, unknown>;
           }
 
-          const authorization = typeof req.headers.authorization === 'string'
-            && req.headers.authorization.length <= 1_024
-            ? req.headers.authorization
-            : undefined;
-          const adminCookieToken = getCookieValue(req, 'psfn_token');
-          const cookie = adminCookieToken && adminCookieToken.length <= 512
-            ? `psfn_token=${encodeURIComponent(adminCookieToken)}`
-            : undefined;
-
-          confirmationQueueApi!.resolveConfirmationQueue(resolveParams, {
-            ...(authorization ? { authorization } : {}),
-            ...(cookie ? { cookie } : {}),
-          }).then(
+          // This agent-hosted route resolves agent-local confirmations only.
+          // Operator-only gateway confirmations are resolved by the Garden
+          // operator process on a direct operator→gateway path, so no operator
+          // ADMIN_TOKEN is read from or forwarded through this agent (x5rt.10).
+          confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
             (result) => {
               appendAuditTimelineEntry?.(
                 'confirmation',

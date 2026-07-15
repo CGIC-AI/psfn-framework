@@ -265,8 +265,6 @@ spec:
               value: {{ default .Values.psfnAppImage.digest .Values.workloads.garden.image.digest | quote }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
-            - name: GATEWAY_OPERATOR_API_BASE_URL
-              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -442,6 +440,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.adminToken }}
+            {{- /* The Garden operator process owns ADMIN_TOKEN and resolves
+                 operator-only gateway confirmations (e.g. kube self-management)
+                 directly against the gateway API, so the credential never
+                 traverses the agent (x5rt.10). */}}
+            - name: GATEWAY_OPERATOR_API_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
             - name: ADMIN_TRANSPORT_MODE
               value: network
             - name: ADMIN_TRANSPORT_URL

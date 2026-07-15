@@ -55,6 +55,7 @@ import {
   normalizeLimit,
   socialGraphEdgeRowToEdge,
 } from './mapping.js';
+import { invalidateMemorySubjectsForContact } from './memory-subject-lifecycle.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 import { compareAndSetGenericUpsertTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
@@ -566,6 +567,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if (await this.tableExists('l2_memories')) {
         await client.query('UPDATE l2_memories SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
       }
+      await invalidateMemorySubjectsForContact(client, sourceContactId);
       if (await this.tableExists('contact_profiles')) {
         const targetProfileExists = await queryOne<{ exists_flag: number }>(
           this.pool,
@@ -1474,26 +1476,33 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
   },
 
   async deleteContact(id: string): Promise<boolean> {
-    const contact = await this.getById(id);
-    if (!contact) return false;
-    if (contact.trustLevel === 'primary') {
-      return false;
-    }
-    await this.pool.query('DELETE FROM contact_channel_ids WHERE contact_id = $1', [id]);
-    await this.pool.query('DELETE FROM contact_channel_activity WHERE contact_id = $1', [id]);
-    await this.pool.query('DELETE FROM contact_identity_link_verifications WHERE contact_id = $1', [id]);
-    await this.pool.query('DELETE FROM contact_mutation_audit WHERE contact_id = $1', [id]);
-    if (await this.tableExists('l2_memories')) {
-      await this.pool.query('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = $1', [id]);
-    }
-    if (await this.tableExists('contact_profiles')) {
-      await this.pool.query('DELETE FROM contact_profiles WHERE contact_id = $1', [id]);
-    }
-    const result = await this.pool.query('DELETE FROM contacts WHERE id = $1', [id]);
-    if ((result.rowCount ?? 0) > 0) {
-      await this.syncContactExports();
-    }
-    return (result.rowCount ?? 0) > 0;
+    const deleted = await withPostgresClient(this.pool, async (client) => {
+      const contact = await client.query<{ trust_level: TrustLevel }>(`
+        SELECT trust_level FROM contacts WHERE id = $1 FOR UPDATE
+      `, [id]);
+      if (contact.rowCount !== 1 || contact.rows[0]?.trust_level === 'primary') return false;
+      await client.query('DELETE FROM contact_channel_ids WHERE contact_id = $1', [id]);
+      await client.query('DELETE FROM contact_channel_activity WHERE contact_id = $1', [id]);
+      await client.query('DELETE FROM contact_identity_link_verifications WHERE contact_id = $1', [id]);
+      await client.query('DELETE FROM contact_mutation_audit WHERE contact_id = $1', [id]);
+      await invalidateMemorySubjectsForContact(client, id);
+      const memoryTable = await client.query<{ table_name: string | null }>(
+        "SELECT to_regclass('l2_memories')::text AS table_name",
+      );
+      if (memoryTable.rows[0]?.table_name) {
+        await client.query('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = $1', [id]);
+      }
+      const profileTable = await client.query<{ table_name: string | null }>(
+        "SELECT to_regclass('contact_profiles')::text AS table_name",
+      );
+      if (profileTable.rows[0]?.table_name) {
+        await client.query('DELETE FROM contact_profiles WHERE contact_id = $1', [id]);
+      }
+      const result = await client.query('DELETE FROM contacts WHERE id = $1', [id]);
+      return (result.rowCount ?? 0) > 0;
+    });
+    if (deleted) await this.syncContactExports();
+    return deleted;
   },
 
   async unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Promise<boolean> {

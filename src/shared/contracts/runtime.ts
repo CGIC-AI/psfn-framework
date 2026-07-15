@@ -335,6 +335,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   requesterProvenance?: RequesterProvenance;
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
+  /** Canonical contact resolved at ingress for subject-authorized memory access. Never model supplied. */
+  viewerMemorySubjectContactId?: string;
   embodimentContext?: EmbodimentPresenceMetadata;
   /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
   icpCorrelation?: IcpConversationCorrelation;

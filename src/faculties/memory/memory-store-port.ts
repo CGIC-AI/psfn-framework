@@ -15,6 +15,10 @@ import type {
   MemorySourceType,
   PurrMemory,
 } from './types.js';
+import type {
+  MemorySubjectClassification,
+  MemorySubjectQueryAuthorization,
+} from '../../shared/contracts/memory-subject.js';
 
 export type {
   CoreMemoryAppendOptions,
@@ -214,6 +218,60 @@ export interface MemoryMaintenanceDiagnosticsOptions {
 
 export type MemorySearchResult = PurrMemory & { similarity: number };
 
+export type MemorySubjectQuerySelector =
+  | { kind: 'list'; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
+  | { kind: 'detail'; memoryId: string }
+  | { kind: 'text_search'; query: string; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
+  | { kind: 'embedding_search'; embedding: Float32Array; threshold: number; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
+  | { kind: 'count'; scopeQuery?: MemoryScopeQuery };
+
+export interface MemorySubjectAuthorizedQuery {
+  authorization: MemorySubjectQueryAuthorization;
+  selector: MemorySubjectQuerySelector;
+}
+
+export interface MemorySubjectAuthorizedQueryResult {
+  memories: MemorySearchResult[];
+  total: number;
+}
+
+export interface MemorySubjectAuthorizedMutation {
+  authorization: MemorySubjectQueryAuthorization;
+  memoryIds: string[];
+  updates: MemoryStoreUpdatePatch;
+}
+
+export interface MemorySubjectAuthorizedWrite extends MemoryWriteCommit {
+  authorization: MemorySubjectQueryAuthorization;
+}
+
+export interface MemorySubjectAuthorizedDelete {
+  authorization: MemorySubjectQueryAuthorization;
+  memoryId: string;
+  options?: MemorySoftDeleteOptions;
+}
+
+export interface MemorySubjectAuthorizedRestore {
+  authorization: MemorySubjectQueryAuthorization;
+  deleteId: string;
+  options?: MemoryUndoSoftDeleteOptions;
+}
+
+export interface MemorySubjectBackfillOptions {
+  batchSize?: number;
+  resetCheckpoint?: boolean;
+  now?: number;
+}
+
+export interface MemorySubjectBackfillResult {
+  state: 'processed' | 'busy' | 'complete';
+  processedCount: number;
+  totalProcessedCount: number;
+  classifierVersion: number;
+  reasonCounts: Record<string, number>;
+  durationMs: number;
+}
+
 export interface MemoryStoreStats {
   total: number;
   byType: Record<string, number>;
@@ -222,6 +280,7 @@ export interface MemoryStoreStats {
 
 export type MemoryStoreUpdatePatch = Partial<Pick<
   PurrMemory,
+  | 'type'
   | 'text'
   | 'importance'
   | 'confidence'
@@ -453,6 +512,13 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
    * scan — when the backing store does not provide it.
    */
   listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Awaitable<MemoryEmbeddingSample[]>;
+  queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery): Awaitable<MemorySubjectAuthorizedQueryResult>;
+  mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Awaitable<number>;
+  persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Awaitable<void>;
+  softDeleteAuthorizedMemorySubject(input: MemorySubjectAuthorizedDelete): Awaitable<MemoryDeleteVersion | null>;
+  undoAuthorizedMemorySubjectDelete(input: MemorySubjectAuthorizedRestore): Awaitable<MemoryDeleteVersion | null>;
+  getMemorySubjectClassification(memoryId: string): Awaitable<MemorySubjectClassification | undefined>;
+  backfillMemorySubjectClassifications(options?: MemorySubjectBackfillOptions): Awaitable<MemorySubjectBackfillResult>;
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
@@ -533,6 +599,13 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Promise<MemoryMaintenanceDiagnostics>;
   /** See MemoryStorePortBackend.listActiveMemoryEmbeddingsSince (htm9.15 evidence read). */
   listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Promise<MemoryEmbeddingSample[]>;
+  queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery): Promise<MemorySubjectAuthorizedQueryResult>;
+  mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Promise<number>;
+  persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Promise<void>;
+  softDeleteAuthorizedMemorySubject(input: MemorySubjectAuthorizedDelete): Promise<MemoryDeleteVersion | null>;
+  undoAuthorizedMemorySubjectDelete(input: MemorySubjectAuthorizedRestore): Promise<MemoryDeleteVersion | null>;
+  getMemorySubjectClassification(memoryId: string): Promise<MemorySubjectClassification | undefined>;
+  backfillMemorySubjectClassifications(options?: MemorySubjectBackfillOptions): Promise<MemorySubjectBackfillResult>;
 }
 
 export interface CoreMemoryStorePort {
@@ -652,6 +725,15 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
         ),
       }
       : {}),
+    queryAuthorizedMemorySubjects: async input => await store.queryAuthorizedMemorySubjects(input),
+    mutateAuthorizedMemorySubjects: async input => await store.mutateAuthorizedMemorySubjects(input),
+    persistAuthorizedMemoryWrite: async input => await store.persistAuthorizedMemoryWrite(input),
+    softDeleteAuthorizedMemorySubject: async input => await store.softDeleteAuthorizedMemorySubject(input),
+    undoAuthorizedMemorySubjectDelete: async input => await store.undoAuthorizedMemorySubjectDelete(input),
+    getMemorySubjectClassification: async memoryId => await store.getMemorySubjectClassification(memoryId),
+    backfillMemorySubjectClassifications: async options => (
+      await store.backfillMemorySubjectClassifications(options)
+    ),
   };
 }
 

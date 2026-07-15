@@ -254,6 +254,16 @@ class FakeMemoryPool {
       } as QueryResult;
     }
 
+    if (normalized.startsWith("select to_regclass('contacts')::text as table_name")) {
+      return {
+        rows: [{ table_name: null }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
     if (normalized.includes('1 - (embedding <=> $1::vector) as similarity')) {
       const queryEmbedding = decodeEmbeddingLiteral(typeof values[0] === 'string' ? values[0] : null);
       const threshold = Number(values[1] ?? 0);
@@ -367,7 +377,40 @@ class FakeMemoryPool {
         embedding: typeof values[29] === 'string' ? values[29] : null,
       };
       this.memories.set(row.id, row);
+      return {
+        rows: [{ authorization_revision: '1' }],
+        rowCount: 1,
+        command: 'INSERT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_subject_classifications')) {
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('delete from l2_memory_subject_contacts')) {
+      return { rows: [], rowCount: 0, command: 'DELETE', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_subject_contacts')) {
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (
+      normalized.startsWith('update l2_memories set subject_evidence_digest = $2')
+      && normalized.includes('returning id')
+    ) {
+      const id = String(values[0] ?? '');
+      const exists = this.memories.has(id);
+      return {
+        rows: exists ? [{ id }] : [],
+        rowCount: exists ? 1 : 0,
+        command: 'UPDATE',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
     }
 
     if (

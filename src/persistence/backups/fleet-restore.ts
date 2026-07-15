@@ -17,7 +17,11 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { isRecord } from '../../shared/utils/types.js';
 import { isStrictSubpath } from '../layout.js';
-import { assertValidPostgresSchemaName } from '../postgres.js';
+import {
+  assertValidPostgresSchemaName,
+  createPostgresPool,
+  withPostgresClient,
+} from '../postgres.js';
 import {
   COMPANION_TREE_DIR_NAME,
   WORKSPACE_TREE_DIR_NAME,
@@ -82,6 +86,7 @@ import {
   type FleetAuthSchemaAccessContract,
   validateFleetAuthSchemaAccessContracts,
 } from './fleet-auth-schema-access.js';
+import { runMemorySubjectBackfillToCompletion } from '../../faculties/memory/postgres-store/subject-backfill.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -349,6 +354,87 @@ async function rollbackFleetAuthOwnedSchemas(options: {
   }
 }
 
+function quotePostgresIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+/** Restore is an evidence-lifecycle mutation: restored projections stay hidden until bounded reclassification. */
+export async function invalidateRestoredMemorySubjectProjections(
+  postgres: FleetRestorePostgresOptions,
+  schemas: readonly string[],
+): Promise<void> {
+  const pool = createPostgresPool(postgres.databaseUrl, {
+    applicationName: 'fleet-restore-memory-subject-invalidation',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    await withPostgresClient(pool, async (client) => {
+      for (const rawSchema of schemas) {
+        const schema = assertValidPostgresSchemaName(rawSchema);
+        const tables = await client.query<{ memories: string | null; classifications: string | null }>(`
+          SELECT to_regclass($1)::text AS memories, to_regclass($2)::text AS classifications
+        `, [`${schema}.l2_memories`, `${schema}.l2_memory_subject_classifications`]);
+        if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
+        const qualified = quotePostgresIdentifier(schema);
+        // The subject-evidence invalidation trigger intentionally addresses
+        // companion-local projection tables without schema qualification.
+        // Pin its lookup to the restored schema for this transaction.
+        await client.query(`SET LOCAL search_path TO ${qualified}, public`);
+        await client.query(`
+          UPDATE ${qualified}.l2_memories
+          SET authorization_revision = authorization_revision + 1,
+              subject_evidence_digest = NULL
+        `);
+        await client.query(`
+          UPDATE ${qualified}.l2_memory_subject_classifications
+          SET status = 'invalidated',
+              updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+        `);
+        const checkpoint = await client.query<{ checkpoint: string | null }>(
+          'SELECT to_regclass($1)::text AS checkpoint',
+          [`${schema}.l2_memory_subject_backfill_checkpoints`],
+        );
+        if (checkpoint.rows[0]?.checkpoint) {
+          await client.query(`
+            UPDATE ${qualified}.l2_memory_subject_backfill_checkpoints
+            SET cursor_memory_id = NULL, completed = FALSE, processed_count = 0,
+                updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+          `);
+        }
+      }
+    });
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
+/** Reclassify each restored schema before restore success can make the corpus reachable. */
+export async function backfillRestoredMemorySubjectProjections(
+  postgres: FleetRestorePostgresOptions,
+  schemas: readonly string[],
+): Promise<void> {
+  for (const rawSchema of schemas) {
+    const schema = assertValidPostgresSchemaName(rawSchema);
+    const pool = createPostgresPool(postgres.databaseUrl, {
+      applicationName: 'fleet-restore-memory-subject-backfill',
+      allowExitOnIdle: true,
+      max: 1,
+      schema,
+    });
+    try {
+      const tables = await pool.query<{ memories: string | null; classifications: string | null }>(`
+        SELECT to_regclass('l2_memories')::text AS memories,
+               to_regclass('l2_memory_subject_classifications')::text AS classifications
+      `);
+      if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
+      await runMemorySubjectBackfillToCompletion(pool);
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
+  }
+}
+
 function expectedUnitSchemas(unit: FleetBackupUnitOutcome): string[] {
   const rawSchemas = unit.kind === 'group'
     ? unit.postgresSchemas
@@ -575,6 +661,15 @@ export async function restoreFleetAuthConsistentFamily(options: {
         contracts: accessContracts,
         ownerRole: options.roles.backupRestore,
       });
+
+      for (const schema of restoredSchemas) {
+        const restoredPostgres = {
+          databaseUrl: options.schemaOwnerDatabaseUrls[schema],
+          ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+        };
+        await invalidateRestoredMemorySubjectProjections(restoredPostgres, [schema]);
+        await backfillRestoredMemorySubjectProjections(restoredPostgres, [schema]);
+      }
 
       const fleetAuth = await restoreFleetAuthSnapshot({
         manifestPath: options.manifestPath,
@@ -901,7 +996,11 @@ async function commitRestore(options: {
       options.postgres,
       operation,
     ),
-    restoreDatabase: async () => await restorePostgresDump(options.dumpPath, options.postgres),
+    restoreDatabase: async () => {
+      await restorePostgresDump(options.dumpPath, options.postgres);
+      await invalidateRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
+      await backfillRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
+    },
     rollbackDatabase: async operation => await rollbackFleetRestoreDatabaseSchemas(
       options.postgres,
       operation,

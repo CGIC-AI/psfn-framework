@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   createPostgresPool,
@@ -45,6 +45,14 @@ import type {
   ScratchpadEntryReplaceOptions,
   MemoryEmbeddingSample,
   MemoryWriteCommit,
+  MemorySubjectAuthorizedMutation,
+  MemorySubjectAuthorizedWrite,
+  MemorySubjectAuthorizedDelete,
+  MemorySubjectAuthorizedRestore,
+  MemorySubjectAuthorizedQuery,
+  MemorySubjectAuthorizedQueryResult,
+  MemorySubjectBackfillOptions,
+  MemorySubjectBackfillResult,
 } from './memory-store-port.js';
 import { normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
@@ -114,6 +122,22 @@ import {
   assertExistingMemorySchemaHasEmbeddingColumn,
   validatePostgresMemorySchema,
 } from './postgres-store/schema.js';
+import {
+  MEMORY_SUBJECT_SELECT_COLUMNS,
+  getMemorySubjectClassification as loadMemorySubjectClassification,
+  queryAuthorizedMemorySubjects as runAuthorizedMemorySubjectQuery,
+} from './postgres-store/subject-queries.js';
+import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
+import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
+import {
+  backfillMemorySubjectClassifications as runMemorySubjectBackfill,
+  runMemorySubjectBackfillToCompletion,
+} from './postgres-store/subject-backfill.js';
+import {
+  parseMemorySubjectQueryAuthorization,
+  type MemorySubjectClassification,
+  type MemorySubjectQueryAuthorization,
+} from '../../shared/contracts/memory-subject.js';
 
 const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
 const SCRATCHPAD_MAX_ENTRIES = 64;
@@ -125,6 +149,8 @@ export interface PostgresMemoryStoreOptions {
   journal?: MemoryJournal;
   /** Optional per-companion Postgres schema; pins the pool's search_path. */
   schema?: string;
+  /** Disable only for bounded-backfill tests; production startup drains this before hydration. */
+  subjectBackfill?: false | MemorySubjectBackfillOptions;
 }
 
 export async function createPostgresMemoryStore(
@@ -152,6 +178,9 @@ export async function createPostgresMemoryStoreFromPool(
   await assertExistingMemorySchemaHasEmbeddingColumn(pool);
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
+  if (options.subjectBackfill !== false) {
+    await runMemorySubjectBackfillToCompletion(pool, embeddingDims, options.subjectBackfill);
+  }
   const store = new PostgresMemoryStore(pool, embeddingDims, options);
   await store.waitUntilReady();
   return store;
@@ -370,20 +399,26 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   private async executeWrite(text: string, values: readonly unknown[]): Promise<void> {
-    const transaction = this.transactionContext.getStore();
-    if (transaction) {
-      await transaction.client.query(text, [...values]);
-      return;
-    }
-    await executeQuery(this.pool, text, values);
+    await this.queryWrite(text, values);
   }
 
-  private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {
+  private async queryWrite<T extends QueryResultRow>(
+    text: string,
+    values: readonly unknown[],
+  ): Promise<T[]> {
+    const transaction = this.transactionContext.getStore();
+    if (transaction) {
+      return (await transaction.client.query<T>(text, [...values])).rows;
+    }
+    return (await executeQuery(this.pool, text, values)).rows as T[];
+  }
+
+  private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<number> {
     if (embedding) {
       validateEmbeddingDimensions(embedding, this.embeddingDims, 'write');
     }
     const row = toMemoryRow(memory, embedding);
-    await this.executeWrite(`
+    const revisions = await this.queryWrite<{ authorization_revision: string }>(`
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
         salience_decay_anchor_at,
@@ -425,6 +460,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         deleted_by = EXCLUDED.deleted_by,
         delete_reason = EXCLUDED.delete_reason,
         embedding = EXCLUDED.embedding
+      RETURNING authorization_revision
     `, [
       row.id,
       row.text,
@@ -457,10 +493,42 @@ class PostgresMemoryStore implements MemoryStorePort {
       row.delete_reason,
       row.embedding,
     ]);
+    const revision = Number(revisions[0]?.authorization_revision);
+    if (!Number.isSafeInteger(revision) || revision < 1) {
+      throw new Error(`Memory ${memory.id} did not return a valid authorization revision`);
+    }
+    return revision;
+  }
+
+  private async upsertMemorySubjectProjection(
+    memory: PurrMemory,
+    memoryRevision: number,
+    embedding?: Float32Array,
+  ): Promise<void> {
+    const transaction = this.transactionContext.getStore();
+    if (!transaction) {
+      throw new Error('Memory subject projection writes require a memory-store transaction');
+    }
+    await persistMemorySubjectProjection(transaction.client, memory, memoryRevision, embedding);
+  }
+
+  private async persistClassifiedMemoryRow(
+    memory: PurrMemory,
+    embedding?: Float32Array,
+  ): Promise<void> {
+    const write = async (): Promise<void> => {
+      const revision = await this.upsertMemoryRow(memory, embedding);
+      await this.upsertMemorySubjectProjection(memory, revision, embedding);
+    };
+    if (this.transactionContext.getStore()) {
+      await write();
+      return;
+    }
+    await this.runInTransaction(write);
   }
 
   private async upsertDeleteVersion(deleteVersion: MemoryDeleteVersion): Promise<void> {
-    await executeQuery(this.pool, `
+    await this.executeWrite(`
       INSERT INTO l2_memory_delete_versions (
         delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -558,7 +626,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       ...memory,
       salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     };
-    await this.runWrite(() => this.upsertMemoryRow(anchoredMemory, embedding));
+    await this.persistClassifiedMemoryRow(anchoredMemory, embedding);
     this.memories.set(memory.id, anchoredMemory);
     this.embeddings.set(memory.id, embedding);
     this.markSalienceMaintenanceChanged();
@@ -567,10 +635,17 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async persistMemoryWrite(input: MemoryWriteCommit): Promise<void> {
-    for (const id of new Set(input.supersededMemoryIds ?? [])) {
-      await this.updateMemory(id, { supersededBy: input.memory.id });
+    const commit = async (): Promise<void> => {
+      for (const id of new Set(input.supersededMemoryIds ?? [])) {
+        await this.updateMemory(id, { supersededBy: input.memory.id });
+      }
+      await this.insertMemory(input.memory, input.embedding);
+    };
+    if (this.transactionContext.getStore()) {
+      await commit();
+      return;
     }
-    await this.insertMemory(input.memory, input.embedding);
+    await this.runInTransaction(commit);
   }
 
   /**
@@ -713,34 +788,62 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void> {
-    const existing = this.memories.get(id);
-    if (!existing) return;
-    const next = { ...existing };
-    if (updates.salience !== undefined) next.salience = updates.salience;
-    if (updates.lastAccessed !== undefined) next.lastAccessed = updates.lastAccessed;
-    if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
-      next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
+    const update = async (): Promise<void> => {
+      const rows = await this.queryWrite<MemoryRow>(`
+        SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+        FROM l2_memories memory
+        WHERE memory.id = $1
+        FOR UPDATE
+      `, [id]);
+      const currentRow = rows.at(0);
+      if (!currentRow) return;
+      const next = { ...fromMemoryRow(currentRow) };
+      if (updates.type !== undefined) next.type = updates.type;
+      if (updates.text !== undefined) next.text = updates.text;
+      if (updates.importance !== undefined) next.importance = updates.importance;
+      if (updates.confidence !== undefined) next.confidence = updates.confidence;
+      if (updates.emotionalValence !== undefined) next.emotionalValence = updates.emotionalValence;
+      if (updates.formationVAD !== undefined) next.formationVAD = updates.formationVAD;
+      if (updates.salience !== undefined) next.salience = updates.salience;
+      if (updates.lastAccessed !== undefined) next.lastAccessed = updates.lastAccessed;
+      if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
+        next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
+      }
+      if (updates.accessCount !== undefined) next.accessCount = updates.accessCount;
+      if (updates.supersededBy !== undefined) next.supersededBy = updates.supersededBy;
+      if (updates.sensitivity !== undefined) next.sensitivity = updates.sensitivity;
+      if (updates.consentFlags !== undefined) next.consentFlags = updates.consentFlags;
+      if (updates.tags !== undefined) next.tags = [...updates.tags];
+      if (updates.scopeRef !== undefined) next.scopeRef = normalizeMemoryScopeRef(updates.scopeRef);
+      if (updates.scopeTags !== undefined) next.scopeTags = normalizeMemoryScopeTags(updates.scopeTags);
+      if (updates.provenanceRefs !== undefined) next.provenanceRefs = [...updates.provenanceRefs];
+      if (updates.retentionClass !== undefined) {
+        next.retentionClass = updates.retentionClass;
+        next.tags = applyRetentionClassTags(next, updates.retentionClass);
+      }
+      if (updates.sourceType !== undefined) next.sourceType = normalizeMemorySourceType(updates.sourceType);
+      if (updates.provenance !== undefined) next.provenance = normalizeMemoryProvenance(updates.provenance);
+      if (updates.contactId !== undefined) next.contactId = updates.contactId;
+      if (updates.deletedAt !== undefined) next.deletedAt = updates.deletedAt;
+      if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
+      if (updates.deleteReason !== undefined) next.deleteReason = updates.deleteReason;
+      const storedEmbedding = decodeEmbedding(currentRow.embedding);
+      if (storedEmbedding) validateEmbeddingDimensions(storedEmbedding, this.embeddingDims, 'update');
+      const embedding = updates.embedding ?? storedEmbedding;
+      await this.persistClassifiedMemoryRow(next, embedding);
+      this.memories.set(id, next);
+      if (embedding) this.embeddings.set(id, embedding);
+      else this.embeddings.delete(id);
+      this.markSalienceMaintenanceChanged();
+      if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
+        this.markRetrievalCorpusChanged();
+      }
+    };
+    if (this.transactionContext.getStore()) {
+      await update();
+      return;
     }
-    if (updates.accessCount !== undefined) next.accessCount = updates.accessCount;
-    if (updates.supersededBy !== undefined) next.supersededBy = updates.supersededBy;
-    if (updates.sensitivity !== undefined) next.sensitivity = updates.sensitivity;
-    if (updates.consentFlags !== undefined) next.consentFlags = updates.consentFlags;
-    if (updates.tags !== undefined) next.tags = [...updates.tags];
-    if (updates.scopeRef !== undefined) next.scopeRef = normalizeMemoryScopeRef(updates.scopeRef);
-    if (updates.scopeTags !== undefined) next.scopeTags = normalizeMemoryScopeTags(updates.scopeTags);
-    if (updates.provenanceRefs !== undefined) next.provenanceRefs = [...updates.provenanceRefs];
-    if (updates.retentionClass !== undefined) next.retentionClass = updates.retentionClass;
-    if (updates.contactId !== undefined) next.contactId = updates.contactId;
-    if (updates.deletedAt !== undefined) next.deletedAt = updates.deletedAt;
-    if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
-    if (updates.deleteReason !== undefined) next.deleteReason = updates.deleteReason;
-    const embedding = this.embeddings.get(id);
-    await this.runWrite(() => this.upsertMemoryRow(next, embedding));
-    this.memories.set(id, next);
-    this.markSalienceMaintenanceChanged();
-    if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
-      this.markRetrievalCorpusChanged();
-    }
+    await this.runInTransaction(update);
   }
 
   async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
@@ -887,6 +990,231 @@ class PostgresMemoryStore implements MemoryStorePort {
     return this.memories.get(id);
   }
 
+  async queryAuthorizedMemorySubjects(
+    input: MemorySubjectAuthorizedQuery,
+  ): Promise<MemorySubjectAuthorizedQueryResult> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Authorized memory subject queries are unavailable inside a memory-store transaction');
+    }
+    await this.persistChain;
+    return await runAuthorizedMemorySubjectQuery(this.pool, this.embeddingDims, input);
+  }
+
+  async getMemorySubjectClassification(
+    memoryId: string,
+  ): Promise<MemorySubjectClassification | undefined> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Memory subject classification reads are unavailable inside a memory-store transaction');
+    }
+    await this.persistChain;
+    return await loadMemorySubjectClassification(this.pool, memoryId);
+  }
+
+  private async lockAuthorizedActiveMemoryRows(
+    authorization: MemorySubjectQueryAuthorization,
+    memoryIds: readonly string[],
+  ): Promise<MemoryRow[]> {
+    if (memoryIds.length === 0) return [];
+    const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
+      memoryAlias: 'memory',
+      firstParameter: 2,
+    });
+    const authorizedRows = await this.queryWrite<MemoryRow>(`
+      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+      FROM l2_memories memory
+      WHERE memory.id = ANY($1::text[])
+        AND memory.superseded_by IS NULL
+        AND memory.deleted_at IS NULL
+        AND ${predicate.sql}
+      ORDER BY memory.id
+      FOR UPDATE
+    `, [memoryIds, ...predicate.values]);
+    if (authorizedRows.length !== memoryIds.length) {
+      throw new Error('Memory subject authorization denied');
+    }
+    return authorizedRows;
+  }
+
+  private hydrateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
+    for (const row of rows) {
+      this.memories.set(row.id, fromMemoryRow(row));
+      const embedding = decodeEmbedding(row.embedding);
+      if (embedding) {
+        validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
+        this.embeddings.set(row.id, embedding);
+      } else {
+        this.embeddings.delete(row.id);
+      }
+    }
+  }
+
+  async mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Promise<number> {
+    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
+    if (authorization.action !== 'bulk_mutation' && authorization.action !== 'update') {
+      throw new Error('Memory subject authorization action does not permit mutation');
+    }
+    const memoryIds = [...new Set(input.memoryIds.flatMap(id => {
+      const normalized = id.trim();
+      return normalized ? [normalized] : [];
+    }))].sort();
+    if (memoryIds.length === 0) return 0;
+    const mutate = async (): Promise<number> => {
+      const authorizedRows = await this.lockAuthorizedActiveMemoryRows(authorization, memoryIds);
+      // The SQL lock is authoritative. Refresh the local snapshot before
+      // applying the patch so a sibling maintenance/contact process cannot
+      // have its committed fields overwritten by stale hydrated state.
+      this.hydrateLockedMemoryRows(authorizedRows, 'authorized mutation');
+      for (const memoryId of memoryIds) {
+        await this.updateMemory(memoryId, input.updates);
+      }
+      return memoryIds.length;
+    };
+    return this.transactionContext.getStore()
+      ? await mutate()
+      : await this.runInTransaction(mutate);
+  }
+
+  async persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Promise<void> {
+    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
+    if (authorization.action !== 'bulk_mutation' && authorization.action !== 'update') {
+      throw new Error('Memory subject authorization action does not permit write');
+    }
+    const supersededMemoryIds = [...new Set(input.supersededMemoryIds?.flatMap(id => {
+      const normalized = id.trim();
+      return normalized ? [normalized] : [];
+    }) ?? [])].sort();
+    const commit = async (): Promise<void> => {
+      const authorizedRows = await this.lockAuthorizedActiveMemoryRows(
+        authorization,
+        supersededMemoryIds,
+      );
+      this.hydrateLockedMemoryRows(authorizedRows, 'authorized write');
+      for (const memoryId of supersededMemoryIds) {
+        await this.updateMemory(memoryId, { supersededBy: input.memory.id });
+      }
+      await this.insertMemory(input.memory, input.embedding);
+    };
+    if (this.transactionContext.getStore()) {
+      await commit();
+      return;
+    }
+    await this.runInTransaction(commit);
+  }
+
+  async softDeleteAuthorizedMemorySubject(
+    input: MemorySubjectAuthorizedDelete,
+  ): Promise<MemoryDeleteVersion | null> {
+    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
+    if (authorization.action !== 'update') {
+      throw new Error('Memory subject authorization action does not permit delete');
+    }
+    const memoryId = input.memoryId.trim();
+    if (!memoryId) return null;
+    const version = await this.runInTransaction(async () => {
+      const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
+        memoryAlias: 'memory',
+        firstParameter: 2,
+      });
+      const rows = await this.queryWrite<MemoryRow>(`
+        SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+        FROM l2_memories memory
+        WHERE memory.id = $1
+          AND memory.superseded_by IS NULL
+          AND memory.deleted_at IS NULL
+          AND ${predicate.sql}
+        FOR UPDATE
+      `, [memoryId, ...predicate.values]);
+      const row = rows.at(0);
+      if (!row) return null;
+      const memory = fromMemoryRow(row);
+      const embedding = decodeEmbedding(row.embedding);
+      if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized delete');
+      const deleteId = input.options?.deleteId ?? randomUUID();
+      const deletedAt = input.options?.deletedAt ?? Date.now();
+      const deletedBy = input.options?.deletedBy?.trim() || 'agent';
+      const deleteReason = input.options?.reason?.trim();
+      const nextVersion: MemoryDeleteVersion = {
+        deleteId,
+        memoryId,
+        snapshot: memory,
+        deletedAt,
+        deletedBy,
+        ...(deleteReason ? { deleteReason } : {}),
+      };
+      await this.upsertDeleteVersion(nextVersion);
+      const deletedMemory = { ...memory, deletedAt, deletedBy, deleteReason };
+      await this.persistClassifiedMemoryRow(deletedMemory, embedding);
+      this.memories.set(memoryId, deletedMemory);
+      return nextVersion;
+    });
+    if (!version) return null;
+    this.markSalienceMaintenanceChanged();
+    this.markRetrievalCorpusChanged();
+    this.deleteVersions.set(version.deleteId, version);
+    this.journal?.onSoftDelete(version);
+    return version;
+  }
+
+  async undoAuthorizedMemorySubjectDelete(
+    input: MemorySubjectAuthorizedRestore,
+  ): Promise<MemoryDeleteVersion | null> {
+    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
+    if (authorization.action !== 'update') {
+      throw new Error('Memory subject authorization action does not permit restore');
+    }
+    const deleteId = input.deleteId.trim();
+    const version = this.deleteVersions.get(deleteId);
+    if (!version || version.restoredAt !== undefined) return null;
+    const nextVersion = await this.runInTransaction(async () => {
+      const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
+        memoryAlias: 'memory',
+        firstParameter: 2,
+      });
+      const rows = await this.queryWrite<MemoryRow>(`
+        SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+        FROM l2_memories memory
+        WHERE memory.id = $1
+          AND memory.deleted_at IS NOT NULL
+          AND ${predicate.sql}
+        FOR UPDATE
+      `, [version.memoryId, ...predicate.values]);
+      const row = rows.at(0);
+      if (!row) return null;
+      const current = fromMemoryRow(row);
+      const embedding = decodeEmbedding(row.embedding);
+      if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized restore');
+      const restoredAt = input.options?.restoredAt ?? Date.now();
+      const restoredBy = input.options?.restoredBy?.trim() || 'agent';
+      const restored = {
+        ...current,
+        deletedAt: undefined,
+        deletedBy: undefined,
+        deleteReason: undefined,
+      };
+      const restoredVersion = { ...version, restoredAt, restoredBy };
+      await this.upsertDeleteVersion(restoredVersion);
+      await this.persistClassifiedMemoryRow(restored, embedding);
+      this.memories.set(version.memoryId, restored);
+      return restoredVersion;
+    });
+    if (!nextVersion) return null;
+    this.markSalienceMaintenanceChanged();
+    this.markRetrievalCorpusChanged();
+    this.deleteVersions.set(deleteId, nextVersion);
+    this.journal?.onRestore(nextVersion);
+    return nextVersion;
+  }
+
+  async backfillMemorySubjectClassifications(
+    options: MemorySubjectBackfillOptions = {},
+  ): Promise<MemorySubjectBackfillResult> {
+    return await this.runInTransaction(async () => {
+      const transaction = this.transactionContext.getStore();
+      if (!transaction) throw new Error('Memory subject backfill transaction is unavailable');
+      return await runMemorySubjectBackfill(transaction.client, this.embeddingDims, options);
+    });
+  }
+
   async softDeleteMemory(id: string, options: MemorySoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
     const memory = this.memories.get(id);
     if (!memory || memory.deletedAt) return null;
@@ -902,9 +1230,12 @@ class PostgresMemoryStore implements MemoryStorePort {
       deletedBy,
       ...(deleteReason ? { deleteReason } : {}),
     };
-    await this.persist(async () => {
+    await this.runInTransaction(async () => {
       await this.upsertDeleteVersion(version);
-      await this.upsertMemoryRow({ ...memory, deletedAt, deletedBy, deleteReason }, this.embeddings.get(id));
+      await this.persistClassifiedMemoryRow(
+        { ...memory, deletedAt, deletedBy, deleteReason },
+        this.embeddings.get(id),
+      );
     });
     this.memories.set(id, { ...memory, deletedAt, deletedBy, deleteReason });
     this.markSalienceMaintenanceChanged();
@@ -923,9 +1254,9 @@ class PostgresMemoryStore implements MemoryStorePort {
     const restoredBy = options.restoredBy?.trim() || 'agent';
     const restored = { ...current, deletedAt: undefined, deletedBy: undefined, deleteReason: undefined };
     const nextVersion = { ...version, restoredAt, restoredBy };
-    await this.persist(async () => {
+    await this.runInTransaction(async () => {
       await this.upsertDeleteVersion(nextVersion);
-      await this.upsertMemoryRow(restored, this.embeddings.get(version.memoryId));
+      await this.persistClassifiedMemoryRow(restored, this.embeddings.get(version.memoryId));
     });
     this.memories.set(version.memoryId, restored);
     this.markSalienceMaintenanceChanged();

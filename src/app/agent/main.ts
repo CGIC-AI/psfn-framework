@@ -121,6 +121,7 @@ import {
 } from '../../faculties/introspection/model-runtime.js';
 import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
 import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
 import {
   createLLMValuesConsistencyEvaluator,
@@ -443,7 +444,12 @@ async function main(): Promise<void> {
     log.info('No persisted internal state snapshot found; starting fresh');
   }
 
-  const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
+  const {
+    scheduler,
+    postTurnActions,
+    backgroundMaintenance,
+    compressionGuidelineEvolution,
+  } = buildAgentSchedulerRuntime({
     eventBus,
     eligibilityGate,
     config,
@@ -569,6 +575,7 @@ async function main(): Promise<void> {
       await moduleLoader.applyRegistryMutation(mutation);
     },
     executionPort: sandboxExecutionPort,
+    compressionGuidelineEvolution,
   });
 
   // Memory write/import tools — intentional memory creation
@@ -578,6 +585,24 @@ async function main(): Promise<void> {
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  // Durable tool-usage evaluator lane (psfn-framework-b0yl.5): closes the LOD
+  // loop by aggregating ACTUAL per-tool invocations from the durable turn-record
+  // stream (every catalog tool, per-companion) to feed presentation ordering +
+  // operator-visible pin suggestions. Opt-in via scheduler.json (registers only
+  // when enabled); registered here so it can use the real MemoryWriter for its
+  // autonomous-action suggestion records and the session store's turn records.
+  if (schedulerConfig.toolUsageEvaluator) {
+    registerToolUsageEvaluatorTask({
+      scheduler,
+      agent: agentLoop,
+      turnRecordAccess: {
+        listChannelKeys: () => sessionStore.listChannels().map(channel => channel.sessionId),
+        readRecentTurnRecords: (channelKey, limit) => sessionStore.getRecentTurnRecords(channelKey, limit),
+      },
+      getMemoryWriter: () => memoryWriter,
+      config: schedulerConfig.toolUsageEvaluator,
+    });
+  }
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
@@ -1269,6 +1294,7 @@ async function main(): Promise<void> {
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
+      backgroundMaintenance,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       driftVelocityReview,
       secondArrowReview,

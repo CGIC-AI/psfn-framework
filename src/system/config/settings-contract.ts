@@ -184,7 +184,7 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['modelCatalog', MODELS_FILE_NAME],
   ['modelRoleAssignments', MODELS_FILE_NAME],
   ['modelRoster', MODELS_FILE_NAME],
-  ['salienceDecayIntervalMs', SCHEDULER_FILE_NAME],
+  ['backgroundMaintenanceIntervalMs', SCHEDULER_FILE_NAME],
   ['episodicProcessingEnabled', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowStartLocalTime', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
@@ -204,7 +204,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['modelCatalog', 'models'],
   ['modelRoleAssignments', 'models'],
   ['modelRoster', 'models'],
-  ['salienceDecayIntervalMs', 'scheduler'],
+  ['backgroundMaintenanceIntervalMs', 'scheduler'],
   ['episodicProcessingEnabled', 'scheduler'],
   ['episodicProcessingRestWindowStartLocalTime', 'scheduler'],
   ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
@@ -257,7 +257,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'sessionMirrorActiveWindowMs',
   'continuityMessageLimit',
   'extractionInterval',
-  'salienceDecayIntervalMs',
+  'backgroundMaintenanceIntervalMs',
   'episodicProcessingInactivityThresholdMinutes',
   'extractionThresholdPct',
   'compactionThresholdPct',
@@ -314,6 +314,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
+  'salienceDecayIntervalMs',
   // Canonical model registry is models.json-backed; these are compatibility projections.
   'primaryModel',
   'primaryProvider',
@@ -343,7 +344,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
-  ['salienceDecayIntervalMs', { min: 1_000 }],
+  ['backgroundMaintenanceIntervalMs', { min: 1_000 }],
   ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],

@@ -2,8 +2,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FREE_TIME_CONFIG, DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
 import {
+  DEFAULT_FREE_TIME_CONFIG,
+  DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
 } from './scheduler-config.js';
@@ -62,6 +63,19 @@ const MEMORY_LANE_BLOCKS = {
   },
 } as const;
 
+function backgroundMaintenance(intervalMs: number) {
+  return {
+    intervalMs,
+    ambientPresence: {
+      minIdleMinutes: 180,
+      minNoteIntervalMinutes: 360,
+    },
+    concernGrooming: {
+      maxActiveConcerns: 7,
+    },
+  };
+}
+
 describe('resolveRuntimeSchedulerConfig', () => {
   it('requires object-form options with a dataDir', () => {
     expect(() => resolveRuntimeSchedulerConfig('invalid' as unknown as {
@@ -81,7 +95,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
-        salienceDecayIntervalMs: 120_000,
+        backgroundMaintenance: backgroundMaintenance(120_000),
         artifactLifecycle: {
           scratchpadRetentionDays: 7,
           generatedMediaRetentionDays: 21,
@@ -96,6 +110,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 45,
         },
         ...MEMORY_LANE_BLOCKS,
+        icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -106,7 +121,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
       expect(resolved).toEqual({
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
-        salienceDecayIntervalMs: 120_000,
+        backgroundMaintenance: backgroundMaintenance(120_000),
         artifactLifecycle: {
           scratchpadRetentionDays: 7,
           generatedMediaRetentionDays: 21,
@@ -122,7 +137,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         },
         ...MEMORY_LANE_BLOCKS,
         socialGraphBuilder: {
-          intervalMs: 1_800_000,
           coPresenceMinSessions: 3,
           coPresenceWindowMinutes: 1440,
           scanMemoryLimit: 500,
@@ -130,6 +144,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+        icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -147,7 +162,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
-        salienceDecayIntervalMs: 30_000,
+        backgroundMaintenance: backgroundMaintenance(30_000),
         artifactLifecycle: {
           scratchpadRetentionDays: 3,
           generatedMediaRetentionDays: 4,
@@ -162,6 +177,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           inactivityThresholdMinutes: 15,
         },
         ...MEMORY_LANE_BLOCKS,
+        icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -172,7 +188,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
       expect(resolved).toEqual({
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
-        salienceDecayIntervalMs: 30_000,
+        backgroundMaintenance: backgroundMaintenance(30_000),
         artifactLifecycle: {
           scratchpadRetentionDays: 3,
           generatedMediaRetentionDays: 4,
@@ -188,7 +204,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         },
         ...MEMORY_LANE_BLOCKS,
         socialGraphBuilder: {
-          intervalMs: 1_800_000,
           coPresenceMinSessions: 3,
           coPresenceWindowMinutes: 1440,
           scanMemoryLimit: 500,
@@ -196,6 +211,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+        icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

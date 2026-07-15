@@ -6,7 +6,7 @@ import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import { evaluateRestWindowEligibility } from './rest-window.js';
-import type { Scheduler } from './scheduler.js';
+import type { BackgroundMaintenanceRegistrar } from './background-maintenance.js';
 import {
   conversationalEntryFromSessionMetadata,
   latestSessionActivityAtOrBefore,
@@ -15,9 +15,8 @@ import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
 
 const log = createComponentLogger('AmbientPresence');
 
-export const AMBIENT_PRESENCE_TASK_ID = 'ambient-presence';
+export const AMBIENT_PRESENCE_OPERATION_ID = 'ambient-presence';
 export const AMBIENT_PRESENCE_TASK_NAME = 'Ambient Presence';
-export const DEFAULT_AMBIENT_PRESENCE_TASK_INTERVAL_MS = 60 * 60_000;
 export const DEFAULT_AMBIENT_PRESENCE_MIN_IDLE_MS = 3 * 60 * 60_000;
 export const DEFAULT_AMBIENT_PRESENCE_MIN_NOTE_INTERVAL_MS = 6 * 60 * 60_000;
 const AMBIENT_PRESENCE_NOTE_SOURCE = 'ambient_presence';
@@ -73,12 +72,11 @@ export interface AmbientPresenceSessionManagerPort {
   appendSystemNote(channelId: string, note: string, source?: string): void;
 }
 
-export interface AmbientPresenceRuntimeOptions {
-  scheduler: Scheduler;
+export interface AmbientPresenceOperationOptions {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
   sessionManager: AmbientPresenceSessionManagerPort;
   restWindow?: EpisodicProcessingRestWindowConfig;
   eventBus?: EventBus;
-  intervalMs?: number;
   minIdleMs?: number;
   minNoteIntervalMs?: number;
 }
@@ -235,7 +233,7 @@ export function buildAmbientPresenceNote(decision: Extract<AmbientPresenceDecisi
 
 function evaluateAmbientPresencePreflight(
   input: Omit<AmbientPresenceEvaluateInput, 'recentEntries'>,
-): AmbientPresenceDecision | null {
+): Extract<AmbientPresenceDecision, { allowed: false }> | null {
   const structuralDecision = evaluateAmbientPresenceEligibility({
     ...input,
     recentEntries: [],
@@ -294,19 +292,11 @@ function evaluateAmbientPresencePreflight(
     : null;
 }
 
-export function registerAmbientPresenceTask(options: AmbientPresenceRuntimeOptions): void {
+function createAmbientPresenceHandler(
+  options: Omit<AmbientPresenceOperationOptions, 'backgroundMaintenance'>,
+): () => Promise<void> {
   const lastRecordedBySession = new Map<string, number>();
-  const intervalMs = Math.max(
-    1_000,
-    Math.floor(options.intervalMs ?? DEFAULT_AMBIENT_PRESENCE_TASK_INTERVAL_MS),
-  );
-
-  options.scheduler.register({
-    id: AMBIENT_PRESENCE_TASK_ID,
-    name: AMBIENT_PRESENCE_TASK_NAME,
-    type: 'every',
-    intervalMs,
-    handler: async () => {
+  return async () => {
       const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
       const sessionId = session?.sessionId;
       const inMemoryLastNoteAt = sessionId ? lastRecordedBySession.get(sessionId) : undefined;
@@ -365,8 +355,19 @@ export function registerAmbientPresenceTask(options: AmbientPresenceRuntimeOptio
         AMBIENT_PRESENCE_NOTE_SOURCE,
       );
       lastRecordedBySession.set(decision.sessionId, decision.nowMs);
-    },
+  };
+}
+
+export function registerAmbientPresenceOperation(options: AmbientPresenceOperationOptions): void {
+  const minIdleMs = options.minIdleMs ?? DEFAULT_AMBIENT_PRESENCE_MIN_IDLE_MS;
+  const minNoteIntervalMs = options.minNoteIntervalMs ?? DEFAULT_AMBIENT_PRESENCE_MIN_NOTE_INTERVAL_MS;
+  options.backgroundMaintenance.registerOperation({
+    id: AMBIENT_PRESENCE_OPERATION_ID,
+    name: AMBIENT_PRESENCE_TASK_NAME,
+    description:
+      `Checks private recent sessions after ${Math.floor(minIdleMs / 60_000)} idle minutes; `
+      + `records at most one no-LLM presence note per ${Math.floor(minNoteIntervalMs / 60_000)} minutes.`,
     eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
-  }, { skipFirstRun: true });
+    handler: createAmbientPresenceHandler(options),
+  });
 }

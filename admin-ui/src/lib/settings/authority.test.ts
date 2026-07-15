@@ -8,7 +8,6 @@ import {
 
 const baseData = {
   config: {
-    salienceDecayIntervalMs: 3600000,
     capabilityTier: 'apprentice',
   },
   env: {},
@@ -26,7 +25,9 @@ const baseData = {
     },
     skills: {},
     scheduler: {
-      salienceDecayIntervalMs: 120000,
+      backgroundMaintenance: {
+        intervalMs: 120000,
+      },
     },
     trustPolicy: {},
     capabilities: {
@@ -38,14 +39,20 @@ const baseData = {
     stt: [],
     tts: [],
   },
+  effectiveBackgroundMaintenance: {
+    ownerFile: 'scheduler.json',
+    effectiveIntervalMs: 3600000,
+    onDiskIntervalMs: 120000,
+    restartRequired: true,
+  },
 };
 
 const baseSchema = {
   schemaVersion: 1,
   subsystems: {},
   fields: {
-    salienceDecayIntervalMs: {
-      key: 'salienceDecayIntervalMs',
+    backgroundMaintenanceIntervalMs: {
+      key: 'backgroundMaintenanceIntervalMs',
       ownerSubsystem: 'scheduler',
       ownerFile: 'scheduler.json',
       type: 'integer',
@@ -71,12 +78,13 @@ const baseSchema = {
   },
 };
 
-test('salience-decay interval authority points at scheduler ownership', () => {
-  const info = resolveSettingAuthority(baseData, baseSchema, 'salienceDecayIntervalMs');
+test('bundled background-maintenance interval authority points at scheduler ownership', () => {
+  const info = resolveSettingAuthority(baseData, baseSchema, 'backgroundMaintenanceIntervalMs');
   assert.equal(info.sourceLabel, 'scheduler.json');
-  assert.equal(info.effectiveValue, '120,000 ms');
-  assert.match(info.detail, /scheduler\.json > salienceDecayIntervalMs/);
-  assert.match(info.precedence ?? '', /scheduler\.json wins/);
+  assert.equal(info.effectiveValue, 'Live: 3,600,000 ms · on disk: 120,000 ms');
+  assert.match(info.detail, /scheduler\.json > backgroundMaintenance\.intervalMs/);
+  assert.match(info.detail, /unchanged until restart/);
+  assert.match(info.precedence ?? '', /Restart required/);
 });
 
 test('custom capability tokens authority shows dormant/active precedence', () => {

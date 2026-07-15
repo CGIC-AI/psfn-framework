@@ -39,11 +39,12 @@ export function hydrateJsonBackedRuntimeConfig(
 
   // scheduler.json is a per-companion owner file (dnll.3): root it at the
   // companion data dir so fleet companions can hold distinct circadian schedules.
-  const schedulerConfig = resolveRuntimeSchedulerConfig({
+  // Salience decay cadence is decoupled from config (origin/main): the scheduler
+  // owns that cadence directly, so we no longer copy it onto the runtime config.
+  resolveRuntimeSchedulerConfig({
     dataDir: companionDataDir,
     ...(seedDir ? { seedDir } : {}),
   });
-  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
 
   // capability-tier.json is a per-companion owner file (dnll.2): root it at the
   // companion data dir so fleet companions can hold distinct maturation tiers.

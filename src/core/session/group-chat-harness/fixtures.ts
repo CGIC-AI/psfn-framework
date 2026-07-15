@@ -206,7 +206,6 @@ export function makeGroupChatConfig(dataDir: string, overrides: Partial<Substrat
     primaryMaxTokens: 16384,
     extractionMaxTokens: 8192,
     maintenanceIntervalMs: 300_000,
-    salienceDecayIntervalMs: 300_000,
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,

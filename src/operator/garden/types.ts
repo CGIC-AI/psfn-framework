@@ -218,7 +218,7 @@ export interface CompactionAuditView {
 
 export interface EnvInfo {
   salienceFloor: number;
-  salienceDecayIntervalMs: number;
+  backgroundMaintenanceIntervalMs: number;
   discordToken: string;
   apiKey: string;
   adminToken: string;

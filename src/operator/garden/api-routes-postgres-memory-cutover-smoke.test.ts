@@ -551,7 +551,7 @@ function makeSettingsService(): AdminSettingsService {
     },
     env: {
       salienceFloor: 0.2,
-      maintenanceIntervalMs: 300_000,
+      backgroundMaintenanceIntervalMs: 300_000,
       discordToken: '[not set]',
       apiKey: '[set]',
       adminToken: '[set]',
@@ -582,7 +582,16 @@ function makeSettingsService(): AdminSettingsService {
       },
       scheduler: {
         tickIntervalMs: 60_000,
-        salienceDecayIntervalMs: 300_000,
+        backgroundMaintenance: {
+          intervalMs: 300_000,
+          ambientPresence: {
+            minIdleMinutes: 180,
+            minNoteIntervalMinutes: 360,
+          },
+          concernGrooming: {
+            maxActiveConcerns: 7,
+          },
+        },
         episodicProcessing: {
           enabled: true,
           startLocalTime: '22:00',

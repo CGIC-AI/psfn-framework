@@ -6,9 +6,15 @@ import { saveSettings } from '../settings.js';
 import { loadModelsConfig, saveModelsConfig } from './models-config.js';
 import { loadProvidersConfig, saveProvidersConfig } from './providers-config.js';
 import { loadTrustPolicyConfig, saveTrustPolicyConfig } from './trust-policy-config.js';
-import { saveSchedulerConfig } from './scheduler-config.js';
+import {
+  DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
+  saveSchedulerConfig,
+} from './scheduler-config.js';
 import { loadCapabilityTierConfig, saveCapabilityTierConfig } from './capability-tier-config.js';
-import { saveChargePolicyConfig } from './charge-policy-config.js';
+import {
+  loadChargePolicySeedDefaults,
+  saveChargePolicyConfig,
+} from './charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import {
   loadStartupCapabilityTierOwnerFile,
@@ -91,7 +97,16 @@ describe('startup owner-file loaders', () => {
     const scheduler = {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
-      salienceDecayIntervalMs: 123_000,
+      backgroundMaintenance: {
+        intervalMs: 123_000,
+        ambientPresence: {
+          minIdleMinutes: 180,
+          minNoteIntervalMinutes: 360,
+        },
+        concernGrooming: {
+          maxActiveConcerns: 7,
+        },
+      },
       artifactLifecycle: {
         scratchpadRetentionDays: 7,
         generatedMediaRetentionDays: 30,
@@ -152,7 +167,6 @@ describe('startup owner-file loaders', () => {
         maxEpisodesPerRun: 60,
       },
       socialGraphBuilder: {
-        intervalMs: 1_800_000,
         coPresenceMinSessions: 3,
         coPresenceWindowMinutes: 1440,
         scanMemoryLimit: 500,
@@ -236,6 +250,7 @@ describe('startup owner-file loaders', () => {
           relevanceFloor: 0.05,
         },
       },
+      icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
     saveSchedulerConfig(rootDir, scheduler);
 
@@ -295,6 +310,7 @@ describe('startup owner-file loaders', () => {
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
       fatigue: makeTestFatiguePolicyConfig(),
+      icpCostBreaker: loadChargePolicySeedDefaults().icpCostBreaker,
     });
 
     const runtimeSettings = loadStartupRuntimeSettingsOwnerFile({
@@ -353,7 +369,16 @@ describe('startup owner-file loaders', () => {
       `${JSON.stringify({
         tickIntervalMs: 2_000,
         heartbeatIntervalMs: 8_000,
-        salienceDecayIntervalMs: 123_000,
+        backgroundMaintenance: {
+          intervalMs: 123_000,
+          ambientPresence: {
+            minIdleMinutes: 180,
+            minNoteIntervalMinutes: 360,
+          },
+          concernGrooming: {
+            maxActiveConcerns: 7,
+          },
+        },
       }, null, 2)}\n`,
       'utf-8',
     );

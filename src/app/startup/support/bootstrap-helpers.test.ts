@@ -1177,7 +1177,10 @@ describe('hydrateCanonicalStartupConfig', () => {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
-      salienceDecayIntervalMs: 123_000,
+      backgroundMaintenance: {
+        ...loadSchedulerSeedDefaults().backgroundMaintenance,
+        intervalMs: 123_000,
+      },
     });
     saveChargePolicyConfig(systemDataDir, {
       schemaVersion: 1,
@@ -1257,8 +1260,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.compactionThresholdPct).toBe(76);
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
-    expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
-    expect(config.salienceDecayIntervalMs).toBe(123_000);
+    expect(result.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.providerRegistry?.providers.length).toBeGreaterThan(0);
     expect(config.litellmBaseUrl).toBeUndefined();
@@ -1502,7 +1504,10 @@ describe('hydrateCanonicalStartupConfig', () => {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,
-      salienceDecayIntervalMs: 222_000,
+      backgroundMaintenance: {
+        ...loadSchedulerSeedDefaults().backgroundMaintenance,
+        intervalMs: 222_000,
+      },
     });
 
     const env = {

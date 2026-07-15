@@ -285,7 +285,11 @@ export function hydrateCanonicalStartupConfig(
   const schedulerConfig: SchedulerRuntimeConfig = {
     tickIntervalMs: persistedScheduler.tickIntervalMs,
     heartbeatIntervalMs: persistedScheduler.heartbeatIntervalMs,
-    salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
+    backgroundMaintenance: {
+      intervalMs: persistedScheduler.backgroundMaintenance.intervalMs,
+      ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
+      concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
+    },
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
     nearTurnMemory: {
@@ -344,7 +348,6 @@ export function hydrateCanonicalStartupConfig(
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),
   };
-  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
 

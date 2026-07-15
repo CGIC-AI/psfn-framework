@@ -134,10 +134,44 @@ function createHarness(options: {
     stream,
     complete,
     modelDiscovery,
+    notifyRequester: runtime.notifyRequester,
   };
 }
 
 describe('registerLLMMethods', () => {
+  it('forwards provider first-output observations as content-free requester notifications', async () => {
+    const harness = createHarness();
+    harness.stream.mockImplementationOnce(async (_context, callbacks) => {
+      callbacks?.onFirstOutput?.({
+        kind: 'thinking',
+        monotonicAtMs: 1_234,
+        timestampMs: 5_678,
+      });
+      return {
+        content: 'answer',
+        toolCalls: [],
+        model: 'mock-model',
+        inputTokens: 5,
+        outputTokens: 3,
+        stopReason: 'stop',
+      };
+    });
+
+    await harness.invoke('llm.chat', {
+      requestId: 'request-provider-output-1',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      stream: true,
+    });
+
+    expect(harness.notifyRequester).toHaveBeenCalledWith('llm.first_output', {
+      requestId: 'request-provider-output-1',
+      kind: 'thinking',
+      monotonicAtMs: 1_234,
+      timestampMs: 5_678,
+    });
+  });
+
   it('defaults shard chat correlation to tool callType and shard execution purpose', async () => {
     const harness = createHarness();
 

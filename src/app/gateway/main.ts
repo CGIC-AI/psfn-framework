@@ -58,6 +58,7 @@ import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -293,6 +294,11 @@ async function main(): Promise<void> {
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
   });
+  const detachTurnPerformanceForwarder = attachGatewayTurnPerformanceForwarder({
+    eventBus,
+    gateway,
+    log,
+  });
   const {
     apiHost,
     apiPort,
@@ -401,6 +407,7 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop turn performance forwarder', action: () => detachTurnPerformanceForwarder() },
         { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
         { step: 'stop companion event relay', action: () => companionRelay.stop() },
         { step: 'stop public api server', action: () => apiServer?.stop() },

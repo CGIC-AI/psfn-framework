@@ -1,5 +1,7 @@
 // ── Admin GUI Types ──
 
+import type { TurnPerformanceSnapshot } from '../../shared/telemetry/turn-performance.js';
+
 export type DashboardCostWindow = 'today' | 'week' | 'month';
 
 export interface DashboardCostWindowUsage {
@@ -39,6 +41,7 @@ export interface DashboardTransientSessionTelemetry {
   turnsSinceOperatorStart: number;
   lastTtftMs: number | null;
   averageTtftMs: number | null;
+  latencyPercentiles: TurnPerformanceSnapshot;
   activeSessionContextPressure: DashboardSessionContextPressure;
 }
 

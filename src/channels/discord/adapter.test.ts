@@ -10,6 +10,7 @@ import {
   resetRuntimeChannelEnvelopeLabels,
   setRuntimeChannelEnvelopeLabels,
 } from '../../system/trust/runtime-channel-labels.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -2385,6 +2386,7 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       ...(overrides?.allowedBotUserIds ? { allowedBotUserIds: overrides.allowedBotUserIds } : {}),
       account: {
         accountId: 'acct-a',
+        companionId: createCompanionId('companion-a'),
         token: overrides?.token ?? 'token-acct-a',
         ...(overrides?.siblings ? { siblingBotUserIds: overrides.siblings } : {}),
       },

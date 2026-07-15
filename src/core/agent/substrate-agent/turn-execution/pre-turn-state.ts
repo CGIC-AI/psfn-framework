@@ -351,7 +351,11 @@ export async function prepareTurnIdentityState(input: {
   });
 
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
+  const compactionWaitStartedAt = performance.now();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
+  observability.emitPerformanceStage('compaction_wait', {
+    durationMs: Math.max(0, performance.now() - compactionWaitStartedAt),
+  });
 
   const privateTurnTrigger = message.routing?.privateTurnTrigger === true;
   const userSessionEntryId = privateTurnTrigger || skipSessionEntryPersistence

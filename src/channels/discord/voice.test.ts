@@ -370,7 +370,11 @@ function createMockVoiceConnection(initialStatus = voiceSdkMocks.VoiceConnection
         off: vi.fn((_event: string, _handler: MockSpeakingListener) => undefined),
       },
     },
-    subscribe: vi.fn(),
+    subscribe: vi.fn((player: unknown) => {
+      const subscription = { player, unsubscribe: vi.fn() };
+      connection.state = { ...connection.state, subscription };
+      return subscription;
+    }),
     destroy: vi.fn(),
     rejoin: vi.fn(() => true),
     rejoinAttempts: 0,
@@ -478,6 +482,10 @@ function makeRuntimeHarness(
   };
 
   (runtime as any).connection = {
+    state: {
+      status: voiceSdkMocks.VoiceConnectionStatus.Ready,
+      subscription: { player },
+    },
     destroy: vi.fn(),
     receiver: {
       subscribe: vi.fn(() => new PassThrough()),
@@ -737,12 +745,16 @@ describe('DiscordVoiceRuntime', () => {
     const eventBus = new EventBus();
     const partialEvents: Array<{ transcript: string }> = [];
     const finalEvents: Array<{ transcript: string }> = [];
+    const performanceEvents: Array<{ traceId: string; stage: string }> = [];
 
     eventBus.on('channel.voice.transcript.partial', (event) => {
       partialEvents.push({ transcript: event.transcript });
     });
     eventBus.on('channel.voice.transcript', (event) => {
       finalEvents.push({ transcript: event.transcript });
+    });
+    eventBus.on('agent.turn.performance', (event) => {
+      performanceEvents.push({ traceId: event.traceId, stage: event.stage });
     });
 
     const handler = vi.fn(async () => {
@@ -766,11 +778,103 @@ describe('DiscordVoiceRuntime', () => {
     expect(partialEvents).toEqual([{ transcript: 'hello' }]);
     expect(finalEvents).toEqual([{ transcript: 'hello world' }]);
     expect(handler).toHaveBeenCalledTimes(1);
+    const voiceMessage = handler.mock.calls[0]?.[0];
+    expect(voiceMessage.id).toMatch(/^voice-turn-/);
+    expect(new Set(performanceEvents.map(event => event.traceId))).toEqual(new Set([voiceMessage.id]));
+    expect(performanceEvents.map(event => event.stage)).toEqual(expect.arrayContaining([
+      'speech_end',
+      'stt_final',
+      'tts_request',
+      'first_audible_playback',
+      'turn_complete',
+    ]));
 
     expect(connectorMocks.sttConnector.startStream).toHaveBeenCalledTimes(1);
     expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
     expect(connectorMocks.ttsConnector.synthesizeBuffer).not.toHaveBeenCalled();
     expect(player.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not claim first audible playback when local playback starts on a disconnected connection', async () => {
+    connectorMocks.sttConnector.startStream.mockResolvedValue({
+      transcripts: makeFinalTranscriptStream('hello world'),
+      writeAudio: vi.fn(async () => {}),
+      endInput: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+    });
+    connectorMocks.ttsConnector.synthesizeStream.mockResolvedValue({
+      audio: makeAudioStream(),
+      cancel: vi.fn(async () => {}),
+    });
+
+    const eventBus = new EventBus();
+    const performanceStages: string[] = [];
+    eventBus.on('agent.turn.performance', event => {
+      performanceStages.push(event.stage);
+    });
+    const handler = vi.fn(async () => ({
+      content: 'assistant response',
+      channelId: 'discord-voice:guild-1',
+      metadata: {
+        model: 'test-model',
+        inputTokens: 10,
+        outputTokens: 12,
+        durationMs: 42,
+      },
+    }));
+    const { runtime, player } = makeRuntimeHarness(eventBus, handler);
+    (runtime as any).connection.state = {
+      status: voiceSdkMocks.VoiceConnectionStatus.Disconnected,
+      subscription: { player },
+    };
+    (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
+
+    await (runtime as any).handleUtterance();
+
+    expect(player.play).toHaveBeenCalledOnce();
+    expect(performanceStages).toContain('turn_complete');
+    expect(performanceStages).not.toContain('first_audible_playback');
+  });
+
+  it('reports failed voice cancellation and surfaces connector cancellation errors', async () => {
+    const eventBus = new EventBus();
+    const cancellationEvents: Array<{ outcome?: string }> = [];
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack') {
+        cancellationEvents.push({ outcome: event.cancellationOutcome });
+      }
+    });
+    const { runtime } = makeRuntimeHarness(eventBus, vi.fn());
+    const cancelError = new Error('tts cancellation failed');
+    const turn = {
+      token: Symbol('voice-turn-cancel-failure'),
+      turnId: 'voice-turn-cancel-failure',
+      channel: (runtime as any).activeChannel,
+      connection: (runtime as any).connection,
+      player: (runtime as any).player,
+      abortController: new AbortController(),
+      sttSession: null,
+      ttsSession: {
+        audio: makeAudioStream(),
+        cancel: vi.fn(async () => {
+          throw cancelError;
+        }),
+      },
+    };
+    (runtime as any).activeTurn = turn;
+    (runtime as any).activeTurnId = turn.turnId;
+    (runtime as any).capturing = true;
+
+    await expect((runtime as any).cancelActiveTurn('operator-interrupt')).rejects.toThrow(
+      'Voice cancellation failed for 1 connector(s)',
+    );
+    await vi.waitFor(() => {
+      expect(cancellationEvents).toEqual([{ outcome: 'failed' }]);
+    });
+    expect(turn.abortController.signal.aborted).toBe(true);
+    expect((runtime as any).activeTurn).toBeNull();
+    expect((runtime as any).activeTurnId).toBeNull();
+    expect((runtime as any).capturing).toBe(false);
   });
 
   it('emits a silence observation and skips STT/TTS for short captures', async () => {

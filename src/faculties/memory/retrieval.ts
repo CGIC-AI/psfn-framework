@@ -824,6 +824,7 @@ export class MemoryRetriever implements MemoryProvider {
     conversationScope?: ConversationScope,
     activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
+    const retrievalStartedAt = performance.now();
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
     const effectiveCallerContext = hasDirectRetrievalContext
       ? callerContext
@@ -877,6 +878,13 @@ export class MemoryRetriever implements MemoryProvider {
       profileIncluded: false,
       emotionalSnapshotIncluded: false,
       emotionalContinuityCount: 0,
+      embeddingCalls: 0,
+      searchCalls: 0,
+      stageTimingsMs: {},
+    };
+    const emitTelemetry = async (): Promise<void> => {
+      telemetry.stageTimingsMs.total = Math.max(0, performance.now() - retrievalStartedAt);
+      await this.emitRetrievalTelemetry(telemetry);
     };
     const rawProfile = turnSnapshot?.profile
       ? cloneContactProfileArtifact(turnSnapshot.profile)
@@ -950,6 +958,7 @@ export class MemoryRetriever implements MemoryProvider {
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
+    telemetry.stageTimingsMs.preparation = Math.max(0, performance.now() - retrievalStartedAt);
 
     if (!contextText.trim()) {
       if (!snapshotWithheldSummary) {
@@ -971,7 +980,7 @@ export class MemoryRetriever implements MemoryProvider {
       }
       telemetry.reason = 'empty_input';
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
-      await this.emitRetrievalTelemetry(telemetry);
+      await emitTelemetry();
       return this.finalizeRetrievalPromptBlock({
         activeContextTarget,
         profile,
@@ -988,25 +997,34 @@ export class MemoryRetriever implements MemoryProvider {
         let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
           .filter(memory => !isInternalMemoryArtifact(memory));
         if (semanticMemories.length === 0 && !turnSnapshot) {
+        const embeddingStartedAt = performance.now();
+        telemetry.embeddingCalls += 1;
         const embedding = await this.embeddingService.embed(contextText);
+        addRetrievalStageTiming(telemetry, 'embedding', embeddingStartedAt);
         const candidateLimit = Math.max(40, limit * 4);
+        const vectorSearchStartedAt = performance.now();
+        telemetry.searchCalls += 1;
         semanticMemories = await this.memoryStore.searchByEmbedding(
           embedding,
           this.retrievalThreshold,
           candidateLimit,
           normalizedScopeQuery,
           );
+          addRetrievalStageTiming(telemetry, 'vector_search', vectorSearchStartedAt);
           semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
         }
         const semanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
         semanticMemories = semanticQuarantine.memories;
         if (!turnSnapshot) {
+          const recentLexicalStartedAt = performance.now();
+          telemetry.searchCalls += 1;
           const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
           memoryStore: this.memoryStore,
           contextText,
           existingIds: new Set(semanticMemories.map(memory => memory.id)),
           scopeQuery: normalizedScopeQuery,
           });
+          addRetrievalStageTiming(telemetry, 'lexical_search', recentLexicalStartedAt);
           semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
           const mergedSemanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
           semanticMemories = mergedSemanticQuarantine.memories;
@@ -1020,12 +1038,15 @@ export class MemoryRetriever implements MemoryProvider {
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
+          const lexicalSearchStartedAt = performance.now();
+          if (!turnSnapshot) telemetry.searchCalls += 1;
           const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
             ?? await this.memoryStore.searchByText(
               contextText,
             Math.max(40, limit * 4),
               normalizedScopeQuery,
             )).filter(memory => !isInternalMemoryArtifact(memory));
+          addRetrievalStageTiming(telemetry, 'lexical_search', lexicalSearchStartedAt);
           const lexicalQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, lexicalMemories);
           const visibleLexicalMemories = lexicalQuarantine.memories;
           withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
@@ -1070,7 +1091,7 @@ export class MemoryRetriever implements MemoryProvider {
               telemetry.provenanceRefs,
               collectEpisodicChainProvenanceRefs(episodicChains),
             );
-            await this.emitRetrievalTelemetry(telemetry);
+            await emitTelemetry();
             return this.finalizeRetrievalPromptBlock({
               activeContextTarget,
               profile,
@@ -1090,7 +1111,7 @@ export class MemoryRetriever implements MemoryProvider {
             lexicalCandidates: 0,
             queryLength: contextText.length,
           });
-          await this.emitRetrievalTelemetry(telemetry);
+          await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
             profile,
@@ -1146,6 +1167,7 @@ export class MemoryRetriever implements MemoryProvider {
       };
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
+      const policyFilterStartedAt = performance.now();
       for (const memory of memories) {
         if (normalizedScopeQuery?.mode === 'only' && !memoryMatchesScopeQuery(memory, normalizedScopeQuery)) {
           continue;
@@ -1179,6 +1201,7 @@ export class MemoryRetriever implements MemoryProvider {
 
         policyAllowed.push(memory);
       }
+      addRetrievalStageTiming(telemetry, 'policy_filter', policyFilterStartedAt);
       diagnostics.policyAllowedCount = policyAllowed.length;
       telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
       telemetry.roomVisibilityRejectedCount = diagnostics.rejectedByRoomVisibility;
@@ -1197,7 +1220,7 @@ export class MemoryRetriever implements MemoryProvider {
             telemetry.provenanceRefs,
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
-          await this.emitRetrievalTelemetry(telemetry);
+          await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
             profile,
@@ -1210,7 +1233,7 @@ export class MemoryRetriever implements MemoryProvider {
           });
         }
         telemetry.reason = 'trust_filtered';
-        await this.emitRetrievalTelemetry(telemetry);
+        await emitTelemetry();
         log.info('Retrieval: all candidates filtered by trust policy', {
           channelId,
           trustLevel: effectiveTrust,
@@ -1239,6 +1262,7 @@ export class MemoryRetriever implements MemoryProvider {
       // entirely, guarantee at least SCORE_GUARANTEE_MIN_K top-similarity
       // memories surface even when privacy penalties zero their composite score.
       // This prevents "water in the well, bucket has holes" retrieval gaps.
+      const rankingStartedAt = performance.now();
       const allScored = policyAllowed
         .map(memory => ({
           memory,
@@ -1265,6 +1289,7 @@ export class MemoryRetriever implements MemoryProvider {
         contextText,
         socialContext,
       );
+      addRetrievalStageTiming(telemetry, 'ranking', rankingStartedAt);
       telemetry.compositionalMode = rerankDecision.mode;
       telemetry.compositionalCandidateCount = rerankDecision.candidateCount;
       telemetry.compositionalEvaluationBatchCount = rerankDecision.evaluationBatchCount;
@@ -1317,7 +1342,7 @@ export class MemoryRetriever implements MemoryProvider {
             telemetry.provenanceRefs,
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
-          await this.emitRetrievalTelemetry(telemetry);
+          await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
             profile,
@@ -1330,7 +1355,7 @@ export class MemoryRetriever implements MemoryProvider {
           });
         }
         telemetry.reason = 'score_filtered';
-        await this.emitRetrievalTelemetry(telemetry);
+        await emitTelemetry();
         log.info('Retrieval: all policy-allowed memories scored zero', {
           channelId,
           trustLevel: effectiveTrust,
@@ -1348,6 +1373,7 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
+      const selectionStartedAt = performance.now();
       const guaranteedSelectionFloor = resolveGuaranteedSelectionFloor(ranked.length, scoreGuaranteedCount);
       const selection = selectWithinRelevanceAndTokenBudget(
         ranked,
@@ -1355,6 +1381,7 @@ export class MemoryRetriever implements MemoryProvider {
         guaranteedSelectionFloor,
       );
       const selected = selection.selected;
+      addRetrievalStageTiming(telemetry, 'selection', selectionStartedAt);
 
       telemetry.returnedCount = selected.length + episodicEpisodeCount;
       telemetry.selectionStopReason = selection.stopReason;
@@ -1426,6 +1453,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelPrivacy,
         ...diagnostics,
       });
+      const enrichmentStartedAt = performance.now();
       const selectedIds = new Set(selected.map(item => item.memory.id));
       const emotionalContinuityMemories = canonicalContactId
         ? await collectEmotionalContinuityMemories(
@@ -1470,8 +1498,10 @@ export class MemoryRetriever implements MemoryProvider {
         selectedForPrompt,
         socialContext,
       );
+      addRetrievalStageTiming(telemetry, 'enrichment', enrichmentStartedAt);
 
       // Update access stats; fail closed if persistence fails.
+      const accessUpdateStartedAt = performance.now();
       for (const s of selected) {
         try {
           await this.memoryStore.updateMemory(s.memory.id, {
@@ -1491,10 +1521,11 @@ export class MemoryRetriever implements MemoryProvider {
           );
         }
       }
+      addRetrievalStageTiming(telemetry, 'access_update', accessUpdateStartedAt);
 
       telemetry.count = selected.length + episodicEpisodeCount;
       telemetry.reason = 'ok';
-      await this.emitRetrievalTelemetry(telemetry);
+      await emitTelemetry();
       return this.finalizeRetrievalPromptBlock({
         activeContextTarget,
         profile,
@@ -1509,7 +1540,7 @@ export class MemoryRetriever implements MemoryProvider {
       });
     } catch (error) {
       telemetry.reason = 'error';
-      await this.emitRetrievalTelemetry(telemetry);
+      await emitTelemetry();
       const wrapped = error instanceof RetrievalIntegrityError
         ? error
         : new RetrievalIntegrityError(
@@ -1616,6 +1647,15 @@ export class MemoryRetriever implements MemoryProvider {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function addRetrievalStageTiming(
+  telemetry: RetrievalTelemetry,
+  stage: Exclude<keyof RetrievalTelemetry['stageTimingsMs'], 'total' | 'preparation'>,
+  startedAt: number,
+): void {
+  const elapsedMs = Math.max(0, performance.now() - startedAt);
+  telemetry.stageTimingsMs[stage] = (telemetry.stageTimingsMs[stage] ?? 0) + elapsedMs;
 }
 
 function clampTurnFrequency(value: number): number {

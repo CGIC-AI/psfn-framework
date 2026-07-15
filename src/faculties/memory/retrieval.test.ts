@@ -2417,7 +2417,20 @@ describe('MemoryRetriever basic behavior', () => {
       compositionalCandidateCount: 2,
       compositionalEvaluationBatchCount: 1,
       compositionalFinalistCount: 2,
+      embeddingCalls: 1,
+      searchCalls: 2,
     });
+    const stageTimings = calls[0][1].stageTimingsMs as Record<string, number>;
+    expect(stageTimings).toEqual(expect.objectContaining({
+      preparation: expect.any(Number),
+      embedding: expect.any(Number),
+      vector_search: expect.any(Number),
+      policy_filter: expect.any(Number),
+      ranking: expect.any(Number),
+      selection: expect.any(Number),
+      total: expect.any(Number),
+    }));
+    expect(stageTimings.total).toBeGreaterThanOrEqual(stageTimings.embedding);
   });
 
   it('emits request-scoped retrieval telemetry for manifest seeding', async () => {

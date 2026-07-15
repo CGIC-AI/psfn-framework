@@ -405,11 +405,19 @@ export class DiscordVoiceRuntime {
   }
 
   private async leaveChannel(reason: string): Promise<void> {
-    await this.cancelActiveTurn(`leave:${reason}`);
+    let cancellationError: unknown;
+    try {
+      await this.cancelActiveTurn(`leave:${reason}`);
+    } catch (error) {
+      cancellationError = error;
+    }
 
     const prevChannel = this.activeChannel;
     const prevConnection = this.connection;
-    if (!prevChannel && !prevConnection) return;
+    if (!prevChannel && !prevConnection) {
+      if (cancellationError) throw cancellationError;
+      return;
+    }
 
     if (prevConnection && this.connectionStateListener) {
       prevConnection.off('stateChange', this.connectionStateListener);
@@ -448,6 +456,7 @@ export class DiscordVoiceRuntime {
         reason,
       });
     }
+    if (cancellationError) throw cancellationError;
   }
 
   private bindConnectionStateListener(connection: VoiceConnection, channel: VoiceBasedChannel, generation: number): void {

@@ -6,7 +6,17 @@
 import { randomUUID } from 'node:crypto';
 import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
-import type { LLMContext, LLMResponse, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
+import type {
+  CorrelationMetadata,
+  LLMContext,
+  LLMResponse,
+  LLMStreamFirstOutputObservation,
+  MessageModelOverride,
+  ModelPurpose,
+  StreamCallbacks,
+  ToolCall,
+  ToolSchema,
+} from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
@@ -55,8 +65,16 @@ export interface SubstrateStreamTransport {
 
 export interface SubstrateStreamRuntimeOptions {
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
+  onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
   transport: SubstrateStreamTransport;
 }
+
+export type ProviderFirstOutputEvent = LLMStreamFirstOutputObservation
+  & Partial<CorrelationMetadata>
+  & {
+    provider: string;
+    model: string;
+  };
 
 /**
  * Create a StreamFn for pi-agent-core's Agent.
@@ -117,6 +135,7 @@ export function createSubstrateStreamFn(
           requestContext,
           correlationFields,
           logicalCallId,
+          onProviderFirstOutput: runtimeOptions.onProviderFirstOutput,
           nextPhysicalAttempt: () => {
             physicalAttempt += 1;
             return physicalAttempt;
@@ -174,6 +193,7 @@ interface ExecuteStreamCandidateParams {
   requestContext: Partial<CorrelationMetadata> | undefined;
   correlationFields: ReturnType<typeof toCorrelationLogFields>;
   logicalCallId: string;
+  onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
   nextPhysicalAttempt: () => number;
 }
 
@@ -211,6 +231,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             attempt: params.nextPhysicalAttempt(),
             retryOwner: 'caller',
           },
+          onProviderFirstOutput: params.onProviderFirstOutput,
         });
 
         for await (const rawEvent of stream) {
@@ -296,6 +317,7 @@ interface TransportEventStreamParams {
   requestOptions: Record<string, unknown>;
   transport: SubstrateStreamTransport;
   accounting: NonNullable<LLMContext['accounting']>;
+  onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
 }
 
 function createTransportEventStream(
@@ -317,6 +339,7 @@ function createTransportEventStream(
       partial: cloneAssistantMessage(state.partial),
     } as AssistantMessageEvent;
 
+    let reportedProviderFirstOutput = false;
     const runTransport = (async () => {
       try {
         const response = await params.transport.stream(
@@ -330,6 +353,20 @@ function createTransportEventStream(
           {
             onText: (delta) => {
               enqueueTextDelta(queue, state, delta);
+            },
+            onFirstOutput: (observation) => {
+              if (!params.onProviderFirstOutput || reportedProviderFirstOutput) return;
+              reportedProviderFirstOutput = true;
+              void Promise.resolve(params.onProviderFirstOutput({
+                ...observation,
+                ...(params.requestContext ?? {}),
+                provider: params.candidate.provider,
+                model: params.candidate.model,
+              })).catch(error => log.warn('Provider first-output observer failed', {
+                error: error instanceof Error ? error.message : String(error),
+                provider: params.candidate.provider,
+                model: params.candidate.model,
+              }));
             },
           },
         );

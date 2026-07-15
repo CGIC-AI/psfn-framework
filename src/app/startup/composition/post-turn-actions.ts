@@ -52,6 +52,7 @@ import {
 import { createComponentLogger } from '../../../shared/logger.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type {
   EligibilityDecision,
   EligibilityGate,
@@ -521,6 +522,8 @@ export function wirePostTurnActionRuntime(
   ): void => {
     const maxAttempts = entry.maxRetries + 1;
     const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
+    const timestamp = Date.now();
+    const backgroundJobAgeMs = Math.max(0, timestamp - entry.action.inferredAt);
     eventBus.emit('agent.post_turn.action.telemetry', {
       actionId: entry.action.id,
       actionKind: entry.action.kind,
@@ -534,12 +537,30 @@ export function wirePostTurnActionRuntime(
       attempt: entry.attempt,
       maxAttempts,
       queueDepth: queue.size,
-      timestamp: Date.now(),
+      timestamp,
       ...(optionsOverride.nextRetryAt !== undefined ? { nextRetryAt: optionsOverride.nextRetryAt } : {}),
       ...(optionsOverride.delayMs !== undefined ? { delayMs: optionsOverride.delayMs } : {}),
       ...(optionsOverride.error !== undefined ? { error: optionsOverride.error } : {}),
     }).catch((error) => {
       log.warn('Deferred action telemetry emit failed', {
+        actionId: entry.action.id,
+        phase,
+        error: String(error),
+      });
+    });
+    void emitTurnPerformance(eventBus, {
+      traceId: entry.action.sourceMessageId || entry.action.id,
+      ...(entry.action.sourceMessageId ? { requestId: entry.action.sourceMessageId } : {}),
+      channelId: entry.action.channelId,
+      stage: 'background_job_state',
+      durationMs: backgroundJobAgeMs,
+      backgroundJobAgeMs,
+      queueDepth: queue.size,
+      backgroundContention: queue.size > 0,
+      deferReason: phase,
+      timestampMs: timestamp,
+    }).catch((error) => {
+      log.warn('Deferred action performance telemetry emit failed', {
         actionId: entry.action.id,
         phase,
         error: String(error),

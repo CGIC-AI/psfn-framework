@@ -23,6 +23,7 @@ import type {
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { sanitizeDiagnosticText } from '../../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import { monotonicEpochNowMs } from '../../../../shared/telemetry/turn-performance.js';
 import type { TurnSnapshot, TurnPromptResponseSnapshot } from '../../../turns/snapshot.js';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
 import type { SystemNoteMessage } from '../../messages.js';
@@ -61,6 +62,7 @@ const log = createComponentLogger('SubstrateAgent');
 const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
+const observedProviderModels = new Set<string>();
 const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
@@ -75,7 +77,7 @@ export interface AgentInvocationMutableState {
 }
 
 export interface AgentInvocationResult {
-  firstTokenAt: number;
+  firstTokenAt: number | null;
   turnMessages: AgentMessage[];
   turnUsage: TurnUsage;
   responseModel: string;
@@ -424,7 +426,7 @@ export async function invokeAgentForTurn(input: {
   mutableState: AgentInvocationMutableState;
   observability: Pick<
     TurnExecutionObservability,
-    'emitObservedTurnStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
+    'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
   >;
 }): Promise<AgentInvocationResult> {
   const {
@@ -450,7 +452,7 @@ export async function invokeAgentForTurn(input: {
     observability,
   } = input;
 
-  let firstTokenAt: number;
+  let firstTokenAt: number | null;
   let turnUsage: TurnUsage;
   let responseText: string;
   let responseModel = runtime.agent.state.model.id;
@@ -461,6 +463,38 @@ export async function invokeAgentForTurn(input: {
   const turnIntent: string | null = autoloadOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
   const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
+  let providerRequestAt: number | null = null;
+  let providerWarmState: 'warm' | 'cold' = 'cold';
+  const markProviderRequest = (): void => {
+    if (providerRequestAt !== null) return;
+    providerRequestAt = monotonicEpochNowMs();
+    const providerModelKey = `${runtime.agent.state.model.provider}:${runtime.agent.state.model.id}`;
+    providerWarmState = observedProviderModels.has(providerModelKey) ? 'warm' : 'cold';
+    observedProviderModels.add(providerModelKey);
+    observability.emitPerformanceStage('provider_request', {
+      monotonicAtMs: providerRequestAt,
+      model: runtime.agent.state.model.id,
+      provider: runtime.agent.state.model.provider,
+      warmState: providerWarmState,
+    });
+  };
+  const markProviderFirstToken = (event: {
+    kind: 'text' | 'thinking' | 'tool';
+    monotonicAtMs: number;
+    provider: string;
+    model: string;
+  }): void => {
+    observability.emitPerformanceStage('provider_first_token', {
+      monotonicAtMs: event.monotonicAtMs,
+      ...(providerRequestAt !== null
+        ? { durationMs: Math.max(0, event.monotonicAtMs - providerRequestAt) }
+        : {}),
+      model: event.model,
+      provider: event.provider,
+      providerOutputKind: event.kind,
+      warmState: providerWarmState,
+    });
+  };
 
   const moaSettings = resolveMoaSettings(runtime.config, log);
   if (moaSettings) {
@@ -471,6 +505,7 @@ export async function invokeAgentForTurn(input: {
         : formatCurrentTurnUserContentForPrompt(message, message.content),
     };
     const moaProviderPrompt = buildMoaPrompt(context, moaCurrentTurn);
+    markProviderRequest();
     const moaResult = await runWithVisionTurnTimeout({
       channelId: message.channelId,
       deadlineAt: visionTurnDeadlineAt,
@@ -490,14 +525,9 @@ export async function invokeAgentForTurn(input: {
         emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
       }),
     });
-    firstTokenAt = Date.now();
-    observability.emitObservedTurnStage('first-token', {
-      ttftMs: firstTokenAt - startTime,
-      source: 'fallback',
-    });
+    firstTokenAt = null;
     observability.emitObservedTurnStage('prompt', {
       durationMs: Date.now() - promptStageStart,
-      ttftMs: firstTokenAt - startTime,
       mode: 'moa',
       rounds: moaResult.rounds,
       stopReason: moaResult.stopReason,
@@ -562,15 +592,15 @@ export async function invokeAgentForTurn(input: {
 
   const agentMessages: AgentMessage[] = piMessages;
 
-  let streamFirstTokenAt: number | null = null;
-  const streamTelemetryBus = runtime.eventBus as unknown as {
-    on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
-  };
-  const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
-    if (channelId !== message.channelId || streamFirstTokenAt != null) return;
-    streamFirstTokenAt = Date.now();
+  let providerFirstOutputAt: number | null = null;
+  const unsubscribeFirstToken = runtime.eventBus.on('agent.provider.first_output', (event) => {
+    if (event.requestId !== requestId
+      || (event.channelId !== undefined && event.channelId !== message.channelId)
+      || providerFirstOutputAt != null) return;
+    providerFirstOutputAt = event.timestampMs;
+    markProviderFirstToken(event);
     observability.emitObservedTurnStage('first-token', {
-      ttftMs: streamFirstTokenAt - startTime,
+      ttftMs: Math.max(0, event.timestampMs - startTime),
       source: 'stream',
     });
   });
@@ -677,6 +707,7 @@ export async function invokeAgentForTurn(input: {
     observability.emitTurnSnapshotInBackground(turnSnapshot);
   }
   try {
+    markProviderRequest();
     await runWithVisionTurnTimeout({
       channelId: message.channelId,
       deadlineAt: promptVisionDeadlineAt,
@@ -719,19 +750,10 @@ export async function invokeAgentForTurn(input: {
   } finally {
     clearInitialPromptContext();
   }
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
-  if (streamFirstTokenAt == null) {
-    streamFirstTokenAt = Date.now();
-    observability.emitObservedTurnStage('first-token', {
-      ttftMs: streamFirstTokenAt - startTime,
-      source: 'fallback',
-    });
-  }
-
   mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
   turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
   responseModel = runtimeFallbackModel ?? runtime.agent.state.model.id;
-  firstTokenAt = streamFirstTokenAt;
+  firstTokenAt = providerFirstOutputAt;
 
   responseText = runtime.extractResponseText();
   const runtimeContradictionDetection = detectRuntimeDatetimeContradiction(
@@ -996,7 +1018,10 @@ export async function invokeAgentForTurn(input: {
   }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,
-    ttftMs: streamFirstTokenAt - startTime,
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- listener closure mutation is invisible to narrowing
+    ...(providerFirstOutputAt !== null
+      ? { ttftMs: Math.max(0, providerFirstOutputAt - startTime) }
+      : {}),
     ...(providerCacheUsage
       ? {
         cacheReadTokens: providerCacheUsage.cacheReadTokens,

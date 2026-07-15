@@ -1,4 +1,12 @@
-import { AudioPlayerStatus, createAudioResource, EndBehaviorType, entersState } from '@discordjs/voice';
+import {
+  AudioPlayerStatus,
+  createAudioResource,
+  EndBehaviorType,
+  entersState,
+  VoiceConnectionStatus,
+  type AudioPlayer,
+  type VoiceConnection,
+} from '@discordjs/voice';
 import prism from 'prism-media';
 import { Readable } from 'node:stream';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -17,6 +25,11 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
+  emitTurnPerformance,
+  type TurnPerformanceEventInput,
+  type TurnPerformanceStage,
+} from '../../shared/telemetry/turn-performance.js';
+import {
   CAPTURE_SILENCE_MS,
   MIN_PCM_BYTES,
   STT_STREAM_CHUNK_BYTES,
@@ -33,6 +46,30 @@ import {
 } from './voice-errors.js';
 
 const log = createComponentLogger('DiscordVoice');
+
+function emitVoicePerformance(
+  runtime: VoiceTurnRuntimeContext,
+  turn: ActiveVoiceTurn,
+  stage: TurnPerformanceStage,
+  details: Omit<TurnPerformanceEventInput, 'traceId' | 'stage' | 'turnId' | 'requestId' | 'channelId' | 'channelType'> = {},
+): void {
+  void emitTurnPerformance(runtime.eventBus, {
+    traceId: turn.turnId,
+    turnId: turn.turnId,
+    requestId: turn.turnId,
+    channelId: turn.channel.id,
+    channelType: 'discord-voice',
+    ...(runtime.config.companionId ? { companionId: runtime.config.companionId } : {}),
+    stage,
+    ...details,
+  }).catch(error => {
+    log.debug('Voice performance telemetry emit failed', {
+      turnId: turn.turnId,
+      stage,
+      error: toErrorMessage(error),
+    });
+  });
+}
 
 export function assertActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, turn: ActiveVoiceTurn): void {
   if (runtime.activeTurn?.token !== turn.token || turn.abortController.signal.aborted) {
@@ -56,24 +93,51 @@ export async function cancelVoiceTurnResources(turn: ActiveVoiceTurn, reason: st
   if (turn.sttSession) {
     const session = turn.sttSession;
     turn.sttSession = null;
-    cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    cancelTasks.push(session.cancel(reason));
   }
   if (turn.ttsSession) {
     const session = turn.ttsSession;
     turn.ttsSession = null;
-    cancelTasks.push(session.cancel(reason).catch(() => undefined));
+    cancelTasks.push(session.cancel(reason));
   }
 
   if (cancelTasks.length > 0) {
-    await Promise.allSettled(cancelTasks);
+    const results = await Promise.allSettled(cancelTasks);
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Voice cancellation failed for ${failures.length} connector(s)`);
+    }
   }
 }
 
 export async function cancelActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, reason: string): Promise<void> {
   const turn = runtime.activeTurn;
   if (!turn) return;
-  await cancelVoiceTurnResources(turn, reason);
-  resetActiveVoiceTurnState(runtime, turn);
+  try {
+    await cancelVoiceTurnResources(turn, reason);
+    emitVoicePerformance(runtime, turn, 'cancellation_ack', {
+      cancellationOutcome: 'acknowledged',
+    });
+  } catch (error) {
+    emitVoicePerformance(runtime, turn, 'cancellation_ack', {
+      cancellationOutcome: 'failed',
+    });
+    log.error('Voice turn cancellation failed', {
+      turnId: turn.turnId,
+      reason,
+      error: toErrorMessage(error),
+    });
+    throw error;
+  } finally {
+    resetActiveVoiceTurnState(runtime, turn);
+  }
+}
+
+function hasReadySubscribedPlayback(connection: VoiceConnection, player: AudioPlayer): boolean {
+  const state = connection.state;
+  return state.status === VoiceConnectionStatus.Ready
+    && 'subscription' in state
+    && state.subscription?.player === player;
 }
 
 export async function emitVoiceTurnObservation(runtime: VoiceTurnRuntimeContext, params: {
@@ -174,6 +238,7 @@ export async function handleVoiceUtterance(
       task: () => runtime.decodeOpusToPcm(opusStream, turn.abortController.signal),
     });
     assertActiveVoiceTurn(runtime, turn);
+    emitVoicePerformance(runtime, turn, 'speech_end');
     if (pcm.length < MIN_PCM_BYTES) {
       turnReason = 'silence';
       await runtime.emitTurnObservation({
@@ -220,6 +285,7 @@ export async function handleVoiceUtterance(
       text: transcript,
       timestampMs: Date.now(),
     });
+    emitVoicePerformance(runtime, turn, 'stt_final');
     assertActiveVoiceTurn(runtime, turn);
 
     const handler = runtime.getHandler();
@@ -248,7 +314,7 @@ export async function handleVoiceUtterance(
 
     const member = turn.channel.members.get(runtime.targetUserId);
     const message: SubstrateMessage = {
-      id: `voice-${Date.now()}`,
+      id: turnId,
       channelId: `discord-voice:${turn.channel.id}`,
       channelType: 'discord',
       isDirectMessage: false,
@@ -289,6 +355,7 @@ export async function handleVoiceUtterance(
       text,
       timestampMs: Date.now(),
     });
+    emitVoicePerformance(runtime, turn, 'tts_request');
 
     await runtime.speakText(text, turn);
     assertActiveVoiceTurn(runtime, turn);
@@ -298,6 +365,7 @@ export async function handleVoiceUtterance(
       userId: runtime.targetUserId,
       text,
     });
+    emitVoicePerformance(runtime, turn, 'turn_complete');
   } catch (error) {
     const structuredError = createStructuredVoiceError({
       error,
@@ -516,6 +584,7 @@ export async function playWithTtsConnector(
           userId: runtime.targetUserId,
           timestampMs: Date.now(),
         });
+        emitVoicePerformance(runtime, turn, 'tts_first_byte');
       }
       await runtime.playReadableAudio(Readable.from(audio), turn);
     } catch (fallbackError) {
@@ -569,6 +638,7 @@ export async function* createPlaybackChunkIterator(
         userId: runtime.targetUserId,
         timestampMs: Date.now(),
       });
+      emitVoicePerformance(runtime, turn, 'tts_first_byte');
     }
 
     yield Buffer.isBuffer(chunk.audio) ? chunk.audio : Buffer.from(chunk.audio);
@@ -595,6 +665,13 @@ export async function playReadableAudio(
       signal: turn?.abortController.signal,
       task: async () => {
         await entersState(player, AudioPlayerStatus.Playing, 5_000);
+        // Discord exposes no remote-listener acknowledgement. The strongest
+        // observable playback proxy is local Playing while the live voice
+        // connection is Ready and still subscribed to this exact player.
+        // Disconnected/unsubscribed local playback emits no TTFA endpoint.
+        if (turn && hasReadySubscribedPlayback(turn.connection, player)) {
+          emitVoicePerformance(runtime, turn, 'first_audible_playback');
+        }
         await entersState(player, AudioPlayerStatus.Idle, 120_000);
       },
     });

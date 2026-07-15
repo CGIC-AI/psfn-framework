@@ -3427,7 +3427,13 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
   it('awaits the post-turn drain gate before starting pre-turn identity work', async () => {
     const eventBus = new EventBus();
-    const postTurnDrain = createDeferred<void>();
+    const performanceEvents: Array<EventMap['agent.turn.performance']> = [];
+    eventBus.on('agent.turn.performance', event => performanceEvents.push(event));
+    const postTurnDrain = createDeferred<{
+      status: 'drained';
+      waitMs: number;
+      workCount: number;
+    }>();
     const awaitPostTurnDrain = vi.fn(() => postTurnDrain.promise);
     const resolveAuthorContext = vi.fn(async () => ({
       trustLevel: 'regular',
@@ -3451,6 +3457,20 @@ describe('handleMessageForTurn compaction scheduling', () => {
       awaitPostTurnDrain,
       resolveAuthorContext,
     });
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+      const timestampMs = Date.now();
+      await eventBus.emit('agent.provider.first_output', {
+        requestId: 'msg-post-turn-drain-wait',
+        channelId: 'ch1',
+        kind: 'text',
+        monotonicAtMs: timestampMs,
+        timestampMs,
+        provider: 'test',
+        model: 'test-model',
+      });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
+    });
 
     const responsePromise = handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'));
     await flushAsyncWork();
@@ -3465,12 +3485,35 @@ describe('handleMessageForTurn compaction scheduling', () => {
     }));
     expect(resolveAuthorContext).not.toHaveBeenCalled();
 
-    postTurnDrain.resolve();
+    postTurnDrain.resolve({ status: 'drained', waitMs: 25, workCount: 2 });
     await expect(responsePromise).resolves.toMatchObject({
       content: 'assistant reply',
       channelId: 'ch1',
     });
     expect(resolveAuthorContext).toHaveBeenCalledTimes(1);
+    expect(performanceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: 'msg-post-turn-drain-wait',
+        requestId: 'msg-post-turn-drain-wait',
+        stage: 'transport_received',
+      }),
+      expect.objectContaining({
+        traceId: 'msg-post-turn-drain-wait',
+        stage: 'post_turn_drain_wait',
+        queueDepth: 2,
+        backgroundContention: true,
+      }),
+      expect.objectContaining({ stage: 'compaction_wait', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'context_assembly', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'prompt_assembly', durationMs: expect.any(Number) }),
+      expect.objectContaining({ stage: 'provider_request', model: 'test-model', provider: 'test' }),
+      expect.objectContaining({
+        stage: 'provider_first_token',
+        providerOutputKind: 'text',
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({ stage: 'turn_complete', toolUse: false, cacheState: 'miss' }),
+    ]));
   });
 
   it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {

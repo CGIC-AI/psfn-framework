@@ -11,6 +11,7 @@ import {
   createStreamingHistoryStampStripper,
   type StreamingHistoryStampStripper,
 } from '../../shared/utils/history-stamp-hygiene.js';
+import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
 
 const log = createComponentLogger('EventBridge');
 
@@ -62,6 +63,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
     purpose?: string;
     originType?: ObservabilityCallType;
     originStage?: string;
+    firstTextCommitted: boolean;
   }> = [];
 
   const unsub = agent.subscribe((event: AgentEvent) => {
@@ -90,6 +92,28 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         : (originType ?? callType ?? 'tool'),
       originStage: originStage ?? purpose ?? eventPurpose,
     });
+    const emitTextDelta = (text: string): void => {
+      if (text.length === 0) return;
+      void eventBus.emit('agent.stream.delta', {
+        channelId,
+        text,
+        ...withCorrelation('chat', 'stream_text_delta'),
+      }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+      if (currentContext.firstTextCommitted) return;
+      currentContext.firstTextCommitted = true;
+      const traceId = requestId ?? turnId;
+      if (!traceId) return;
+      void emitTurnPerformance(eventBus, {
+        traceId,
+        stage: 'first_text_committed',
+        channelId,
+        ...(turnId ? { turnId } : {}),
+        ...(requestId ? { requestId } : {}),
+      }).catch(err => log.warn('EventBus emit failed', {
+        event: 'agent.turn.performance',
+        error: String(err),
+      }));
+    };
 
     switch (event.type) {
       case 'message_update': {
@@ -97,33 +121,18 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         if (delta.type === 'text_start') {
           activeTextStripper = createStreamingHistoryStampStripper();
           const text = activeTextStripper.push(getTextFromPartial(delta.partial, delta.contentIndex));
-          if (text.length === 0) break;
-          eventBus.emit('agent.stream.delta', {
-            channelId,
-            text,
-            ...withCorrelation('chat', 'stream_text_delta'),
-          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+          emitTextDelta(text);
         } else if (delta.type === 'text_delta') {
           // A delta without a preceding text_start means the context attached
           // mid-stream; a fresh stripper still starts at a line start, which
           // is the fail-safe reading for stamp mimicry.
           activeTextStripper ??= createStreamingHistoryStampStripper();
           const text = activeTextStripper.push(delta.delta);
-          if (text.length === 0) break;
-          eventBus.emit('agent.stream.delta', {
-            channelId,
-            text,
-            ...withCorrelation('chat', 'stream_text_delta'),
-          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+          emitTextDelta(text);
         } else if (delta.type === 'text_end') {
           const withheld = activeTextStripper?.flush() ?? '';
           activeTextStripper = null;
-          if (withheld.length === 0) break;
-          eventBus.emit('agent.stream.delta', {
-            channelId,
-            text: withheld,
-            ...withCorrelation('chat', 'stream_text_delta'),
-          }).catch(err => log.warn('EventBus emit failed', { event: 'agent.stream.delta', error: String(err) }));
+          emitTextDelta(withheld);
         } else if (delta.type === 'thinking_delta') {
           eventBus.emit('agent.stream.thinking', {
             channelId,
@@ -212,6 +221,7 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
         ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
         ...(correlation?.originType ? { originType: correlation.originType } : {}),
         ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+        firstTextCommitted: false,
       });
       return token;
     },

@@ -18,6 +18,11 @@ import {
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import {
+  emitTurnPerformance,
+  type TurnPerformanceEventInput,
+  type TurnPerformanceStage,
+} from '../../../../shared/telemetry/turn-performance.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
@@ -35,6 +40,13 @@ export interface TurnExecutionObservability {
   emitObservedTurnStage: (
     stage: TurnExecutionStageName,
     payload: Record<string, unknown>,
+  ) => void;
+  emitPerformanceStage: (
+    stage: TurnPerformanceStage,
+    details?: Omit<
+      TurnPerformanceEventInput,
+      'traceId' | 'stage' | 'turnId' | 'requestId' | 'channelId' | 'channelType' | 'companionId'
+    >,
   ) => void;
   emitTurnSnapshotInBackground: (snapshot: TurnSnapshot) => void;
   emitTurnSnapshot: (snapshot: TurnSnapshot) => Promise<void>;
@@ -69,6 +81,8 @@ export function createTurnExecutionObservability(input: {
   let observedTurnSnapshot: TurnObservabilityRecord['snapshot'] | undefined;
   let memoryManifestSeed: ContextManifestMemorySeed | undefined;
   let retrievalProvenanceRefs: string[] = [];
+  const performanceCompanionId = turnCorrelationBase.companionId
+    ?? runtime.config.companionId?.trim();
 
   const emitObservedTurnStage = (
     stage: TurnExecutionStageName,
@@ -84,6 +98,30 @@ export function createTurnExecutionObservability(input: {
       payload,
     );
     observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
+  };
+
+  const emitPerformanceStage: TurnExecutionObservability['emitPerformanceStage'] = (
+    stage,
+    details = {},
+  ): void => {
+    void emitTurnPerformance(runtime.eventBus, {
+      traceId: requestId,
+      stage,
+      turnId,
+      requestId,
+      channelId: message.channelId,
+      channelType: message.channelType,
+      ...(performanceCompanionId ? { companionId: performanceCompanionId } : {}),
+      ...details,
+    }).catch(error => {
+      log.debug('Turn performance telemetry emit failed', {
+        stage,
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(error),
+      });
+    });
   };
 
   const buildTurnSnapshotPayload = (snapshot: TurnSnapshot) => ({
@@ -168,6 +206,7 @@ export function createTurnExecutionObservability(input: {
 
   return {
     emitObservedTurnStage,
+    emitPerformanceStage,
     emitTurnSnapshotInBackground,
     emitTurnSnapshot,
     getObservedTurnStages: () => [...observedTurnStages],

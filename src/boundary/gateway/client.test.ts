@@ -13,6 +13,8 @@ import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.js';
 
 const TEST_COMPANION_ID = createCompanionId('companion');
 const TEST_GATEWAY_ROUTING = {
@@ -463,6 +465,57 @@ describe('GatewayClient streaming', () => {
     expect(resultB.content).toBe('hello-B world-B');
     expect(resultA.reasoning).toBe('thinking-a');
     expect(resultA.providerObservability?.systemRole.transport).toBe('openai_developer');
+  });
+
+  it('routes exactly one provider first-output observation by requestId', async () => {
+    const observations: Array<Record<string, unknown>> = [];
+    const streamPromise = client.stream(
+      { systemPrompt: 'test', messages: [{ role: 'user', content: 'use a tool' }] },
+      { onFirstOutput: observation => observations.push(observation) },
+    );
+    const req = conn.sent[0] as {
+      id: number;
+      params: { requestId: string; stream: boolean };
+    };
+
+    expect(req.params.stream).toBe(true);
+    conn._emit({
+      method: 'llm.first_output',
+      params: {
+        requestId: req.params.requestId,
+        kind: 'tool',
+        monotonicAtMs: 1_234,
+        timestampMs: 5_678,
+      },
+    });
+    conn._emit({
+      method: 'llm.first_output',
+      params: {
+        requestId: req.params.requestId,
+        kind: 'text',
+        monotonicAtMs: 1_235,
+        timestampMs: 5_679,
+      },
+    });
+    conn._emit({
+      id: req.id,
+      jsonrpc: '2.0',
+      result: {
+        content: '',
+        toolCalls: [{ id: 'tool-1', name: 'memory_lookup', input: { query: 'hello' } }],
+        model: 'test',
+        inputTokens: 10,
+        outputTokens: 5,
+        stopReason: 'toolUse',
+      },
+    });
+
+    await streamPromise;
+    expect(observations).toEqual([{
+      kind: 'tool',
+      monotonicAtMs: 1_234,
+      timestampMs: 5_678,
+    }]);
   });
 
   it('cleans up chunk handler after stream completes', async () => {
@@ -1147,6 +1200,64 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.content).toBe('voice response');
     expect(response.result.model).toBe('test-model');
     expect(response.result.durationMs).toBe(500);
+  });
+
+  it('assembles voice TTFA on the agent bus from gateway-process RPC stages', async () => {
+    const agentEventBus = new EventBus();
+    const tracker = new TurnPerformanceTracker();
+    agentEventBus.on('agent.turn.performance', event => tracker.observe(event));
+    client.onTurnPerformance(async (event) => {
+      await agentEventBus.emit('agent.turn.performance', event);
+    });
+
+    const sendStage = (id: number, stage: 'speech_end' | 'first_audible_playback', monotonicAtMs: number) => {
+      conn._emit({
+        jsonrpc: '2.0',
+        id,
+        method: 'telemetry.turn.performance',
+        params: {
+          event: {
+            schemaVersion: 1,
+            traceId: 'voice-split-1',
+            stage,
+            monotonicAtMs,
+            timestampMs: monotonicAtMs,
+            companionId: 'companion',
+            channelId: 'voice-channel-1',
+            channelType: 'discord-voice',
+          },
+        },
+      });
+    };
+
+    sendStage(80, 'speech_end', 1_000);
+    sendStage(81, 'first_audible_playback', 1_075);
+    await vi.waitFor(() => {
+      expect(getRpcResponse(conn.sent, 80)?.result).toEqual({ accepted: true });
+      expect(getRpcResponse(conn.sent, 81)?.result).toEqual({ accepted: true });
+    });
+
+    const ttfa = tracker.snapshot().series.find(series => (
+      series.metric === 'ttfa' && Object.keys(series.dimensions).length === 0
+    ));
+    expect(ttfa?.percentiles).toEqual({ samples: 1, p50Ms: 75, p95Ms: 75, p99Ms: 75 });
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 82,
+      method: 'telemetry.turn.performance',
+      params: {
+        event: {
+          schemaVersion: 1,
+          traceId: 'voice-private',
+          stage: 'speech_end',
+          monotonicAtMs: 2_000,
+          timestampMs: 2_000,
+          transcript: 'must not cross processes',
+        },
+      },
+    });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 82)?.error).toBeDefined());
   });
 
   it('fails closed when voice.handleMessage omits validated gateway routing', async () => {

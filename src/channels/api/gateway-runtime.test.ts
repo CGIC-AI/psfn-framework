@@ -23,6 +23,10 @@ describe('GatewayApiRuntime', () => {
       if (method === 'api.chat.completion') {
         streamListener?.('partial delta');
         expect(params.requestId).toMatch(/^api-/);
+        expect(params.performance).toEqual({
+          receivedMonotonicAtMs: expect.any(Number),
+          receivedTimestampMs: expect.any(Number),
+        });
         return {
           ok: true,
           response: {

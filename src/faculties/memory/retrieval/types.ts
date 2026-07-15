@@ -121,6 +121,21 @@ export interface RetrievalTelemetry {
   compositionalCandidateCount?: number;
   compositionalEvaluationBatchCount?: number;
   compositionalFinalistCount?: number;
+  embeddingCalls: number;
+  searchCalls: number;
+  stageTimingsMs: Partial<Record<
+    | 'preparation'
+    | 'embedding'
+    | 'vector_search'
+    | 'lexical_search'
+    | 'policy_filter'
+    | 'ranking'
+    | 'selection'
+    | 'enrichment'
+    | 'access_update'
+    | 'total',
+    number
+  >>;
 }
 
 export interface CompositionalRetrievalDecision {

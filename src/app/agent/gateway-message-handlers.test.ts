@@ -25,6 +25,7 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
 import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
+import { EventBus } from '../../shared/event-bus.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -66,6 +67,8 @@ function createDeferred<T>() {
 }
 
 function createHarness(overrides?: {
+  eventBus?: EventBus;
+  nowMonotonicMs?: () => number;
   config?: SubstrateConfig;
   delegateSatelliteSession?: (request: {
     message: SubstrateMessage;
@@ -215,8 +218,10 @@ function createHarness(overrides?: {
   const config = overrides?.config ?? ({
     companionId: 'companion-test',
   } as SubstrateConfig);
+  const eventBus = overrides?.eventBus ?? new EventBus();
 
   registerGatewayMessageHandlers({
+    eventBus,
     gateway,
     agentLoop,
     shardManager,
@@ -232,6 +237,7 @@ function createHarness(overrides?: {
       ? { outboundReplyGuard: overrides.outboundReplyGuard }
       : {}),
     companionAuthorName: 'Selene',
+    ...(overrides?.nowMonotonicMs ? { nowMonotonicMs: overrides.nowMonotonicMs } : {}),
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -247,6 +253,7 @@ function createHarness(overrides?: {
     trackSessionActivity,
     observedGroupMemoryScheduler: overrides?.observedGroupMemoryScheduler,
     outboundReplyGuard: overrides?.outboundReplyGuard,
+    eventBus,
     onHandleMessage,
     onDiscordMessage,
     onCompanionMessage,
@@ -781,6 +788,67 @@ describe('registerGatewayMessageHandlers', () => {
       count: 2,
     });
     expect(harness.log.error).not.toHaveBeenCalled();
+  });
+
+  it('measures each bundled discord message from enqueue to dequeue with its own trace key', async () => {
+    let releaseFirstTurn: (response: AgentResponse) => void = () => {};
+    const firstTurn = new Promise<AgentResponse>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    const handleMessage = vi.fn()
+      .mockImplementationOnce(async () => firstTurn)
+      .mockImplementation(async () => makeResponse('bundled reply'));
+    let monotonicNow = 0;
+    const eventBus = new EventBus();
+    const performanceEvents: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.turn.performance', event => {
+      performanceEvents.push(event as unknown as Record<string, unknown>);
+    });
+    const harness = createHarness({
+      eventBus,
+      handleMessage,
+      nowMonotonicMs: () => monotonicNow,
+    });
+    const makeBurstMessage = (id: string, content: string) => makeMessage({
+      id,
+      content,
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+      attachments: undefined,
+    });
+
+    await harness.onDiscordMessage(makeBurstMessage('msg-a', 'first thing'));
+    monotonicNow = 100;
+    await harness.onDiscordMessage(makeBurstMessage('msg-b', 'second thing'));
+    monotonicNow = 125;
+    await harness.onDiscordMessage(makeBurstMessage('msg-c', 'and a third'));
+    monotonicNow = 175;
+    releaseFirstTurn(makeResponse('reply to the first'));
+
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(performanceEvents.filter(event => event.stage === 'channel_queue_wait')).toHaveLength(3);
+    });
+    expect(performanceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: 'msg-b',
+        turnId: 'msg-b',
+        requestId: 'msg-b',
+        stage: 'channel_queue_wait',
+        monotonicAtMs: 175,
+        durationMs: 75,
+      }),
+      expect.objectContaining({
+        traceId: 'msg-c',
+        turnId: 'msg-c',
+        requestId: 'msg-c',
+        stage: 'channel_queue_wait',
+        monotonicAtMs: 175,
+        durationMs: 50,
+      }),
+    ]));
+    expect((handleMessage.mock.calls[1]?.[0] as SubstrateMessage).id).toBe('msg-c');
   });
 
   it('does not bundle messages from different authors into one user turn', async () => {

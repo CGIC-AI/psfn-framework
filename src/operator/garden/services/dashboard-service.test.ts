@@ -147,6 +147,22 @@ describe('AdminDashboardDataService', () => {
     await eventBus.emit('agent.turn.stage', {
       turnId: 'turn-2', channelId: 'chat', stage: 'first-token', elapsedMs: 800, ttftMs: 800,
     });
+    await eventBus.emit('agent.turn.performance', {
+      schemaVersion: 1,
+      traceId: 'trace-1',
+      stage: 'provider_request',
+      monotonicAtMs: 1_000,
+      timestampMs: 1_000,
+      provider: 'test',
+    });
+    await eventBus.emit('agent.turn.performance', {
+      schemaVersion: 1,
+      traceId: 'trace-1',
+      stage: 'provider_first_token',
+      monotonicAtMs: 1_900,
+      timestampMs: 1_900,
+      provider: 'test',
+    });
 
     const dashboard = await service.getDashboardData();
 
@@ -154,6 +170,11 @@ describe('AdminDashboardDataService', () => {
       source: 'live_event_bus',
       lastTtftMs: 800,
       averageTtftMs: 1_000,
+    });
+    expect(dashboard.stats.transientSessionTelemetry.latencyPercentiles.series).toContainEqual({
+      metric: 'llm_ttft',
+      dimensions: {},
+      percentiles: { samples: 1, p50Ms: 900, p95Ms: 900, p99Ms: 900 },
     });
     expect(dashboard.stats.toolStatus).toEqual([
       { name: 'orient', status: 'degraded', detail: 'last call timed out' },

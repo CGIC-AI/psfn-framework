@@ -10,12 +10,19 @@ import {
   createKubeDiagnosticsExecutor,
   type KubeReadApiPort,
 } from '../../system/lifecycle/kube-diagnostics.js';
+import {
+  combineKubeSelfManagementExecutors,
+  createKubeRolloutRestartExecutor,
+  type KubeRolloutApiPort,
+} from '../../system/lifecycle/kube-rollout-restart.js';
 import { createInClusterKubernetesReadApi } from './kubernetes-read-api.js';
+import { createInClusterKubernetesRolloutApi } from './kubernetes-rollout-api.js';
 
 export interface ResolveKubeSelfManagementControllerOptions {
   env: NodeJS.ProcessEnv;
   audit(entry: AuditSummaryEntry): Promise<unknown>;
   createApi?: (env: NodeJS.ProcessEnv) => KubeReadApiPort;
+  createRolloutApi?: (env: NodeJS.ProcessEnv) => KubeRolloutApiPort;
 }
 
 function parseEnabled(raw: string | undefined): boolean {
@@ -83,18 +90,27 @@ export function resolveKubeSelfManagementController(
   }
   const helmRevision = requirePositiveRevision(options.env.PSFN_HELM_REVISION);
   const api = (options.createApi ?? createInClusterKubernetesReadApi)(options.env);
+  const rolloutApi = (options.createRolloutApi ?? createInClusterKubernetesRolloutApi)(options.env);
   return new KubeSelfManagementController({
     namespace,
     release,
-    executor: createKubeDiagnosticsExecutor({
-      namespace,
-      release,
-      resourcePrefix,
-      helmRevision,
-      sourceRevision,
-      targetImage,
-      api,
-    }),
+    executor: combineKubeSelfManagementExecutors([
+      createKubeDiagnosticsExecutor({
+        namespace,
+        release,
+        resourcePrefix,
+        helmRevision,
+        sourceRevision,
+        targetImage,
+        api,
+      }),
+      createKubeRolloutRestartExecutor({
+        namespace,
+        release,
+        resourcePrefix,
+        api: rolloutApi,
+      }),
+    ]),
     audit: async event => {
       await options.audit(auditSummary(event));
     },

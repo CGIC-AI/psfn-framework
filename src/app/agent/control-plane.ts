@@ -5,7 +5,8 @@ import {
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
-import { createSystemTool, runRepoLifecycleBuildCommand } from '../../core/tools/lifecycle.js';
+import { resolveKubeLifecycleContext } from '../../system/lifecycle/kube-lifecycle-context.js';
+import { createSystemTool, runRepoLifecycleBuildCommand, type KubeLifecycleToolRuntime } from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
@@ -205,6 +206,18 @@ export function buildAgentControlPlane(
     await stopPromise;
   };
 
+  // Resolve deployment mode. Under a guarded Kubernetes deployment the system
+  // tool routes restart/rebuild through the gateway's approval-gated controller
+  // instead of the local supervisor/reexec path. Fails closed (throws) if
+  // self-management is declared enabled but its facts are malformed.
+  const kubeLifecycleContext = resolveKubeLifecycleContext(process.env);
+  const kubeLifecycle: KubeLifecycleToolRuntime | undefined = kubeLifecycleContext.deployment === 'kube'
+    ? {
+        context: kubeLifecycleContext,
+        invoke: request => gateway.kubeSelfManagement(request),
+      }
+    : undefined;
+
   agentLoop.registerTool(createSystemTool(
     config,
     {
@@ -213,6 +226,7 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
+      ...(kubeLifecycle ? { kubeLifecycle } : {}),
       runBuildCommand: async () => {
         await runRepoLifecycleBuildCommand({
           repoRoot: process.cwd(),

@@ -386,6 +386,17 @@ The canonical model-facing `system` surface collapses safe runtime-setting reads
 
 `system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
 
+### Deployment-mode awareness (Kubernetes)
+
+The `system` surface is deployment-mode aware and fails closed when the mode cannot be determined:
+
+- **Local / systemd / split runtime** keeps the existing behavior: `restart` exits through the configured supervisor/reexec/command strategy, and `rebuild` runs the repo-owned build before restarting.
+- **Guarded Kubernetes deployment** (detected from `KUBERNETES_SERVICE_HOST` plus `PSFN_KUBE_SELF_MANAGEMENT_ENABLED` and the pinned Helm facts):
+  - `read` additionally reports deployment mode, the current image/Helm/source revision, and live per-deployment readiness (fetched through the gateway's read-only diagnose action).
+  - `restart` performs an **approved rollout restart** of `psfn-agent`, `psfn-gateway`, and `psfn-garden`, routed through the gateway's approval-gated `KubeSelfManagementController` (x5rt.4). The agent holds no Kubernetes RBAC; the write path (a strategic-merge pod-template patch) stays on the gateway ServiceAccount, and the rollout only runs after an operator approves. The companion is never restarted before approval, and there is never a silent local reexec under Kubernetes.
+  - `rebuild` refuses in-pod builds and directs the change to the guarded build-test-image deploy pipeline (x5rt.6).
+  - When running under Kubernetes but self-management is disabled or its facts are missing, lifecycle mutation refuses loudly rather than falling back to the local path.
+
 ## Reserved Shard Surface
 
 The `shard` registry entry is reserved for long-horizon shard work and fold-back lifecycle control. It is not yet the ordinary direct model-facing control surface.

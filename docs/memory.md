@@ -292,6 +292,24 @@ When memories are withheld, the retriever can return withheld summaries instead 
 
 Episodic retrieval is landmark-first. A cue such as a wedding cake question should select the cake/bakery episode chain and its raw references, not the entire wedding-planning history and not one giant wedding memory. If no episodic landmarks match, normal L2 retrieval behavior remains intact.
 
+### Decay and retrieval matrix
+
+`settings.json` owns the complete `memoryRetrievalPolicy` object. Garden exposes it in the advanced Memory section as a structured JSON object. Omitting the whole object uses the compiled defaults; if the object is present, it must contain the complete schema. Partial, unknown, or out-of-range policy data is rejected rather than merged with hidden defaults.
+
+| Type | Half-life | Salience floor | Retrieval prior |
+| --- | ---: | --- | ---: |
+| emotional | 365 days | `0.25 + 0.35 * abs(valence)` | 1.3 |
+| relational | 180 days | 0.5 at `abs(valence) >= 0.5`, otherwise 0.05 | 1.15 |
+| boundary | 365 days | 0.5 | 1.6 |
+| semantic | 120 days | 0.05 | 1.0 |
+| reflection | 90 days | 0.05 | 0.9 |
+| episodic | 30 days | 0.05 | 1.0 |
+| procedural | 14 days | 0.05 | 0.6 casual / 1.2 task context |
+
+Emotional persistence scales its half-life from 1x to 6x using formation intensity. Durable retention floors and multipliers still compose with the type matrix. Default retrieval floors recency at 0.35 so age orders ambient recall without burying a strong match; temporal retrieval deliberately keeps its sharp seven-day recency curve. Procedural task weighting uses only the caller-provided `taskKind`, never content inference, and active-memory cache identity includes that task kind.
+
+Selection caps reflections and procedurals at two each per turn. Other engram types remain uncapped within the token budget. The lexical augment scans active memories in deterministic newest-first Postgres order using settings-owned page and scan bounds (defaults: 256 per page, 2,048 scanned, 12 retained), so it reaches beyond the former newest-96 window without creating an unbounded turn-time scan. Vector search continues to score the full active corpus before applying its result limit. Dedup thresholds and privacy/trust filtering are unchanged.
+
 ### Turn Hot Path (Active Memory Context, E5.5)
 
 Foreground turns never block on retrieval. The turn serves the cached active-memory context and schedules a background refresh; the refreshed context lands on a later pass, so remembering something a turn late is acceptable and by design. There is no blocking legacy fallback: a memory provider wired into turn execution must expose the active-context surface or startup of the turn fails closed.
@@ -387,6 +405,7 @@ Start here when behavior matters:
 - `src/faculties/memory/writer.ts`
 - `src/faculties/memory/extraction.ts`
 - `src/faculties/memory/retrieval.ts`
+- `src/system/config/memory-retrieval-policy.ts`
 - `src/faculties/memory/episodic/store.ts`
 - `src/faculties/memory/episodic/postgres-store.ts`
 - `src/faculties/memory/episodic/synthesis.ts`

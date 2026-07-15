@@ -6,6 +6,7 @@ import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { computeRetrievalScore } from './retrieval/scoring.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -56,12 +57,49 @@ describe('SalienceDecay', () => {
     vi.useRealTimers();
   });
 
+  it('uses the approved half-life and floor for every memory type', () => {
+    const now = 1_800_000_000_000;
+    const dayMs = 24 * 60 * 60 * 1_000;
+    const halfLifeDaysByType = {
+      episodic: 30,
+      semantic: 120,
+      emotional: 365,
+      procedural: 14,
+      boundary: 365,
+      reflection: 90,
+      relational: 180,
+    } as const;
+
+    for (const [type, halfLifeDays] of Object.entries(halfLifeDaysByType)) {
+      const salience = calculateEffectiveMemorySalience(makeMemory({
+        type: type as PurrMemory['type'],
+        salience: 1,
+        emotionalValence: 0,
+        lastAccessed: now - (halfLifeDays * dayMs),
+      }), now);
+      expect(salience, type).toBeCloseTo(0.5, 10);
+    }
+
+    expect(calculateEffectiveMemorySalience(makeMemory({
+      type: 'emotional',
+      salience: 1,
+      emotionalValence: 1,
+      lastAccessed: now - (100 * 365 * dayMs),
+    }), now)).toBe(0.6);
+    expect(calculateEffectiveMemorySalience(makeMemory({
+      type: 'relational',
+      salience: 1,
+      emotionalValence: -0.5,
+      lastAccessed: now - (100 * 365 * dayMs),
+    }), now)).toBe(0.5);
+  });
+
   it('decays old memories', async () => {
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oneHalfLifeAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
       type: 'episodic',
       salience: 1.0,
-      lastAccessed: oneWeekAgo,
+      lastAccessed: oneHalfLifeAgo,
     });
     store.insertMemory(mem, makeEmbedding());
 
@@ -69,13 +107,13 @@ describe('SalienceDecay', () => {
 
     const updated = store.getAllActiveMemories();
     expect(updated).toHaveLength(1);
-    // Episodic half-life is 7 days, so after 7 days salience should be ~0.5
+    // The settings-owned episodic half-life is 30 days.
     expect(updated[0].salience).toBeCloseTo(0.5, 1);
   });
 
   it('does not reapply the persisted decay window when retrieval reloads a swept memory', async () => {
     const start = 1_800_000_000_000;
-    const halfLifeLater = start + 7 * 24 * 60 * 60_000;
+    const halfLifeLater = start + 30 * 24 * 60 * 60_000;
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(start);
     const memory = makeMemory({
       id: 'sweep-then-retrieve',
@@ -103,6 +141,32 @@ describe('SalienceDecay', () => {
     expect(retrievalScore.effectiveSalience).not.toBeCloseTo(0.25, 10);
   });
 
+  it('applies a live policy replacement even when the memory revision is unchanged', async () => {
+    const now = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    let policy = createDefaultMemoryRetrievalPolicy();
+    const liveDecay = new SalienceDecay(store.asPort(), {
+      memoryRetrievalPolicy: () => policy,
+    });
+    store.insertMemory(makeMemory({
+      id: 'live-policy-replacement',
+      type: 'episodic',
+      salience: 1,
+      extractedAt: now - (30 * 24 * 60 * 60_000),
+      lastAccessed: now - (30 * 24 * 60 * 60_000),
+    }), makeEmbedding());
+
+    await liveDecay.run();
+    expect(store.getById('live-policy-replacement')?.salience).toBeCloseTo(0.5, 10);
+
+    policy = createDefaultMemoryRetrievalPolicy();
+    policy.typePolicies.episodic.salienceFloor = { mode: 'constant', value: 0.8 };
+    await liveDecay.run();
+
+    expect(store.getById('live-policy-replacement')?.salience).toBe(0.8);
+    nowSpy.mockRestore();
+  });
+
   it('never decays below floor', async () => {
     const veryOld = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
@@ -115,10 +179,10 @@ describe('SalienceDecay', () => {
     await decay.run();
 
     const updated = store.getAllActiveMemories();
-    expect(updated[0].salience).toBe(MEMORY_CONFIG.salienceFloor);
+    expect(updated[0].salience).toBe(0.05);
   });
 
-  it('procedural memories decay slower than episodic', async () => {
+  it('procedural memories decay faster than episodic', async () => {
     const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
 
     const episodic = makeMemory({
@@ -143,18 +207,18 @@ describe('SalienceDecay', () => {
     const ep = all.find(m => m.id === 'ep')!;
     const pr = all.find(m => m.id === 'pr')!;
 
-    expect(pr.salience).toBeGreaterThan(ep.salience);
+    expect(pr.salience).toBeLessThan(ep.salience);
   });
 
   it('retains high-intensity memories longer than medium and low-intensity memories', async () => {
-    const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
 
     const lowIntensity = makeMemory({
       id: 'low-intensity',
       type: 'emotional',
       salience: 1.0,
       emotionalValence: 0,
-      lastAccessed: twoWeeksAgo,
+      lastAccessed: oneYearAgo,
     });
     const mediumIntensity = makeMemory({
       id: 'medium-intensity',
@@ -162,7 +226,7 @@ describe('SalienceDecay', () => {
       salience: 1.0,
       emotionalValence: 0.4,
       formationVAD: { valence: 0.4, arousal: 0.2, dominance: 0 },
-      lastAccessed: twoWeeksAgo,
+      lastAccessed: oneYearAgo,
     });
     const highIntensity = makeMemory({
       id: 'high-intensity',
@@ -170,7 +234,7 @@ describe('SalienceDecay', () => {
       salience: 1.0,
       emotionalValence: 1,
       formationVAD: { valence: 1, arousal: 1, dominance: 0.2 },
-      lastAccessed: twoWeeksAgo,
+      lastAccessed: oneYearAgo,
     });
 
     store.insertMemory(lowIntensity, makeEmbedding());
@@ -194,7 +258,7 @@ describe('SalienceDecay', () => {
 
     const standardLowIntensity = makeMemory({
       id: 'standard-low-intensity',
-      type: 'relational',
+      type: 'emotional',
       salience: 1.0,
       emotionalValence: 0,
       lastAccessed: twoYearsAgo,
@@ -202,7 +266,7 @@ describe('SalienceDecay', () => {
     });
     const durableLowIntensity = makeMemory({
       id: 'durable-low-intensity',
-      type: 'relational',
+      type: 'emotional',
       salience: 1.0,
       emotionalValence: 0,
       lastAccessed: twoYearsAgo,
@@ -210,7 +274,7 @@ describe('SalienceDecay', () => {
     });
     const durableHighIntensity = makeMemory({
       id: 'durable-high-intensity',
-      type: 'relational',
+      type: 'emotional',
       salience: 1.0,
       emotionalValence: 0.95,
       formationVAD: { valence: 0.9, arousal: 1, dominance: 0.2 },
@@ -229,7 +293,7 @@ describe('SalienceDecay', () => {
     const durableLow = all.find(m => m.id === 'durable-low-intensity')!;
     const durableHigh = all.find(m => m.id === 'durable-high-intensity')!;
 
-    expect(standardLow.salience).toBe(MEMORY_CONFIG.salienceFloor);
+    expect(standardLow.salience).toBeCloseTo(0.25, 10);
     expect(durableLow.salience).toBeGreaterThan(standardLow.salience);
     expect(durableHigh.salience).toBeGreaterThan(durableLow.salience);
   });
@@ -261,7 +325,7 @@ describe('SalienceDecay', () => {
     const durableUpdated = all.find(m => m.id === 'durable-rel')!;
     const transientUpdated = all.find(m => m.id === 'transient-rel')!;
 
-    expect(transientUpdated.salience).toBe(MEMORY_CONFIG.salienceFloor);
+    expect(transientUpdated.salience).toBeCloseTo(0.245, 2);
     expect(durableUpdated.salience).toBeGreaterThan(transientUpdated.salience);
     expect(durableUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.durableSalienceFloor);
   });
@@ -345,12 +409,12 @@ describe('SalienceDecay', () => {
   it('batches eligible salience updates instead of updating each memory individually', async () => {
     const updateSpy = vi.spyOn(store, 'updateMemory');
     const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oneHalfLifeAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     store.insertMemory(makeMemory({
       id: 'tx-check',
       type: 'episodic',
       salience: 1.0,
-      lastAccessed: oneWeekAgo,
+      lastAccessed: oneHalfLifeAgo,
     }), makeEmbedding());
 
     await decay.run();
@@ -381,20 +445,20 @@ describe('SalienceDecay', () => {
   });
 
   it('stops an in-flight run before reading the next batch', async () => {
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oneHalfLifeAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const firstBatchWriteStarted = createDeferred();
     const firstBatchWriteRelease = createDeferred();
     const firstBatch = makeMemory({
       id: 'cancel-page-0',
       type: 'episodic',
       salience: 1.0,
-      lastAccessed: oneWeekAgo,
+      lastAccessed: oneHalfLifeAgo,
     });
     const secondBatch = makeMemory({
       id: 'cancel-page-1',
       type: 'episodic',
       salience: 1.0,
-      lastAccessed: oneWeekAgo,
+      lastAccessed: oneHalfLifeAgo,
     });
     const listActiveMemories = vi.fn(async (options?: { limit?: number; offset?: number }) => (
       options?.offset === 0 ? [firstBatch] : [secondBatch]
@@ -421,7 +485,7 @@ describe('SalienceDecay', () => {
   });
 
   it('processes salience decay across multiple pages of active memories', async () => {
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oneHalfLifeAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const baseExtractedAt = Date.now();
     const pagedDecay = new SalienceDecay(store.asPort(), { batchSize: 2 });
     const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
@@ -432,7 +496,7 @@ describe('SalienceDecay', () => {
         type: 'episodic',
         salience: 1.0,
         extractedAt: baseExtractedAt - i,
-        lastAccessed: oneWeekAgo,
+        lastAccessed: oneHalfLifeAgo,
       }), makeEmbedding());
     }
 
@@ -533,7 +597,7 @@ describe('SalienceDecay', () => {
     const start = 1_800_000_000_000;
     const memory = makeMemory({
       id: 'cadence-independent',
-      type: 'episodic',
+      type: 'procedural',
       salience: 1,
       extractedAt: start,
       lastAccessed: start,

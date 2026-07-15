@@ -15,6 +15,7 @@ import { resolveBroadcastVisibilityScope } from '../../../system/trust/broadcast
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import type { MemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-port.js';
 import type {
   MemoryScopeQuery,
@@ -76,6 +77,7 @@ export interface CaptureTurnMemorySnapshotDeps {
   embeddingService: EmbeddingProviderPort;
   embeddingProvenance?: RetrievalQueryEmbeddingProvenance;
   retrievalThreshold: number;
+  resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy;
   resolveRetrievalBudget(turn?: ContextBudgetTurnCharacteristics): ResolvedContextBudget;
   resolveRoomVisibilityContext(
     channelId: string,
@@ -230,6 +232,7 @@ export async function captureTurnMemorySnapshot(
         ...lexicalCandidates.map(memory => memory.id),
       ]),
       scopeQuery: normalizedScopeQuery,
+      memoryRetrievalPolicy: deps.resolveMemoryRetrievalPolicy(),
     });
     semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
     semanticCandidates = applyQuarantineResult(

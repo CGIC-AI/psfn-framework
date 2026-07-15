@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import { collectRecentLexicalMemoryCandidates } from './candidates.js';
@@ -24,7 +25,10 @@ function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory
 
 function makeStore(memories: PurrMemory[]): MemoryStorePort {
   return {
-    listActiveMemories: async () => memories,
+    listActiveMemories: async options => memories.slice(
+      options?.offset ?? 0,
+      (options?.offset ?? 0) + (options?.limit ?? memories.length),
+    ),
   } as unknown as MemoryStorePort;
 }
 
@@ -95,5 +99,60 @@ describe('collectRecentLexicalMemoryCandidates only-scope filtering', () => {
     });
 
     expect(candidates.map(candidate => candidate.id)).toEqual(['prefer-unscoped']);
+  });
+});
+
+describe('collectRecentLexicalMemoryCandidates bounded pagination', () => {
+  const contextText = 'greenhouse irrigation schedule recalibrating';
+
+  it('can recover a matching memory beyond the former newest-96 boundary', async () => {
+    const memories = Array.from({ length: 120 }, (_, index) => makeMemory(
+      `memory-${index}`,
+      index === 110
+        ? {}
+        : { text: `Unrelated archive entry number ${index}`, tags: [] },
+    ));
+
+    const candidates = await collectRecentLexicalMemoryCandidates({
+      memoryStore: makeStore(memories),
+      contextText,
+      existingIds: new Set(),
+      scopeQuery: undefined,
+    });
+
+    expect(candidates.map(candidate => candidate.id)).toContain('memory-110');
+  });
+
+  it('reads deterministic ordered pages and never exceeds the configured scan bound', async () => {
+    const memories = Array.from({ length: 200 }, (_, index) => makeMemory(
+      `ordered-${index}`,
+      index === 110
+        ? {}
+        : { text: `Unrelated archive entry number ${index}`, tags: [] },
+    ));
+    const listActiveMemories = vi.fn(async (options?: { limit?: number; offset?: number }) => (
+      memories.slice(
+        options?.offset ?? 0,
+        (options?.offset ?? 0) + (options?.limit ?? memories.length),
+      )
+    ));
+    const policy = createDefaultMemoryRetrievalPolicy();
+    policy.lexicalAugment = { pageSize: 50, maxScan: 120, selectedLimit: 12 };
+
+    const candidates = await collectRecentLexicalMemoryCandidates({
+      memoryStore: { listActiveMemories } as unknown as MemoryStorePort,
+      contextText,
+      existingIds: new Set(),
+      scopeQuery: undefined,
+      memoryRetrievalPolicy: policy,
+    });
+
+    expect(listActiveMemories.mock.calls.map(([options]) => options)).toEqual([
+      { limit: 50, offset: 0 },
+      { limit: 50, offset: 50 },
+      { limit: 20, offset: 100 },
+    ]);
+    expect(candidates.map(candidate => candidate.id)).toContain('ordered-110');
+    expect(listActiveMemories).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 120 }));
   });
 });

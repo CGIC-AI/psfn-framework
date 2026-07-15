@@ -27,6 +27,66 @@
   "memoryExtractionMaxWrites": 2,
   "memoryExtractionTelemetryEnabled": true,
   "memoryRetrievalTelemetryEnabled": true,
+  "memoryRetrievalPolicy": {
+    "typePolicies": {
+      "episodic": {
+        "halfLifeDays": 30,
+        "salienceFloor": { "mode": "constant", "value": 0.05 },
+        "retrievalPrior": 1
+      },
+      "semantic": {
+        "halfLifeDays": 120,
+        "salienceFloor": { "mode": "constant", "value": 0.05 },
+        "retrievalPrior": 1
+      },
+      "emotional": {
+        "halfLifeDays": 365,
+        "salienceFloor": {
+          "mode": "valence_scaled",
+          "base": 0.25,
+          "absoluteValenceScale": 0.35
+        },
+        "retrievalPrior": 1.3
+      },
+      "procedural": {
+        "halfLifeDays": 14,
+        "salienceFloor": { "mode": "constant", "value": 0.05 },
+        "retrievalPrior": 0.6
+      },
+      "boundary": {
+        "halfLifeDays": 365,
+        "salienceFloor": { "mode": "constant", "value": 0.5 },
+        "retrievalPrior": 1.6
+      },
+      "reflection": {
+        "halfLifeDays": 90,
+        "salienceFloor": { "mode": "constant", "value": 0.05 },
+        "retrievalPrior": 0.9
+      },
+      "relational": {
+        "halfLifeDays": 180,
+        "salienceFloor": {
+          "mode": "valence_threshold",
+          "base": 0.05,
+          "absoluteValenceThreshold": 0.5,
+          "thresholdValue": 0.5
+        },
+        "retrievalPrior": 1.15
+      }
+    },
+    "proceduralTaskRetrievalPrior": 1.2,
+    "selectionCaps": {
+      "reflection": 2,
+      "procedural": 2
+    },
+    "nonTemporalRecencyFloor": 0.35,
+    "lexicalAugment": {
+      "pageSize": 256,
+      "maxScan": 2048,
+      "selectedLimit": 12
+    },
+    "emotionalIntensityPersistenceMaxMultiplier": 6
+  },
   "memoryRefreshFailureAlertThreshold": 3,
   "groupMemory": {
     "enabled": true,

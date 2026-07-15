@@ -11,6 +11,7 @@ import type {
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
+import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
   CanonicalModelRegistry,
@@ -215,6 +216,7 @@ export interface SubstrateConfig {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   /**
    * Consecutive failed active-memory context refreshes (per context key)
    * before an operator alert is raised via the system-derived notification

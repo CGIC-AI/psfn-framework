@@ -87,8 +87,13 @@ export function registerSalienceDecayTask(input: {
   scheduler: Scheduler;
   memoryStore: MemoryStorePort;
   intervalMs: number;
+  config?: SubstrateConfig;
 }): void {
-  const salienceDecay = new SalienceDecay(input.memoryStore);
+  const salienceDecay = new SalienceDecay(input.memoryStore, {
+    ...(input.config
+      ? { memoryRetrievalPolicy: () => input.config?.memoryRetrievalPolicy }
+      : {}),
+  });
   input.scheduler.register({
     id: 'salience-decay',
     name: 'Memory Salience Decay',
@@ -154,6 +159,7 @@ export function buildAgentSchedulerRuntime(
     scheduler,
     memoryStore: options.memoryStore,
     intervalMs: options.config.salienceDecayIntervalMs,
+    config: options.config,
   });
 
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';

@@ -180,6 +180,47 @@ describe('settings contract guard', () => {
   });
 });
 
+describe('memory retrieval policy settings compliance', () => {
+  it('surfaces the strict settings.json policy as a Garden memory object editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.memoryRetrievalPolicy).toEqual({
+      key: 'memoryRetrievalPolicy',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.memoryRetrievalPolicy).toEqual({
+      sectionId: 'memory',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('memoryRetrievalPolicy');
+  });
+
+  it('ships every matrix knob in the canonical seed policy', () => {
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
+      memoryRetrievalPolicy?: Record<string, unknown>;
+    };
+
+    expect(seed.memoryRetrievalPolicy).toEqual(expect.objectContaining({
+      typePolicies: expect.objectContaining({
+        episodic: expect.any(Object),
+        semantic: expect.any(Object),
+        emotional: expect.any(Object),
+        procedural: expect.any(Object),
+        boundary: expect.any(Object),
+        reflection: expect.any(Object),
+        relational: expect.any(Object),
+      }),
+      proceduralTaskRetrievalPrior: 1.2,
+      selectionCaps: { reflection: 2, procedural: 2 },
+      nonTemporalRecencyFloor: 0.35,
+      lexicalAugment: { pageSize: 256, maxScan: 2_048, selectedLimit: 12 },
+      emotionalIntensityPersistenceMaxMultiplier: 6,
+    }));
+  });
+});
+
 // Sprint 10 / Workstream F2: the Home Assistant connection settings are the only
 // runtime toggles the location/world surface adds to the settings contract
 // (places.json stays a soft registry with no owner-file boot gate). These named

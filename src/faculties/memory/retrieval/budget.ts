@@ -7,6 +7,11 @@ import {
 } from '../../../shared/context-budget.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { PurrMemory } from '../types.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  resolveMemorySelectionCap,
+  type MemoryRetrievalPolicy,
+} from '../../../system/config/memory-retrieval-policy.js';
 import { SCORE_GUARANTEE_MIN_K } from './scoring.js';
 import type {
   RetrievalSelectionDecision,
@@ -56,7 +61,9 @@ export function selectWithinRelevanceAndTokenBudget(
   scored: ScoredMemory[],
   tokenBudget: number,
   minimumSelectedCount = MEMORY_RETRIEVAL_MIN_ITEMS,
+  policyInput?: MemoryRetrievalPolicy,
 ): RetrievalSelectionDecision {
+  const policy = resolveMemoryRetrievalPolicy(policyInput);
   const selectionFloor = Math.max(1, Math.min(minimumSelectedCount, scored.length));
 
   if (scored.length === 0) {
@@ -69,20 +76,6 @@ export function selectWithinRelevanceAndTokenBudget(
     };
   }
 
-  if (tokenBudget <= 0) {
-    const selected = scored.slice(0, selectionFloor);
-    return {
-      selected,
-      stopReason: scored.length > selected.length ? 'budget' : 'exhausted',
-      relevanceStoppedCount: 0,
-      budgetCappedCount: Math.max(0, scored.length - selected.length),
-      relevanceScoreFloor: Math.max(
-        RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
-        scored[0].score * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
-      ),
-    };
-  }
-
   const relevanceScoreFloor = Math.max(
     RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
     scored[0].score * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
@@ -92,9 +85,17 @@ export function selectWithinRelevanceAndTokenBudget(
   let stopReason: RetrievalSelectionDecision['stopReason'] = 'exhausted';
   let relevanceStoppedCount = 0;
   let budgetCappedCount = 0;
+  const selectedTypeCounts = new Map<string, number>();
 
   for (let index = 0; index < scored.length; index++) {
     const item = scored[index];
+    const selectionCap = resolveMemorySelectionCap(policy, item.memory.type);
+    if (
+      selectionCap !== undefined
+      && (selectedTypeCounts.get(item.memory.type) ?? 0) >= selectionCap
+    ) {
+      continue;
+    }
     const itemTokens = estimateMemoryPromptTokens(item.memory);
 
     if (selected.length >= selectionFloor) {
@@ -104,7 +105,7 @@ export function selectWithinRelevanceAndTokenBudget(
         break;
       }
 
-      if (usedTokens + itemTokens > tokenBudget) {
+      if (tokenBudget <= 0 || usedTokens + itemTokens > tokenBudget) {
         stopReason = 'budget';
         budgetCappedCount = scored.length - index;
         break;
@@ -112,6 +113,10 @@ export function selectWithinRelevanceAndTokenBudget(
     }
 
     selected.push(item);
+    selectedTypeCounts.set(
+      item.memory.type,
+      (selectedTypeCounts.get(item.memory.type) ?? 0) + 1,
+    );
     usedTokens += itemTokens;
   }
 

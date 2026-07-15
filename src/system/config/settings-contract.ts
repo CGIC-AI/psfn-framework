@@ -254,6 +254,7 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
 ]);
 
 const SETTINGS_OBJECT_FIELDS = new Set<string>([
+  'memoryRetrievalPolicy',
   'compositionalPolicy',
   'groupMemory',
   'emotionScoping',

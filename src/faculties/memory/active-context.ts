@@ -107,6 +107,7 @@ export function resolveActiveMemoryContextIdentity(
     | 'scopeQuery'
     | 'callerContext'
     | 'retrievalMode'
+    | 'turnBudgetCharacteristics'
   >,
 ): ActiveMemoryContextIdentity {
   const trustLevel = request.trustLevel ?? 'regular';
@@ -127,6 +128,7 @@ export function resolveActiveMemoryContextIdentity(
     `focus:${serializeScopeQuery(request.scopeQuery)}`,
     `callerMode:${serializeRetrievalModeInput(callerRetrievalMode)}`,
     `mode:${serializeRetrievalModeInput(request.retrievalMode)}`,
+    `taskKind:${request.turnBudgetCharacteristics?.taskKind?.trim().toLowerCase() ?? ''}`,
   ].join('|');
 
   return {

@@ -7,6 +7,7 @@ import {
   createDefaultObserverEvalSidecarSettings,
   createDefaultSessionTailCacheSettings,
 } from './runtime-config-contracts.js';
+import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -128,6 +129,7 @@ describe('loadConfig path defaults', () => {
     expect(config.companionId).toBe('test-companion');
     expect(config.characterCardPath).toBe('./companion/companion.json');
     expect(config.databasePath).toBe('companion/state/companion.db');
+    expect(config.memoryRetrievalPolicy).toEqual(createDefaultMemoryRetrievalPolicy());
   });
 
   it('requires explicit companion identity wiring', () => {

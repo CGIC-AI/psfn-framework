@@ -1,5 +1,9 @@
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import {
+  resolveMemorySelectionCap,
+  type MemoryRetrievalPolicy,
+} from '../../../system/config/memory-retrieval-policy.js';
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import type { ContextManifestMemorySeed } from '../../../core/session/context-manifest.js';
 import { buildSnapshotVersionPointer } from '../../../core/turns/snapshot.js';
@@ -56,6 +60,7 @@ export interface FinalizeRetrievalPromptBlockInput {
 
 export interface ActiveMemoryContextRefreshDeps {
   activeMemoryContexts: Map<string, ActiveMemoryState>;
+  memoryRetrievalPolicy: MemoryRetrievalPolicy;
   eventBus?: EventBus;
   isMemoryQuarantined(memory: PurrMemory): boolean;
   filterQuarantinedMemories(memories: readonly PurrMemory[]): PurrMemory[];
@@ -217,10 +222,25 @@ function applyActiveMemoryContextRefresh(
       right.retainedScore - left.retainedScore
       || right.lastSelectedAt - left.lastSelectedAt
       || right.scored.memory.importance - left.scored.memory.importance
-    ))
-    .slice(0, maxEntries);
-  const cappedEntries = new Map(rankedEntries);
-  const selectedForActivePrompt = rankedEntries.map(([, entry]) => cloneScoredPromptMemory(entry.scored));
+    ));
+  const selectedEntryCounts = new Map<string, number>();
+  const selectedEntries: Array<[string, ActiveMemoryEntry]> = [];
+  for (const rankedEntry of rankedEntries) {
+    const type = rankedEntry[1].scored.memory.type;
+    const selectionCap = resolveMemorySelectionCap(deps.memoryRetrievalPolicy, type);
+    if (
+      selectionCap !== undefined
+      && (selectedEntryCounts.get(type) ?? 0) >= selectionCap
+    ) {
+      continue;
+    }
+    selectedEntries.push(rankedEntry);
+    selectedEntryCounts.set(type, (selectedEntryCounts.get(type) ?? 0) + 1);
+    if (selectedEntries.length >= maxEntries) break;
+  }
+  const cappedEntries = new Map(selectedEntries);
+  const selectedForActivePrompt = selectedEntries
+    .map(([, entry]) => cloneScoredPromptMemory(entry.scored));
   const profile = input.profile ?? existing?.profile;
   const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
   const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0

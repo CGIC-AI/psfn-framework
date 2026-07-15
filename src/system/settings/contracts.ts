@@ -1,6 +1,7 @@
 import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
+import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
@@ -150,6 +151,7 @@ export interface EditableSettings {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   memoryRefreshFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
@@ -287,6 +289,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryRetrievalPolicy',
   'memoryRefreshFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
@@ -389,6 +392,7 @@ export type RuntimeSettingValue =
   | CompositionalPolicyConfig
   | GroupMemorySettings
   | EmotionScopingSettings
+  | MemoryRetrievalPolicy
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
   | ImageWorkflowSettings

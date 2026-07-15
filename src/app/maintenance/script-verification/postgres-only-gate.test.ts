@@ -79,6 +79,21 @@ describe('Postgres-only repository gate', () => {
     expect(result.stderr).toContain('unclassified retired-backend reference: src/database.ts:1');
   });
 
+  it('rejects an import of a retired implementation whose path has no backend token', () => {
+    const root = makeFixture();
+    writeFileSync(
+      join(root, 'src', 'memory-fixture.ts'),
+      "import { MemoryStore } from './faculties/memory/store.js';\n",
+    );
+
+    const result = run(root);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'retired implementation import: src/memory-fixture.ts: ./faculties/memory/store.js',
+    );
+  });
+
   it('rejects unclassified text even when it is not an import', () => {
     const root = makeFixture();
     writeFileSync(join(root, 'src', 'fallback.ts'), `const backend = '${RETIRED_BACKEND}';\n`);

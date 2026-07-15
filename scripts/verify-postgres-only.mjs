@@ -15,6 +15,7 @@ const RETIRED_PACKAGE_NAMES = [
   ['@types', ['better', 'sqlite3'].join('-')].join('/'),
 ];
 const RETIRED_TOKEN = /sqlite|better-sqlite3|sqlite-vec/iu;
+const RELATIVE_IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\()\s*['"](\.[^'"]+)['"]|^\s*import\s*['"](\.[^'"]+)['"]/gmu;
 const TEXT_EXTENSIONS = new Set([
   '.cjs',
   '.env',
@@ -339,17 +340,47 @@ function verifyTextReferences(root, errors) {
     allowlistByPath.set(entry.path, entries);
   }
   const usedAllowlistEntries = new Set();
+  const retiredFiles = new Set(
+    RETIRED_IMPLEMENTATION_PATHS
+      .filter(path => extname(path) !== '')
+      .map(path => path.replace(/\.[^.]+$/u, '')),
+  );
+  const retiredDirectories = RETIRED_IMPLEMENTATION_PATHS
+    .filter(path => extname(path) === '');
 
   for (const path of files) {
     if (resolve(path) === resolve(SCRIPT_PATH)) continue;
     const repositoryPath = normalizePath(root, path);
     const allowed = allowlistByPath.get(repositoryPath) ?? [];
-    const lines = readFileSync(path, 'utf8').split(/\r?\n/u);
+    const source = readFileSync(path, 'utf8');
+    for (const match of source.matchAll(RELATIVE_IMPORT_SPECIFIER)) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier) continue;
+      const resolvedImport = normalizePath(root, resolve(dirname(path), specifier))
+        .replace(/\.[^.]+$/u, '');
+      if (
+        retiredFiles.has(resolvedImport)
+        || retiredDirectories.some(directory => (
+          resolvedImport === directory || resolvedImport.startsWith(`${directory}/`)
+        ))
+      ) {
+        errors.push(`retired implementation import: ${repositoryPath}: ${specifier}`);
+      }
+    }
+
+    const lines = source.split(/\r?\n/u);
     for (const [index, line] of lines.entries()) {
       if (!RETIRED_TOKEN.test(line)) continue;
       const matches = allowed.filter(entry => line.includes(entry.contains));
       if (matches.length > 0) {
         for (const match of matches) usedAllowlistEntries.add(match.index);
+        const unclassifiedRemainder = matches.reduce(
+          (remainder, match) => remainder.replace(match.contains, ''),
+          line,
+        );
+        if (RETIRED_TOKEN.test(unclassifiedRemainder)) {
+          errors.push(`unclassified retired-backend reference: ${repositoryPath}:${index + 1}: ${line.trim()}`);
+        }
         continue;
       }
       errors.push(`unclassified retired-backend reference: ${repositoryPath}:${index + 1}: ${line.trim()}`);

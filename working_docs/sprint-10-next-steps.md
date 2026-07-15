@@ -20,8 +20,25 @@ The headline fact governing everything below: the multi-companion substrate is *
   same logical segmented archive. Final integrated gate at `4b22e676`: six
   exact regressions passed, the proportional journal/session/Garden slice
   passed 137/137, lint passed, root ESM+DTS build passed, and diff checks were
-  clean. Parent epic `psfn-framework-t5z7` remains open because `.5`, `.9`, and
-  `.10` remain real work.
+  clean. Parent epic `psfn-framework-t5z7` remains open because `.9` and `.10`
+  remain real work.
+- `psfn-framework-t5z7.5` is closed through `b2af5296` (server-cache
+  implementation `2ff153c0`, single-review remediation `77d2d825`, integration
+  merge `9dbc59d0`, pagination-seam test alignment `b2af5296`). The hot newest
+  transcript page now reuses the deployment/companion-scoped shared Redis tail
+  while authenticated journal rows remain authoritative on every ID overlap.
+  A current bounded canonical window rejects and repopulates cross-process
+  tails that lag a durable append; Redis-disabled, degraded-cache, older-page,
+  and namespace-isolation behavior remain intact. Recent activity and session
+  lists were already slim channel-index reads, so no redundant cache was added.
+- The one independent review found two important partner-data issues: an
+  unauthenticated same-ID tail row could override journal content/channel, and
+  the freshness checkpoint was process-local. The one allowed remediation made
+  journal truth win and added the exact blocked-writer/two-store freshness
+  proof. Final integrated gate at `b2af5296`: both exact regressions passed,
+  the combined server-cache/journal/session slice passed 95/95, lint passed,
+  root ESM+DTS build passed, and diff checks were clean. Parent epic
+  `psfn-framework-t5z7` remains open only for `.9` and `.10`.
 - `psfn-framework-t5z7.4` is closed at `af553dc0` (server/API slice
   `118890bd`, client/UI slice `af553dc0`). The sessions index is now one
   contact-free request carrying only bounded channel/session identity,

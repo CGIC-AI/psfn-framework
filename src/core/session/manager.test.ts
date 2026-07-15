@@ -2480,6 +2480,27 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Summary of old messages.');
   });
 
+  it('captures auto-compaction input at or before the durable source entry', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    mgr.recordUserMessage('ch1', 'turn A user', 'u1', 'User');
+    const sourceEntryId = mgr.recordAssistantMessage('ch1', 'turn A assistant');
+    expect(sourceEntryId).not.toBeNull();
+    mgr.recordUserMessage('ch1', 'newer turn must stay out', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'newer response must stay out');
+
+    const captured = mgr.captureAutoCompactionRecentEntries({
+      channelId: 'ch1',
+      maxSessionEntryId: sourceEntryId!,
+      now: new Date(),
+    });
+
+    expect(captured.map(entry => entry.content)).toEqual([
+      'turn A user',
+      'turn A assistant',
+    ]);
+    expect(captured.every(entry => entry.id <= sourceEntryId!)).toBe(true);
+  });
+
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);

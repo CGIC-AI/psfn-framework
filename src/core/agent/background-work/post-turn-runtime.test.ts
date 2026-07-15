@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort, MemoryExtractor } from '../contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { SessionEntry } from '../../session/types.js';
+import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
 import {
   BackgroundWorkDeferredError,
@@ -12,6 +14,7 @@ import {
   fingerprintBackgroundWorkPayload,
   fingerprintBackgroundWorkTurnRecord,
   fingerprintEmotionAppraisalPersonalityProjection,
+  type AutoCompactionBackgroundPayload,
   type ClaimedBackgroundWorkJob,
   type EmotionAppraisalBackgroundPayload,
   type MemoryExtractionBackgroundPayload,
@@ -65,6 +68,8 @@ function makeExecution(record: TurnRecord): {
       requestId: record.requestId,
       turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
       createdAtMs: record.completedAt,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
     },
     canonicalContactId: 'contact-1',
     placeId: 'living-room',
@@ -107,6 +112,7 @@ function makeDependencies(input: {
   maybeExtract?: ReturnType<typeof vi.fn>;
   runIntentionPostTurnHooks?: ReturnType<typeof vi.fn>;
   beforeSourceEligibilityFence?: () => void;
+  recentEntries?: SessionEntry[];
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
@@ -123,12 +129,25 @@ function makeDependencies(input: {
     input.beforeSourceEligibilityFence?.();
     return operation();
   });
+  const getRecentMessagesAtOrBefore = vi.fn(() => input.recentEntries ?? []);
+  const withStableRecordedTurnEligibilitySnapshot = vi.fn(async (
+    _logicalSessionId: string,
+    _requiredTurnIds: readonly string[],
+    readSnapshot: () => SessionEntry[],
+    operation: (entries: readonly SessionEntry[]) => Promise<unknown>,
+  ) => operation(readSnapshot()));
+  const captureAutoCompactionRecentEntries = vi.fn(() => input.recentEntries ?? []);
+  const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
   return {
     dependencies: {
       sessionManager: {
         findSourceRecordedTurn,
         isSourceRecordedTurnEligible,
         withSourceRecordedTurnEligibilityFence,
+        getRecentMessagesAtOrBefore,
+        withStableRecordedTurnEligibilitySnapshot,
+        captureAutoCompactionRecentEntries,
+        scheduleAutoCompactionBetweenTurns,
       } as unknown as SessionManager,
       llmProvider: {} as LLMProviderPort,
       getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
@@ -140,6 +159,10 @@ function makeDependencies(input: {
     findSourceRecordedTurn,
     isSourceRecordedTurnEligible,
     withSourceRecordedTurnEligibilityFence,
+    getRecentMessagesAtOrBefore,
+    withStableRecordedTurnEligibilitySnapshot,
+    captureAutoCompactionRecentEntries,
+    scheduleAutoCompactionBetweenTurns,
     maybeExtract,
     runIntentionPostTurnHooks,
     triggerEmotionAppraisal,
@@ -147,6 +170,64 @@ function makeDependencies(input: {
 }
 
 describe('executePostTurnBackgroundWork', () => {
+  it('runs memory extraction from the exact rechecked cross-turn snapshot', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const olderTurnId = '019d2326-d9e1-701d-bcee-250d2cbb0e4f';
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'older turn content',
+        timestamp: 80,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: olderTurnId,
+          requestId: 'request-older',
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: record.assistantMessage!.content,
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const fixture = makeDependencies({ record, recentEntries });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(fixture.getRecentMessagesAtOrBefore).toHaveBeenCalledWith(
+      record.sessionId,
+      2,
+      10,
+    );
+    expect(fixture.withStableRecordedTurnEligibilitySnapshot).toHaveBeenCalledWith(
+      record.sessionId,
+      [record.turnId],
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(fixture.maybeExtract).toHaveBeenCalledWith(
+      record.sessionId,
+      'contact-1',
+      record.turnId,
+      'living-room',
+      undefined,
+      expect.any(Function),
+      recentEntries,
+    );
+  });
+
   it('rehydrates an exact physical-source/logical-session turn without copying content into the job', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
@@ -166,6 +247,7 @@ describe('executePostTurnBackgroundWork', () => {
       'living-room',
       undefined,
       expect.any(Function),
+      [],
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);
@@ -249,7 +331,33 @@ describe('executePostTurnBackgroundWork', () => {
         payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
       },
     };
-    const fixture = makeDependencies({ record });
+    const appraisalEntry: SessionEntry = {
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: record.turnId,
+        requestId: record.requestId,
+        role: 'assistant',
+        actorKind: 'machine_intelligence',
+      }),
+    };
+    const recentEntries: SessionEntry[] = [{
+      id: 1,
+      channelId: record.sessionId!,
+      role: 'system',
+      content: '[Intention Appraisal] internal artifact',
+      timestamp: 99,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e50',
+        requestId: 'request-artifact',
+        role: 'system',
+        actorKind: 'system',
+      }),
+    }, appraisalEntry];
+    const fixture = makeDependencies({ record, recentEntries });
 
     await executePostTurnBackgroundWork(execution, fixture.dependencies);
 
@@ -258,7 +366,14 @@ describe('executePostTurnBackgroundWork', () => {
       turnId: record.turnId,
       appraisalState: payload.appraisalState,
       templateVariables: { personality: 'current canonical personality' },
+      recentEntries: [appraisalEntry],
     }));
+    expect(fixture.withStableRecordedTurnEligibilitySnapshot).toHaveBeenCalledWith(
+      record.sessionId,
+      [record.turnId],
+      expect.any(Function),
+      expect.any(Function),
+    );
     expect(fixture.triggerEmotionAppraisal.mock.calls[0]?.[0]).not.toHaveProperty('internalState');
 
     const mismatchedPayload = {
@@ -277,6 +392,71 @@ describe('executePostTurnBackgroundWork', () => {
       expect.objectContaining<Partial<BackgroundWorkPermanentError>>({
         name: 'BackgroundWorkPermanentError',
         reasonCode: 'source_mismatch',
+      }),
+    );
+  });
+
+  it('runs auto-compaction from the exact bounded source-turn snapshot', async () => {
+    const record = makeTurnRecord();
+    const base = makeExecution(record);
+    const payload: AutoCompactionBackgroundPayload = {
+      schemaVersion: 1,
+      kind: 'auto_compaction',
+      source: base.payload.source,
+      systemPromptTokenCount: 12,
+      memoriesTokenCount: 4,
+      adaptiveProfile: {
+        enabled: false,
+        source: 'disabled',
+        category: 'default',
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 2,
+      },
+      turnBudgetCharacteristics: {},
+    };
+    const execution = {
+      payload,
+      effects: base.effects,
+      job: {
+        ...base.job,
+        kind: payload.kind,
+        payload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      },
+    };
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: record.turnId,
+        requestId: record.requestId,
+        role: 'assistant',
+        actorKind: 'machine_intelligence',
+      }),
+    }];
+    const fixture = makeDependencies({ record, recentEntries });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(fixture.captureAutoCompactionRecentEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: record.sessionId,
+        maxSessionEntryId: 2,
+      }),
+    );
+    expect(fixture.withStableRecordedTurnEligibilitySnapshot).toHaveBeenCalledWith(
+      record.sessionId,
+      [record.turnId],
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(fixture.scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: record.sessionId,
+        capturedRecentEntries: recentEntries,
       }),
     );
   });
@@ -334,5 +514,13 @@ describe('executePostTurnBackgroundWork', () => {
 
     expect(persistedResponses).toEqual([]);
     expect(fixture.runIntentionPostTurnHooks).not.toHaveBeenCalled();
+    expect(fixture.withSourceRecordedTurnEligibilityFence).toHaveBeenCalledWith(
+      record.channelId,
+      record.sessionId,
+      record.turnId,
+      expect.any(Function),
+    );
+    expect(fixture.withStableRecordedTurnEligibilitySnapshot).not.toHaveBeenCalled();
+    expect(fixture.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
   });
 });

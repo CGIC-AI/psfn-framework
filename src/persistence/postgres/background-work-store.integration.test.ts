@@ -25,6 +25,7 @@ import { PostgresTurnRecordEligibilityFence } from './turn-record-eligibility-fe
 import { SessionStore } from '../sessions/store.js';
 import { createTurnId } from '../../core/turns/id.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -1003,6 +1004,199 @@ describe('PostgresBackgroundWorkStore', () => {
         second.close(),
         firstFencePool.end(),
         secondFencePool.end(),
+        inspectionPool.end(),
+      ]);
+    }
+  }, 30_000);
+
+  it('rechecks a bounded cross-turn snapshot after every consumed TurnRecord fence is held', async () => {
+    const database = await harness.createDatabase();
+    const consumerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const writerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-consumed-fence-'));
+    const consumerFence = new PostgresTurnRecordEligibilityFence(consumerPool, 'companion_a');
+    const writerFence = new PostgresTurnRecordEligibilityFence(writerPool, 'companion_a');
+    const consumer = new SessionStore(sessionsDir, { turnRecordEligibilityFence: consumerFence });
+    const writer = new SessionStore(sessionsDir, { turnRecordEligibilityFence: writerFence });
+    const unfencedWriter = new SessionStore(sessionsDir);
+    const logicalSessionId = 'api:cross-turn-consumed-fence';
+    const olderTurnId = createTurnId();
+    const sourceTurnId = createTurnId();
+    const privateOlderContent = 'PRIVATE-OLDER-TURN-MUST-NOT-SURVIVE';
+
+    const appendTurn = async (
+      turnId: TurnRecord['turnId'],
+      content: string,
+      timestamp: number,
+    ): Promise<void> => {
+      consumer.append({
+        channelId: logicalSessionId,
+        role: 'user',
+        content,
+        timestamp,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId,
+          requestId: `request-${turnId}`,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      });
+      await consumer.appendTurnRecord(makeCanonicalTurnRecord(
+        logicalSessionId,
+        turnId,
+        `response-${turnId}`,
+      ));
+    };
+
+    try {
+      await inspectionPool.query(`
+        CREATE TABLE cross_turn_derived_effects (
+          id BIGSERIAL PRIMARY KEY,
+          content TEXT NOT NULL
+        )
+      `);
+      await appendTurn(olderTurnId, privateOlderContent, 50);
+      await appendTurn(sourceTurnId, 'source turn B', 60);
+
+      const redactionHeld = deferred();
+      const allowRedaction = deferred();
+      const redaction = writerFence.withTurnRecordEligibilityFence({
+        logicalSessionId,
+        turnId: olderTurnId,
+      }, async () => {
+        redactionHeld.resolve();
+        await allowRedaction.promise;
+        await unfencedWriter.redactTurn(logicalSessionId, olderTurnId, {
+          actor: 'operator:test',
+          reason: 'privacy revocation',
+        });
+      });
+      await redactionHeld.promise;
+
+      let initialReadCompleted = false;
+      const staleAttempt = consumer.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        [sourceTurnId],
+        () => {
+          const entries = consumer.getRecent(logicalSessionId, 10);
+          initialReadCompleted = true;
+          return entries;
+        },
+        async (entries) => {
+          await inspectionPool.query(
+            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            [entries.map(entry => entry.content).join('|')],
+          );
+        },
+      );
+      expect(initialReadCompleted).toBe(true);
+      allowRedaction.resolve();
+      await redaction;
+      await expect(staleAttempt).rejects.toThrow('TurnRecord eligibility snapshot changed');
+
+      await consumer.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        [sourceTurnId],
+        () => consumer.getRecent(logicalSessionId, 10),
+        async (entries) => {
+          await inspectionPool.query(
+            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            [entries.map(entry => entry.content).join('|')],
+          );
+        },
+      );
+
+      const effects = await inspectionPool.query<{ content: string }>(
+        'SELECT content FROM cross_turn_derived_effects ORDER BY id',
+      );
+      expect(effects.rows).toHaveLength(1);
+      expect(effects.rows[0]?.content).not.toContain(privateOlderContent);
+
+      await writer.restoreTurn(logicalSessionId, olderTurnId, {
+        actor: 'operator:test',
+        reason: 'approved restore',
+      });
+      const effectEntered = deferred();
+      const allowEffect = deferred();
+      const effectFirst = consumer.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        [sourceTurnId],
+        () => consumer.getRecent(logicalSessionId, 10),
+        async () => {
+          effectEntered.resolve();
+          await allowEffect.promise;
+        },
+      );
+      await effectEntered.promise;
+      let restoreCompleted = false;
+      const competingRestore = writer.restoreTurn(logicalSessionId, olderTurnId, {
+        actor: 'operator:test',
+        reason: 'second approved restore',
+      }).then(() => { restoreCompleted = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(restoreCompleted).toBe(false);
+      allowEffect.resolve();
+      await Promise.all([effectFirst, competingRestore]);
+
+      // Reverse caller order cannot create AB-BA because the Postgres adapter
+      // canonicalizes every bounded set before acquiring it. Ten repetitions
+      // stress the exact overlap pattern that would deadlock without that order.
+      for (let iteration = 0; iteration < 10; iteration += 1) {
+        const firstEntered = deferred();
+        const releaseFirst = deferred();
+        const first = consumerFence.withTurnRecordEligibilityFences([
+          { logicalSessionId, turnId: sourceTurnId },
+          { logicalSessionId, turnId: olderTurnId },
+        ], async () => {
+          firstEntered.resolve();
+          await releaseFirst.promise;
+        });
+        await firstEntered.promise;
+        const second = writerFence.withTurnRecordEligibilityFences([
+          { logicalSessionId, turnId: olderTurnId },
+          { logicalSessionId, turnId: sourceTurnId },
+        ], async () => undefined);
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
+      }
+
+      const unrelatedSessionCompleted = consumerFence.withTurnRecordEligibilityFences([
+        { logicalSessionId, turnId: olderTurnId },
+        { logicalSessionId, turnId: sourceTurnId },
+      ], async () => writerFence.withTurnRecordEligibilityFences([{
+        logicalSessionId: 'api:unrelated-session',
+        turnId: createTurnId(),
+      }], async () => true));
+      await expect(unrelatedSessionCompleted).resolves.toBe(true);
+
+      await writer.appendTurnRecord(makeCanonicalTurnRecord(
+        logicalSessionId,
+        olderTurnId,
+        `response-${olderTurnId}`,
+      ));
+      let duplicateEffectRan = false;
+      await expect(consumer.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        [sourceTurnId],
+        () => consumer.getRecent(logicalSessionId, 10),
+        async () => { duplicateEffectRan = true; },
+      )).rejects.toThrow('Consumed TurnRecord is missing, duplicated, tombstoned');
+      expect(duplicateEffectRan).toBe(false);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await Promise.all([
+        consumerPool.end(),
+        writerPool.end(),
         inspectionPool.end(),
       ]);
     }

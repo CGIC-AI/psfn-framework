@@ -113,6 +113,8 @@ const log = createComponentLogger('SessionStore');
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
+/** Hard bound preventing a post-turn effect from turning one session into an unbounded lock set. */
+const MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES = 512;
 const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
 export {
   L0_SESSION_FILE_MAX_BYTES,
@@ -177,6 +179,41 @@ export interface CogSecTombstoneChannelDiagnostic {
   channelId: string;
   rowCount: number;
   messageIds: number[];
+}
+
+export class TurnRecordEligibilitySnapshotChangedError extends Error {
+  constructor() {
+    super('TurnRecord eligibility snapshot changed while acquiring consumed-record fences');
+    this.name = 'TurnRecordEligibilitySnapshotChangedError';
+  }
+}
+
+export class TurnRecordEligibilitySnapshotInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TurnRecordEligibilitySnapshotInvalidError';
+  }
+}
+
+function sessionEntrySnapshotMatches(
+  left: readonly SessionEntry[],
+  right: readonly SessionEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const candidate = right[index]!;
+    return entry.id === candidate.id
+      && entry.channelId === candidate.channelId
+      && entry.role === candidate.role
+      && entry.content === candidate.content
+      && entry.authorId === candidate.authorId
+      && entry.authorName === candidate.authorName
+      && entry.timestamp === candidate.timestamp
+      && entry.discordMessageId === candidate.discordMessageId
+      && entry.metadata === candidate.metadata
+      && entry.originChannelId === candidate.originChannelId
+      && entry.channelVisibility === candidate.channelVisibility;
+  });
 }
 
 export interface CogSecTombstoneDiagnostic {
@@ -1100,6 +1137,87 @@ export class SessionStore implements TranscriptSearchPort {
       logicalSessionId,
       turnId,
     }, operation);
+  }
+  /**
+   * Captures a bounded content window, locks every TurnID represented in that
+   * window plus the required source IDs, then re-reads and validates the exact
+   * snapshot before exposing it to a durable effect.
+   */
+  async withStableTurnRecordEligibilitySnapshot<T>(
+    logicalSessionId: string,
+    requiredTurnIds: readonly string[],
+    readSnapshot: () => SessionEntry[],
+    operation: (entries: readonly SessionEntry[]) => Promise<T>,
+  ): Promise<T> {
+    const normalizedSessionId = logicalSessionId.trim();
+    if (!normalizedSessionId) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility snapshot logicalSessionId cannot be empty',
+      );
+    }
+    if (!this.turnRecordEligibilityFence) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility fence is not configured',
+      );
+    }
+
+    const initial = readSnapshot();
+    const consumed = initial.map((entry) => ({
+      sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
+      turnId: resolveSessionEntryTurnContext(entry).turnId,
+    }));
+    const turnIds = new Set<string>();
+    for (const turnId of requiredTurnIds) {
+      const normalized = turnId.trim();
+      if (!normalized) {
+        throw new TurnRecordEligibilitySnapshotInvalidError(
+          'TurnRecord eligibility snapshot required TurnID cannot be empty',
+        );
+      }
+      turnIds.add(normalized);
+    }
+    for (const reference of consumed) turnIds.add(reference.turnId);
+    if (turnIds.size === 0) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility snapshot must contain at least one TurnID',
+      );
+    }
+    if (turnIds.size > MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        `TurnRecord eligibility snapshot exceeds ${MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES} TurnIDs`,
+      );
+    }
+
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFences(
+      [...turnIds].map(turnId => ({ logicalSessionId: normalizedSessionId, turnId })),
+      async () => {
+        const current = readSnapshot();
+        if (!sessionEntrySnapshotMatches(initial, current)) {
+          throw new TurnRecordEligibilitySnapshotChangedError();
+        }
+
+        const uniqueConsumed = new Map<string, { sourceChannelId: string; turnId: string }>();
+        for (const entry of current) {
+          const reference = {
+            sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
+            turnId: resolveSessionEntryTurnContext(entry).turnId,
+          };
+          uniqueConsumed.set(`${reference.sourceChannelId}\u0000${reference.turnId}`, reference);
+        }
+        for (const reference of uniqueConsumed.values()) {
+          if (!this.isSourceTurnRecordEligible(
+            reference.sourceChannelId,
+            normalizedSessionId,
+            reference.turnId,
+          )) {
+            throw new TurnRecordEligibilitySnapshotInvalidError(
+              'Consumed TurnRecord is missing, duplicated, tombstoned, or belongs to another session',
+            );
+          }
+        }
+        return operation(current);
+      },
+    );
   }
   private async withTurnRecordEligibilityMutationFence<T>(
     logicalSessionId: string,

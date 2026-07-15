@@ -6,7 +6,10 @@ import type {
   IntentionPostTurnHookContext,
   IntentionPostTurnHookRunOptions,
 } from '../substrate-agent/post-turn-actions.js';
-import type { EmotionSelfModelRuntime } from '../substrate-agent/emotion-self-model-runtime.js';
+import {
+  selectEmotionAppraisalSourceEntries,
+  type EmotionSelfModelRuntime,
+} from '../substrate-agent/emotion-self-model-runtime.js';
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkPermanentError,
@@ -125,11 +128,144 @@ function resolveMaxSessionEntryId(source: BackgroundWorkSourceRef): number | und
   return source.assistantSessionEntryId ?? source.userSessionEntryId;
 }
 
+function requireMaxSessionEntryId(source: BackgroundWorkSourceRef): number {
+  const maxSessionEntryId = resolveMaxSessionEntryId(source);
+  if (maxSessionEntryId === undefined) {
+    throw new BackgroundWorkPermanentError('source_mismatch');
+  }
+  return maxSessionEntryId;
+}
+
+async function withStableConsumedSnapshot<T>(
+  input: BackgroundWorkExecutionInput,
+  dependencies: PostTurnBackgroundRuntimeDependencies,
+  readSnapshot: () => ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
+  operation: (entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>) => Promise<T>,
+): Promise<T> {
+  try {
+    return await dependencies.sessionManager.withStableRecordedTurnEligibilitySnapshot(
+      input.payload.source.logicalSessionId,
+      [input.payload.source.turnId],
+      readSnapshot,
+      async entries => operation([...entries]),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotChangedError') {
+      throw new BackgroundWorkDeferredError('source_not_ready', 250);
+    }
+    if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotInvalidError') {
+      throw new BackgroundWorkPermanentError('source_missing');
+    }
+    throw error;
+  }
+}
+
 export async function executePostTurnBackgroundWork(
   input: BackgroundWorkExecutionInput,
   dependencies: PostTurnBackgroundRuntimeDependencies,
 ): Promise<void> {
   const { payload, job } = input;
+  if (payload.kind === 'memory_extraction') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => dependencies.sessionManager.getRecentMessagesAtOrBefore(
+        payload.source.logicalSessionId,
+        maxSessionEntryId,
+        10,
+      ),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        const extractor = dependencies.getMemoryExtractor();
+        if (!extractor) throw new Error('Memory extraction background handler is not wired');
+        await input.effects.run('memory-extraction', async (assertOwned) => {
+          await extractor.maybeExtract(
+            payload.source.logicalSessionId,
+            payload.canonicalContactId,
+            record.turnId,
+            payload.placeId,
+            payload.icpCorrelation,
+            assertOwned,
+            recentEntries,
+          );
+        });
+      },
+    );
+    return;
+  }
+  if (payload.kind === 'emotion_appraisal') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => selectEmotionAppraisalSourceEntries(
+        dependencies.sessionManager.getRecentMessagesAtOrBefore(
+          payload.source.logicalSessionId,
+          maxSessionEntryId,
+          10,
+        ),
+      ),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
+          throw new BackgroundWorkPermanentError('source_mismatch');
+        }
+        await input.effects.run('emotion-appraisal', async (assertOwned) => {
+          const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
+          await dependencies.emotionRuntime.triggerEmotionAppraisal({
+            sessionChannelId: payload.emotionSessionId,
+            turnId: record.turnId,
+            appraisalState: payload.appraisalState,
+            templateVariables: canonicalTemplateVariables,
+            assertEffectAllowed: assertOwned,
+            recentEntries,
+            ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+          });
+        });
+      },
+    );
+    return;
+  }
+  if (payload.kind === 'auto_compaction') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    const snapshotAt = new Date();
+    const captureParams = {
+      channelId: payload.source.logicalSessionId,
+      adaptiveProfile: payload.adaptiveProfile,
+      turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
+      maxSessionEntryId,
+      now: snapshotAt,
+    } as const;
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => dependencies.sessionManager.captureAutoCompactionRecentEntries(captureParams),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        await input.effects.run('auto-compaction', async (assertOwned) => {
+          await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
+            channelId: payload.source.logicalSessionId,
+            systemPromptTokenCount: payload.systemPromptTokenCount,
+            memoriesTokenCount: payload.memoriesTokenCount,
+            adaptiveProfile: payload.adaptiveProfile,
+            turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
+            llmProvider: dependencies.llmProvider,
+            throwOnFailure: true,
+            assertEffectAllowed: assertOwned,
+            capturedRecentEntries: recentEntries,
+            ...(payload.channelMeta ? { channelMeta: payload.channelMeta } : {}),
+            ...(payload.userId ? { userId: payload.userId } : {}),
+            ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+          });
+        });
+      },
+    );
+    return;
+  }
   await dependencies.sessionManager.withSourceRecordedTurnEligibilityFence(
     payload.source.channelId,
     payload.source.logicalSessionId,
@@ -140,70 +276,17 @@ export async function executePostTurnBackgroundWork(
       // proved only after it is held, and raw content never leaves its scope.
       await input.effects.assertOwned();
       const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
-      switch (payload.kind) {
-        case 'memory_extraction': {
-          const extractor = dependencies.getMemoryExtractor();
-          if (!extractor) throw new Error('Memory extraction background handler is not wired');
-          await input.effects.run('memory-extraction', async (assertOwned) => {
-            await extractor.maybeExtract(
-              payload.source.logicalSessionId,
-              payload.canonicalContactId,
-              record.turnId,
-              payload.placeId,
-              payload.icpCorrelation,
-              assertOwned,
-            );
-          });
-          return;
-        }
-        case 'intention_post_turn_hooks':
-          await dependencies.runIntentionPostTurnHooks(
-            rehydrateIntentionContext(record, payload),
-            {
-              propagateFailures: true,
-              runEffect: input.effects.run,
-            },
-          );
-          return;
-        case 'emotion_appraisal':
-          if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
-            throw new BackgroundWorkPermanentError('source_mismatch');
-          }
-          await input.effects.run('emotion-appraisal', async (assertOwned) => {
-            const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
-            // Identity may have legitimately changed since enqueue, so execution
-            // always consumes current canonical owner data rather than queued prose.
-            await dependencies.emotionRuntime.triggerEmotionAppraisal({
-              sessionChannelId: payload.emotionSessionId,
-              turnId: record.turnId,
-              appraisalState: payload.appraisalState,
-              templateVariables: canonicalTemplateVariables,
-              assertEffectAllowed: assertOwned,
-              ...(resolveMaxSessionEntryId(payload.source) !== undefined
-                ? { maxSessionEntryId: resolveMaxSessionEntryId(payload.source) }
-                : {}),
-              ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
-            });
-          });
-          return;
-        case 'auto_compaction':
-          await input.effects.run('auto-compaction', async (assertOwned) => {
-            await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
-              channelId: payload.source.logicalSessionId,
-              systemPromptTokenCount: payload.systemPromptTokenCount,
-              memoriesTokenCount: payload.memoriesTokenCount,
-              adaptiveProfile: payload.adaptiveProfile,
-              turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
-              llmProvider: dependencies.llmProvider,
-              throwOnFailure: true,
-              assertEffectAllowed: assertOwned,
-              ...(payload.channelMeta ? { channelMeta: payload.channelMeta } : {}),
-              ...(payload.userId ? { userId: payload.userId } : {}),
-              ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
-            });
-          });
-          return;
-      }
+      // Source-only audit: the sole production hook records a behavioral
+      // pattern from this canonical message/response pair; it does not read a
+      // session window. Keep it on the one-source fence unless that hook
+      // contract changes.
+      await dependencies.runIntentionPostTurnHooks(
+        rehydrateIntentionContext(record, payload),
+        {
+          propagateFailures: true,
+          runEffect: input.effects.run,
+        },
+      );
     },
   );
 }

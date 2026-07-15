@@ -47,32 +47,53 @@ export class PostgresTurnRecordEligibilityFence implements TurnRecordEligibility
     source: TurnRecordEligibilityFenceKey,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const key = advisoryKey(this.scope, source);
+    return this.withTurnRecordEligibilityFences([source], operation);
+  }
+
+  async withTurnRecordEligibilityFences<T>(
+    sources: readonly TurnRecordEligibilityFenceKey[],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (sources.length === 0) {
+      throw new Error('TurnRecord eligibility fence set cannot be empty');
+    }
+    const keys = [...new Set(sources.map(source => advisoryKey(this.scope, source)))].sort();
     const client = await this.pool.connect();
-    let acquired = false;
+    const acquired: string[] = [];
     let operationCompleted = false;
     let operationResult: T | undefined;
     let operationError: unknown;
     try {
-      // SAFETY: this is the outer lock. Callers acquire it before queue-effect
-      // receipts or session/TurnRecord filesystem locks; no writer may acquire
-      // this advisory lock while already holding either inner lock.
-      await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
-      acquired = true;
+      // SAFETY: these are the outer locks. Every multi-record consumer acquires
+      // the canonical text keys lexicographically on one checked-out session;
+      // single-record writers are a subset of that same order. Callers acquire
+      // them before queue-effect receipts or session/TurnRecord filesystem
+      // locks; no writer may acquire an eligibility key while holding an inner
+      // lock.
+      for (const key of keys) {
+        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+        acquired.push(key);
+      }
       operationResult = await operation();
       operationCompleted = true;
     } catch (error) {
       operationError = error;
     }
 
-    let releaseError: unknown;
-    try {
-      if (acquired) await unlock(client, key);
-    } catch (error) {
-      releaseError = error;
-    } finally {
-      client.release(releaseError ? new Error('TurnRecord eligibility fence release failed') : undefined);
+    const releaseErrors: unknown[] = [];
+    for (const key of acquired.reverse()) {
+      try {
+        await unlock(client, key);
+      } catch (error) {
+        releaseErrors.push(error);
+      }
     }
+    const releaseError = releaseErrors.length === 0
+      ? undefined
+      : releaseErrors.length === 1
+        ? releaseErrors[0]
+        : new AggregateError(releaseErrors, 'Multiple TurnRecord eligibility fence releases failed');
+    client.release(releaseError ? new Error('TurnRecord eligibility fence release failed') : undefined);
 
     if (!operationCompleted) {
       if (releaseError) {

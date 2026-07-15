@@ -13,6 +13,8 @@ import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
+import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
+import type { SessionEntry } from '../../core/session/types.js';
 import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,
@@ -318,6 +320,43 @@ describe('SessionStore', () => {
       operation,
     )).rejects.toThrow('TurnRecord eligibility fence is not configured');
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before acquiring an unbounded consumed-TurnRecord fence set', async () => {
+    const withTurnRecordEligibilityFences = vi.fn(async (
+      _keys: readonly unknown[],
+      operation: () => Promise<unknown>,
+    ) => operation());
+    const fencedStore = new SessionStore(join(dir, 'bounded-fence'), {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences,
+      },
+    });
+    const snapshot: SessionEntry[] = Array.from({ length: 513 }, (_, index) => {
+      const turnId = createTurnId();
+      return {
+        id: index + 1,
+        channelId: 'api:bounded-fence',
+        role: 'user',
+        content: `message ${index}`,
+        timestamp: 1_700_000_000_000 + index,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId,
+          requestId: `request-${index}`,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      };
+    });
+
+    await expect(fencedStore.withStableTurnRecordEligibilitySnapshot(
+      'api:bounded-fence',
+      [],
+      () => snapshot,
+      async () => undefined,
+    )).rejects.toThrow('exceeds 512 TurnIDs');
+    expect(withTurnRecordEligibilityFences).not.toHaveBeenCalled();
   });
 
   it('accepts system-attributed turn records for internal scheduler prompts', () => {

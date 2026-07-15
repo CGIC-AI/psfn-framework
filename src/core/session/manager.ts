@@ -215,7 +215,17 @@ export interface AutoCompactionBetweenTurnsParams {
   icpCorrelation?: IcpConversationCorrelation;
   throwOnFailure?: boolean;
   assertEffectAllowed?: () => Promise<void>;
+  /** Exact source-bounded input captured and rechecked under TurnRecord fences. */
+  capturedRecentEntries?: readonly SessionEntry[];
 }
+
+export type AutoCompactionRecentEntriesCaptureParams = Pick<
+  AutoCompactionBetweenTurnsParams,
+  'channelId' | 'adaptiveProfile' | 'turnBudgetCharacteristics'
+> & {
+  maxSessionEntryId?: number;
+  now?: Date;
+};
 
 function resolveCompactionTokenCount(input: {
   count?: number;
@@ -831,33 +841,15 @@ export class SessionManager {
           this.config,
           params.turnBudgetCharacteristics,
         );
-        const historyBudget = resolveSessionHistoryBudget(this.config, {
-          ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
-          adaptiveProfile,
-        });
-        let recent = collectRecentEntriesWithinTokenBudget({
-          store: this.compactionBoundaryStore,
-          channelId: resolvedChannelId,
-          estimatedCount: historyBudget.estimatedCount,
-          tokenBudget: historyBudget.tokenBudget,
-          turnBudgetCharacteristics: params.turnBudgetCharacteristics,
-        }).entries;
-        // Presence-window gate (bead s10rm): a compaction summary is
-        // itself a served surface — never let it summarize pre-window room
-        // content, or the summary would smuggle it back into context.
-        const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
-        if (roomWindow.kind !== 'unwindowed') {
-          const floor = roomContentWindowFloorMs(roomWindow);
-          recent = recent.filter(entry => entry.timestamp >= floor);
-        }
-        recent = applyFocusCompactionRanges(
-          recent,
-          this.getFocusCompactionRanges(resolvedChannelId),
-        ).entries;
-        recent = applyObservationMasking(
-          recent,
-          this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
-        ).entries;
+        const recent = params.capturedRecentEntries
+          ? [...params.capturedRecentEntries]
+          : this.captureAutoCompactionRecentEntries({
+              channelId: resolvedChannelId,
+              adaptiveProfile,
+              ...(params.turnBudgetCharacteristics
+                ? { turnBudgetCharacteristics: params.turnBudgetCharacteristics }
+                : {}),
+            });
         const coreMemoryBlock = this.coreMemoryProvider
           ?.formatForContext(this.buildCoreMemoryFormatContext(
             // Between-turns work resolves its own scope at drain time; the
@@ -918,6 +910,61 @@ export class SessionManager {
 
     this.pendingAutoCompactions.set(resolvedChannelId, next);
     return next;
+  }
+
+  captureAutoCompactionRecentEntries(
+    params: AutoCompactionRecentEntriesCaptureParams,
+  ): SessionEntry[] {
+    const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
+    const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
+      this.config,
+      params.turnBudgetCharacteristics,
+    );
+    const historyBudget = resolveSessionHistoryBudget(this.config, {
+      ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
+      adaptiveProfile,
+    });
+    const maxSessionEntryId = params.maxSessionEntryId;
+    if (maxSessionEntryId !== undefined
+      && (!Number.isSafeInteger(maxSessionEntryId) || maxSessionEntryId < 1)) {
+      throw new Error('Auto-compaction maxSessionEntryId must be a positive safe integer');
+    }
+    const boundedStore = maxSessionEntryId === undefined
+      ? this.compactionBoundaryStore
+      : {
+          getRecent: (channelId: string, limit: number): SessionEntry[] => {
+            const coveredUpTo = this.store.getCompactionSummaries(channelId).reduce(
+              (maximum, summary) => Math.max(maximum, summary.coveredUpTo),
+              0,
+            );
+            return this.store
+              .getEntriesBefore(channelId, maxSessionEntryId + 1, limit)
+              .filter(entry => entry.id > coveredUpTo);
+          },
+        };
+    let recent = collectRecentEntriesWithinTokenBudget({
+      store: boundedStore,
+      channelId: resolvedChannelId,
+      estimatedCount: historyBudget.estimatedCount,
+      tokenBudget: historyBudget.tokenBudget,
+      turnBudgetCharacteristics: params.turnBudgetCharacteristics,
+      ...(params.now ? { now: params.now } : {}),
+    }).entries;
+    // A compaction summary is a served surface: never let it reintroduce room
+    // content from before the current presence window.
+    const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
+    if (roomWindow.kind !== 'unwindowed') {
+      const floor = roomContentWindowFloorMs(roomWindow);
+      recent = recent.filter(entry => entry.timestamp >= floor);
+    }
+    recent = applyFocusCompactionRanges(
+      recent,
+      this.getFocusCompactionRanges(resolvedChannelId),
+    ).entries;
+    return applyObservationMasking(
+      recent,
+      this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+    ).entries;
   }
 
   recordToolObservation(
@@ -1036,6 +1083,20 @@ export class SessionManager {
       sourceChannelId,
       logicalSessionId,
       turnId,
+      operation,
+    );
+  }
+
+  async withStableRecordedTurnEligibilitySnapshot<T>(
+    logicalSessionId: string,
+    requiredTurnIds: readonly string[],
+    readSnapshot: () => SessionEntry[],
+    operation: (entries: readonly SessionEntry[]) => Promise<T>,
+  ): Promise<T> {
+    return this.store.withStableTurnRecordEligibilitySnapshot(
+      logicalSessionId,
+      requiredTurnIds,
+      readSnapshot,
       operation,
     );
   }

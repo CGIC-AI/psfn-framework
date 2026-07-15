@@ -18,6 +18,7 @@ import type {
   ActiveMemoryContextSnapshot,
 } from '../../faculties/memory/active-context.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
+import type { SessionEntry } from '../session/types.js';
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
@@ -134,6 +135,7 @@ export interface MemoryExtractor {
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
+    recoveredEntries?: readonly SessionEntry[],
   ): Promise<void>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }

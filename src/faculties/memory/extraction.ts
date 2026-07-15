@@ -255,6 +255,7 @@ export class MemoryExtractor {
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
+    recoveredEntries?: readonly SessionEntry[],
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -287,7 +288,7 @@ export class MemoryExtractor {
       channelId,
       trigger.triggerReason,
       canonicalContactId,
-      undefined,
+      recoveredEntries ? [...recoveredEntries] : undefined,
       turnId,
       undefined,
       placeId,

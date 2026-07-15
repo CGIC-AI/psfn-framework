@@ -4,6 +4,79 @@ import { createPostgresContactStore } from './postgres-adapter.js';
 import { FakePostgresPool } from '../../test-support/fake-postgres-contact-pool.js';
 
 describe('PostgresContactStore', () => {
+  it('denies autonomous promotion into a high trust tier', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Autonomous Promotion Target' });
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'trusted',
+      'agent:contact-tool',
+      { mutationSource: 'autonomous' },
+    )).resolves.toBe(false);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+  });
+
+  it('denies autonomous downgrade out of a high trust tier', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert(
+      { displayName: 'Autonomous Downgrade Target', trustLevel: 'trusted' },
+      { actor: 'operator:test' },
+    );
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'regular',
+      'agent:contact-tool',
+      { mutationSource: 'autonomous' },
+    )).resolves.toBe(false);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'trusted' });
+  });
+
+  it('allows operator-authorized mutations into and out of high trust tiers', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Manual Trust Target' });
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'trusted',
+      'operator:test',
+      { mutationSource: 'manual' },
+    )).resolves.toBe(true);
+    await expect(store.setTrustLevel(
+      contact.id,
+      'regular',
+      'operator:test',
+      { mutationSource: 'manual' },
+    )).resolves.toBe(true);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+  });
+
+  it('preserves autonomous low-tier trust continuity', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({ displayName: 'Low Tier Trust Target' });
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'public',
+      'agent:contact-tool',
+      { mutationSource: 'autonomous' },
+    )).resolves.toBe(true);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'public' });
+  });
+
   it('round-trips contact identity and social graph data', async () => {
     const pool = new FakePostgresPool();
     const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {

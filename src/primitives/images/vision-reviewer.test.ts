@@ -175,11 +175,20 @@ describe('DefaultImageVisionReviewer', () => {
 
     await runWithRequestContext(
       {
+        sessionId: 'logical-session-1',
         turnId: 'turn-1' as TurnID,
-        channelId: 'channel-1',
+        channelId: 'discord:guild:channel-1',
+        channelType: 'discord',
         requestId: 'req-1',
+        originType: 'chat',
         toolName: 'media',
         toolCallId: 'call-1',
+        conversationId: 'logical-session-1',
+        rootInitiationId: 'root-initiation-1',
+        shardId: 'shard-1',
+        subagentId: 'subagent-1',
+        workloadType: 'subagent',
+        workloadId: 'subagent-1',
       },
       async () => {
         await reviewer.analyze({
@@ -192,14 +201,22 @@ describe('DefaultImageVisionReviewer', () => {
     expect(llmProvider.complete).toHaveBeenCalledWith(
       expect.objectContaining({
         correlation: expect.objectContaining({
+          sessionId: 'logical-session-1',
           turnId: 'turn-1',
-          channelId: 'channel-1',
+          channelId: 'discord:guild:channel-1',
+          channelType: 'discord',
           requestId: 'req-1:vision-review',
           callType: 'tool',
           toolName: 'media',
           toolCallId: 'call-1',
+          conversationId: 'logical-session-1',
+          rootInitiationId: 'root-initiation-1',
+          shardId: 'shard-1',
+          subagentId: 'subagent-1',
+          workloadType: 'subagent',
+          workloadId: 'subagent-1',
           purpose: 'images.vision_review',
-          originType: 'tool',
+          originType: 'chat',
           originStage: 'images.vision_review',
         }),
       }),

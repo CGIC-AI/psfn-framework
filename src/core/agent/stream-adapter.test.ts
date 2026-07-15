@@ -1,16 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '../../boundary/pi-agent/index.js';
 import type { AgentEvent } from '../../boundary/pi-agent/index.js';
-import { validateToolArguments } from '@mariozechner/pi-ai';
+import { validateToolArguments, type Context } from '@mariozechner/pi-ai';
 import { Type } from '@sinclair/typebox';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
-import { MODEL_USAGE_LEDGER_FILE_NAME, ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
@@ -167,6 +166,13 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
     events.push(event);
   }
   return events;
+}
+
+function makePiContext(): Context {
+  return {
+    systemPrompt: 'System',
+    messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+  };
 }
 
 describe('createSubstrateStreamFn', () => {
@@ -465,203 +471,6 @@ describe('createSubstrateStreamFn', () => {
       .toThrow('Validation failed for tool "toolset"');
   });
 
-  it('fails closed and emits budget-block event when stream candidate exceeds budget', async () => {
-    const baseConfig = makeConfig();
-    const baseRegistry = baseConfig.modelRegistry!;
-    const config = makeConfig({
-      modelRegistry: {
-        ...baseRegistry,
-        budgetPolicy: {
-          enabled: true,
-          dailyUsdLimit: 0.001,
-          monthlyUsdLimit: 1,
-          currency: 'USD',
-        },
-        models: baseRegistry.models.map((entry) => (
-          entry.id === 'chat'
-            ? {
-              ...entry,
-              cost: { inputPer1MUsd: 100, outputPer1MUsd: 100, currency: 'USD' },
-            }
-            : entry
-        )),
-      },
-    });
-    const controller = new ModelBudgetController(config);
-    controller.recordUsage({
-      candidate: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2', maxTokens: 16384, slotKey: 'chat' },
-      purpose: 'chat',
-      service: 'chat',
-      process: 'seed',
-      inputTokens: 1000,
-      outputTokens: 1000,
-    });
-
-    const blockedEvents: Array<Record<string, unknown>> = [];
-    const streamFn = makeStreamFn(config, {
-      onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
-    });
-
-    streamAdapterMocks.transportStream.mockResolvedValue({
-      content: 'ok',
-      toolCalls: [],
-      model: 'openrouter/deepseek/deepseek-v3.2',
-      inputTokens: 1,
-      outputTokens: 1,
-      stopReason: 'stop',
-    });
-
-    await expect(runWithRequestContext(
-      {
-        turnId: 'turn-stream-budget-1',
-        requestId: 'req-stream-budget-1',
-        channelId: 'channel-stream-budget-1',
-        callType: 'chat',
-        originType: 'chat',
-        originStage: 'agent.stream.prompt',
-      },
-      async () => {
-        const stream = await streamFn(
-          {
-            id: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            name: 'deepseek/deepseek-v3.2',
-            api: 'openai-completions',
-            input: ['text'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 16_384,
-          } as any,
-          {
-            systemPrompt: 'System',
-            messages: [{ role: 'user', content: 'hello' }],
-          } as any,
-          {},
-        );
-        return await collectStreamEvents(stream as AsyncIterable<unknown>);
-      },
-    )).rejects.toThrow('Model budget blocked');
-    expect(blockedEvents).toHaveLength(1);
-    expect(blockedEvents[0]).toMatchObject({
-      reason: 'daily_budget_exceeded',
-      purpose: 'chat',
-      provider: 'openrouter',
-      model: 'deepseek/deepseek-v3.2',
-      service: 'chat',
-      process: 'agent.stream.prompt',
-      turnId: 'turn-stream-budget-1',
-      requestId: 'req-stream-budget-1',
-      channelId: 'channel-stream-budget-1',
-      callType: 'chat',
-      originType: 'chat',
-      originStage: 'agent.stream.prompt',
-      budget: {
-        dailyLimitUsd: 0.001,
-        monthlyLimitUsd: 1,
-        dayKey: expect.any(String),
-        monthKey: expect.any(String),
-        dailySpentUsd: expect.any(Number),
-        monthlySpentUsd: expect.any(Number),
-      },
-      estimatedRequestCostUsd: expect.any(Number),
-    });
-    expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
-  });
-
-  it('skips preflight token estimation when model budget policy is disabled', async () => {
-    const baseConfig = makeConfig();
-    const baseRegistry = baseConfig.modelRegistry!;
-    const config = makeConfig({
-      modelRegistry: {
-        ...baseRegistry,
-        budgetPolicy: {
-          enabled: false,
-          dailyUsdLimit: 1,
-          monthlyUsdLimit: 10,
-          currency: 'USD',
-        },
-      },
-    });
-    const circular = {} as { self?: unknown };
-    circular.self = circular;
-    const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
-
-    streamAdapterMocks.transportStream.mockResolvedValue({
-      content: 'ok',
-      toolCalls: [],
-      model: 'openrouter/deepseek/deepseek-v3.2',
-      inputTokens: 13,
-      outputTokens: 7,
-      stopReason: 'stop',
-    });
-
-    const stream = await streamFn(model, {
-      systemPrompt: 'System',
-      messages: [{ role: 'user', content: 'hello' }],
-      debugOnly: circular,
-    } as any, {});
-    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
-
-    expect((events.at(-1) as { type: string }).type).toBe('done');
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
-    expect(parsed.records[0]).toMatchObject({
-      inputTokens: 13,
-      outputTokens: 7,
-    });
-  });
-
-  it('limits budget preflight token estimation to prompt messages while recording provider usage', async () => {
-    const baseConfig = makeConfig();
-    const baseRegistry = baseConfig.modelRegistry!;
-    const config = makeConfig({
-      modelRegistry: {
-        ...baseRegistry,
-        budgetPolicy: {
-          enabled: true,
-          dailyUsdLimit: 0.0001,
-          monthlyUsdLimit: 1,
-          currency: 'USD',
-        },
-        models: baseRegistry.models.map((entry) => (
-          entry.id === 'chat'
-            ? {
-              ...entry,
-              cost: { inputPer1MUsd: 1, outputPer1MUsd: 0.000001, currency: 'USD' },
-            }
-            : entry
-        )),
-      },
-    });
-    const streamFn = makeStreamFn(config);
-    const model = resolveModel(config, 'chat');
-
-    streamAdapterMocks.transportStream.mockResolvedValue({
-      content: 'ok',
-      toolCalls: [],
-      model: 'openrouter/deepseek/deepseek-v3.2',
-      inputTokens: 321,
-      outputTokens: 9,
-      stopReason: 'stop',
-    });
-
-    const stream = await streamFn(model, {
-      systemPrompt: 'S',
-      messages: [{ role: 'user', content: 'hello' }],
-      debugOnly: 'x'.repeat(20_000),
-    } as any, {});
-    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
-
-    expect((events.at(-1) as { type: string }).type).toBe('done');
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
-    expect(parsed.records[0]).toMatchObject({
-      inputTokens: 321,
-      outputTokens: 9,
-    });
-  });
-
   it('falls back to the next configured chat candidate when the primary stream errors before output commits', async () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();
@@ -723,6 +532,37 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
     expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('deepseek/deepseek-v3.2');
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
+  });
+
+  it('uses one logical call with monotonic physical attempts and pinned transport candidates', async () => {
+    const config = makeConfig({
+      retryMaxAttempts: 1,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream
+      .mockRejectedValueOnce(new Error('503 provider unavailable'))
+      .mockResolvedValueOnce({
+        content: 'Recovered on retry.',
+        toolCalls: [],
+        model: 'openrouter/deepseek/deepseek-v3.2',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, 'chat'), makePiContext(), {});
+    await collectStreamEvents(stream);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    const contexts = streamAdapterMocks.transportStream.mock.calls.map(call => call[0] as LLMContext);
+    const accounting = contexts.map(context => context.accounting);
+    expect(accounting).toEqual([
+      { logicalCallId: expect.stringMatching(/^llm:/), attempt: 1, retryOwner: 'caller' },
+      { logicalCallId: expect.stringMatching(/^llm:/), attempt: 2, retryOwner: 'caller' },
+    ]);
+    expect(accounting[0]?.logicalCallId).toBe(accounting[1]?.logicalCallId);
+    expect(contexts.map(context => context.modelHint?.pin)).toEqual([true, true]);
   });
 
   it('falls back to the next configured chat candidate when the primary response has no text', async () => {

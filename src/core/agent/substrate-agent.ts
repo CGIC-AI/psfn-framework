@@ -23,7 +23,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -55,6 +55,7 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ReflectionNudgeTracker } from '../../faculties/skills/reflection-nudge.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
@@ -221,7 +222,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
-  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked' | 'transport'>;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'transport'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -497,16 +498,6 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    const emitBudgetBlocked = (event: ModelBudgetBlockedEvent) => {
-      this.eventBus.emit('model.budget.blocked', event).catch((error) => {
-        log.error('Failed to emit stream budget blocked telemetry', {
-          error: toErrorMessage(error),
-          provider: event.provider,
-          model: event.model,
-          reason: event.reason,
-        });
-      });
-    };
     const defaultStreamTransport = options?.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
@@ -515,7 +506,6 @@ export class SubstrateAgent {
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
         ...(options?.streamRuntimeOptions ?? {}),
         transport: defaultStreamTransport,
-        onBudgetBlocked: emitBudgetBlocked,
       }),
       convertToLlm,
     });
@@ -1043,6 +1033,12 @@ export class SubstrateAgent {
 
   setInternalStateStore(store: InternalStateStorePort | null): void {
     this.internalStateStore = store;
+  }
+
+  setIntrospectionTurnSensitivityDecisions(
+    decisions: IntrospectionTurnSensitivityDecisions | null,
+  ): void {
+    this.turnSupportRuntime.setIntrospectionTurnSensitivityDecisions(decisions);
   }
 
   /** Restores a validated persisted snapshot as the current running state (startup rehydration). */

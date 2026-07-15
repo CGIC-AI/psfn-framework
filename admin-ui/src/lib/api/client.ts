@@ -80,6 +80,32 @@ export async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export interface ApiDownload {
+  blob: Blob;
+  filename: string | null;
+}
+
+export async function apiDownload(path: string): Promise<ApiDownload> {
+  const res = await fetch(API_BASE + path, {
+    cache: 'no-store',
+    headers: authHeaders(),
+    credentials: 'include',
+  });
+  await throwIfNotOk(res);
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/iu)?.[1];
+  const plainFilename = disposition.match(/filename="?([^";]+)"?/iu)?.[1];
+  let filename: string | null = plainFilename?.trim() || null;
+  if (encodedFilename) {
+    try {
+      filename = decodeURIComponent(encodedFilename.trim());
+    } catch {
+      filename = encodedFilename.trim();
+    }
+  }
+  return { blob: await res.blob(), filename };
+}
+
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(API_BASE + path, {
     method: 'POST',

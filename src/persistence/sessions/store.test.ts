@@ -584,6 +584,7 @@ describe('SessionStore', () => {
       reason: 'privacy request',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
 
     await store.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
@@ -593,6 +594,69 @@ describe('SessionStore', () => {
       firstTurnId,
       secondTurnId,
     ]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
+      firstTurnId,
+      secondTurnId,
+    ]);
+  });
+
+  it('applies logical-session tombstones to routed physical-source records after disk reload', () => {
+    const sourceChannelId = 'discord:public-room';
+    const logicalSessionId = 'session:logical-after-reset';
+    const redactedTurnId = createTurnId(1_700_000_000_000);
+    const visibleTurnId = createTurnId(1_700_000_000_100);
+    store.append({
+      channelId: logicalSessionId,
+      role: 'user',
+      content: 'logical session owner',
+      timestamp: 1_700_000_000_000,
+      turnId: redactedTurnId,
+    });
+    for (const [turnId, requestId, completedAt] of [
+      [redactedTurnId, 'req-redacted', 1_700_000_000_010],
+      [visibleTurnId, 'req-visible', 1_700_000_000_110],
+    ] as const) {
+      store.appendTurnRecord({
+        schemaVersion: 1,
+        turnId,
+        requestId,
+        sessionId: logicalSessionId,
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        startedAt: completedAt - 10,
+        completedAt,
+        status: 'completed',
+        userMessage: { role: 'user', content: requestId, timestamp: completedAt - 10 },
+        assistantMessage: { role: 'assistant', content: 'reply', timestamp: completedAt },
+        toolCalls: [],
+        extractedMemoryIds: [],
+        concernDeltaRefs: [],
+        contactDeltaRefs: [],
+        versionPointers: { model: 'test/model' },
+        provenanceRefs: [],
+      });
+    }
+
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
+      .toEqual([logicalSessionId, logicalSessionId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(true);
+    store.redactTurn(logicalSessionId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
+      .toBe(true);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
   });
 
   it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {

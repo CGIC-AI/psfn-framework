@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import {
   existsSync,
@@ -10,7 +11,8 @@ import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type {
@@ -190,6 +192,79 @@ function parseOptionalLocation(value: unknown): TurnRecordLocation | undefined {
   };
 }
 
+function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "auditPrivacy" must be an object');
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error('TurnRecord field "auditPrivacy.schemaVersion" must be 1');
+  }
+  const contentMode = value.contentMode;
+  if (contentMode !== 'verbatim_public' && contentMode !== 'emotional_signal_only') {
+    throw new Error('TurnRecord field "auditPrivacy.contentMode" is invalid');
+  }
+  const reason = value.reason;
+  const validReasons: TurnRecordAuditPrivacy['reason'][] = [
+    'explicit_public_non_dm',
+    'direct_message',
+    'non_public_channel',
+    'intimate_content',
+    'missing_or_ambiguous_content_sensitivity',
+    'missing_or_ambiguous_privacy',
+  ];
+  if (!validReasons.includes(reason as TurnRecordAuditPrivacy['reason'])) {
+    throw new Error('TurnRecord field "auditPrivacy.reason" is invalid');
+  }
+  const channelPrivacy = value.channelPrivacy;
+  if (channelPrivacy !== undefined && !isChannelPrivacy(channelPrivacy)) {
+    throw new Error('TurnRecord field "auditPrivacy.channelPrivacy" is invalid');
+  }
+  const contentSensitivity = value.contentSensitivity;
+  if (
+    contentSensitivity !== 'non_intimate'
+    && contentSensitivity !== 'intimate'
+    && contentSensitivity !== 'ambiguous'
+  ) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivity" is invalid');
+  }
+  const contentSensitivityActor = value.contentSensitivityActor;
+  if (contentSensitivityActor !== undefined && (
+    !isRecord(contentSensitivityActor)
+    || contentSensitivityActor.kind !== 'companion'
+    || Object.keys(contentSensitivityActor).length !== 3
+    || Object.keys(contentSensitivityActor).some(key => !['kind', 'turnId', 'requestId'].includes(key))
+  )) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivityActor" is invalid');
+  }
+  const normalizedSensitivityActor = contentSensitivityActor === undefined
+    ? undefined
+    : {
+      kind: 'companion' as const,
+      turnId: parseRequiredString(contentSensitivityActor.turnId, 'auditPrivacy.contentSensitivityActor.turnId') as TurnID,
+      requestId: parseRequiredString(contentSensitivityActor.requestId, 'auditPrivacy.contentSensitivityActor.requestId'),
+    };
+  if (
+    contentMode === 'verbatim_public'
+    && (
+      channelPrivacy !== 'public'
+      || contentSensitivity !== 'non_intimate'
+      || !normalizedSensitivityActor
+      || reason !== 'explicit_public_non_dm'
+    )
+  ) {
+    throw new Error('TurnRecord auditPrivacy verbatim mode requires explicit non-intimate public provenance');
+  }
+  return {
+    schemaVersion: 1,
+    contentMode,
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+    contentSensitivity,
+    ...(normalizedSensitivityActor ? { contentSensitivityActor: normalizedSensitivityActor } : {}),
+    reason: reason as TurnRecordAuditPrivacy['reason'],
+  };
+}
+
 function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMessage {
   if (!isRecord(value)) {
     throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
@@ -206,6 +281,7 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   const sourceMessageId = value.sourceMessageId;
   const authorId = value.authorId;
   const authorName = value.authorName;
+  const runtimeFallbackProvenance = value.runtimeFallbackProvenance;
 
   return {
     role,
@@ -222,6 +298,14 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
       : {}),
     ...(typeof authorName === 'string' && authorName.trim().length > 0
       ? { authorName: authorName.trim() }
+      : {}),
+    ...(runtimeFallbackProvenance !== undefined
+      ? {
+        runtimeFallbackProvenance: normalizeRuntimeFallbackProvenance(
+          runtimeFallbackProvenance,
+          `${fieldName}.runtimeFallbackProvenance`,
+        ),
+      }
       : {}),
   };
 }
@@ -467,6 +551,9 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
 
   const turnId = parseTurnIdOrBackfill(raw, channelId);
   const requestId = parseRequiredString(raw.requestId, 'requestId');
+  const sessionId = raw.sessionId === undefined
+    ? undefined
+    : parseRequiredString(raw.sessionId, 'sessionId');
   const startedAt = parseRequiredTimestamp(raw.startedAt, 'startedAt');
   const completedAt = parseRequiredTimestamp(raw.completedAt, 'completedAt');
 
@@ -486,21 +573,34 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   const observability = parseTurnObservability(raw.observability, {
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
+  const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
+  if (
+    auditPrivacy?.contentSensitivityActor
+    && (
+      auditPrivacy.contentSensitivityActor.turnId !== turnId
+      || auditPrivacy.contentSensitivityActor.requestId !== requestId
+    )
+  ) {
+    throw new Error('TurnRecord auditPrivacy sensitivity actor must match the owning turn');
+  }
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
     channelType: channelType as ChannelType,
     startedAt,
     completedAt,
     status: status as TurnRecord['status'],
     ...(location ? { location } : {}),
+    ...(auditPrivacy ? { auditPrivacy } : {}),
     userMessage,
     ...(assistantMessage ? { assistantMessage } : {}),
     toolCalls,
@@ -890,12 +990,25 @@ export function createFilesystemTurnRecordStorePort(
       );
       appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
     },
-    readRecentTurnRecords: (channelId, limit) => (
+    readRecentTurnRecords: (channelId, limit, offset = 0) => {
+      if (limit <= 0 || offset < 0) return [];
+      // #49 introspection auditing pages back through history via `offset`.
+      // Read `limit + offset` newest records (oldest-first) across segments,
+      // then drop the newest `offset` — the trailing entries of the ascending
+      // window — to land on the requested page.
+      const rows = readRecentTurnRecordsAcrossSegments(
+        sessionsDir,
+        channelId,
+        limit + offset,
+        { scanChunkBytes },
+      );
+      const windowed = offset > 0
+        ? rows.slice(0, Math.max(0, rows.length - offset))
+        : rows;
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      readRecentTurnRecordsAcrossSegments(sessionsDir, channelId, limit, { scanChunkBytes })
-        .map(record => resolveTurnRecordToolDefinitions(record, sharedStore))
-    ),
+      return windowed.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
+    },
   };
 }

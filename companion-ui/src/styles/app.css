@@ -680,6 +680,15 @@ button:focus-visible {
   color: #2f6da2;
 }
 
+.update-toast {
+  border-color: rgba(143, 187, 232, 0.48);
+  background: rgba(234, 244, 255, 0.96);
+}
+
+.update-toast > svg {
+  color: #2f6da2;
+}
+
 .toast-actions {
   display: flex;
   justify-content: flex-end;

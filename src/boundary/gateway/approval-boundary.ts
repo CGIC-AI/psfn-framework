@@ -66,6 +66,8 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   approvalAction: string;
   approvalScope: (params: P) => string;
   approvalReason?: (params: P) => string;
+  /** Connection-scoped policy authority for multi-companion workspace isolation. */
+  policyConfigProvider?: () => PolicyConfig;
 }
 
 export interface ApprovalBoundaryService {
@@ -163,7 +165,7 @@ export function createGatewayApprovalBoundaryService(
         }
         const decision = evaluatePolicy(
           { method: gateOptions.method, params: params as unknown as Record<string, unknown> },
-          options.policyConfig,
+          gateOptions.policyConfigProvider?.() ?? options.policyConfig,
         );
         const summary = gateOptions.paramsSummary(params);
         const auditId = await options.audit(gateOptions.method, decision, summary);

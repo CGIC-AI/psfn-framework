@@ -377,11 +377,11 @@ export class SessionManager {
     await pending;
   }
 
-  listRecentSessions(limit?: number): SessionActivitySummary[] {
+  listRecentSessions(limit?: number, offset = 0): SessionActivitySummary[] {
     if (limit === undefined) {
-      return this.store.listSessionsByRecentActivity();
+      return this.store.listSessionsByRecentActivity(20, offset);
     }
-    return this.store.listSessionsByRecentActivity(limit);
+    return this.store.listSessionsByRecentActivity(limit, offset);
   }
 
   /**
@@ -492,6 +492,7 @@ export class SessionManager {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
+        replyToMessageId: options.replyToMessageId,
         role: 'user',
       })
       : options.metadata;

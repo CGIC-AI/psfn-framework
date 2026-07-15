@@ -105,6 +105,39 @@ export async function ensurePostgresSchema(pool: Pool, statements: readonly stri
 }
 
 /**
+ * Serialize one migration chain across every process connected to the database.
+ * PostgreSQL's `IF NOT EXISTS` DDL is not race-free when independent sessions
+ * create the same relation concurrently, so callers with eager startup
+ * migrations must use a stable, migration-specific lock key.
+ */
+export async function ensurePostgresSchemaWithAdvisoryLock(
+  pool: Pool,
+  statements: readonly string[],
+  lockKey: readonly [number, number],
+): Promise<void> {
+  const [namespaceKey, migrationKey] = lockKey;
+  if (
+    !Number.isInteger(namespaceKey)
+    || !Number.isInteger(migrationKey)
+    || namespaceKey < -2_147_483_648
+    || namespaceKey > 2_147_483_647
+    || migrationKey < -2_147_483_648
+    || migrationKey > 2_147_483_647
+  ) {
+    throw new Error('Postgres advisory lock keys must be signed 32-bit integers');
+  }
+  await withPostgresClient(pool, async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [
+      namespaceKey,
+      migrationKey,
+    ]);
+    for (const statement of statements) {
+      await client.query(statement);
+    }
+  });
+}
+
+/**
  * Create a Postgres schema if it does not already exist.
  *
  * The name is strictly validated before it is quoted into the DDL, so an

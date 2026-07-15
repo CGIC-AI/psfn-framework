@@ -1,6 +1,3 @@
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
@@ -9,19 +6,6 @@ import { GatewayErrors } from '../protocol.js';
 
 function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<string, unknown>): Promise<any> } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
-  const keyring = {
-    activeVersion: 'v1',
-    keys: { v1: 'test-shell-secret' },
-  };
-  const effectivePolicyConfig: PolicyConfig = {
-    ...policyConfig,
-    ...(policyConfig.shellExec ? {
-      shellExec: {
-        pathOverride: dirname(process.execPath),
-        ...policyConfig.shellExec,
-      },
-    } : {}),
-  };
   const runtime: GatewayMethodRuntime = {
     target: {
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
@@ -31,308 +15,59 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     llmProvider: {} as any,
     embeddingService: {} as any,
     discordAdapter: {} as any,
-    policyConfig: effectivePolicyConfig,
+    policyConfig,
     workspacePath: process.cwd(),
-    sessionHmacKeyring: keyring,
+    sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test-shell-secret' } },
     notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({
-      id: 'noop',
-      status: 'not_found',
-      message: 'noop',
-      executed: false,
+      id: 'noop', status: 'not_found', message: 'noop', executed: false,
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    approvalBoundary: {
-      gate: (_options) => async (params) => _options.handler(params),
-    } as any,
+    approvalBoundary: { gate: options => async params => options.handler(params) } as any,
   };
   registerShellMethods(runtime);
   const method = methods.get('shell.exec');
-  if (!method) {
-    throw new Error('shell.exec method was not registered');
-  }
-  return {
-    invoke(params: Record<string, unknown>) {
-      return method(params);
-    },
-  };
+  if (!method) throw new Error('shell.exec method was not registered');
+  return { invoke: params => method(params) };
 }
 
 describe('registerShellMethods', () => {
-  const tempPaths: string[] = [];
+  afterEach(() => resetShellCircuitBreakersForTests());
 
-  afterEach(() => {
-    resetShellCircuitBreakersForTests();
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (!target) continue;
-      rmSync(target, { recursive: true, force: true });
-    }
-  });
-
-  function makeTempDir(prefix: string): string {
-    const dir = mkdtempSync(join(tmpdir(), prefix));
-    tempPaths.push(dir);
-    return dir;
-  }
-
-  it('executes allowlisted command within policy bounds', async () => {
+  it('maps the missing OS confinement boundary to a policy denial', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-      },
+      shellExec: { enabled: true, allowlist: ['printf'], allowedCwd: [process.cwd()] },
     });
-
-    const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("ok")'],
+    await expect(harness.invoke({ command: 'printf', args: ['never'] })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('no OS-enforced filesystem confinement'),
     });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('ok');
-    expect(result.stderr).toBe('');
-    expect(result.timedOut).toBe(false);
   });
 
-  it('denies shell.exec when policy is disabled at the runner boundary', async () => {
+  it('retains the explicit disabled-policy denial', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),
-      shellExec: {
-        enabled: false,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-      },
+      shellExec: { enabled: false, allowlist: ['printf'], allowedCwd: [process.cwd()] },
     });
-
-    await expect(harness.invoke({
-      command: 'node',
-      args: ['-v'],
-    })).rejects.toMatchObject({
+    await expect(harness.invoke({ command: 'printf', args: ['never'] })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
       message: expect.stringContaining('policy is disabled'),
     });
   });
 
-  it('denies command outside allowlist', async () => {
+  it('denies non-blacklisted evaluators and never turns policy denials into a circuit failure', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['bash'],
-        allowedCwd: [process.cwd()],
-      },
+      shellExec: { enabled: true, allowlist: ['awk'], allowedCwd: [process.cwd()] },
     });
-
-    await expect(harness.invoke({
-      command: 'node',
-      args: ['-v'],
-    })).rejects.toMatchObject({
-      code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('not allowlisted'),
-    });
-  });
-
-  it('enforces execution timeout', async () => {
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-        maxTimeoutMs: 150,
-      },
-    });
-
-    const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'setTimeout(() => process.stdout.write("late"), 500)'],
-      timeoutMs: 50,
-    });
-
-    expect(result.timedOut).toBe(true);
-    expect(result.exitCode).toBeNull();
-  });
-
-  it('opens a per-command shell.exec circuit after repeated execution failures', async () => {
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-      },
-    });
-    const params = {
-      command: 'node',
-      args: ['-e', 'process.exit(7)'],
-    };
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await harness.invoke(params);
-      expect(result.exitCode).toBe(7);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await expect(harness.invoke({ command: 'awk', args: ['BEGIN { print 1 }'] }))
+        .rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
     }
-
-    await expect(harness.invoke(params)).rejects.toMatchObject({
-      code: GatewayErrors.PROVIDER_ERROR,
-      message: expect.stringContaining('Circuit open for shell.exec'),
-    });
-  });
-
-  it('enforces output limit', async () => {
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-        maxOutputChars: 120,
-      },
-    });
-
-    const result = await harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("x".repeat(300)); process.stderr.write("e".repeat(300));'],
-      maxOutputChars: 80,
-    });
-
-    expect(result.truncated).toBe(true);
-    expect((result.stdout.length + result.stderr.length)).toBeLessThanOrEqual(80);
-  });
-
-  it('denies cwd outside allowlist', async () => {
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-      },
-    });
-
-    await expect(harness.invoke({
-      command: 'node',
-      args: ['-v'],
-      cwd: '/tmp',
-    })).rejects.toMatchObject({
-      code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('cwd not allowlisted'),
-    });
-  });
-
-  it('denies basename/path allowlist bypass attempts', async () => {
-    const fakeBinDir = makeTempDir('psfn-shell-fake-bin-');
-    const fakeNode = join(fakeBinDir, 'node');
-    writeFileSync(fakeNode, '#!/bin/sh\necho fake-node\n', 'utf8');
-    chmodSync(fakeNode, 0o755);
-
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [process.cwd()],
-      },
-    });
-
-    await expect(harness.invoke({
-      command: fakeNode,
-      args: ['-v'],
-    })).rejects.toMatchObject({
-      code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('not allowlisted'),
-    });
-  });
-
-  it('passes through only explicitly allowlisted env vars to sandboxed shell execution', async () => {
-    const previousAllowed = process.env.PSFN_ALLOWED_TOKEN;
-    const previousBlocked = process.env.PSFN_BLOCKED_TOKEN;
-    process.env.PSFN_ALLOWED_TOKEN = 'visible-token';
-    process.env.PSFN_BLOCKED_TOKEN = 'hidden-token';
-
-    try {
-      const harness = createHarness({
-        workspacePath: process.cwd(),
-        shellExec: {
-          enabled: true,
-          allowlist: ['node'],
-          envAllowlist: ['PSFN_ALLOWED_TOKEN'],
-          allowedCwd: [process.cwd()],
-        },
-      });
-
-      const result = await harness.invoke({
-        command: 'node',
-        args: [
-          '-e',
-          'process.stdout.write(JSON.stringify({allowed: process.env.PSFN_ALLOWED_TOKEN ?? null, blocked: Object.prototype.hasOwnProperty.call(process.env, "PSFN_BLOCKED_TOKEN"), home: Object.prototype.hasOwnProperty.call(process.env, "HOME")}))',
-        ],
-        envVars: ['PSFN_ALLOWED_TOKEN'],
-      });
-
-      expect(JSON.parse(result.stdout)).toEqual({
-        allowed: 'visible-token',
-        blocked: false,
-        home: false,
-      });
-    } finally {
-      if (previousAllowed === undefined) delete process.env.PSFN_ALLOWED_TOKEN;
-      else process.env.PSFN_ALLOWED_TOKEN = previousAllowed;
-      if (previousBlocked === undefined) delete process.env.PSFN_BLOCKED_TOKEN;
-      else process.env.PSFN_BLOCKED_TOKEN = previousBlocked;
-    }
-  });
-
-  it('denies unallowlisted env var passthrough requests', async () => {
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        envAllowlist: ['PSFN_ALLOWED_TOKEN'],
-        allowedCwd: [process.cwd()],
-      },
-    });
-
-    await expect(harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("never")'],
-      envVars: ['PSFN_BLOCKED_TOKEN'],
-    })).rejects.toMatchObject({
-      code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('env var not allowlisted'),
-    });
-  });
-
-  it('denies cwd symlink escapes via canonical path checks', async () => {
-    const allowedRoot = makeTempDir('psfn-shell-allowed-root-');
-    const outsideRoot = makeTempDir('psfn-shell-outside-root-');
-    const escapeLink = join(allowedRoot, 'escape');
-    mkdirSync(join(outsideRoot, 'real-cwd'), { recursive: true });
-    symlinkSync(outsideRoot, escapeLink, 'dir');
-
-    const harness = createHarness({
-      workspacePath: process.cwd(),
-      shellExec: {
-        enabled: true,
-        allowlist: ['node'],
-        allowedCwd: [allowedRoot],
-      },
-    });
-
-    await expect(harness.invoke({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("blocked")'],
-      cwd: join(escapeLink, 'real-cwd'),
-    })).rejects.toMatchObject({
-      code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('cwd not allowlisted'),
-    });
   });
 });

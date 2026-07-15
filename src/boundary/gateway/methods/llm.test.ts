@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
+import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createHarness() {
+function createHarness(options: {
+  embeddingService?: GatewayMethodRuntime['embeddingService'] & {
+    embedBatchWithUsage?: (texts: string[]) => Promise<unknown>;
+  };
+  usageEvents?: ModelUsageEventInput[];
+} = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn(async () => ({
     content: 'streamed',
@@ -75,11 +81,18 @@ function createHarness() {
       stream,
       complete,
     } as any,
-    embeddingService: {
+    embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),
       dims: 1,
     } as any,
+    ...(options.usageEvents ? {
+      modelUsageRecorder: {
+        async recordUsageEvent(event: ModelUsageEventInput) {
+          options.usageEvents?.push(event);
+        },
+      },
+    } : {}),
     modelDiscovery,
     discordAdapter: {} as any,
     policyConfig: { workspacePath: process.cwd() },
@@ -150,6 +163,33 @@ describe('registerLLMMethods', () => {
     })).rejects.toThrow('non-empty shard identifier');
   });
 
+  it('propagates private telemetry generically and strips source identifiers', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'private work' }],
+      systemPrompt: 'private',
+      purpose: 'background',
+      turnId: 'source-turn',
+      requestId: 'source-request',
+      channelId: 'source-channel',
+      originStage: 'revealing.private.operation',
+      telemetryVisibility: 'companion_private',
+    });
+
+    const correlation = harness.complete.mock.calls[0]?.[0].correlation;
+    expect(correlation).toEqual({
+      requestId: 'companion-private',
+      callType: 'background',
+      purpose: 'companion_private.background',
+      originType: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    });
+  });
+
   it('preserves model knob fields from llm.chat params into provider context hints', async () => {
     const harness = createHarness();
 
@@ -186,6 +226,48 @@ describe('registerLLMMethods', () => {
       frequencyPenalty: 0.12,
       repetitionPenalty: 1.03,
     });
+  });
+
+  it('preserves validated caller-owned accounting identity into the provider context', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      pin: true,
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    expect(harness.stream.mock.calls[0]?.[0]).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('rejects malformed caller-owned accounting identity before provider transport', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: '',
+        attempt: 0,
+        retryOwner: 'caller',
+      },
+    })).rejects.toThrow('accounting.logicalCallId');
+    expect(harness.stream).not.toHaveBeenCalled();
   });
 
   it('returns reasoning and provider observability from llm.chat', async () => {
@@ -310,7 +392,6 @@ describe('registerLLMMethods', () => {
           cacheRead: 0,
           cacheWrite: 0,
           totalTokens: 12,
-          cost: { total: 0 },
         },
         stopReason: 'stop',
       };
@@ -332,5 +413,123 @@ describe('registerLLMMethods', () => {
         currency: 'USD',
       },
     });
+  });
+
+  it('awaits canonical embedding usage persistence with provider token and cost evidence', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 2,
+          cacheWrite: 0,
+          totalTokens: 9,
+          cost: { total: 0.000009, currency: 'USD' },
+          raw: { prompt_tokens: 9, total_tokens: 9 },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await expect(harness.invoke('llm.embed', {
+      texts: ['first'],
+      companionId: 'companion-a',
+      sessionId: 'session-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeEventId: 'charge-event-1',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    })).resolves.toEqual({
+      embeddings: [[1, 2, 3]],
+    });
+
+    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first']);
+    expect(embeddingService.embedBatch).not.toHaveBeenCalled();
+    expect(usageEvents).toMatchObject([{
+      attempt: 1,
+      status: 'success',
+      settlement: 'complete',
+      callKind: 'embedding',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeEventId: 'charge-event-1',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+      },
+      provider: 'api',
+      model: 'text-embedding-3-small',
+      inputTokens: 7,
+      outputTokens: 0,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 0,
+      totalTokens: 9,
+      providerCost: { total: 0.000009, currency: 'USD' },
+      metadata: expect.objectContaining({
+        rawUsage: { prompt_tokens: 9, total_tokens: 9 },
+      }),
+    }]);
+  });
+
+  it('records direct gateway embedding cost conflicts as partially settled', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 7,
+          raw: {
+            providerCostEvidence: {
+              bodyUsage: { total: 0.1, currency: 'USD' },
+              headers: { total: 0.2, currency: 'USD' },
+            },
+            providerCostEvidenceConflict: { fields: ['total'] },
+          },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await harness.invoke('llm.embed', { texts: ['first'] });
+
+    expect(usageEvents).toMatchObject([{
+      status: 'success',
+      settlement: 'partial',
+      inputTokens: 7,
+      metadata: expect.objectContaining({
+        rawUsage: expect.objectContaining({
+          providerCostEvidenceConflict: { fields: ['total'] },
+        }),
+      }),
+    }]);
   });
 });

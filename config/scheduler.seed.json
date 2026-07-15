@@ -152,5 +152,17 @@
       "declineDampeningFactor": 0.5,
       "relevanceFloor": 0.05
     }
+  },
+  "introspectionAudit": {
+    "enabled": false,
+    "intervalMs": 86400000,
+    "recentSessionLimit": 16,
+    "recentTurnLimit": 64,
+    "maxCandidatesPerRun": 3,
+    "maxSourceChars": 4000,
+    "minConfidence": 0.7,
+    "estimatorMaxTokens": 500,
+    "comparisonMaxTokens": 300,
+    "reflectionMaxTokens": 300
   }
 }

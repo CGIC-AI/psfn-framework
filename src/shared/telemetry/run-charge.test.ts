@@ -9,6 +9,7 @@ import {
   resetRunChargeRollingWindowForTests,
   RUN_CHARGE_ROLLING_WINDOW_MS,
   runWithChargeContext,
+  runWithChargedSurface,
 } from './run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
@@ -69,6 +70,21 @@ describe('run charge rolling window', () => {
   afterEach(() => {
     resetRunChargeRollingWindowForTests();
     vi.useRealTimers();
+  });
+
+  it('keeps the exact charge event identity active for the provider work it buys', async () => {
+    const snapshots = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'root-exact-charge',
+    }, async () => await runWithChargedSurface('externalModelConsult', {}, async () => ({
+      active: getRunChargeSnapshot(),
+    })));
+
+    expect(snapshots.active).toMatchObject({
+      surface: 'externalModelConsult',
+      chargeEventId: expect.any(String),
+    });
   });
 
   it('shares the rolling 24-hour lane budget across separate root invocations', async () => {

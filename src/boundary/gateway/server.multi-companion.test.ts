@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
@@ -13,6 +14,9 @@ import {
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -221,17 +225,25 @@ function multiCompanion(
     fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
     channelRouting,
     discordAccounts,
+    personalWorkspaceByCompanionId: {
+      'comp-a': '/workspace/comp-a',
+      'comp-b': '/workspace/comp-b',
+      'comp-c': '/workspace/comp-c',
+    },
   };
 }
 
 function resolvedFleet(companionIds: readonly string[]) {
   return {
     persistenceRoot: '/runtime',
+    workspacesRoot: '/runtime/workspaces',
+    sharedWorkspacePath: '/runtime/workspaces/shared',
     companions: companionIds.map((companionId, index) => ({
       companionId,
       companionDataDir: `/runtime/companions/${index}`,
       characterCardPath: `/runtime/companions/${index}/companion.json`,
       postgresSchema: `companion_${index}`,
+      personalWorkspacePath: `/runtime/workspaces/personal/${companionId}`,
     })),
   };
 }
@@ -313,6 +325,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {},
     });
   });
 
@@ -329,6 +342,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {
+        'comp-a': '/runtime/workspaces/personal/comp-a',
+        'comp-b': '/runtime/workspaces/personal/comp-b',
+      },
+      sharedWorkspacePath: '/runtime/workspaces/shared',
     });
   });
 
@@ -362,6 +380,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: {},
       discordAccounts: { 'acct-a': 'comp-a', 'acct-b': 'comp-b' },
+      personalWorkspaceByCompanionId: {
+        'comp-a': '/runtime/workspaces/personal/comp-a',
+        'comp-b': '/runtime/workspaces/personal/comp-b',
+      },
+      sharedWorkspacePath: '/runtime/workspaces/shared',
     });
   });
 
@@ -437,6 +460,29 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     expect(methodFrames(connB, 'discord.message')).toHaveLength(1);
   });
 
+  it('disconnects a frame that explicitly carries a malformed companion identity claim', async () => {
+    const auditAppend = vi.fn(async () => 7);
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const conn = await connect();
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'llm.complete',
+      params: { companionId: null },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(conn.conn.destroyed).toBe(true);
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.identity_claim_invalid',
+      decision: 'DENY',
+    }));
+  });
+
   it('broadcasts llm.chunk stream deltas to every agent (characterizes existing behavior)', async () => {
     const options = createMinimalOptions();
     options.llmProvider.stream = vi.fn(async (_context: any, callbacks: any) => {
@@ -485,6 +531,42 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('confines filesystem reads and writes to the authenticated Personal Workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-gateway-workspace-isolation-'));
+    const personalA = join(root, 'personal', 'comp-a');
+    const personalB = join(root, 'personal', 'comp-b');
+    mkdirSync(personalA, { recursive: true });
+    mkdirSync(personalB, { recursive: true });
+    writeFileSync(join(personalA, 'note.txt'), 'alpha');
+    writeFileSync(join(personalB, 'note.txt'), 'beta');
+    try {
+      const routing = multiCompanion({});
+      routing.personalWorkspaceByCompanionId = {
+        'comp-a': personalA,
+        'comp-b': personalB,
+        'comp-c': join(root, 'personal', 'comp-c'),
+      };
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: routing,
+        capabilityTierProvider: () => 'autonomous',
+      });
+      const conn = await connect();
+      await identifyAgent(conn, 'comp-a', 1);
+
+      expect((await invokeRpc(conn, 2, 'fs.read', { path: 'note.txt' })).result.content)
+        .toBe('alpha');
+      expect((await invokeRpc(conn, 3, 'fs.read', { path: join(personalB, 'note.txt') })).error)
+        .toBeDefined();
+      expect((await invokeRpc(conn, 4, 'fs.write', {
+        path: join(personalB, 'intrusion.txt'),
+        content: 'nope',
+      })).error).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects agent identify without a companionId', async () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
@@ -712,6 +794,37 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     }));
     await expect(server.requestAgent('test', {})).rejects.toThrow();
   });
+
+  it.each([
+    ['blank', '   '],
+    ['null', null],
+    ['number', 42],
+    ['invalid format', 'comp:a'],
+  ])('disconnects and audits a present-but-%s per-frame companionId', async (_label, claim) => {
+    const auditAppend = vi.fn(async () => 10);
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+      multiCompanion: multiCompanion({}),
+    });
+    const conn = await connect();
+    await identifyAgent(conn, 'comp-a', 1);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'llm.complete',
+      params: { companionId: claim },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(conn.conn.destroyed).toBe(true);
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.identity_claim_invalid',
+      decision: 'DENY',
+      params: expect.objectContaining({ boundCompanionId: 'comp-a' }),
+    }));
+  });
 });
 
 describe('GatewayServer multi-companion routing (flag on)', () => {
@@ -738,6 +851,84 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       expect.objectContaining({ params: { queue: 'confirmations' } }),
     ]);
     expect(methodFrames(connB, 'garden.queue.changed')).toHaveLength(0);
+  });
+
+  it('exposes reviewed shared artifacts read-only to authenticated companions', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-shared-reader-'));
+    mkdirSync(join(root, 'artifacts', 'world'), { recursive: true });
+    mkdirSync(join(root, 'artifacts', 'private'), { recursive: true });
+    mkdirSync(join(root, 'reviews'), { recursive: true });
+    mkdirSync(join(root, 'provenance', 'events'), { recursive: true });
+    const reviewedContent = '# Reviewed guide\n';
+    const reviewedRevision = createHash('sha256').update(reviewedContent).digest('hex');
+    const reviewId = '11111111-1111-4111-8111-111111111111';
+    writeFileSync(join(root, 'artifacts', 'world', 'guide.md'), reviewedContent);
+    writeFileSync(join(root, 'artifacts', 'private', 'pending.md'), 'not reviewed');
+    writeFileSync(join(root, 'reviews', `${reviewId}.json`), JSON.stringify({
+      reviewId,
+      artifactPath: 'world/guide.md',
+      proposedRevision: reviewedRevision,
+      status: 'approved',
+    }));
+    writeFileSync(join(root, 'provenance', 'events', `${reviewId}.approved.json`), JSON.stringify({
+      schemaVersion: 1,
+      event: 'approved',
+      at: '2026-07-13T00:00:00.000Z',
+      reviewId,
+      artifactPath: 'world/guide.md',
+      proposedRevision: reviewedRevision,
+    }));
+    writeFileSync(join(root, 'reviews', 'pending.json'), JSON.stringify({
+      artifactPath: 'private/pending.md',
+      status: 'pending',
+      content: 'not reviewed',
+    }));
+    try {
+      const config = multiCompanion({});
+      config.sharedWorkspacePath = root;
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: config,
+      });
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, 'comp-a', 1);
+      await identifyAgent(connB, 'comp-b', 2);
+
+      const listA = await invokeRpc(connA, 3, 'shared.workspace.list', {});
+      const listB = await invokeRpc(connB, 4, 'shared.workspace.list', {});
+      expect(listA.result.artifacts).toEqual([
+        expect.objectContaining({ artifactPath: 'world/guide.md' }),
+      ]);
+      expect(listB.result).toEqual(listA.result);
+      expect(JSON.stringify(listA.result)).not.toContain('pending.md');
+
+      const read = await invokeRpc(connA, 5, 'shared.workspace.read', {
+        artifactPath: 'world/guide.md',
+      });
+      expect(read.result.content).toBe('# Reviewed guide\n');
+
+      const traversal = await invokeRpc(connB, 6, 'shared.workspace.read', {
+        artifactPath: '../reviews/pending.json',
+      });
+      expect(traversal.error).toBeDefined();
+      const identityClaim = await invokeRpc(connB, 7, 'shared.workspace.read', {
+        artifactPath: 'world/guide.md',
+        companionId: 'comp-b',
+      });
+      expect(identityClaim.error.message).toContain('identity assertions are forbidden');
+      const write = await invokeRpc(connA, 8, 'shared.workspace.write', {
+        artifactPath: 'world/guide.md',
+        content: 'changed',
+      });
+      expect(write.error).toBeDefined();
+
+      writeFileSync(join(root, 'artifacts', 'world', 'guide.md'), 'unreviewed mutation\n');
+      const tamperedList = await invokeRpc(connA, 9, 'shared.workspace.list', {});
+      expect(tamperedList.error.message).toContain('no longer matches its approved revision');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('delivers inbound channel messages to exactly the routed companion', async () => {
@@ -1097,20 +1288,64 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     }));
   });
 
-  it('routes discord.sendMedia through the calling companion\'s own bot account', async () => {
+  it('materializes discord.sendMedia inside the calling companion workspace and rejects a peer path', async () => {
     const { options, dockA, dockB } = createMultiAccountOptions();
-    const { connect } = await setupServer(options);
-    const connB = await connect();
-    await identifyAgent(connB, 'comp-b', 1);
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'psfn-discord-media-routing-'));
+    try {
+      const workspaceA = join(workspaceRoot, 'comp-a');
+      const workspaceB = join(workspaceRoot, 'comp-b');
+      mkdirSync(workspaceA);
+      mkdirSync(workspaceB);
+      const peerPath = join(workspaceA, 'peer.png');
+      const ownPath = join(workspaceB, 'own.png');
+      writeFileSync(peerPath, 'peer-bytes');
+      writeFileSync(ownPath, 'own-bytes');
+      options.multiCompanion = {
+        ...options.multiCompanion!,
+        personalWorkspaceByCompanionId: {
+          'comp-a': workspaceA,
+          'comp-b': workspaceB,
+          'comp-c': join(workspaceRoot, 'comp-c'),
+        },
+      };
+      const { connect } = await setupServer(options);
+      const connB = await connect();
+      await identifyAgent(connB, 'comp-b', 1);
 
-    const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
-      channelId: 'ch-2',
-      media: { kind: 'image', name: 'pic.png', url: 'https://example.test/pic.png' },
-      companionId: 'comp-b',
-    });
-    expect(response.result).toEqual({ success: true });
-    expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
-    expect(dockA.sendMedia).not.toHaveBeenCalled();
+      const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
+        channelId: 'ch-2',
+        media: {
+          name: 'pic.png',
+          contentType: 'image/png',
+          url: 'https://example.test/pic.png',
+          localPath: ownPath,
+        },
+        companionId: 'comp-b',
+      });
+      expect(response.result).toEqual({ success: true });
+      expect(dockB.sendMedia).toHaveBeenCalledWith({ channelId: 'ch-2' }, {
+        name: 'pic.png',
+        contentType: 'image/png',
+        url: 'https://example.test/pic.png',
+        dataBase64: Buffer.from('own-bytes').toString('base64'),
+      });
+
+      const peerResponse = await invokeRpc(connB, 14, 'discord.sendMedia', {
+        channelId: 'ch-2',
+        media: {
+          name: 'peer.png',
+          contentType: 'image/png',
+          url: 'https://example.test/peer.png',
+          localPath: peerPath,
+        },
+        companionId: 'comp-b',
+      });
+      expect(peerResponse.error?.message).toMatch(/outside its authenticated root/);
+      expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
+      expect(dockA.sendMedia).not.toHaveBeenCalled();
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('keeps flag-off outbound discord sends on the shared adapter (parity)', async () => {

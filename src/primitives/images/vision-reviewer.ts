@@ -11,6 +11,10 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
 import { getRequestContext } from '../llm/request-context.js';
 import {
+  normalizeCorrelationValue,
+  resolveCorrelationMetadata,
+} from '../llm/correlation.js';
+import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
@@ -150,19 +154,13 @@ function extractVisionResponseSummary(response: { content?: unknown[] | string }
 
 function buildVisionReviewCorrelation(): CorrelationMetadata {
   const requestContext = getRequestContext();
-  return {
-    ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-    ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
-    requestId: requestContext?.requestId
-      ? `${requestContext.requestId}:vision-review`
-      : `vision-review-${Date.now()}`,
+  const requestId = normalizeCorrelationValue(requestContext?.requestId);
+  return resolveCorrelationMetadata(requestContext, {
+    requestId: requestId ? `${requestId}:vision-review` : `vision-review-${Date.now()}`,
     callType: 'tool',
-    ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
     purpose: 'images.vision_review',
-    originType: 'tool',
     originStage: 'images.vision_review',
-    ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
-  };
+  }, 'vision');
 }
 
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {

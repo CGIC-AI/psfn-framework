@@ -405,6 +405,7 @@ export function buildSubstrateMessage(params: {
     authorId,
     authorName,
     content,
+    ...(channelPrivacy === 'public' ? { isDirectMessage: false } : {}),
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
     ...(hasRouting ? { routing } : {}),
     timestamp: new Date(),

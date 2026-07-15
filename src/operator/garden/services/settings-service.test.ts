@@ -112,6 +112,25 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
+  it('exposes fleet personal/shared workspace posture without an env escape hatch', async () => {
+    const root = makeTempDir();
+    const service = buildService({
+      ...buildConfig(root),
+      multiCompanion: true,
+      workspacePath: join(root, 'workspaces/personal/companion-a'),
+      sharedWorkspacePath: join(root, 'workspaces/shared'),
+    });
+
+    expect((await service.getSettingsData()).workspaceLayout).toEqual({
+      mode: 'fleet',
+      personalWorkspacePath: join(root, 'workspaces/personal/companion-a'),
+      sharedWorkspacePath: join(root, 'workspaces/shared'),
+      companionSharedAccess: 'read_only',
+      executableAutoLoad: false,
+      promptAutoLoad: false,
+    });
+  });
+
   it('round-trips the visible runtime-owned Garden controls through the canonical settings payload', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);

@@ -21,7 +21,10 @@ import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import { dispatchObserverEvalTurn } from '../../../eval/observer-sidecar/runtime.js';
-import type { ObserverEvalLifecycleState } from '../../../eval/observer-sidecar/types.js';
+import type {
+  ObserverEvalLifecycleState,
+  ObserverEvalRoutingSource,
+} from '../../../eval/observer-sidecar/types.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
@@ -35,6 +38,16 @@ type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecution
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
+
+function resolveObserverEvalRoutingSource(message: SubstrateMessage): ObserverEvalRoutingSource {
+  if (message.routing?.source) {
+    return message.routing.source;
+  }
+  if (message.channelType === 'api' || message.channelType === 'terminal') {
+    return message.channelType;
+  }
+  return 'unspecified';
+}
 
 export interface PreparedTurnIdentityState {
   authorContext: ResolvedAuthorContext;
@@ -680,7 +693,7 @@ export async function computePreTurnState(input: {
         ...(taskKind ? { taskKind } : {}),
       },
       source: {
-        routingSource: message.routing?.source ?? 'unspecified',
+        routingSource: resolveObserverEvalRoutingSource(message),
         isDirectMessage: message.isDirectMessage ?? false,
         ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
       },

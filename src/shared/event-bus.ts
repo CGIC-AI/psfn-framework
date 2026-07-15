@@ -997,9 +997,16 @@ export interface EventMap {
     /** In-process preview source; stripped before anything leaves for the hub. */
     preview?: CompanionArtifactPreviewSource;
     channelId?: string;
+    /** Authenticated gateway connection identity; never accepted from event JSON. */
+    companionId?: string;
     timestamp: number;
   };
-  'companion.tool.activity': { payload: CompanionToolActivityPayload; channelId?: string; timestamp: number };
+  'companion.tool.activity': {
+    payload: CompanionToolActivityPayload;
+    channelId?: string;
+    companionId?: string;
+    timestamp: number;
+  };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {

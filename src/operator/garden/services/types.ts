@@ -42,6 +42,7 @@ export type {
 } from './types/wiki.js';
 
 export type {
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminModelUsageService,
 } from './types/runtime-telemetry.js';

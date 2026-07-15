@@ -43,6 +43,7 @@ import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminConcernService,
@@ -85,6 +86,8 @@ import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
+import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 
 export type { AdminApiRoute } from './routes/types.js';
 
@@ -255,6 +258,7 @@ export function buildAdminApiRoutes(options: {
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  chargeCostReconciliationService?: AdminChargeCostReconciliationService | null;
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
@@ -275,6 +279,7 @@ export function buildAdminApiRoutes(options: {
   subsystemHealthService?: AdminSubsystemHealthService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   settingsService: AdminSettingsService;
+  sharedWorkspaceService?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11); always wired in production. */
   intakeQuarantineService?: AdminIntakeQuarantineService | null;
   /** Slow-poisoning drift review cards (htm9.14). */
@@ -306,6 +311,7 @@ export function buildAdminApiRoutes(options: {
     imagesService,
     auditHistoryService,
     chargeLedgerService,
+    chargeCostReconciliationService,
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
@@ -326,6 +332,7 @@ export function buildAdminApiRoutes(options: {
     subsystemHealthService,
     toolConformanceService,
     settingsService,
+    sharedWorkspaceService,
     intakeQuarantineService,
     driftReviewService,
     identityService,
@@ -409,11 +416,15 @@ export function buildAdminApiRoutes(options: {
   };
 
   return [
+    ...(sharedWorkspaceService
+      ? buildAdminSharedWorkspaceRoutes({ service: sharedWorkspaceService, withBody })
+      : []),
     ...buildAdminOverviewRoutes({
       config,
       dashboardService,
       auditHistoryService,
       chargeLedgerService,
+      chargeCostReconciliationService,
       modelUsageService,
       observerEvalSidecarService,
       actionPipeService,

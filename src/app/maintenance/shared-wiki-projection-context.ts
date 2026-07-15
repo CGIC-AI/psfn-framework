@@ -2,16 +2,16 @@
 //
 // The vinz.4 (places→wiki publish) and vinz.27 (bulk import) CLIs run
 // host-side with dotenv + loadConfig, so they construct the configured
-// embedding provider directly — the same provider composition builds for the
-// runtime (`createEmbeddingProviderFromConfig`), just not proxied through the
-// gateway. The projection runner then decides: multi-companion + missing
+// embedding provider through the canonical provider composition, including
+// durable usage accounting, but not through the gateway. The projection runner
+// then decides: multi-companion + missing
 // Postgres/embedder fails closed BEFORE any filesystem write; flag-off it
 // degrades to an honest `skipped` report.
 
-import { createEmbeddingProviderFromConfig } from '../../faculties/memory/embedding.js';
 import type { SharedWikiProjectionContext } from '../../faculties/wiki/shared-pgvector-projection.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 
 const log = createComponentLogger('SharedWikiProjectionCli');
 
@@ -28,7 +28,7 @@ export function resolveSharedWikiProjectionContext(
   try {
     return {
       databaseUrl,
-      embedding: createEmbeddingProviderFromConfig(config, process.env),
+      embedding: createProviderRuntimeServices({ config, providerEnv: process.env }).embeddingProvider,
       multiCompanion,
     };
   } catch (error) {

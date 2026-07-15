@@ -49,7 +49,12 @@ export interface GatewayMessageGateway {
   discordSendMedia(channelId: string, media: Attachment): Promise<void>;
   /** Inter-companion lane (sprint 10, W6): inbound peer messages + outbound replies. */
   onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
-  companionSend(channelId: string, content: string, authorName?: string): Promise<unknown>;
+  companionSend(
+    channelId: string,
+    content: string,
+    authorName?: string,
+    replyToMessageId?: string,
+  ): Promise<unknown>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
@@ -645,7 +650,12 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           }
           if (response.content.trim()) {
             failureReason = 'reply_delivery_failed';
-            await gateway.companionSend(message.channelId, response.content, companionAuthorName);
+            await gateway.companionSend(
+              message.channelId,
+              response.content,
+              companionAuthorName,
+              message.id,
+            );
           }
           completed = true;
         } catch (err) {

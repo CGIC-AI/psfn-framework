@@ -82,8 +82,11 @@ import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sideca
 import {
   resolveContactsDir,
   resolveContactBlockListPath,
+  resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
+import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
+import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -153,6 +156,7 @@ export interface AgentCoreRuntime {
   memoryStore: MemoryStorePort;
   contactStore: ContactStorePort;
   coreMemoryStore: CoreMemoryStorePort;
+  introspectionConsentStore: IntrospectionConsentStore;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
@@ -300,6 +304,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
         persistenceBackend: config.persistenceBackend,
         postgresDatabaseUrl,
+        companionId: config.companionId,
       });
     }
     return cachedModelUsageStore;
@@ -479,11 +484,21 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pendingFollowUpProvider: null,
     behavioralPatternProvider: null,
   });
+  const introspectionConsentStore = new IntrospectionConsentStore(
+    resolveIntrospectionConsentLedgerPath(pathSnapshot.companionDataDir),
+  );
+  // Read the complete append-only chain at startup. Corruption or tampering is
+  // fatal; an absent ledger remains safely unconfigured/disabled.
+  introspectionConsentStore.load();
+  const introspectionTurnSensitivityDecisions = new IntrospectionTurnSensitivityDecisions();
+  agentLoop.setIntrospectionTurnSensitivityDecisions(introspectionTurnSensitivityDecisions);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
     config,
     concernStore: intentionRuntime.concernStore,
+    introspectionConsentStore,
+    introspectionTurnSensitivityDecisions,
   });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
@@ -536,6 +551,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,

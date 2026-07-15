@@ -3,6 +3,10 @@ import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import {
+  emitTurnPerformance,
+  monotonicEpochNowMs,
+} from '../../../shared/telemetry/turn-performance.js';
 import type {
   DurableRunChargeProbe,
   DurableRunChargeRecorder,
@@ -204,7 +208,11 @@ export interface TurnExecutionRuntime {
     turnId: TurnID;
     requestId: string;
     correlation: CorrelationMetadata;
-  }) => Promise<void>;
+  }) => Promise<void | {
+    status: 'idle' | 'drained' | 'timeout';
+    waitMs: number;
+    workCount: number;
+  }>;
   registerPostTurnBackgroundWork: (input: {
     channelId: string;
     turnId: TurnID;
@@ -658,6 +666,8 @@ export async function handleMessageForTurn(
   message: SubstrateMessage,
   deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
+  const transportReceivedAt = monotonicEpochNowMs();
+  const transportReceivedTimestamp = Date.now();
   const requestId = message.id;
   const recoveredResponse = deliveryLifecycle?.recoveredResponse
     ? parseIcpRecoveryResponse(deliveryLifecycle.recoveredResponse, {
@@ -737,11 +747,51 @@ export async function handleMessageForTurn(
     ...(deferredContinuationId ? { deferredContinuationId } : {}),
   });
   let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
-  await runtime.awaitPostTurnDrain({
+  const performanceCompanionId = turnCorrelationBase.companionId
+    ?? runtime.config.companionId?.trim();
+  void emitTurnPerformance(runtime.eventBus, {
+    traceId: requestId,
+    turnId,
+    requestId,
+    channelId: message.channelId,
+    channelType: message.channelType,
+    ...(performanceCompanionId ? { companionId: performanceCompanionId } : {}),
+    stage: 'transport_received',
+    monotonicAtMs: transportReceivedAt,
+    timestampMs: transportReceivedTimestamp,
+  }).catch(error => {
+    log.debug('Turn transport performance telemetry emit failed', {
+      channelId: message.channelId,
+      turnId,
+      requestId,
+      error: toErrorMessage(error),
+    });
+  });
+  const drainWaitStartedAt = monotonicEpochNowMs();
+  const drainResult = await runtime.awaitPostTurnDrain({
     channelId: message.channelId,
     turnId,
     requestId,
     correlation: turnCorrelationBase,
+  });
+  void emitTurnPerformance(runtime.eventBus, {
+    traceId: requestId,
+    turnId,
+    requestId,
+    channelId: message.channelId,
+    channelType: message.channelType,
+    ...(performanceCompanionId ? { companionId: performanceCompanionId } : {}),
+    stage: 'post_turn_drain_wait',
+    durationMs: Math.max(0, monotonicEpochNowMs() - drainWaitStartedAt),
+    queueDepth: drainResult?.workCount ?? 0,
+    backgroundContention: (drainResult?.workCount ?? 0) > 0,
+  }).catch(error => {
+    log.debug('Turn drain performance telemetry emit failed', {
+      channelId: message.channelId,
+      turnId,
+      requestId,
+      error: toErrorMessage(error),
+    });
   });
   const startTime = Date.now();
   const restorePinnedSessionContext = runtime.pinDeferredContinuationSessionContext(
@@ -1012,6 +1062,7 @@ export async function handleMessageForTurn(
     }
     runtime.ensureModel(message);
     responseModel = runtime.agent.state.model.id;
+    const contextAssemblyStartedAt = performance.now();
     const preTurnState = await computePreTurnState({
       runtime,
       message,
@@ -1034,6 +1085,9 @@ export async function handleMessageForTurn(
       turnCorrelationBase,
       observability,
     });
+    observability.emitPerformanceStage('context_assembly', {
+      durationMs: Math.max(0, performance.now() - contextAssemblyStartedAt),
+    });
     turnSnapshot = preTurnState.turnSnapshot;
     if (fatigueDecision) {
       turnSnapshot.fatigue = fatigueDecision.metadata;
@@ -1055,6 +1109,7 @@ export async function handleMessageForTurn(
     const canaryToken = runtime.cogSecMode === 'off'
       ? undefined
       : sessionCanaryRegistry.ensure(emotionSessionId);
+    const promptAssemblyStartedAt = performance.now();
     const promptAssembly = await assembleTurnPrompt({
       runtime,
       message,
@@ -1085,6 +1140,9 @@ export async function handleMessageForTurn(
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,
+    });
+    observability.emitPerformanceStage('prompt_assembly', {
+      durationMs: Math.max(0, performance.now() - promptAssemblyStartedAt),
     });
     promptMode = promptAssembly.promptMode;
     fullPrompt = promptAssembly.fullPrompt;
@@ -1591,6 +1649,18 @@ export async function handleMessageForTurn(
       turnBudgetCharacteristics,
       observability,
       persistedUserMessageContent,
+    });
+
+    observability.emitPerformanceStage('turn_complete', {
+      durationMs: Math.max(0, monotonicEpochNowMs() - transportReceivedAt),
+      model: responseModel,
+      provider: runtime.agent.state.model.provider,
+      toolUse: turnUsage.toolCalls > 0,
+      cacheState: turnUsage.cacheReadTokens > 0 ? 'hit' : 'miss',
+      inputTokens: turnUsage.inputTokens,
+      outputTokens: turnUsage.outputTokens,
+      cacheReadTokens: turnUsage.cacheReadTokens,
+      ...(turnUsage.estimatedCostUsd !== undefined ? { costUsd: turnUsage.estimatedCostUsd } : {}),
     });
 
     return agentResponse;

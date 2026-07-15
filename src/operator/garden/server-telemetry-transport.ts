@@ -155,6 +155,7 @@ export class AdminServerTelemetryTransport {
       'agent.turn.usage',
       'agent.turn.snapshot',
       'agent.turn.stage',
+      'agent.turn.performance',
       'agent.analysis_workbench.trace',
       'agent.stream.thinking',
       'agent.tool.start',

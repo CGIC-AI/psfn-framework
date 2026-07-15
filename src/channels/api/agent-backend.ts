@@ -63,6 +63,10 @@ import {
   singleHeader as firstHeaderValue,
 } from './http-policy.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
+import { createComponentLogger } from '../../shared/logger.js';
+
+const log = createComponentLogger('AgentApiBackend');
 
 const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -223,10 +227,26 @@ export class AgentApiBackend {
         channelId: active.channelId,
         reason: 'client_disconnected',
       }).catch(() => undefined);
+      this.emitCancellationAcknowledgement(params.requestId, active.channelId);
       return { cancelled: true };
     }
     this.abortActiveTurn(active.channelId, 'client_disconnected');
+    this.emitCancellationAcknowledgement(params.requestId, active.channelId);
     return { cancelled: true };
+  }
+
+  private emitCancellationAcknowledgement(requestId: string, channelId: string): void {
+    void emitTurnPerformance(this.eventBus, {
+      traceId: requestId,
+      requestId,
+      channelId,
+      channelType: 'api',
+      stage: 'cancellation_ack',
+      cancellationOutcome: 'acknowledged',
+    }).catch(error => log.debug('API cancellation performance telemetry emit failed', {
+      requestId,
+      error: toErrorMessage(error),
+    }));
   }
 
   async handleChatCompletion(
@@ -239,6 +259,7 @@ export class AgentApiBackend {
       headers: params.headers,
       clientCert: params.clientCert,
       timeoutMs: params.timeoutMs,
+      performance: params.performance,
       onDelta: params.request.stream && this.onStreamDelta
         ? (text) => this.onStreamDelta?.(params.requestId, text)
         : undefined,
@@ -266,6 +287,7 @@ export class AgentApiBackend {
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
+    performance?: ApiChatCompletionRpcParams['performance'];
   }): Promise<ApiChatCompletionRpcResult> {
     const overrides = this.parseTurnRoutingOverrides(params.request);
     if (!overrides.ok) {
@@ -280,6 +302,7 @@ export class AgentApiBackend {
     }
 
     const pendingTurn = await this.prepareTurn(
+      params.requestId,
       params.request,
       params.headers,
       params.principal,
@@ -288,6 +311,23 @@ export class AgentApiBackend {
     if (!pendingTurn.ok) {
       return pendingTurn.error;
     }
+
+    void emitTurnPerformance(this.eventBus, {
+      traceId: params.requestId,
+      requestId: params.requestId,
+      channelId: pendingTurn.value.channelId,
+      channelType: pendingTurn.value.substrateMsg.channelType,
+      stage: 'transport_received',
+      ...(params.performance?.receivedMonotonicAtMs !== undefined
+        ? { monotonicAtMs: params.performance.receivedMonotonicAtMs }
+        : {}),
+      ...(params.performance?.receivedTimestampMs !== undefined
+        ? { timestampMs: params.performance.receivedTimestampMs }
+        : {}),
+    }).catch(error => log.debug('API transport performance telemetry emit failed', {
+      requestId: params.requestId,
+      error: toErrorMessage(error),
+    }));
 
     this.activeRequests.set(params.requestId, { channelId: pendingTurn.value.channelId });
     const unsubscribe = params.onDelta
@@ -621,7 +661,7 @@ export class AgentApiBackend {
     });
   }
 
-  private async acquireChannel(channelId: string): Promise<() => void> {
+  private async acquireChannel(channelId: string, traceId: string): Promise<() => void> {
     const queued = this.channelTurnLock.acquire(channelId);
     if (queued.contended) {
       this.emitQueueTelemetry(channelId, 'contended', {
@@ -638,6 +678,18 @@ export class AgentApiBackend {
       queueDepth: Math.max(0, this.channelTurnLock.pending(channelId) - 1),
       waitMs: lease.waitMs,
     });
+    void emitTurnPerformance(this.eventBus, {
+      traceId,
+      requestId: traceId,
+      channelId,
+      channelType: 'api',
+      stage: 'channel_queue_wait',
+      durationMs: lease.waitMs,
+      queueDepth: queued.queueDepth,
+    }).catch(error => log.debug('API queue performance telemetry emit failed', {
+      requestId: traceId,
+      error: toErrorMessage(error),
+    }));
 
     let released = false;
     return () => {
@@ -994,6 +1046,7 @@ export class AgentApiBackend {
   }
 
   private buildSubstrateMessage(params: {
+    requestId: string;
     channelId: string;
     channelType: ChannelType;
     source: NonNullable<MessageRoutingMetadata['source']>;
@@ -1045,7 +1098,7 @@ export class AgentApiBackend {
       || routing.intakeEnvelopes;
 
     return {
-      id: `api-${randomUUID()}`,
+      id: params.requestId,
       channelId: params.channelId,
       channelType: params.channelType,
       authorId: params.authorId,
@@ -1059,6 +1112,7 @@ export class AgentApiBackend {
   }
 
   private async prepareTurn(
+    requestId: string,
     request: ChatCompletionRequest,
     headers: ApiRpcHeaders,
     principal: ApiAuthPrincipal,
@@ -1139,6 +1193,7 @@ export class AgentApiBackend {
       documentIngest: this.documentIngest,
     });
     const substrateMsg = this.buildSubstrateMessage({
+      requestId,
       channelId,
       channelType,
       source,
@@ -1155,7 +1210,7 @@ export class AgentApiBackend {
     });
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
-    const releaseChannel = await this.acquireChannel(channelId);
+    const releaseChannel = await this.acquireChannel(channelId, requestId);
     return {
       ok: true,
       value: {

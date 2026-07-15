@@ -737,12 +737,16 @@ describe('DiscordVoiceRuntime', () => {
     const eventBus = new EventBus();
     const partialEvents: Array<{ transcript: string }> = [];
     const finalEvents: Array<{ transcript: string }> = [];
+    const performanceEvents: Array<{ traceId: string; stage: string }> = [];
 
     eventBus.on('channel.voice.transcript.partial', (event) => {
       partialEvents.push({ transcript: event.transcript });
     });
     eventBus.on('channel.voice.transcript', (event) => {
       finalEvents.push({ transcript: event.transcript });
+    });
+    eventBus.on('agent.turn.performance', (event) => {
+      performanceEvents.push({ traceId: event.traceId, stage: event.stage });
     });
 
     const handler = vi.fn(async () => {
@@ -766,6 +770,16 @@ describe('DiscordVoiceRuntime', () => {
     expect(partialEvents).toEqual([{ transcript: 'hello' }]);
     expect(finalEvents).toEqual([{ transcript: 'hello world' }]);
     expect(handler).toHaveBeenCalledTimes(1);
+    const voiceMessage = handler.mock.calls[0]?.[0];
+    expect(voiceMessage.id).toMatch(/^voice-turn-/);
+    expect(new Set(performanceEvents.map(event => event.traceId))).toEqual(new Set([voiceMessage.id]));
+    expect(performanceEvents.map(event => event.stage)).toEqual(expect.arrayContaining([
+      'speech_end',
+      'stt_final',
+      'tts_request',
+      'first_audible_playback',
+      'turn_complete',
+    ]));
 
     expect(connectorMocks.sttConnector.startStream).toHaveBeenCalledTimes(1);
     expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);

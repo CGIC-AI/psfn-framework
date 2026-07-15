@@ -20,6 +20,7 @@ import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
+import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -394,6 +395,8 @@ export interface EventMap {
     elapsedMs: number;
     [key: string]: unknown;
   };
+  /** Content-free monotonic foreground timing envelope (mmo9.2). */
+  'agent.turn.performance': TurnPerformanceEvent;
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
   /** An optional prompt section was dropped because macros stayed unresolved (E2.5 no-silent-leak). */
   'agent.prompt.section_dropped': {
@@ -634,6 +637,9 @@ export interface EventMap {
     compositionalCandidateCount?: number;
     compositionalEvaluationBatchCount?: number;
     compositionalFinalistCount?: number;
+    embeddingCalls?: number;
+    searchCalls?: number;
+    stageTimingsMs?: Record<string, number>;
   } & EventCorrelationFields;
   /**
    * E8.3: outcome of a wiki pgvector projection write (store write-hook or a

@@ -10,6 +10,7 @@ import type {
   ApiServerRuntime,
   ApiTelemetryIngestRpcResult,
 } from './types.js';
+import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
 
 const DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS = 95_000;
 const GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
@@ -46,6 +47,8 @@ export class GatewayApiRuntime implements ApiServerRuntime {
   }
 
   async handleChatCompletion(input: ApiRuntimeChatRequest): Promise<ApiChatCompletionRpcResult> {
+    const receivedMonotonicAtMs = monotonicEpochNowMs();
+    const receivedTimestampMs = Date.now();
     const requestId = `api-${Date.now()}-${++this.requestCounter}`;
     const unsubscribe = input.onDelta
       ? this.gateway.subscribeApiStream(requestId, input.onDelta)
@@ -90,6 +93,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         headers: input.headers,
         ...(input.clientCert ? { clientCert: input.clientCert } : {}),
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
+        performance: { receivedMonotonicAtMs, receivedTimestampMs },
       }, this.chatRequestTimeoutMs);
     } finally {
       if (input.signal) {

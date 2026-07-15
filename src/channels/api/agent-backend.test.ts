@@ -47,6 +47,8 @@ describe('AgentApiBackend chat completion deadlines', () => {
     vi.useFakeTimers();
     try {
       const eventBus = new EventBus();
+      const performanceEvents: Array<{ traceId: string; stage: string; monotonicAtMs: number }> = [];
+      eventBus.on('agent.turn.performance', event => performanceEvents.push(event));
       const response = {
         content: 'visible answer',
         channelId: 'api:principal-1:completion-session',
@@ -82,6 +84,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
           'x-channel-privacy': 'public',
         },
         timeoutMs: 1_000,
+        performance: {
+          receivedMonotonicAtMs: 123_456,
+          receivedTimestampMs: 123_000,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -95,9 +101,15 @@ describe('AgentApiBackend chat completion deadlines', () => {
         },
       });
       expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
+        id: 'req-visible-complete',
         isDirectMessage: false,
         routing: { channelPrivacy: 'public' },
       });
+      expect(performanceEvents).toContainEqual(expect.objectContaining({
+        traceId: 'req-visible-complete',
+        stage: 'transport_received',
+        monotonicAtMs: 123_456,
+      }));
     } finally {
       vi.useRealTimers();
     }

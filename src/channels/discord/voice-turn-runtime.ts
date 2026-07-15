@@ -17,6 +17,11 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
+  emitTurnPerformance,
+  type TurnPerformanceEventInput,
+  type TurnPerformanceStage,
+} from '../../shared/telemetry/turn-performance.js';
+import {
   CAPTURE_SILENCE_MS,
   MIN_PCM_BYTES,
   STT_STREAM_CHUNK_BYTES,
@@ -33,6 +38,29 @@ import {
 } from './voice-errors.js';
 
 const log = createComponentLogger('DiscordVoice');
+
+function emitVoicePerformance(
+  runtime: VoiceTurnRuntimeContext,
+  turn: ActiveVoiceTurn,
+  stage: TurnPerformanceStage,
+  details: Omit<TurnPerformanceEventInput, 'traceId' | 'stage' | 'turnId' | 'requestId' | 'channelId' | 'channelType'> = {},
+): void {
+  void emitTurnPerformance(runtime.eventBus, {
+    traceId: turn.turnId,
+    turnId: turn.turnId,
+    requestId: turn.turnId,
+    channelId: turn.channel.id,
+    channelType: 'discord-voice',
+    stage,
+    ...details,
+  }).catch(error => {
+    log.debug('Voice performance telemetry emit failed', {
+      turnId: turn.turnId,
+      stage,
+      error: toErrorMessage(error),
+    });
+  });
+}
 
 export function assertActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, turn: ActiveVoiceTurn): void {
   if (runtime.activeTurn?.token !== turn.token || turn.abortController.signal.aborted) {
@@ -73,6 +101,9 @@ export async function cancelActiveVoiceTurn(runtime: VoiceTurnRuntimeContext, re
   const turn = runtime.activeTurn;
   if (!turn) return;
   await cancelVoiceTurnResources(turn, reason);
+  emitVoicePerformance(runtime, turn, 'cancellation_ack', {
+    cancellationOutcome: 'acknowledged',
+  });
   resetActiveVoiceTurnState(runtime, turn);
 }
 
@@ -174,6 +205,7 @@ export async function handleVoiceUtterance(
       task: () => runtime.decodeOpusToPcm(opusStream, turn.abortController.signal),
     });
     assertActiveVoiceTurn(runtime, turn);
+    emitVoicePerformance(runtime, turn, 'speech_end');
     if (pcm.length < MIN_PCM_BYTES) {
       turnReason = 'silence';
       await runtime.emitTurnObservation({
@@ -220,6 +252,7 @@ export async function handleVoiceUtterance(
       text: transcript,
       timestampMs: Date.now(),
     });
+    emitVoicePerformance(runtime, turn, 'stt_final');
     assertActiveVoiceTurn(runtime, turn);
 
     const handler = runtime.getHandler();
@@ -248,7 +281,7 @@ export async function handleVoiceUtterance(
 
     const member = turn.channel.members.get(runtime.targetUserId);
     const message: SubstrateMessage = {
-      id: `voice-${Date.now()}`,
+      id: turnId,
       channelId: `discord-voice:${turn.channel.id}`,
       channelType: 'discord',
       isDirectMessage: false,
@@ -289,6 +322,7 @@ export async function handleVoiceUtterance(
       text,
       timestampMs: Date.now(),
     });
+    emitVoicePerformance(runtime, turn, 'tts_request');
 
     await runtime.speakText(text, turn);
     assertActiveVoiceTurn(runtime, turn);
@@ -298,6 +332,7 @@ export async function handleVoiceUtterance(
       userId: runtime.targetUserId,
       text,
     });
+    emitVoicePerformance(runtime, turn, 'turn_complete');
   } catch (error) {
     const structuredError = createStructuredVoiceError({
       error,
@@ -516,6 +551,7 @@ export async function playWithTtsConnector(
           userId: runtime.targetUserId,
           timestampMs: Date.now(),
         });
+        emitVoicePerformance(runtime, turn, 'tts_first_byte');
       }
       await runtime.playReadableAudio(Readable.from(audio), turn);
     } catch (fallbackError) {
@@ -569,6 +605,7 @@ export async function* createPlaybackChunkIterator(
         userId: runtime.targetUserId,
         timestampMs: Date.now(),
       });
+      emitVoicePerformance(runtime, turn, 'tts_first_byte');
     }
 
     yield Buffer.isBuffer(chunk.audio) ? chunk.audio : Buffer.from(chunk.audio);
@@ -595,6 +632,7 @@ export async function playReadableAudio(
       signal: turn?.abortController.signal,
       task: async () => {
         await entersState(player, AudioPlayerStatus.Playing, 5_000);
+        if (turn) emitVoicePerformance(runtime, turn, 'first_audible_playback');
         await entersState(player, AudioPlayerStatus.Idle, 120_000);
       },
     });

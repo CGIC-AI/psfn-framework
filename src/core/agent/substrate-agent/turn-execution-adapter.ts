@@ -226,7 +226,7 @@ export function createTurnExecutionRuntimeAdapter(
     observerEvalSidecar: options.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => options.turnSupportRuntime
       .pinDeferredContinuationSessionContext(deferredContinuationId, channelId),
-    awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input).then(() => undefined),
+    awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input),
     registerPostTurnBackgroundWork: (input) => options.turnSupportRuntime.registerPostTurnBackgroundWork(input),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),
     buildTurnBudgetCharacteristics: (message, taskKind) => options.callbacks

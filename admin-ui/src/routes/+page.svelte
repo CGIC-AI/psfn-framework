@@ -177,6 +177,8 @@
     {@const selectedCostWindowUsage = stats.modelUsage.usage}
     {@const modelUsageFreshness = stats.modelUsage.freshness}
     {@const transientSessionTelemetry = stats.transientSessionTelemetry}
+    {@const llmTtftPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'llm_ttft' && Object.keys(series.dimensions).length === 0)?.percentiles}
+    {@const ttfaPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'ttfa' && Object.keys(series.dimensions).length === 0)?.percentiles}
     {@const sessionContextPressure = resolveSessionContextPressureView(transientSessionTelemetry.activeSessionContextPressure)}
     <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">
       Durable model usage is {modelUsageFreshness.state}.
@@ -355,6 +357,18 @@
               Canonical PostgreSQL usage for {costWindowHint(committedCostWindow)}. Live-only latency is separate:
               last TTFT {formatOptionalDuration(transientSessionTelemetry.lastTtftMs)},
               average TTFT {formatOptionalDuration(transientSessionTelemetry.averageTtftMs)}.
+              {#if llmTtftPercentiles}
+                Live LLM TTFT p50/p95/p99:
+                {formatOptionalDuration(llmTtftPercentiles.p50Ms)} /
+                {formatOptionalDuration(llmTtftPercentiles.p95Ms)} /
+                {formatOptionalDuration(llmTtftPercentiles.p99Ms)}.
+              {/if}
+              {#if ttfaPercentiles}
+                Voice TTFA p50/p95/p99:
+                {formatOptionalDuration(ttfaPercentiles.p50Ms)} /
+                {formatOptionalDuration(ttfaPercentiles.p95Ms)} /
+                {formatOptionalDuration(ttfaPercentiles.p99Ms)}.
+              {/if}
               <a href="/charge-budget" class="font-medium text-gold-700 hover:text-gold-800">Charge / Budget</a>.
             </p>
           </div>

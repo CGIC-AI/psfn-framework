@@ -23,6 +23,7 @@ import type {
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { sanitizeDiagnosticText } from '../../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import { monotonicEpochNowMs } from '../../../../shared/telemetry/turn-performance.js';
 import type { TurnSnapshot, TurnPromptResponseSnapshot } from '../../../turns/snapshot.js';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
 import type { SystemNoteMessage } from '../../messages.js';
@@ -61,6 +62,7 @@ const log = createComponentLogger('SubstrateAgent');
 const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
+const observedProviderModels = new Set<string>();
 const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
@@ -424,7 +426,7 @@ export async function invokeAgentForTurn(input: {
   mutableState: AgentInvocationMutableState;
   observability: Pick<
     TurnExecutionObservability,
-    'emitObservedTurnStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
+    'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
   >;
 }): Promise<AgentInvocationResult> {
   const {
@@ -461,6 +463,34 @@ export async function invokeAgentForTurn(input: {
   const turnIntent: string | null = autoloadOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
   const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
+  let providerRequestAt: number | null = null;
+  let providerWarmState: 'warm' | 'cold' = 'cold';
+  const markProviderRequest = (): void => {
+    if (providerRequestAt !== null) return;
+    providerRequestAt = monotonicEpochNowMs();
+    const providerModelKey = `${runtime.agent.state.model.provider}:${runtime.agent.state.model.id}`;
+    providerWarmState = observedProviderModels.has(providerModelKey) ? 'warm' : 'cold';
+    observedProviderModels.add(providerModelKey);
+    observability.emitPerformanceStage('provider_request', {
+      monotonicAtMs: providerRequestAt,
+      model: runtime.agent.state.model.id,
+      provider: runtime.agent.state.model.provider,
+      warmState: providerWarmState,
+    });
+  };
+  const markProviderFirstToken = (source: 'stream' | 'fallback'): void => {
+    const observedAt = monotonicEpochNowMs();
+    observability.emitPerformanceStage('provider_first_token', {
+      monotonicAtMs: observedAt,
+      ...(providerRequestAt !== null
+        ? { durationMs: Math.max(0, observedAt - providerRequestAt) }
+        : {}),
+      model: runtime.agent.state.model.id,
+      provider: runtime.agent.state.model.provider,
+      warmState: providerWarmState,
+      ...(source === 'fallback' ? { deferReason: 'no_stream_delta' } : {}),
+    });
+  };
 
   const moaSettings = resolveMoaSettings(runtime.config, log);
   if (moaSettings) {
@@ -471,6 +501,7 @@ export async function invokeAgentForTurn(input: {
         : formatCurrentTurnUserContentForPrompt(message, message.content),
     };
     const moaProviderPrompt = buildMoaPrompt(context, moaCurrentTurn);
+    markProviderRequest();
     const moaResult = await runWithVisionTurnTimeout({
       channelId: message.channelId,
       deadlineAt: visionTurnDeadlineAt,
@@ -491,6 +522,7 @@ export async function invokeAgentForTurn(input: {
       }),
     });
     firstTokenAt = Date.now();
+    markProviderFirstToken('fallback');
     observability.emitObservedTurnStage('first-token', {
       ttftMs: firstTokenAt - startTime,
       source: 'fallback',
@@ -564,11 +596,18 @@ export async function invokeAgentForTurn(input: {
 
   let streamFirstTokenAt: number | null = null;
   const streamTelemetryBus = runtime.eventBus as unknown as {
-    on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
+    on: (event: string, handler: (data: {
+      channelId: string;
+      text: string;
+      requestId?: string;
+    }) => void) => () => void;
   };
-  const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
-    if (channelId !== message.channelId || streamFirstTokenAt != null) return;
+  const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId, requestId: deltaRequestId }) => {
+    if (channelId !== message.channelId
+      || (deltaRequestId !== undefined && deltaRequestId !== requestId)
+      || streamFirstTokenAt != null) return;
     streamFirstTokenAt = Date.now();
+    markProviderFirstToken('stream');
     observability.emitObservedTurnStage('first-token', {
       ttftMs: streamFirstTokenAt - startTime,
       source: 'stream',
@@ -677,6 +716,7 @@ export async function invokeAgentForTurn(input: {
     observability.emitTurnSnapshotInBackground(turnSnapshot);
   }
   try {
+    markProviderRequest();
     await runWithVisionTurnTimeout({
       channelId: message.channelId,
       deadlineAt: promptVisionDeadlineAt,
@@ -722,6 +762,7 @@ export async function invokeAgentForTurn(input: {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
   if (streamFirstTokenAt == null) {
     streamFirstTokenAt = Date.now();
+    markProviderFirstToken('fallback');
     observability.emitObservedTurnStage('first-token', {
       ttftMs: streamFirstTokenAt - startTime,
       source: 'fallback',

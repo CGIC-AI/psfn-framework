@@ -196,6 +196,11 @@ export interface ApiChatCompletionRpcParams {
    */
   clientCert?: SatelliteClientCertIdentity;
   timeoutMs?: number;
+  /** Server-authored content-free timing anchor captured at HTTP ingress. */
+  performance?: {
+    receivedMonotonicAtMs: number;
+    receivedTimestampMs: number;
+  };
 }
 
 export interface ApiChatCompletionRpcSuccess {

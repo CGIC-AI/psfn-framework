@@ -23,6 +23,7 @@ import {
   resolveDashboardCostWindowRange,
 } from './dashboard-cost-windows.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performance.js';
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
@@ -49,6 +50,8 @@ export class AdminDashboardDataService implements AdminDashboardService {
   private latestTtftMs: number | null = null;
   private ttftTotalMs = 0;
   private ttftSampleCount = 0;
+
+  private readonly turnPerformance = new TurnPerformanceTracker();
 
   private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
@@ -83,6 +86,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
       this.latestTtftMs = ttftMs;
       this.ttftTotalMs += ttftMs;
       this.ttftSampleCount += 1;
+    });
+
+    this.deps.eventBus.on('agent.turn.performance', (payload) => {
+      this.turnPerformance.observe(payload);
     });
 
     this.deps.eventBus.on('agent.analysis_workbench.trace', ({ timestamp, task, result }) => {
@@ -297,6 +304,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
           averageTtftMs: this.ttftSampleCount > 0
             ? this.ttftTotalMs / this.ttftSampleCount
             : null,
+          latencyPercentiles: this.turnPerformance.snapshot(),
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
         },
         toolStatus,

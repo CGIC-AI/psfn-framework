@@ -33,3 +33,24 @@ test("embodied session registry derives one stable PSFN hub channel", () => {
 test("thin shell capabilities are text-only for assistant output", () => {
   assert.equal(canReceiveStreamingAudio(THIN_SHELL_CAPABILITIES), false);
 });
+
+test("detaching an enrolled satellite removes its cached assertion authority", () => {
+  const registry = new EmbodiedSessionRegistry();
+  registry.attachSatellite({
+    sessionId: "realtime:office-device",
+    satelliteId: "office",
+    satelliteName: "Office",
+    deviceAuthority: {
+      deviceId: "office-device",
+      enrollmentVersion: 7,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
+    },
+  });
+
+  registry.detachSatellite("realtime:office-device", "office");
+
+  assert.equal(registry.getSession("realtime:office-device"), null);
+});

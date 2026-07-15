@@ -9,7 +9,10 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { HomeAssistantConfig, HubControlConfig } from "../../shared/env.js";
 import { HomeAssistantClient } from "./client.js";
 import { HomeAssistantControlServer } from "./control-server.js";
-import type { HubDeviceRegistry } from "../device-registry.js";
+import {
+  createHubDeviceRegistryAuthority,
+  type HubDeviceRegistry,
+} from "../device-registry.js";
 
 const CONTROL_TOKEN = "hub-control-test-token";
 const DEVICE_TOKEN = "office-device-test-token";
@@ -32,6 +35,7 @@ const DEVICE_REGISTRY: HubDeviceRegistry = {
     homeAssistantEntityIds: ["light.office", "fan.main_bedroom"],
   }],
 };
+const DEVICE_REGISTRY_AUTHORITY = createHubDeviceRegistryAuthority(() => DEVICE_REGISTRY);
 
 test("HomeAssistantClient authenticates, hydrates state, subscribes, and calls a service", async () => {
   const mock = await MockHomeAssistant.start();
@@ -69,10 +73,14 @@ test("private control server authenticates, validates, and deduplicates service 
     maxBodyBytes: 4096,
   };
   assert.throws(
-    () => new HomeAssistantControlServer({ ...controlConfig, token: DEVICE_TOKEN }, client, DEVICE_REGISTRY),
+    () => new HomeAssistantControlServer(
+      { ...controlConfig, token: DEVICE_TOKEN },
+      client,
+      DEVICE_REGISTRY_AUTHORITY,
+    ),
     /must not match a registered device credential/,
   );
-  const control = new HomeAssistantControlServer(controlConfig, client, DEVICE_REGISTRY);
+  const control = new HomeAssistantControlServer(controlConfig, client, DEVICE_REGISTRY_AUTHORITY);
   client.start();
   await control.start();
   try {

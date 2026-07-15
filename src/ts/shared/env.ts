@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 import dotenv from "dotenv";
-import { loadHubDeviceRegistry, type HubDeviceRegistry } from "../hub/device-registry.js";
+import {
+  loadHubDeviceRegistryAuthority,
+  type HubDeviceRegistryAuthority,
+} from "../hub/device-registry.js";
 import {
   createHubDeviceAssertionIssuer,
   type HubDeviceAssertionIssuer,
@@ -98,7 +101,7 @@ export interface HubConfig {
   companion: CompanionBridgeConfig | null;
   homeAssistant: HomeAssistantConfig | null;
   control: HubControlConfig | null;
-  deviceRegistry: HubDeviceRegistry | null;
+  deviceRegistry: HubDeviceRegistryAuthority | null;
   voxta: VoxtaFacadeConfig;
   sessionTtlSeconds: number;
 }
@@ -288,7 +291,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
   const companion = loadCompanionBridgeConfig(psfn.satelliteClaim);
   const homeAssistant = loadHomeAssistantConfig();
   const control = loadHubControlConfig(homeAssistant !== null);
-  const deviceRegistry = loadHubDeviceRegistry(
+  const deviceRegistry = loadHubDeviceRegistryAuthority(
     optional("HUB_DEVICE_REGISTRY_PATH")
       ? resolveExistingFile(projectRoot, required("HUB_DEVICE_REGISTRY_PATH"), "HUB_DEVICE_REGISTRY_PATH")
       : undefined,

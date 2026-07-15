@@ -61,7 +61,9 @@ import {
 import {
   authenticateHubDevice,
   intersectCapabilities,
-  type HubDeviceRegistry,
+  requireCurrentHubDeviceEnrollment,
+  type HubDeviceIdentity,
+  type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 
@@ -206,7 +208,7 @@ class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
 }
 
 function createFrameworkAgent(config: HubConfig): FrameworkAgentAdapter {
-  return new PsfnModelAdapter(config.psfn);
+  return new PsfnModelAdapter(config.psfn, undefined, config.deviceRegistry);
 }
 
 function resolveChannelType(config: HubConfig): string {
@@ -231,6 +233,7 @@ class RealtimeConnection {
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
   private claimIdentity: PsfnChannelContext["claimIdentity"];
   private authenticated: boolean;
+  private authenticatedDevice: HubDeviceIdentity | null = null;
   private unsubscribeCompanion: (() => void) | null = null;
 
   constructor(
@@ -241,7 +244,7 @@ class RealtimeConnection {
     private readonly agent: FrameworkAgentAdapter,
     private readonly tts: StreamingTtsAdapter,
     private readonly companion: CompanionBridge | null = null,
-    private readonly deviceRegistry: HubDeviceRegistry | null = null,
+    private readonly deviceRegistry: HubDeviceRegistryAuthority | null = null,
   ) {
     this.authenticated = !this.deviceRegistry;
     if (!this.deviceRegistry) this.attachSatellite();
@@ -304,6 +307,9 @@ class RealtimeConnection {
       this.socket.close(1008, "duplicate hello");
       return;
     }
+    if (this.deviceRegistry && this.authenticated && message.type !== "hello") {
+      if (!await this.ensureCurrentDeviceEnrollment()) return;
+    }
     switch (message.type) {
       case "hello":
         if (this.deviceRegistry) {
@@ -315,7 +321,18 @@ class RealtimeConnection {
             this.socket.close(1008, "browser-authored authority forbidden");
             return;
           }
-          const device = authenticateHubDevice(this.deviceRegistry, message.credential);
+          let device: HubDeviceIdentity | null;
+          try {
+            device = authenticateHubDevice(this.deviceRegistry.readCurrent(), message.credential);
+          } catch (error) {
+            console.error("Hub device registry reload failed:", error);
+            await this.send({
+              type: "error-event",
+              data: { message: "Satellite device authority is unavailable" },
+            });
+            this.socket.close(1011, "device authority unavailable");
+            return;
+          }
           if (!device || message.deviceId !== device.deviceId) {
             await this.send({
               type: "error-event",
@@ -325,6 +342,7 @@ class RealtimeConnection {
             return;
           }
           this.deviceId = device.deviceId;
+          this.authenticatedDevice = device;
           this.deviceName = device.deviceName;
           this.satelliteId = device.satelliteId;
           this.satelliteName = device.satelliteName;
@@ -1082,11 +1100,33 @@ class RealtimeConnection {
   private async cleanup(): Promise<void> {
     this.unsubscribeCompanion?.();
     this.unsubscribeCompanion = null;
+    this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId);
     await this.cancelReply("connection_closed");
     this.activeTurn = null;
     if (this.sttSession) {
       await this.sttSession.close();
       this.sttSession = null;
+    }
+  }
+
+  private async ensureCurrentDeviceEnrollment(): Promise<boolean> {
+    if (!this.deviceRegistry || !this.authenticatedDevice) return false;
+    try {
+      this.authenticatedDevice = requireCurrentHubDeviceEnrollment(
+        this.deviceRegistry,
+        this.authenticatedDevice,
+      );
+      return true;
+    } catch (error) {
+      console.warn("Active Hub device enrollment fenced:", error);
+      this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId);
+      await this.cancelReply("device_enrollment_fenced");
+      await this.send({
+        type: "error-event",
+        data: { message: "Satellite device enrollment changed; reconnect required" },
+      });
+      this.socket.close(1008, "device enrollment changed");
+      return false;
     }
   }
 

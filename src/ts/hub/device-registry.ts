@@ -28,9 +28,23 @@ export interface HubDeviceIdentity {
   homeAssistantEntityIds: string[];
 }
 
+export type HubDeviceEnrollmentBinding = Pick<
+  HubDeviceIdentity,
+  | "deviceId"
+  | "enrollmentVersion"
+  | "enrollmentAssurance"
+  | "enrollmentStatus"
+  | "companionId"
+  | "placeId"
+>;
+
 export interface HubDeviceRegistry {
   schemaVersion: 1;
   devices: HubDeviceIdentity[];
+}
+
+export interface HubDeviceRegistryAuthority {
+  readCurrent(): HubDeviceRegistry;
 }
 
 export function loadHubDeviceRegistry(filePath: string | undefined): HubDeviceRegistry | null {
@@ -44,6 +58,44 @@ export function loadHubDeviceRegistry(filePath: string | undefined): HubDeviceRe
   assertUnique(devices, "satelliteId/endpointId", (device) => `${device.satelliteId}/${device.endpointId}`);
   assertUnique(devices, "credentialSha256", (device) => device.credentialSha256);
   return { schemaVersion: 1, devices };
+}
+
+export function loadHubDeviceRegistryAuthority(
+  filePath: string | undefined,
+): HubDeviceRegistryAuthority | null {
+  if (!filePath) return null;
+  loadRequiredHubDeviceRegistry(filePath);
+  return Object.freeze({
+    readCurrent: () => loadRequiredHubDeviceRegistry(filePath),
+  });
+}
+
+export function createHubDeviceRegistryAuthority(
+  readCurrent: () => HubDeviceRegistry,
+): HubDeviceRegistryAuthority {
+  validateRegistry(readCurrent());
+  return Object.freeze({
+    readCurrent: () => validateRegistry(readCurrent()),
+  });
+}
+
+export function requireCurrentHubDeviceEnrollment(
+  authority: HubDeviceRegistryAuthority,
+  attached: HubDeviceEnrollmentBinding,
+): HubDeviceIdentity {
+  const current = authority.readCurrent().devices.find(device => device.deviceId === attached.deviceId);
+  if (!current || current.enrollmentStatus !== "active") {
+    throw new Error("Hub device enrollment is no longer active");
+  }
+  if (current.enrollmentVersion !== attached.enrollmentVersion) {
+    throw new Error("Hub device enrollment version changed");
+  }
+  if (current.enrollmentAssurance !== attached.enrollmentAssurance
+    || current.companionId !== attached.companionId
+    || current.placeId !== attached.placeId) {
+    throw new Error("Hub device enrollment authority binding changed without a version bump");
+  }
+  return current;
 }
 
 export function authenticateHubDevice(
@@ -111,6 +163,23 @@ function parseDevice(value: unknown, index: number): HubDeviceIdentity {
     maxCapabilities: parseMaximumCapabilities(value.maxCapabilities, index),
     homeAssistantEntityIds: parseEntityIds(value.homeAssistantEntityIds, index),
   };
+}
+
+function loadRequiredHubDeviceRegistry(filePath: string): HubDeviceRegistry {
+  const registry = loadHubDeviceRegistry(filePath);
+  if (!registry) throw new Error("Hub device registry path is required");
+  return registry;
+}
+
+function validateRegistry(registry: HubDeviceRegistry): HubDeviceRegistry {
+  const devices = registry.devices.map((device, index) => parseDevice(device, index));
+  if (registry.schemaVersion !== 1 || devices.length === 0) {
+    throw new Error("Hub device registry must use schemaVersion 1 and contain at least one device");
+  }
+  assertUnique(devices, "deviceId", device => device.deviceId);
+  assertUnique(devices, "satelliteId/endpointId", device => `${device.satelliteId}/${device.endpointId}`);
+  assertUnique(devices, "credentialSha256", device => device.credentialSha256);
+  return { schemaVersion: 1, devices };
 }
 
 function requiredPositiveInteger(value: unknown, field: string): number {

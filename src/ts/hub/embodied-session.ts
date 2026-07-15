@@ -168,6 +168,31 @@ export class EmbodiedSessionRegistry {
   getSession(sessionId: string): EmbodiedSession | null {
     return this.sessions.get(sessionId) ?? null;
   }
+
+  detachSatellite(sessionId: string, satelliteId: string): void {
+    const current = this.sessions.get(sessionId);
+    if (!current) return;
+    const satellites = current.satellites.filter(satellite => satellite.id !== satelliteId);
+    if (satellites.length === current.satellites.length) return;
+    if (satellites.length === 0) {
+      this.sessions.delete(sessionId);
+      return;
+    }
+    const claimIdentities = { ...current.claimIdentities };
+    const deviceAuthorities = { ...current.deviceAuthorities };
+    delete claimIdentities[satelliteId];
+    delete deviceAuthorities[satelliteId];
+    const updated: EmbodiedSession = {
+      ...current,
+      satellites,
+      claimIdentities,
+      deviceAuthorities,
+      updatedAt: new Date().toISOString(),
+    };
+    if (Object.keys(claimIdentities).length === 0) delete updated.claimIdentities;
+    if (Object.keys(deviceAuthorities).length === 0) delete updated.deviceAuthorities;
+    this.sessions.set(sessionId, updated);
+  }
 }
 
 export function canReceiveStreamingAudio(capabilities: SatelliteCapabilities): boolean {

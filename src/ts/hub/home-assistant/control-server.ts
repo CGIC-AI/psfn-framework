@@ -3,7 +3,11 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { HubControlConfig } from "../../shared/env.js";
-import { authenticateHubDevice, type HubDeviceIdentity, type HubDeviceRegistry } from "../device-registry.js";
+import {
+  authenticateHubDevice,
+  type HubDeviceIdentity,
+  type HubDeviceRegistryAuthority,
+} from "../device-registry.js";
 import { HomeAssistantClient } from "./client.js";
 import {
   HOME_ASSISTANT_ALLOWED_DOMAINS,
@@ -47,9 +51,9 @@ export class HomeAssistantControlServer {
   constructor(
     private readonly config: HubControlConfig,
     private readonly client: HomeAssistantClient,
-    private readonly deviceRegistry: HubDeviceRegistry,
+    private readonly deviceRegistry: HubDeviceRegistryAuthority,
   ) {
-    if (authenticateHubDevice(deviceRegistry, config.token)) {
+    if (authenticateHubDevice(deviceRegistry.readCurrent(), config.token)) {
       throw new Error("HUB_CONTROL_TOKEN must not match a registered device credential");
     }
     this.server = http.createServer((request, response) => {
@@ -146,14 +150,16 @@ export class HomeAssistantControlServer {
 
   private authenticateDevice(raw: string | undefined): HubDeviceIdentity | null {
     if (!raw?.startsWith("Bearer ")) return null;
-    return authenticateHubDevice(this.deviceRegistry, raw.slice("Bearer ".length));
+    return authenticateHubDevice(this.deviceRegistry.readCurrent(), raw.slice("Bearer ".length));
   }
 
   private authenticatePrincipal(raw: string | undefined): HomeAssistantPrincipal | null {
     if (this.authorizedControlToken(raw)) {
       return {
         id: "PSFN gateway",
-        entityIds: [...new Set(this.deviceRegistry.devices.flatMap((device) => device.homeAssistantEntityIds))],
+        entityIds: [...new Set(this.deviceRegistry.readCurrent().devices.flatMap(
+          device => device.homeAssistantEntityIds,
+        ))],
       };
     }
     const device = this.authenticateDevice(raw);

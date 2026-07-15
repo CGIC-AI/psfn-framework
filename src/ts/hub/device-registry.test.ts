@@ -10,6 +10,8 @@ import {
   authenticateHubDevice,
   intersectCapabilities,
   loadHubDeviceRegistry,
+  loadHubDeviceRegistryAuthority,
+  requireCurrentHubDeviceEnrollment,
 } from "./device-registry.js";
 
 test("device registry authenticates a credential without storing plaintext", () => {
@@ -54,6 +56,42 @@ test("device registry authenticates a credential without storing plaintext", () 
     devices: registry.devices.map(device => ({ ...device, enrollmentStatus: "revoked" as const })),
   }, credential), null);
   assert.equal(JSON.stringify(registry).includes(credential), false);
+});
+
+test("file-backed device authority reloads enrollment state and fences stale attachments", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hub-device-authority-"));
+  const filePath = path.join(directory, "devices.json");
+  const device = {
+    deviceId: "bedroom-pi",
+    deviceName: "Bedroom Pi",
+    satelliteId: "bedroom",
+    satelliteName: "Bedroom",
+    endpointId: "bedroom-pi",
+    claimType: "room-satellite",
+    credentialSha256: "0".repeat(64),
+    enrollmentVersion: 1,
+    enrollmentAssurance: "device_credential" as const,
+    enrollmentStatus: "active" as const,
+    companionId: "11111111-1111-4111-8111-111111111111",
+    placeId: "bedroom",
+    maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+    homeAssistantEntityIds: [],
+  };
+  fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, devices: [device] }));
+  const authority = loadHubDeviceRegistryAuthority(filePath);
+  assert.ok(authority);
+  const attached = authority.readCurrent().devices[0]!;
+
+  fs.writeFileSync(filePath, JSON.stringify({
+    schemaVersion: 1,
+    devices: [{ ...device, enrollmentVersion: 2 }],
+  }));
+
+  assert.throws(
+    () => requireCurrentHubDeviceEnrollment(authority, attached),
+    /enrollment version changed/,
+  );
+  assert.equal(authority.readCurrent().devices[0]?.enrollmentVersion, 2);
 });
 
 test("capability authorization preserves safety and rejects escalation", () => {

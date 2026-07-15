@@ -5,17 +5,9 @@ import {
   type KeyObject,
 } from "node:crypto";
 
-import type { HubDeviceIdentity } from "./device-registry.js";
+import type { HubDeviceEnrollmentBinding } from "./device-registry.js";
 
-export type HubDeviceAssertionAuthority = Pick<
-  HubDeviceIdentity,
-  | "deviceId"
-  | "enrollmentVersion"
-  | "enrollmentAssurance"
-  | "enrollmentStatus"
-  | "companionId"
-  | "placeId"
->;
+export type HubDeviceAssertionAuthority = HubDeviceEnrollmentBinding;
 
 export const HUB_DEVICE_ASSERTION_HEADER = {
   alg: "EdDSA",

@@ -12,6 +12,11 @@ import { PsfnModelAdapter, type PsfnReplyTelemetry } from "./psfn-model.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+import {
+  createHubDeviceRegistryAuthority,
+  type HubDeviceIdentity,
+  type HubDeviceRegistry,
+} from "./device-registry.js";
 
 const HUB_ASSERTION_PRIVATE_KEY = createPrivateKey({
   key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
@@ -52,6 +57,55 @@ function jsonResponse(body: string): Response {
 }
 
 const EMPTY_COMPLETION = '{"choices":[{"message":{"role":"assistant","content":""}}]}';
+
+const AUTHENTICATED_DEVICE = {
+  deviceId: "office-device",
+  deviceName: "Office Device",
+  satelliteId: "office",
+  satelliteName: "Office",
+  endpointId: "office-device",
+  claimType: "room-satellite",
+  credentialSha256: "0".repeat(64),
+  enrollmentVersion: 7,
+  enrollmentAssurance: "device_credential",
+  enrollmentStatus: "active",
+  companionId: "11111111-1111-4111-8111-111111111111",
+  placeId: "office",
+  maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+  homeAssistantEntityIds: [],
+} satisfies HubDeviceIdentity;
+
+function authenticatedAssertionRuntime(overrides: Partial<PsfnRuntimeConfig> = {}): PsfnRuntimeConfig {
+  return buildRuntimeConfig({
+    deviceAssertionIssuer: createHubDeviceAssertionIssuer({
+      issuer: "psfn-satellite-hub",
+      kid: "hub-2026-07",
+      audience: "https://fleet.example.test",
+      privateKeyPem: HUB_ASSERTION_PRIVATE_KEY,
+      ttlSeconds: 30,
+    }),
+    ...overrides,
+  });
+}
+
+function authenticatedChannel(): PsfnChannelContext {
+  return {
+    sessionId: "realtime:office-device:session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:office",
+    sourceSatelliteId: "office",
+    sourceSatelliteName: "Office",
+    deviceAuthority: AUTHENTICATED_DEVICE,
+    activeSatellites: [],
+  };
+}
+
+function authenticatedRegistryAuthority() {
+  return createHubDeviceRegistryAuthority(() => ({
+    schemaVersion: 1,
+    devices: [AUTHENTICATED_DEVICE],
+  }));
+}
 
 test("psfn model adapter sends embodied hub channel headers", async () => {
   const originalFetch = globalThis.fetch;
@@ -196,7 +250,7 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
     },
     activeSatellites: [],
   };
-  const adapter = new PsfnModelAdapter(runtime);
+  const adapter = new PsfnModelAdapter(runtime, undefined, authenticatedRegistryAuthority());
   try {
     await drainReply(adapter, {
       inputMode: "text", userText: "first", conversationId: channel.sessionId, channel,
@@ -220,6 +274,97 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
       placeId: "office",
     });
     assert.equal(JSON.stringify(capturedHeaders).includes("PRIVATE KEY"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery retries reuse one exact Hub assertion for one logical turn", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+  process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = "1";
+  const scenarios = ["agent_busy", "empty", "timeout"] as const;
+
+  try {
+    for (const scenario of scenarios) {
+      const assertions: string[] = [];
+      let calls = 0;
+      globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+        calls += 1;
+        const headers = init?.headers as Record<string, string>;
+        assertions.push(headers["X-PSFN-Hub-Device-Assertion"] ?? "");
+        if (calls > 1) {
+          return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+        }
+        if (scenario === "agent_busy") {
+          return new Response(
+            '{"error":{"message":"Agent is already processing another prompt","type":"agent_busy"}}',
+            { status: 503, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (scenario === "empty") return jsonResponse(EMPTY_COMPLETION);
+        return await delayedResponse(
+          200,
+          '{"choices":[{"message":{"role":"assistant","content":"Too late"}}]}',
+          init?.signal,
+        );
+      };
+      const adapter = new PsfnModelAdapter(
+        authenticatedAssertionRuntime({
+          textReplyDeadlineMs: 250,
+          textAttemptTimeoutMs: 25,
+        }),
+        undefined,
+        authenticatedRegistryAuthority(),
+      );
+      await drainReply(adapter, {
+        inputMode: "text",
+        userText: `recover ${scenario}`,
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      });
+      assert.equal(calls, 2, `${scenario} must make exactly one recovery request`);
+      assert.equal(assertions.length, 2);
+      assert.ok(assertions[0]);
+      assert.equal(assertions[1], assertions[0], `${scenario} must reuse identical assertion bytes`);
+    }
+  } finally {
+    if (originalRetryBase === undefined) delete process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+    else process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = originalRetryBase;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery fences a device whose enrollment version changes between attempts", async () => {
+  const originalFetch = globalThis.fetch;
+  let registry: HubDeviceRegistry = { schemaVersion: 1, devices: [AUTHENTICATED_DEVICE] };
+  const authority = createHubDeviceRegistryAuthority(() => registry);
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    registry = {
+      schemaVersion: 1,
+      devices: [{ ...AUTHENTICATED_DEVICE, enrollmentVersion: 8 }],
+    };
+    return jsonResponse(EMPTY_COMPLETION);
+  };
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authority,
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "must not retry after version bump",
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      }),
+      /enrollment version changed/,
+    );
+    assert.equal(calls, 1, "no request may leave after the authority version changes");
   } finally {
     globalThis.fetch = originalFetch;
   }

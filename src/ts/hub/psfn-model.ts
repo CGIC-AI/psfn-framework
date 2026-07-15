@@ -9,6 +9,10 @@ import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 import type { RuntimeIdentity } from "../shared/protocol.js";
 import {
+  requireCurrentHubDeviceEnrollment,
+  type HubDeviceRegistryAuthority,
+} from "./device-registry.js";
+import {
   buildSatelliteClaimEnvelope,
   buildSatelliteRegistryHeaders,
   defaultCapabilitiesForProfile,
@@ -69,7 +73,11 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private readonly onTelemetry: PsfnTelemetrySink;
   private identityRequest: Promise<RuntimeIdentity | null> | null = null;
 
-  constructor(private readonly runtime: PsfnRuntimeConfig, onTelemetry?: PsfnTelemetrySink) {
+  constructor(
+    private readonly runtime: PsfnRuntimeConfig,
+    onTelemetry?: PsfnTelemetrySink,
+    private readonly deviceRegistryAuthority: HubDeviceRegistryAuthority | null = null,
+  ) {
     const baseUrl = runtime.baseUrl.replace(/\/$/, "");
     this.apiBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     this.onTelemetry = onTelemetry ?? defaultTelemetrySink;
@@ -138,7 +146,12 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       const attemptStart = Date.now();
       const scope = createAttemptScope(externalSignal, Math.min(attemptTimeoutMs, remainingMs));
       try {
-        const response = await this.postChatCompletionWithBusyRetry(headers, body, scope.signal);
+        const response = await this.postChatCompletionWithBusyRetry(
+          headers,
+          body,
+          scope.signal,
+          () => this.assertCurrentDeviceAuthority(channel),
+        );
         if (!response.ok) {
           const errorText = await formatError(response);
           attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart, httpStatus: response.status });
@@ -252,12 +265,14 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     headers: Record<string, string>,
     body: string,
     signal?: AbortSignal,
+    assertCurrentAuthority: () => void = () => undefined,
   ): Promise<CompletionResponse> {
     const maxRetries = agentBusyMaxRetries();
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       if (signal?.aborted) {
         throw abortReason(signal);
       }
+      assertCurrentAuthority();
       const response = await this.postChatCompletion(headers, body, signal);
       if (response.ok) {
         return response;
@@ -349,6 +364,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       satelliteClaim,
     }));
     if (channel.deviceAuthority) {
+      this.assertCurrentDeviceAuthority(channel);
       if (!this.runtime.deviceAssertionIssuer) {
         throw new Error("Authenticated Hub device traffic requires the device assertion signing authority");
       }
@@ -360,6 +376,14 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     headers["X-PSFN-Satellite-Claim"] = JSON.stringify(sanitizeHeaderJsonValue(satelliteClaim));
     headers["X-PSFN-Channel-Metadata"] = JSON.stringify(sanitizeHeaderJsonValue(channelMetadata));
     return sanitizeHttpHeaders(headers);
+  }
+
+  private assertCurrentDeviceAuthority(channel: PsfnChannelContext): void {
+    if (!channel.deviceAuthority) return;
+    if (!this.deviceRegistryAuthority) {
+      throw new Error("Authenticated Hub device traffic requires a live device registry authority");
+    }
+    requireCurrentHubDeviceEnrollment(this.deviceRegistryAuthority, channel.deviceAuthority);
   }
 
   private buildMessages(

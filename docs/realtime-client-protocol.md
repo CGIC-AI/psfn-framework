@@ -59,10 +59,22 @@ and `channelId` are forbidden in the browser hello. Device name, satellite
 identity, enrollment version and assurance, companion, and optional place all
 come from the Hub registry. A revoked registry entry cannot authenticate.
 
+The registry file is a live authority, not a startup snapshot. The Hub rereads
+and validates it before every enrolled hello, before accepting another message
+from an attached enrolled device, and before each Framework transport attempt.
+Removal, revocation, enrollment-version drift, or a changed assertion binding
+fences the active socket and requires a new hello; unreadable or malformed
+registry state fails closed. An idle socket is checked on its next authenticated
+event rather than by a background watcher. A reconnect always resolves the
+current registry state.
+
 ## Framework Device Assertion
 
-After an enrolled hello succeeds, each Hub-to-Framework request carries a new
-`X-PSFN-Hub-Device-Assertion` compact token. The Hub is the only holder of the
+After an enrolled hello succeeds, each logical Hub-to-Framework turn carries a
+new `X-PSFN-Hub-Device-Assertion` compact token. Recovery transport attempts for
+that turn reuse the exact token bytes across `agent_busy`, timeout/lost-response,
+and empty-response recovery. A later logical turn receives a new token and
+replay id. The Hub is the only holder of the
 Ed25519 private key. The protected header is canonical JSON with `alg=EdDSA`,
 `typ=PSFN-HUB-DEVICE`, `v=1`, and `kid`. The canonical claims are:
 
@@ -87,8 +99,11 @@ not a device-assertion claim: the fleet broker attaches or clears the human
 principal separately, so a shared-display logout does not de-enroll the
 device. Framework verification allowlists the Hub issuer/public-key ring,
 binds the exact audience, companion, device and current enrollment version,
-and transactionally consumes `jti`. Unknown, expired, revoked-key, replayed,
-or non-canonical assertions fail closed. The deterministic shared fixture is
+and transactionally consumes `jti`. The first `jti` and assertion digest records
+the verified allow; an identical retry returns that recorded decision through
+the assertion lifetime, while a different digest using the same `jti` is denied
+and durably audited. Unknown, expired, revoked-key, mutated-replay, or
+non-canonical assertions fail closed. The deterministic shared fixture is
 `test-fixtures/fleet-sso/hub-device-assertion-v1.json`.
 
 `user.text`

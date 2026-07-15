@@ -285,6 +285,15 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     assert.equal(config.control?.bindHost, "127.0.0.1");
     assert.equal(config.control?.port, 8788);
     assert.ok(config.psfn.deviceAssertionIssuer);
+    assert.equal(config.deviceRegistry?.readCurrent().devices[0]?.enrollmentVersion, 1);
+    const registryPath = path.join(projectRoot, "devices.json");
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      schemaVersion: 1;
+      devices: Array<Record<string, unknown>>;
+    };
+    updated.devices[0]!.enrollmentVersion = 2;
+    fs.writeFileSync(registryPath, JSON.stringify(updated));
+    assert.equal(config.deviceRegistry?.readCurrent().devices[0]?.enrollmentVersion, 2);
   });
 });
 

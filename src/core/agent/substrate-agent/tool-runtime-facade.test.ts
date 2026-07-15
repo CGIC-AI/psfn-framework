@@ -744,6 +744,70 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
+  it.each(['heartbeat', 'reflection', 'maintenance'] as const)(
+    'applies the explicit maintenance allowlist to authorized core and extended tools on %s turns',
+    (taskKind) => {
+      const grantedTokens = [
+        'external.companion',
+        'external.discord',
+        'external.email',
+        'external.web',
+        'git.read',
+        'git.write',
+        'issue.read',
+        'issue.write',
+        'issue.close',
+        'repl.execute',
+        'world.read',
+        'world.control',
+      ];
+      const { facade, agent, emitTelemetry, correlation } = createFacade(taskKind, grantedTokens);
+      facade.registerTool(makeTool('identity'), 'core');
+      facade.registerTool(makeTool('self_status'), 'core');
+      for (const toolName of ['repo', 'shell', 'beads', 'notify', 'world']) {
+        facade.registerTool(makeTool(toolName), 'extended');
+      }
+
+      facade.applyActiveToolsToAgentForTurn({
+        id: `msg-${taskKind}-source-agnostic`,
+        channelId: `internal:${taskKind}`,
+        channelType: 'api',
+        authorId: 'runtime',
+        authorName: 'Runtime',
+        content: taskKind,
+        timestamp: new Date('2026-07-15T11:00:00Z'),
+      }, taskKind, 'background', correlation, { intent: 'ops' });
+
+      const activeNames = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>)
+        .map(tool => tool.name);
+      expect(activeNames).toEqual(expect.arrayContaining(['identity', 'self_status']));
+      expect(activeNames).not.toEqual(expect.arrayContaining(['repo', 'shell', 'beads', 'notify', 'world']));
+
+      const snapshot = emitTelemetry.mock.calls.find(
+        ([eventName]) => eventName === 'agent.tools.adaptive.snapshot',
+      )?.[1];
+      expect(snapshot).toMatchObject({
+        tools: expect.arrayContaining([
+          { toolName: 'identity', source: 'core' },
+          { toolName: 'self_status', source: 'core' },
+        ]),
+        counts: { core: 2, extended: 0, total: 2 },
+      });
+
+      const skipped = emitTelemetry.mock.calls
+        .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped')
+        .map(([, payload]) => payload);
+      for (const toolName of ['repo', 'shell', 'beads', 'notify', 'world']) {
+        expect(skipped).toContainEqual(expect.objectContaining({
+          toolName,
+          source: 'extended',
+          taskKind,
+          reason: 'maintenance_turn_allowlist',
+        }));
+      }
+    },
+  );
+
   it('keeps expressive image tools available on heartbeat turns (psfn img2)', () => {
     const { facade, agent, correlation } = createFacade('heartbeat');
     facade.registerTool(makeTool('selfie_create'), 'core');

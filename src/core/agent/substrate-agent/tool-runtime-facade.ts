@@ -91,14 +91,14 @@ interface ToolRuntimeFacadeOptions {
   getActiveTurnTaskKind: () => string | null;
 }
 
-interface MaintenanceCoreToolPolicy {
-  // When present, the core tool survives a maintenance-restricted turn but its
+interface MaintenanceToolPolicy {
+  // When present, the tool survives a maintenance-restricted turn but its
   // actions are constrained to this allowlist. When absent, the tool passes
   // through unrestricted (used for expressive tools whose whole point is a
   // single spontaneous action).
   readonly allowedActions?: readonly string[];
   readonly resolveAction?: (params: Record<string, unknown>) => string | null;
-  // Turn classes on which this core tool survives at all. Defaults to every
+  // Turn classes on which this tool survives at all. Defaults to every
   // maintenance-restricted class (heartbeat, reflection, maintenance). Narrow
   // it to scope a tool to specific self-directed turn classes.
   readonly allowedTaskKinds?: readonly string[];
@@ -134,7 +134,7 @@ const CANDIDATE_TOOL_MUTATION_DENIAL =
 //   - maintenance-> NOT available. Pure ops/housekeeping.
 const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
 
-const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy>([
+const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['contact', {
     allowedActions: ['list', 'lookup'],
     resolveAction: resolveMaintenanceContactAction,
@@ -967,19 +967,14 @@ export class ToolRuntimeFacade {
 
     for (const tool of resolution.tools) {
       const source = sourceByToolName.get(tool.name);
-      if (source !== 'core') {
-        filteredTools.push(tool);
-        if (source) {
-          filteredSnapshotTools.push({ toolName: tool.name, source });
-        }
-        continue;
-      }
-
-      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind ?? '', correlation);
-      if (!guardedTool) {
+      const guardedTool = source
+        ? this.createMaintenanceGuardedTool(tool, taskKind ?? '', correlation, source)
+        : null;
+      if (!guardedTool || !source) {
         this.emitTelemetry('agent.tools.core_guardrail.skipped', {
           ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
           toolName: tool.name,
+          source: source ?? null,
           taskKind,
           reason: 'maintenance_turn_allowlist',
         });
@@ -987,7 +982,7 @@ export class ToolRuntimeFacade {
       }
 
       filteredTools.push(guardedTool);
-      filteredSnapshotTools.push({ toolName: guardedTool.name, source: 'core' });
+      filteredSnapshotTools.push({ toolName: guardedTool.name, source });
     }
 
     const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
@@ -1206,12 +1201,13 @@ export class ToolRuntimeFacade {
     };
   }
 
-  private createMaintenanceGuardedCoreTool(
+  private createMaintenanceGuardedTool(
     tool: AgentTool<any>,
     taskKind: string,
     correlation: CorrelationMetadata | null,
+    source: AdaptiveToolSnapshotTool['source'],
   ): AgentTool<any> | null {
-    const policy = MAINTENANCE_CORE_TOOL_POLICIES.get(tool.name);
+    const policy = MAINTENANCE_TOOL_POLICIES.get(tool.name);
     if (!policy) {
       return null;
     }
@@ -1240,6 +1236,7 @@ export class ToolRuntimeFacade {
           this.emitTelemetry('agent.tools.core_guardrail.denied', {
             ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
             toolName: tool.name,
+            source,
             taskKind,
             requestedAction: requestedAction ?? null,
             allowedActions: [...allowedActions],
@@ -1253,6 +1250,7 @@ export class ToolRuntimeFacade {
               companionMessage,
               rawDiagnostic: {
                 toolName: tool.name,
+                source,
                 taskKind,
                 requestedAction: requestedAction ?? null,
                 allowedActions: [...allowedActions],

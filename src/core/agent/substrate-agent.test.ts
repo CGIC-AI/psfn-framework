@@ -6630,6 +6630,44 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
     expect(abortSpy).not.toHaveBeenCalled();
   });
 
+  it('does not let a concurrent ordinary turn (no cancellationId) null the active voice turn identity', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+
+    // Voice turn Y is the active run: its prompt hangs (blocked provider) so it
+    // stays mid-generation while a concurrent turn is dispatched.
+    const gate = hangNextPrompt();
+    const voiceTurn = agent.handleMessage(
+      makeMessage({ id: 'turn-voice-Y' }),
+      undefined,
+      { cancellationId: 'cancel-Y' },
+    );
+    await gate.started;
+
+    // A scheduler/heartbeat/API turn fires while Y is generating. handleMessage
+    // dispatches it through `runShared`, which grants it as a CONCURRENT shared
+    // reader alongside Y. It carries NO cancellationId and — because Y owns the
+    // pi-agent activeRun — throws 'Agent is already processing'. Its entry and
+    // finally must not touch Y's registered cancellation identity.
+    promptSpy.mockImplementationOnce(async () => {
+      throw new Error('Agent is already processing.');
+    });
+    await agent
+      .handleMessage(makeMessage({ id: 'turn-ordinary-concurrent' }))
+      .catch(() => undefined);
+
+    // Barge-in: Y's identity survived the concurrent throw-away, so cancelTurn
+    // still aborts Y. Pre-fix the concurrent turn reset the field to null and
+    // this returned { status: 'not_active' } — Y ran straight through the interrupt.
+    expect(agent.cancelTurn('cancel-Y')).toEqual({ status: 'signaled' });
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await voiceTurn;
+  });
+
   it('does not let a late cancel for a finished turn abort a newer turn with a different id', async () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),

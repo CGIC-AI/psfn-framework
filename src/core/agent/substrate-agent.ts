@@ -340,11 +340,14 @@ export class SubstrateAgent {
   private currentTurnIntakeEnvelopes: readonly IntakeEnvelopeSnapshot[] = [];
   /**
    * mmo9.6.1: transport-agnostic cancellation identity of the CURRENT active
-   * turn (from `message.routing.cancellationId` or the dispatch options). Set
-   * for the lifetime of the turn's run and cleared in the finally, so
-   * {@link cancelTurn} can abort IFF the caller names the turn that is actually
-   * running. A stale/mismatched id is a no-op — it must never abort a newer
-   * turn (critical for rapid voice segment turns, mmo9.8).
+   * turn (from `message.routing.cancellationId` or the dispatch options).
+   * CLAIMED by a turn only when it carries an id AND the slot is unregistered,
+   * and cleared in the finally only by the turn that claimed it, so concurrent
+   * ordinary turns (granted as overlapping shared readers by the turn-run
+   * reservation) cannot overwrite or null it. {@link cancelTurn} can abort IFF
+   * the caller names the turn that is actually running. A stale/mismatched id is
+   * a no-op — it must never abort a newer turn (critical for rapid voice segment
+   * turns, mmo9.8).
    */
   private activeTurnCancellationId: string | null = null;
   activeConcernProvider: ActiveConcernContextProvider | null = null;
@@ -1291,7 +1294,25 @@ export class SubstrateAgent {
     // mmo9.6.1: register this turn's cancellation identity for the lifetime of
     // the run and wire the dispatch AbortSignal to the identity-guarded cancel
     // so aborting the signal cancels THIS turn and no other.
-    this.activeTurnCancellationId = cancellationId;
+    //
+    // handleMessage dispatches ordinary turns through `turnRunReservation.runShared`,
+    // a reader-writer lock that grants consecutive ordinary turns CONCURRENTLY
+    // (see turn-run-reservation.ts drain: `while (queue[0]?.mode === 'shared')`).
+    // Only ONE of those overlapping turns becomes the pi-agent `activeRun`; every
+    // other concurrent dispatch throws 'Agent is already processing' and is a
+    // throw-away. A throw-away turn MUST NOT overwrite — or null — the running
+    // turn's cancellation identity, or a voice barge-in silently no-ops
+    // (psfn-framework-mmo9.6.1): a concurrent scheduler/heartbeat/API turn carries
+    // no cancellationId and, under the old unconditional assignment, reset the
+    // field to null while a voice turn was mid-generation. So a turn CLAIMS the
+    // identity only when it carries one AND none is currently registered, and it
+    // CLEARS only the identity it itself registered — leaving the genuinely
+    // active run the sole owner of the cancellation identity.
+    const claimsCancellationIdentity =
+      cancellationId !== null && this.activeTurnCancellationId === null;
+    if (claimsCancellationIdentity) {
+      this.activeTurnCancellationId = cancellationId;
+    }
     let detachCancelSignal: (() => void) | null = null;
     if (turnControl?.signal && cancellationId !== null) {
       const signal = turnControl.signal;
@@ -1309,7 +1330,9 @@ export class SubstrateAgent {
       return await this.handleMessageUnderReservationInner(message, deliveryLifecycle);
     } finally {
       detachCancelSignal?.();
-      if (this.activeTurnCancellationId === cancellationId) {
+      // Clear only the identity THIS turn registered. A concurrent throw-away
+      // turn that never claimed the field must not clear the active turn's id.
+      if (claimsCancellationIdentity && this.activeTurnCancellationId === cancellationId) {
         this.activeTurnCancellationId = null;
       }
     }

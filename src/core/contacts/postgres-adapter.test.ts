@@ -157,6 +157,212 @@ describe('PostgresContactStore', () => {
     await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'trusted' });
   });
 
+  it('rejects a stale profile trust change after an ABA trust mutation', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Concurrent Generic ABA Target',
+      trustLevel: 'public',
+    });
+    pool.beforeNextContactProfileUpdate = async () => {
+      await store.setTrustLevel(
+        contact.id,
+        'trusted',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+      await store.setTrustLevel(
+        contact.id,
+        'public',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+    };
+
+    const updated = await store.upsert({
+      id: contact.id,
+      displayName: 'Concurrent Generic ABA Target Renamed',
+      trustLevel: 'regular',
+    });
+
+    expect(updated.displayName).toBe('Concurrent Generic ABA Target Renamed');
+    expect(updated.trustLevel).toBe('public');
+  });
+
+  it('rejects a stale explicit trust change after an ABA trust mutation', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Concurrent Explicit ABA Target',
+      trustLevel: 'public',
+    });
+    pool.beforeNextContactTrustUpdate = async () => {
+      await store.setTrustLevel(
+        contact.id,
+        'trusted',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+      await store.setTrustLevel(
+        contact.id,
+        'public',
+        'operator:test',
+        { mutationSource: 'manual' },
+      );
+    };
+
+    const staleMutationApplied = await store.setTrustLevel(
+      contact.id,
+      'regular',
+      'agent:contact-tool',
+      { mutationSource: 'autonomous' },
+    );
+
+    expect(staleMutationApplied).toBe(false);
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'public' });
+  });
+
+  it('does not grant primary to an existing contact from a conflicting proposed owner identity', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const owner = await store.upsert({
+      displayName: 'Configured Owner',
+      discordUserId: 'primary-user-123',
+    });
+    const target = await store.upsert({
+      displayName: 'Conflicting Target',
+      discordUserId: 'other-user-456',
+      trustLevel: 'regular',
+    });
+
+    await expect(store.upsert({
+      id: target.id,
+      displayName: 'Conflicting Target',
+      discordUserId: 'primary-user-123',
+      trustLevel: 'primary',
+    }, {
+      actor: 'operator:test',
+      mutationSource: 'manual',
+    })).rejects.toThrow(/Primary trust assignment denied/);
+
+    await expect(store.getById(owner.id)).resolves.toMatchObject({ trustLevel: 'primary' });
+    await expect(store.getById(target.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+    await expect(store.getByDiscordUserId('primary-user-123')).resolves.toMatchObject({ id: owner.id });
+  });
+
+  it('does not grant primary to an existing contact from an unbound proposed owner identity', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const target = await store.upsert({
+      displayName: 'Unbound Target',
+      discordUserId: 'other-user-456',
+      trustLevel: 'regular',
+    });
+
+    await expect(store.upsert({
+      id: target.id,
+      displayName: 'Unbound Target',
+      discordUserId: 'primary-user-123',
+      trustLevel: 'primary',
+    }, {
+      actor: 'operator:test',
+      mutationSource: 'manual',
+    })).rejects.toThrow(/Primary trust assignment denied/);
+
+    await expect(store.getById(target.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+    await expect(store.getByDiscordUserId('primary-user-123')).resolves.toBeUndefined();
+  });
+
+  it('rolls back a generic primary trust change when its audit insert fails', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Generic Trust Audit Rollback',
+      trustLevel: 'regular',
+    });
+    pool.failNextMutationAudit = true;
+
+    await expect(store.upsert({
+      id: contact.id,
+      displayName: contact.displayName,
+      trustLevel: 'primary',
+    }, {
+      actor: 'operator:test',
+      mutationSource: 'manual',
+      allowPrimaryTrustAssignment: true,
+    })).rejects.toThrow('forced mutation audit failure');
+
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+    expect(pool.contactMutationAudit).toEqual([]);
+
+    await expect(store.upsert({
+      id: contact.id,
+      displayName: contact.displayName,
+      trustLevel: 'primary',
+    }, {
+      actor: 'operator:test',
+      mutationSource: 'manual',
+      allowPrimaryTrustAssignment: true,
+    })).resolves.toMatchObject({ trustLevel: 'primary' });
+    expect(pool.contactMutationAudit).toEqual([
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'operator:test:primary_allowed',
+        field: 'trust_level',
+        old_value: 'regular',
+        new_value: 'primary',
+      }),
+    ]);
+  });
+
+  it('rolls back an explicit primary trust change when its audit insert fails', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+    const contact = await store.upsert({
+      displayName: 'Explicit Trust Audit Rollback',
+      trustLevel: 'regular',
+    });
+    pool.failNextMutationAudit = true;
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'primary',
+      'operator:test',
+      { mutationSource: 'manual', allowPrimaryTrustAssignment: true },
+    )).rejects.toThrow('forced mutation audit failure');
+
+    await expect(store.getById(contact.id)).resolves.toMatchObject({ trustLevel: 'regular' });
+    expect(pool.contactMutationAudit).toEqual([]);
+
+    await expect(store.setTrustLevel(
+      contact.id,
+      'primary',
+      'operator:test',
+      { mutationSource: 'manual', allowPrimaryTrustAssignment: true },
+    )).resolves.toBe(true);
+    expect(pool.contactMutationAudit).toEqual([
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'operator:test:primary_allowed',
+        field: 'trust_level',
+        old_value: 'regular',
+        new_value: 'primary',
+      }),
+    ]);
+  });
+
   it('preserves autonomous low-tier trust continuity', async () => {
     const pool = new FakePostgresPool();
     const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {

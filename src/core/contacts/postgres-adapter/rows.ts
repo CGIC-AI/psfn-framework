@@ -4,6 +4,7 @@ export interface ContactRow {
   display_name: string;
   nickname: string | null;
   trust_level: string;
+  trust_version?: string;
   relationship_type: string;
   is_machine_intelligence?: boolean | null;
   emotional_baseline: unknown;

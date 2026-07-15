@@ -57,7 +57,7 @@ import {
 } from './mapping.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
-import { compareAndSetGenericUpsertTrust } from './trust-concurrency.js';
+import { compareAndSetGenericUpsertTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -106,6 +106,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     if (
       partial.trustLevel === 'primary'
+      && target?.trustLevel !== 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
     ) {
       await this.appendPrimaryTrustAudit(target?.id, target?.trustLevel ?? null, 'upsert', 'denied', options.actor, {
@@ -117,7 +118,11 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     const now = new Date().toISOString();
     if (target) {
-      const previousTrustLevel = target.trustLevel;
+      const trustSnapshot = await loadContactTrustSnapshot(this.pool, target.id);
+      if (!trustSnapshot) {
+        throw new Error(`Concurrent contact deletion detected during contact upsert: ${target.id}`);
+      }
+      const previousTrustLevel = trustSnapshot.trustLevel;
       const nextDisplayName = partial.displayName.trim() || target.displayName;
       const requestedNickname = normalizeNicknameValue(partial.nickname);
       const nextNickname = requestedNickname === undefined ? (target.nickname ?? undefined) : requestedNickname;
@@ -125,9 +130,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       // entered a high trust tier, only the explicit setTrustLevel path may
       // move it out again; otherwise a resolver miss followed by an upsert
       // race can replace trusted with the public new-speaker floor.
-      const nextTrustLevel = isHighTierTrustLevel(target.trustLevel)
-        ? target.trustLevel
-        : (partial.trustLevel ?? target.trustLevel);
+      const nextTrustLevel = isHighTierTrustLevel(previousTrustLevel)
+        ? previousTrustLevel
+        : (partial.trustLevel ?? previousTrustLevel);
       const relationshipMutationRequested = partial.relationshipType !== undefined;
       const nextRelationshipType = partial.relationshipType ?? target.relationshipType;
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};
@@ -204,12 +209,35 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         );
       }
 
-      const trustLevelChanged = await compareAndSetGenericUpsertTrust(
-        this.pool,
-        target.id,
-        previousTrustLevel,
-        nextTrustLevel,
-      );
+      await withPostgresClient(this.pool, async (client) => {
+        const changed = await compareAndSetGenericUpsertTrust(
+          client,
+          target.id,
+          trustSnapshot,
+          nextTrustLevel,
+        );
+        if (!changed) return;
+        if (nextTrustLevel === 'primary') {
+          await this.appendPrimaryTrustAudit(
+            target.id,
+            previousTrustLevel,
+            'upsert',
+            'allowed',
+            options.actor,
+            undefined,
+            client,
+          );
+        } else {
+          await this.appendMutationAuditEntry(
+            target.id,
+            'trust_level',
+            previousTrustLevel,
+            nextTrustLevel,
+            options.actor,
+            client,
+          );
+        }
+      });
 
       for (const identity of identities) {
         await this.upsertIdentityLinkRecord(
@@ -222,11 +250,6 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         );
       }
 
-      if (trustLevelChanged && nextTrustLevel === 'primary') {
-        await this.appendPrimaryTrustAudit(target.id, previousTrustLevel, 'upsert', 'allowed', options.actor);
-      } else if (trustLevelChanged) {
-        await this.appendMutationAuditEntry(target.id, 'trust_level', previousTrustLevel, nextTrustLevel, options.actor);
-      }
       if (target.displayName !== nextDisplayName) {
         await this.appendMutationAuditEntry(target.id, 'display_name', target.displayName, nextDisplayName, options.actor);
       }
@@ -681,6 +704,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               display_name = $2,
               nickname = $3,
               trust_level = $4,
+              trust_version = CASE
+                WHEN trust_level IS DISTINCT FROM $4 THEN trust_version + 1
+                ELSE trust_version
+              END,
               relationship_type = $5,
               emotional_baseline = $6,
               emotional_time_series = $7,
@@ -1247,8 +1274,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       await this.pool.query(
         `
           UPDATE contacts
-          SET trust_level = 'primary'
-          WHERE id = $1
+          SET trust_level = 'primary',
+              trust_version = trust_version + 1
+          WHERE id = $1 AND trust_level <> 'primary'
         `,
         [contactId],
       );

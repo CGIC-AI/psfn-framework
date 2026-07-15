@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Pool, PoolClient } from 'pg';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import type {
   ChannelPrivacyLevel,
@@ -297,8 +298,9 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     oldValue: string | null,
     newValue: string | null,
     actor?: string,
+    queryable?: Pool | PoolClient,
   ): Promise<void> {
-    await this.pool.query(
+    await (queryable ?? this.pool).query(
       `
         INSERT INTO contact_mutation_audit (
           contact_id,

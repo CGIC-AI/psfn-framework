@@ -39,6 +39,9 @@ const SCAN_TARGETS = [
   'docs/operations.md',
   'docs/development-status.md',
   'docs/CODEBASE_MAP.md',
+  'docs/specifications.md',
+  'docs/PSFN_PROJECT_CHARTER.md',
+  'docs/context-envelope.md',
   'deploy/helm/psfn/README.md',
 ];
 const RETIRED_IMPLEMENTATION_PATHS = [
@@ -114,6 +117,24 @@ const TEXT_REFERENCE_ALLOWLIST = [
     contains: 'SQLite (`better-sqlite3`/`sqlite-vec`) implementations and packages are removed.',
     classification: 'cutover-contract',
     reason: 'The codebase map prevents agents from looking for deleted adapters.',
+  },
+  {
+    path: 'docs/specifications.md',
+    contains: 'opaque pre-cutover SQLite database placement',
+    classification: 'legacy-artifact-contract',
+    reason: 'The live alpha boundary permits opaque layout preservation without a reader.',
+  },
+  {
+    path: 'docs/specifications.md',
+    contains: 'do not open them through a SQLite reader',
+    classification: 'legacy-artifact-contract',
+    reason: 'The live alpha boundary explicitly denies an implementation exception.',
+  },
+  {
+    path: 'docs/PSFN_PROJECT_CHARTER.md',
+    contains: 'SQLite implementations, dependencies, readers, and adapter fixtures are removed.',
+    classification: 'cutover-contract',
+    reason: 'The project charter states the final persistence law.',
   },
   {
     path: 'scripts/recovery/psfn-ext4-recovery.sh',

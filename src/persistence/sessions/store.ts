@@ -51,6 +51,7 @@ import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
+  type TurnRecordRecentEntryHealDrop,
 } from './turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -114,6 +115,25 @@ import {
   uniqueStrings,
 } from './store/cogsec-journal-helpers.js';
 const log = createComponentLogger('SessionStore');
+
+/**
+ * Process-lifetime count of turn-record `recentEntries` heal-drops (an id-backed
+ * entry that was dropped on read because its L0 row is gone). Emitted as a stable
+ * structured event with a running counter — mirroring the turn-record quarantine
+ * telemetry in turn-records.ts, since no telemetry port is reachable from the
+ * persistence layer. Lets operators distinguish legitimate redaction/rolloff
+ * drops (this signal, expected) from structural ref corruption (fails closed
+ * upstream and throws, never reaching here). See bead psfn-framework-hgw3.10.
+ */
+let recentEntryHealDropCount = 0;
+function emitRecentEntryHealDrop(drop: TurnRecordRecentEntryHealDrop): void {
+  recentEntryHealDropCount += 1;
+  log.info('turn_record_recent_entry_heal_drop', {
+    ...drop,
+    healDropsThisProcess: recentEntryHealDropCount,
+  });
+}
+
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
@@ -1093,12 +1113,16 @@ export class SessionStore implements TranscriptSearchPort {
   /**
    * Reconstruct L0-referenced session entries and redaction-gate the rendered
    * view (bead psfn-framework-9ree) at the persistence read boundary, so every
-   * consumer above the store sees fully inline, journal-current records.
+   * consumer above the store sees fully inline, journal-current records. Pre-9ree
+   * "old fat" records (inline recentEntries, no ref) are redaction-gated against
+   * L0 here too (bead psfn-framework-hgw3.10); id-backed heal-drops emit
+   * structured telemetry via emitRecentEntryHealDrop.
    */
   private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
     return resolveTurnRecordSessionEntries(
       record,
       (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
+      emitRecentEntryHealDrop,
     );
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {

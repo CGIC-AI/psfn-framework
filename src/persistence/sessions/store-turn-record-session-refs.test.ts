@@ -7,6 +7,21 @@ import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { SessionStore } from './store.js';
 import { REDACTED_MESSAGE_PLACEHOLDER } from './turn-record-session-refs.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../layout.js';
+
+/** Persist a record with its verbatim inline recentEntries intact (no ref) — the
+ * exact pre-9ree "old fat" on-disk shape — by bypassing the session-entry slim
+ * that SessionStore.appendTurnRecord normally applies. */
+function appendFatTurnRecord(store: SessionStore, record: TurnRecord): void {
+  (store as unknown as {
+    turnRecordStore: { appendTurnRecord(record: TurnRecord): void };
+  }).turnRecordStore.appendTurnRecord(record);
+}
 
 const dirs: string[] = [];
 
@@ -132,5 +147,77 @@ describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', ()
     // The rendered view masks the phantom-backed message and keeps the live one.
     expect(snapshot.plan.messages.map(m => m.content)).toEqual(['kept line', REDACTED_MESSAGE_PLACEHOLDER]);
     expect(JSON.stringify(read)).not.toContain('REDACTED SECRET');
+  });
+
+  // ── pre-9ree "old fat" record gating (bead psfn-framework-hgw3.10) ──────────
+
+  it('redaction-gates a pre-9ree fat record: a since-tombstoned L0 entry surfaces the marker, never the captured plaintext', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'api:oldfat';
+
+    const secretId = store.append({ channelId, role: 'user', content: 'my SECRET pre-9ree line', timestamp: 1_000 });
+    store.append({ channelId, role: 'assistant', content: 'kept companion line', timestamp: 2_000 });
+    const entries = store.getRecent(channelId, 10);
+
+    // Persist the fat record verbatim (inline recentEntries, no ref).
+    appendFatTurnRecord(store, buildTurnRecord(channelId, entries, entries.map(message)));
+
+    // Proof it is genuinely fat: the plaintext IS on disk and there is no ref —
+    // so an ungated read would resurrect it. That is the leak this gate closes.
+    const persisted = readTurnRecordFile(dir);
+    expect(persisted).not.toContain('recentEntriesRef');
+    expect(persisted).toContain('my SECRET pre-9ree line');
+
+    // CogSec-tombstone the secret L0 entry.
+    const caseId = 'cogsec_20260715T000000Z_oldfat';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({ channelId, caseId, eventStore, forensicArchive, messageIds: [secretId] });
+
+    // Read back: recentEntries surfaces the marker, never the captured plaintext.
+    const read = store.getRecentTurnRecords(channelId, 10);
+    expect(read).toHaveLength(1);
+    const ctx = (read[0]!.observability!.snapshot as unknown as {
+      sessionContext: { recentEntries: SessionEntry[]; recentEntriesRef?: unknown };
+    }).sessionContext;
+    expect(ctx.recentEntries.map(e => e.content)).toEqual([
+      `[CogSec redaction: ${caseId}]`,
+      'kept companion line',
+    ]);
+    expect(ctx.recentEntriesRef).toBeUndefined();
+    expect(JSON.stringify(read)).not.toContain('my SECRET pre-9ree line');
+  });
+
+  it('heals a pre-9ree fat record whose inline L0 entry is now gone, never resurrecting its body', () => {
+    const dir = makeDir();
+    const store = new SessionStore(dir);
+    const channelId = 'api:oldfat-gone';
+    store.append({ channelId, role: 'user', content: 'live line', timestamp: 1_000 });
+    const entries = store.getRecent(channelId, 10);
+    // A captured entry whose id is absent from L0 (redacted-as-tombstone / rolled off).
+    const phantom: SessionEntry = { id: 9_999, channelId, role: 'user', content: 'PHANTOM SECRET body', timestamp: 4_000 };
+
+    appendFatTurnRecord(store, buildTurnRecord(channelId, [...entries, phantom], []));
+
+    // Genuinely fat on disk: the phantom body is present verbatim (the leak).
+    const persisted = readTurnRecordFile(dir);
+    expect(persisted).not.toContain('recentEntriesRef');
+    expect(persisted).toContain('PHANTOM SECRET body');
+
+    const read = store.getRecentTurnRecords(channelId, 10);
+    const ctx = (read[0]!.observability!.snapshot as unknown as {
+      sessionContext: { recentEntries: SessionEntry[] };
+    }).sessionContext;
+    expect(ctx.recentEntries.map(e => e.content)).toEqual(['live line']);
+    expect(JSON.stringify(read)).not.toContain('PHANTOM SECRET body');
   });
 });

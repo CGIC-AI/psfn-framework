@@ -131,13 +131,79 @@ describe('turn-record session-entry diet (psfn-framework-9ree)', () => {
       expect(sessionContext(slim)[RECENT_ENTRIES_REF_FIELD]).toBeUndefined();
     });
 
-    it('passes an old fat record (inline entries, no ref) through unchanged on read', () => {
+    it('redaction-gates an old fat record (inline entries, no ref) against L0 on read', () => {
+      // hgw3.10: an old fat record whose inline entry is still live in L0 keeps
+      // its content, but the gating DOES re-read L0 (no longer a blind passthrough).
       const entries = [entry(1, 'hello')];
       const record = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: entries } });
       const resolve = vi.fn(resolverFor(entries));
       const resolved = resolveTurnRecordSessionEntries(record, resolve);
       expect(sessionContext(resolved).recentEntries).toEqual(entries);
+      expect(resolve).toHaveBeenCalledWith('ch:a', 1, 1);
+    });
+
+    it('passes an old fat record with only divergence deltas (no L0 id) through untouched', () => {
+      // All entries lack a positive L0 id → nothing is CogSec-redactable → no read.
+      const captured = [{ id: 0, channelId: 'ch:a', role: 'system' as const, content: 'synthetic', timestamp: 5 }];
+      const record = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: captured } });
+      const resolve = vi.fn(resolverFor([]));
+      const resolved = resolveTurnRecordSessionEntries(record, resolve);
+      expect(sessionContext(resolved).recentEntries).toEqual(captured);
       expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it('never resurrects an old fat record\'s inline plaintext after its L0 entry is redacted', () => {
+      // hgw3.10 regression: pre-9ree record froze verbatim plaintext inline. Once
+      // L0 entry 2 is CogSec-tombstoned, the read MUST surface the marker, never
+      // the captured plaintext.
+      const captured = [entry(1, 'keep'), entry(2, 'SECRET plaintext'), entry(3, 'keep2')];
+      const record = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: captured } });
+      const marker = buildCogSecTombstoneContent('cogsec_case_oldfat');
+      const resolved = resolveTurnRecordSessionEntries(
+        record,
+        resolverFor([entry(1, 'keep'), entry(2, marker), entry(3, 'keep2')]),
+      );
+      const recent = sessionContext(resolved).recentEntries as SessionEntry[];
+      expect(recent.map(e => e.content)).toEqual(['keep', marker, 'keep2']);
+      expect(JSON.stringify(resolved)).not.toContain('SECRET plaintext');
+    });
+
+    it('drops (heals) an old fat record\'s inline entry that is now absent from L0, no resurrection', () => {
+      const captured = [entry(1, 'keep'), entry(2, 'GONE secret'), entry(3, 'keep2')];
+      const record = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: captured } });
+      // L0 no longer holds entry 2 (redacted-as-tombstone / rolled off).
+      const resolved = resolveTurnRecordSessionEntries(record, resolverFor([entry(1, 'keep'), entry(3, 'keep2')]));
+      const recent = sessionContext(resolved).recentEntries as SessionEntry[];
+      expect(recent.map(e => e.id)).toEqual([1, 3]);
+      expect(JSON.stringify(resolved)).not.toContain('GONE secret');
+    });
+
+    it('emits a heal-drop signal for an old fat inline drop and a ref-backed drop', () => {
+      // Old fat inline drop.
+      const inlineDrops: unknown[] = [];
+      const fat = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: [entry(1, 'a'), entry(2, 'gone')] } });
+      resolveTurnRecordSessionEntries(fat, resolverFor([entry(1, 'a')]), d => inlineDrops.push(d));
+      expect(inlineDrops).toEqual([
+        { channelId: 'ch:a', entryId: 2, source: 'inline-old-fat', turnId: 'turn-1' },
+      ]);
+
+      // Ref-backed drop (slim first, then drop entry 2 from L0).
+      const refDrops: unknown[] = [];
+      const slim = slimTurnRecordSessionEntriesForAppend(
+        buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: [entry(1, 'a'), entry(2, 'gone')] } }),
+      );
+      resolveTurnRecordSessionEntries(slim, resolverFor([entry(1, 'a')]), d => refDrops.push(d));
+      expect(refDrops).toEqual([
+        { channelId: 'ch:a', entryId: 2, source: 'ref-backed', turnId: 'turn-1' },
+      ]);
+    });
+
+    it('does not emit a heal-drop when an entry resolves to a redaction marker (present, not dropped)', () => {
+      const drops: unknown[] = [];
+      const record = buildRecord({ sessionContext: { channelId: 'ch:a', recentEntries: [entry(2, 'original')] } });
+      const marker = buildCogSecTombstoneContent('cogsec_present');
+      resolveTurnRecordSessionEntries(record, resolverFor([entry(2, marker)]), d => drops.push(d));
+      expect(drops).toEqual([]);
     });
 
     it('fails closed when a record carries BOTH inline recentEntries and a ref', () => {

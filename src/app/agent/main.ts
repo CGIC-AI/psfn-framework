@@ -682,6 +682,10 @@ async function main(): Promise<void> {
     memoryStore,
     episodicStore,
     contactStore,
+    // Same config authority the MemoryWriter and retrieval faculty resolve
+    // from, so the action=timeline tool path honors operator-set timeline
+    // knobs instead of compiled defaults (zet.2).
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 

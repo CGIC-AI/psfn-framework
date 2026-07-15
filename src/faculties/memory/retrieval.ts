@@ -1337,7 +1337,7 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.lowConfidenceSuppressedCount = diagnostics.lowConfidenceSuppressedCount;
       telemetry.explicitQueryOverrideCount = diagnostics.explicitQueryOverrideCount;
 
-      const scoreGuarantee = applyScoreGuarantee(scoredCandidates);
+      const scoreGuarantee = applyScoreGuarantee(scoredCandidates, memoryRetrievalPolicy);
       diagnostics.rejectedByScore = scoreGuarantee.rejectedByScore;
       telemetry.scoreRejectedCount = diagnostics.rejectedByScore;
       const scoreGuaranteedCount = scoreGuarantee.scoreGuaranteedCount;
@@ -1395,7 +1395,11 @@ export class MemoryRetriever implements MemoryProvider {
       }
 
       const selectionStartedAt = performance.now();
-      const guaranteedSelectionFloor = resolveGuaranteedSelectionFloor(ranked.length, scoreGuaranteedCount);
+      const guaranteedSelectionFloor = resolveGuaranteedSelectionFloor(
+        ranked.length,
+        scoreGuaranteedCount,
+        memoryRetrievalPolicy,
+      );
       const selection = selectWithinRelevanceAndTokenBudget(
         ranked,
         budget.tokenBudget,
@@ -1644,7 +1648,7 @@ export class MemoryRetriever implements MemoryProvider {
     return resolveEpisodicChainsWithDeps({
       episodicStore: this.episodicStore,
       sessionQuarantineFilter: this.sessionQuarantineFilter,
-      request: input,
+      request: { ...input, memoryRetrievalPolicy: this.resolveMemoryRetrievalPolicy() },
       wrapError: error => new RetrievalIntegrityError(
         'Episodic landmark retrieval failed',
         {

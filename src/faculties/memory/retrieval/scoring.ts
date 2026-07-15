@@ -19,13 +19,17 @@ import { normalizeRetrievalModes } from './modes.js';
 import type { ScoredMemory } from './types.js';
 import { calculateEffectiveMemorySalience } from '../decay.js';
 import {
+  createDefaultMemoryRetrievalPolicy,
   resolveMemoryRetrievalPolicy,
   resolveMemoryRetrievalPrior,
   type MemoryRetrievalPolicy,
 } from '../../../system/config/memory-retrieval-policy.js';
 
-export const SCORE_GUARANTEE_MIN_K = 3;
-export const SCORE_GUARANTEE_FLOOR = 0.01;
+const DEFAULT_MEMORY_RETRIEVAL_POLICY = createDefaultMemoryRetrievalPolicy();
+/** Default score-guarantee floor (owner file: memoryRetrievalPolicy.scoreGuaranteeMinK). */
+export const SCORE_GUARANTEE_MIN_K = DEFAULT_MEMORY_RETRIEVAL_POLICY.scoreGuaranteeMinK;
+/** Default score-guarantee similarity multiplier (memoryRetrievalPolicy.scoreGuaranteeFloor). */
+export const SCORE_GUARANTEE_FLOOR = DEFAULT_MEMORY_RETRIEVAL_POLICY.scoreGuaranteeFloor;
 
 const DEFAULT_RECENCY_DECAY_DAYS = 30;
 const TEMPORAL_RECENCY_DECAY_DAYS = 7;
@@ -111,21 +115,25 @@ export function collectSelectedProvenanceRefs(
   return [...refs];
 }
 
-export function applyScoreGuarantee(scoredCandidates: ScoredMemory[]): ScoreGuaranteeResult {
+export function applyScoreGuarantee(
+  scoredCandidates: ScoredMemory[],
+  policyInput?: MemoryRetrievalPolicy,
+): ScoreGuaranteeResult {
+  const policy = resolveMemoryRetrievalPolicy(policyInput);
   const positiveScored = scoredCandidates.filter(candidate => candidate.score > 0);
   const zeroScored = scoredCandidates.filter(candidate => candidate.score <= 0);
   const guaranteeEligibleZeroScored = zeroScored.filter(candidate => !candidate.quietPreferenceSuppressed);
   const rejectedByScore = zeroScored.length;
 
   let scoreGuaranteedCount = 0;
-  if (positiveScored.length < SCORE_GUARANTEE_MIN_K && guaranteeEligibleZeroScored.length > 0) {
-    const needed = SCORE_GUARANTEE_MIN_K - positiveScored.length;
+  if (positiveScored.length < policy.scoreGuaranteeMinK && guaranteeEligibleZeroScored.length > 0) {
+    const needed = policy.scoreGuaranteeMinK - positiveScored.length;
     const rescued = guaranteeEligibleZeroScored
       .sort((a, b) => b.memory.similarity - a.memory.similarity)
       .slice(0, needed)
       .map(item => ({
         ...item,
-        score: item.memory.similarity * SCORE_GUARANTEE_FLOOR,
+        score: item.memory.similarity * policy.scoreGuaranteeFloor,
       }));
     positiveScored.push(...rescued);
     positiveScored.sort((a, b) => b.score - a.score);

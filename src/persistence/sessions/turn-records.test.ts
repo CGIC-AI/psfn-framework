@@ -775,6 +775,17 @@ function createWireCaptureTurnRecord(
   return record;
 }
 
+/**
+ * Byte-identity is the turn-record STORE PORT contract: with no L0 access and no
+ * redaction, the port round-trips the captured body verbatim from the sidecar.
+ * CogSec redaction gating of the wire body (bead psfn-framework-eb14) lives one
+ * layer up, at the SessionManager store read boundary (resolveTurnRecordSessionEntries
+ * → gateRenderedViews), which owns L0 tombstone authority; a body is withheld
+ * there only when a source L0 entry it embedded is redacted/removed. These
+ * port-level tests therefore stay byte-identical — the gated contract reduces to
+ * "verbatim" whenever nothing is redacted. See store-turn-record-session-refs.test.ts
+ * for the redaction-gating coverage.
+ */
 describe('turn-records content-addressed captured wire payload (bead hgw3-80f6)', () => {
   const wireBody = {
     model: 'fixture-model',

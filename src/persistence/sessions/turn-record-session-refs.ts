@@ -32,7 +32,22 @@ import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../
  *   are redaction-gated against L0 at read time (bead psfn-framework-hgw3.10) so
  *   their frozen inline plaintext can never outlive an L0 redaction either;
  * - the rendered view (`plan.messages`, the Loom conversation) is redaction-
- *   gated at read time via each message's `provenance.sourceEntryIds`.
+ *   gated at read time via each message's `provenance.sourceEntryIds`;
+ * - the captured provider wire body (Loom "Raw Wire Body", bead
+ *   psfn-framework-eb14) is withheld at read time when any SAME-CHANNEL,
+ *   entry-backed L0 content it serialized is redacted/absent — its
+ *   `plan.messages` history AND the current turn's own partner entry (see
+ *   gateRenderedViews).
+ *
+ * Redaction-scope caveat (bead psfn-framework-eb14): the read-time gating in this
+ * module is keyed to THIS turn-channel's L0 id-space. CROSS-CHANNEL continuity
+ * content — which a wire body's `system` block (and other continuity surfaces)
+ * can embed — originates in other channels' journals, carries no `plan.messages`
+ * provenance, and is therefore NOT gated here. Same-channel entry-backed content
+ * (including the current turn after bead eb14) IS gated; cross-channel continuity
+ * is a separate leak tracked coherently across all continuity surfaces by
+ * follow-up bead psfn-framework-ervg. Claims below about "can NEVER be
+ * resurrected" are scoped to same-channel entry-backed content.
  *
  * Redaction-safety invariant: verbatim `SessionEntry.content` is stored ONLY for
  * entries that have no resolvable positive L0 id (a "divergence delta" — e.g. a
@@ -71,6 +86,17 @@ export const SESSION_ENTRIES_REF_VERSION = 1 as const;
 export const REDACTED_MESSAGE_PLACEHOLDER = '[redacted: source entry removed from the session journal]';
 
 /**
+ * Discriminant stamped on a captured provider wire body that has been withheld
+ * because a source L0 entry it embedded was redacted/removed (bead
+ * psfn-framework-eb14). The raw provider request body is structured JSON whose
+ * `messages`/`system` embed rendered conversation content; a merged, provider-
+ * transformed body cannot be partially rebuilt, so the whole body is replaced
+ * with this marker — mirroring gatePlanMessages' conservative whole-message
+ * masking. The safe summary metadata (api/model/byteLength/toolCount) stays.
+ */
+export const WITHHELD_WIRE_BODY_MARKER = 'cogsec-redaction' as const;
+
+/**
  * Resolve an inclusive L0 entry-id range for a channel through the HMAC-verified
  * journal reader (applies CogSec tombstones + redaction). Entries legitimately
  * absent from the journal are simply omitted from the result.
@@ -104,6 +130,36 @@ export interface TurnRecordRecentEntryHealDrop {
 
 /** Sink for {@link TurnRecordRecentEntryHealDrop} events; wired to store telemetry. */
 export type TurnRecordHealDropSink = (drop: TurnRecordRecentEntryHealDrop) => void;
+
+/**
+ * Structured signal (bead psfn-framework-eb14): a captured provider wire body was
+ * withheld on read because a source L0 entry it embedded is now absent/redacted.
+ * Emitted so operators can see redaction propagating into the observability wire
+ * surface, mirroring {@link TurnRecordRecentEntryHealDrop}.
+ */
+export interface TurnRecordWireBodyWithheld {
+  /** Turn-channel id-space whose L0 redaction triggered the withhold. */
+  channelId: string;
+  /** Owning turn record, for audit correlation. */
+  turnId: string;
+}
+
+/** Sink for {@link TurnRecordWireBodyWithheld} events; wired to store telemetry. */
+export type TurnRecordWireBodyWithheldSink = (event: TurnRecordWireBodyWithheld) => void;
+
+/**
+ * Outcome of the `recentEntries` L0 resolution pass. `windowRedactionDetected`
+ * is true when ANY id-backed entry in the record's recentEntries window resolved
+ * to a CogSec redaction marker or was absent on re-read (heal-dropped) — the same
+ * single L0 range read that reconstructs the window. It is threaded into the
+ * wire-body withhold decision (bead psfn-framework-eb14) so a captured wire body
+ * is withheld whenever the L0 window it serialized shows any redaction/absence,
+ * not only when a `plan.messages` provenance id was suppressed.
+ */
+interface RecentEntriesResolution {
+  record: TurnRecord;
+  windowRedactionDetected: boolean;
+}
 
 interface RecentEntryDelta {
   delta: SessionEntry;
@@ -222,9 +278,9 @@ function resolveRecentEntries(
   record: TurnRecord,
   resolve: SessionEntryRangeResolver,
   onHealDrop?: TurnRecordHealDropSink,
-): TurnRecord {
+): RecentEntriesResolution {
   const sessionContext = readSessionContext(record);
-  if (!sessionContext) return record;
+  if (!sessionContext) return { record, windowRedactionDetected: false };
   const rawRef = sessionContext[RECENT_ENTRIES_REF_FIELD];
   if (rawRef === undefined) {
     return gateInlineRecentEntries(record, sessionContext, resolve, onHealDrop);
@@ -245,13 +301,17 @@ function resolveRecentEntries(
     }
   }
   const recentEntries: SessionEntry[] = [];
+  let windowRedactionDetected = false;
   for (const item of ref.items) {
     if (typeof item === 'number') {
       const resolved = byId.get(item);
       if (resolved) {
         recentEntries.push(resolved);
+        // Present but redacted: the journal's current truth is a CogSec marker.
+        if (isRedactedContent(resolved.content)) windowRedactionDetected = true;
       } else {
         // absent → dropped (redacted-as-tombstone / tombstoned / rolled-off)
+        windowRedactionDetected = true;
         onHealDrop?.({ channelId: ref.channelId, entryId: item, source: 'ref-backed', turnId: record.turnId });
       }
     } else {
@@ -259,7 +319,10 @@ function resolveRecentEntries(
     }
   }
   const { [RECENT_ENTRIES_REF_FIELD]: _ref, ...rest } = sessionContext;
-  return withSessionContext(record, { ...rest, recentEntries });
+  return {
+    record: withSessionContext(record, { ...rest, recentEntries }),
+    windowRedactionDetected,
+  };
 }
 
 /**
@@ -280,9 +343,9 @@ function gateInlineRecentEntries(
   sessionContext: Record<string, unknown>,
   resolve: SessionEntryRangeResolver,
   onHealDrop?: TurnRecordHealDropSink,
-): TurnRecord {
+): RecentEntriesResolution {
   const inline = sessionContext.recentEntries;
-  if (!Array.isArray(inline) || inline.length === 0) return record;
+  if (!Array.isArray(inline) || inline.length === 0) return { record, windowRedactionDetected: false };
   const channelId = typeof sessionContext.channelId === 'string' ? sessionContext.channelId : '';
   const ids: number[] = [];
   for (const entry of inline) {
@@ -291,20 +354,23 @@ function gateInlineRecentEntries(
   // No re-readable L0 ids (all divergence deltas), or no channel to read from:
   // nothing here is CogSec-redactable, so the inline copy is already the only
   // truth and passes through untouched.
-  if (ids.length === 0 || channelId.length === 0) return record;
+  if (ids.length === 0 || channelId.length === 0) return { record, windowRedactionDetected: false };
   const byId = new Map<number, SessionEntry>();
   for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
     byId.set(entry.id, entry);
   }
   const recentEntries: SessionEntry[] = [];
+  let windowRedactionDetected = false;
   for (const entry of inline) {
     if (isRecord(entry) && isValidL0Id(entry.id)) {
       const fresh = byId.get(entry.id);
       if (fresh) {
         // Journal-current truth (incl. any redaction marker) — never the frozen inline body.
         recentEntries.push(fresh);
+        if (isRedactedContent(fresh.content)) windowRedactionDetected = true;
       } else {
         // absent → dropped (redacted-as-tombstone / tombstoned / rolled-off)
+        windowRedactionDetected = true;
         onHealDrop?.({ channelId, entryId: entry.id, source: 'inline-old-fat', turnId: record.turnId });
       }
     } else {
@@ -312,10 +378,13 @@ function gateInlineRecentEntries(
       recentEntries.push(entry as SessionEntry);
     }
   }
-  return withSessionContext(record, { ...sessionContext, recentEntries });
+  return {
+    record: withSessionContext(record, { ...sessionContext, recentEntries }),
+    windowRedactionDetected,
+  };
 }
 
-// ── plan.messages redaction gating ───────────────────────────────────────────
+// ── rendered-view redaction gating (plan.messages + captured wire body) ───────
 
 function readPlanMessages(record: TurnRecord): Record<string, unknown>[] | undefined {
   const snapshot = record.observability?.snapshot;
@@ -331,62 +400,225 @@ function messageSourceEntryIds(message: Record<string, unknown>): number[] {
 }
 
 /**
- * Redaction-gate the rendered view (`plan.messages`). Each entry-backed message
- * carries `provenance.sourceEntryIds` (turn-channel id-space). If ANY backing
- * entry is now absent from L0 (tombstoned / rolled off) or resolves to a CogSec
- * redaction marker, the whole message content is masked — a merged multi-id
- * message cannot be partially rebuilt, so masking is the conservative, correct
- * choice. Synthetic messages with no `sourceEntryIds` (e.g. history-compaction
- * summaries, which hold non-verbatim summarized text) pass through. Applied to
- * every record, including old fat records, so redaction propagates uniformly.
+ * The current turn's own partner (user) L0 session-entry id (bead
+ * psfn-framework-eb14). This entry is deliberately EXCLUDED from `plan.messages`
+ * (prompt-assembly throws if it leaks into prior-history), yet its plaintext IS
+ * the captured wire body's final user message — derived from
+ * `promptContext.currentTurnInput` at capture time. Redacting/removing this entry
+ * therefore leaves NO `plan.messages` provenance signal, so the wire body must be
+ * gated on this id directly. It equals `currentSessionEntryId` /
+ * `userSessionEntryId` at write time (turn-execution-runtime → turn-records).
  */
-function gatePlanMessages(record: TurnRecord, resolve: SessionEntryRangeResolver): TurnRecord {
-  const messages = readPlanMessages(record);
-  if (!messages || messages.length === 0) return record;
-  const sessionContext = readSessionContext(record);
-  const channelId = (typeof sessionContext?.channelId === 'string' && sessionContext.channelId.length > 0)
-    ? sessionContext.channelId
-    : record.channelId;
-  if (typeof channelId !== 'string' || channelId.length === 0) return record;
+function readCurrentTurnPartnerEntryId(record: TurnRecord): number | undefined {
+  const id = record.userMessage.sessionEntryId;
+  return isValidL0Id(id) ? id : undefined;
+}
 
-  const allIds = new Set<number>();
-  for (const message of messages) {
-    for (const id of messageSourceEntryIds(message)) allIds.add(id);
-  }
-  if (allIds.size === 0) return record;
+/**
+ * Locate the captured provider wire payload record (bead hgw3-80f6) inside a
+ * turn snapshot. By the time this gate runs the payload's `bodyRef` has already
+ * been resolved back to an inline `body` by the turn-record store port, so a
+ * present `body` is the verbatim provider request JSON.
+ */
+function readCapturedWirePayload(record: TurnRecord): Record<string, unknown> | undefined {
+  const promptContext = record.observability?.snapshot?.promptContext;
+  if (!isRecord(promptContext)) return undefined;
+  const providerObservability = promptContext.providerObservability;
+  if (!isRecord(providerObservability)) return undefined;
+  const captured = providerObservability.capturedWirePayload;
+  return isRecord(captured) ? captured : undefined;
+}
 
-  const ids = [...allIds];
-  const live = new Map<number, SessionEntry>();
-  for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
-    live.set(entry.id, entry);
-  }
-
-  const gated = messages.map((message) => {
-    const sourceIds = messageSourceEntryIds(message);
-    if (sourceIds.length === 0) return message;
-    const suppressed = sourceIds.some((id) => {
-      const entry = live.get(id);
-      return entry === undefined || isRedactedContent(entry.content);
-    });
-    if (!suppressed) return message;
-    return { ...message, content: REDACTED_MESSAGE_PLACEHOLDER };
-  });
-  // Masking allocates a fresh object per message; identity change ⇒ mutation.
-  if (!gated.some((message, index) => message !== messages[index])) return record;
-
+function withCapturedWirePayload(record: TurnRecord, captured: Record<string, unknown>): TurnRecord {
   const observability = record.observability!;
   const snapshot = observability.snapshot!;
-  const plan = snapshot.plan as unknown as Record<string, unknown>;
+  const promptContext = snapshot.promptContext as unknown as Record<string, unknown>;
+  const providerObservability = promptContext.providerObservability as Record<string, unknown>;
   return {
     ...record,
     observability: {
       ...observability,
       snapshot: {
         ...snapshot,
-        plan: { ...plan, messages: gated } as unknown as NonNullable<typeof snapshot.plan>,
+        promptContext: {
+          ...promptContext,
+          providerObservability: {
+            ...providerObservability,
+            capturedWirePayload: captured,
+          },
+        } as unknown as NonNullable<typeof snapshot.promptContext>,
       },
     },
   };
+}
+
+/** Structured replacement for a withheld captured wire body. */
+function buildWithheldWireBody(caseChannelId: string): Record<string, unknown> {
+  return {
+    withheld: WITHHELD_WIRE_BODY_MARKER,
+    reason: 'A source session-journal entry embedded in this captured provider '
+      + 'request body was redacted or removed; the raw body is withheld so the '
+      + 'redacted content cannot be served.',
+    channelId: caseChannelId,
+  };
+}
+
+/**
+ * Redaction-gate the rendered views of a turn against the CURRENT L0 journal, in
+ * a single range read shared by both surfaces:
+ *
+ *  - `plan.messages` (the Loom conversation): each entry-backed message carries
+ *    `provenance.sourceEntryIds`. If ANY backing entry is now absent from L0
+ *    (tombstoned / rolled off) or resolves to a CogSec redaction marker, the
+ *    whole message content is masked — a merged multi-id message cannot be
+ *    partially rebuilt, so masking is the conservative, correct choice.
+ *
+ *  - `capturedWirePayload.body` (the Loom "Raw Wire Body", bead
+ *    psfn-framework-eb14): the raw provider request JSON embeds the rendered
+ *    conversation (`plan.messages` as history) AND the current turn's own partner
+ *    text (its final user message, from `promptContext.currentTurnInput`). It is
+ *    served verbatim IFF NOTHING in the L0 window it serialized is redacted or
+ *    absent; otherwise the whole body is withheld and replaced with a structured
+ *    marker (option (b) — provably safe whole-body conservatism, no per-field
+ *    surgery of provider-transformed JSON). The safe summary metadata
+ *    (api/model/byteLength/toolCount) stays inline. Read-time gating only: the
+ *    content-addressed sidecar file is never touched, so bodies shared across
+ *    turns and dangling-ref fail-closed semantics are unaffected.
+ *
+ *    The wire-body withhold key is broader than the `plan.messages` mask because
+ *    the wire body carries content `plan.messages` structurally cannot: the
+ *    current turn's own partner entry is EXCLUDED from prior-history assembly
+ *    (prompt-assembly throws if it leaks in) yet is embedded verbatim as the
+ *    body's final user message — the single most common redaction target. So the
+ *    body is withheld when ANY of:
+ *      (a) a `plan.messages` provenance entry was suppressed (history redaction);
+ *      (b) the current-turn partner entry (`userMessage.sessionEntryId`) is now
+ *          redacted/absent in L0 (`readCurrentTurnPartnerEntryId`);
+ *      (c) the `recentEntries` L0 window showed any redaction/absence
+ *          (`windowRedactionDetected`, threaded from the recentEntries pass —
+ *          belt-and-suspenders over (a) for the same-channel history window).
+ *    This gate runs even when `plan.messages` is empty: a body whose only
+ *    entry-backed content is the current turn (or an empty-history first turn
+ *    whose partner entry is later redacted) must still be gated. Only a record
+ *    with NO entry-backed window at all (no plan provenance ids, no current-turn
+ *    entry, no window redaction) passes through untouched.
+ *
+ * Synthetic messages with no `sourceEntryIds` (history-compaction summaries,
+ * non-verbatim text) pass through the `plan.messages` mask. Applied to every
+ * record — including pre-9ree old fat records and any legacy inline-body record —
+ * so redaction propagates uniformly regardless of storage vintage.
+ * `onWireBodyWithheld`, if provided, is invoked once per record whose body is
+ * withheld.
+ *
+ * SCOPE (bead psfn-framework-eb14, blocker-2 carve-out → follow-up
+ * psfn-framework-ervg): this gate covers SAME-CHANNEL, entry-backed content —
+ * `plan.messages` history and the current turn's own partner entry, both keyed to
+ * this channel's L0 id-space. It does NOT gate CROSS-CHANNEL continuity content
+ * that a wire body's `system` block can embed: continuity spans other channels'
+ * journals whose origin id-space is not readable here, carries no
+ * `plan.messages` provenance, and so escapes every id-keyed check below. That
+ * leak across all continuity surfaces is tracked coherently by
+ * psfn-framework-ervg and is deliberately out of scope for this pass.
+ */
+function gateRenderedViews(
+  record: TurnRecord,
+  resolve: SessionEntryRangeResolver,
+  windowRedactionDetected: boolean,
+  onWireBodyWithheld?: TurnRecordWireBodyWithheldSink,
+): TurnRecord {
+  const messages = readPlanMessages(record);
+  const sessionContext = readSessionContext(record);
+  const channelId = (typeof sessionContext?.channelId === 'string' && sessionContext.channelId.length > 0)
+    ? sessionContext.channelId
+    : record.channelId;
+  if (typeof channelId !== 'string' || channelId.length === 0) return record;
+
+  // Entry-backed L0 ids embedded in the wire body: plan.messages history
+  // provenance PLUS the current turn's own partner entry (the body's final user
+  // message, which plan.messages structurally excludes).
+  const currentTurnPartnerEntryId = readCurrentTurnPartnerEntryId(record);
+  const allIds = new Set<number>();
+  if (messages) {
+    for (const message of messages) {
+      for (const id of messageSourceEntryIds(message)) allIds.add(id);
+    }
+  }
+  if (currentTurnPartnerEntryId !== undefined) allIds.add(currentTurnPartnerEntryId);
+
+  // Nothing entry-backed AND no redaction signalled by the recentEntries window
+  // ⇒ nothing L0-redactable is embedded in either the rendered view or the
+  // captured wire body (only synthetic/summary/continuity content), so both pass
+  // through untouched. (Cross-channel continuity leaks are out of scope here —
+  // see psfn-framework-ervg.)
+  if (allIds.size === 0 && !windowRedactionDetected) return record;
+
+  const live = new Map<number, SessionEntry>();
+  if (allIds.size > 0) {
+    const ids = [...allIds];
+    for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
+      live.set(entry.id, entry);
+    }
+  }
+  const isSuppressedId = (id: number): boolean => {
+    const entry = live.get(id);
+    return entry === undefined || isRedactedContent(entry.content);
+  };
+
+  // Mask the rendered conversation view (plan.messages) where a backing entry was
+  // suppressed.
+  let anyPlanSuppressed = false;
+  let gated = messages;
+  if (messages) {
+    gated = messages.map((message) => {
+      const sourceIds = messageSourceEntryIds(message);
+      if (sourceIds.length === 0) return message;
+      return sourceIds.some(isSuppressedId)
+        ? { ...message, content: REDACTED_MESSAGE_PLACEHOLDER }
+        : message;
+    });
+    // Masking allocates a fresh object per message; identity change ⇒ suppression.
+    anyPlanSuppressed = gated.some((message, index) => message !== messages[index]);
+  }
+
+  // Withhold the captured wire body if ANY L0 content it serialized is now
+  // redacted/absent: a suppressed history message, the current-turn partner
+  // entry, or any redaction/absence in the recentEntries window. Serving the raw
+  // body in any of those cases would resurrect the exact plaintext L0 removed.
+  const currentTurnSuppressed = currentTurnPartnerEntryId !== undefined
+    && isSuppressedId(currentTurnPartnerEntryId);
+  const withholdWireBody = anyPlanSuppressed || currentTurnSuppressed || windowRedactionDetected;
+
+  let next = record;
+
+  if (anyPlanSuppressed && messages) {
+    const observability = record.observability!;
+    const snapshot = observability.snapshot!;
+    const plan = snapshot.plan as unknown as Record<string, unknown>;
+    next = {
+      ...next,
+      observability: {
+        ...observability,
+        snapshot: {
+          ...snapshot,
+          plan: { ...plan, messages: gated } as unknown as NonNullable<typeof snapshot.plan>,
+        },
+      },
+    };
+  }
+
+  if (withholdWireBody) {
+    const captured = readCapturedWirePayload(next);
+    if (captured && captured.body !== undefined) {
+      const { body: _body, ...capturedRest } = captured;
+      next = withCapturedWirePayload(next, {
+        ...capturedRest,
+        body: buildWithheldWireBody(channelId),
+      });
+      onWireBodyWithheld?.({ channelId: record.channelId, turnId: record.turnId });
+    }
+  }
+
+  return next;
 }
 
 // ── public seam ──────────────────────────────────────────────────────────────
@@ -403,18 +635,20 @@ export function slimTurnRecordSessionEntriesForAppend(record: TurnRecord): TurnR
 /**
  * Read-side resolution applied at the SessionManager store boundary: reconstruct
  * (ref-backed) or redaction-gate (pre-9ree inline) `recentEntries` from L0 and
- * redaction-gate `plan.messages`, making the diet transparent to every consumer
- * above persistence (Garden Loom, session-turn observability, introspection
- * auditing). `onHealDrop`, if provided, is invoked for each id-backed
- * `recentEntries` item dropped because its L0 entry is absent on re-read.
+ * redaction-gate the rendered views (`plan.messages` and the captured provider
+ * wire body), making the diet transparent to every consumer above persistence
+ * (Garden Loom, session-turn observability, introspection auditing).
+ * `onHealDrop`, if provided, is invoked for each id-backed `recentEntries` item
+ * dropped because its L0 entry is absent on re-read; `onWireBodyWithheld`, if
+ * provided, is invoked once per record whose captured wire body is withheld
+ * because a source L0 entry it embedded was redacted/removed.
  */
 export function resolveTurnRecordSessionEntries(
   record: TurnRecord,
   resolve: SessionEntryRangeResolver,
   onHealDrop?: TurnRecordHealDropSink,
+  onWireBodyWithheld?: TurnRecordWireBodyWithheldSink,
 ): TurnRecord {
-  return gatePlanMessages(
-    resolveRecentEntries(record, resolve, onHealDrop),
-    resolve,
-  );
+  const { record: resolved, windowRedactionDetected } = resolveRecentEntries(record, resolve, onHealDrop);
+  return gateRenderedViews(resolved, resolve, windowRedactionDetected, onWireBodyWithheld);
 }

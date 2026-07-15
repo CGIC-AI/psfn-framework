@@ -6,7 +6,12 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { SessionStore } from './store.js';
-import { REDACTED_MESSAGE_PLACEHOLDER } from './turn-record-session-refs.js';
+import {
+  REDACTED_MESSAGE_PLACEHOLDER,
+  WITHHELD_WIRE_BODY_MARKER,
+} from './turn-record-session-refs.js';
+import { buildPromptLoomData } from '../../operator/garden/services/session-turn-observability.js';
+import type { AdminTurnSnapshotData } from '../../operator/garden/services/types.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import {
@@ -219,5 +224,276 @@ describe('SessionStore turn-record session-entry diet (psfn-framework-9ree)', ()
     }).sessionContext;
     expect(ctx.recentEntries.map(e => e.content)).toEqual(['live line']);
     expect(JSON.stringify(read)).not.toContain('PHANTOM SECRET body');
+  });
+});
+
+// ── captured wire-body CogSec gating (bead psfn-framework-eb14) ────────────────
+
+/** Build a turn record whose snapshot carries a captured provider wire body
+ * (the shape 80f6 interns into `_shared/wirebodies`). The body embeds the
+ * verbatim partner/companion lines the provider request actually shipped. */
+function buildWireTurnRecord(
+  channelId: string,
+  recentEntries: SessionEntry[],
+  messages: Array<Record<string, unknown>>,
+  wireBody: unknown,
+  options?: {
+    /**
+     * The current turn's own partner L0 entry id — persisted at
+     * `userMessage.sessionEntryId`. Production EXCLUDES this entry from both
+     * `recentEntries` and `plan.messages` (prompt-assembly throws if it leaks
+     * into prior history), yet its plaintext IS the wire body's final user
+     * message. Set this to reproduce the production shape where the tombstone
+     * target is the current turn itself (bead psfn-framework-eb14, blocker 1).
+     */
+    currentTurnPartnerEntryId?: number;
+    /** The wire body's final user message text (= the current partner line). */
+    currentTurnInput?: string;
+  },
+): TurnRecord {
+  const record = buildTurnRecord(channelId, recentEntries, messages);
+  const snapshot = record.observability!.snapshot! as unknown as Record<string, unknown>;
+  // Give the plan an (empty) blocks array so the Loom system-section derivation
+  // has something to iterate; the raw-wire panel we assert on is independent.
+  snapshot.plan = { messages, blocks: [], toolDefinitions: [] };
+  if (options?.currentTurnPartnerEntryId !== undefined) {
+    (record.userMessage as { sessionEntryId?: number; content: string }).sessionEntryId
+      = options.currentTurnPartnerEntryId;
+    if (options.currentTurnInput !== undefined) {
+      (record.userMessage as { content: string }).content = options.currentTurnInput;
+    }
+  }
+  snapshot.promptContext = {
+    currentTurnInput: options?.currentTurnInput ?? 'wire input',
+    providerObservability: {
+      routeKind: 'registered_model',
+      requestedProvider: 'fixture',
+      requestedModel: 'fixture',
+      backendProvider: 'fixture',
+      backendModel: 'fixture',
+      backendApi: 'anthropic-messages',
+      // transport null ⇒ Loom uses the recorded_snapshot branch (no full plan
+      // serialization needed) while still surfacing capturedWirePayload.
+      systemRole: {
+        transport: null,
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: false,
+      },
+      promptCaching: { configured: false, engaged: false },
+      capturedWirePayload: {
+        api: 'anthropic-messages',
+        model: 'test/model',
+        capturedAtMs: 1_700_000_000_000,
+        byteLength: Buffer.byteLength(JSON.stringify(wireBody), 'utf8'),
+        toolCount: 0,
+        body: wireBody,
+      },
+    },
+  };
+  return record;
+}
+
+function capturedBody(record: TurnRecord): unknown {
+  const snapshot = record.observability!.snapshot as unknown as {
+    promptContext?: { providerObservability?: { capturedWirePayload?: { body?: unknown } } };
+  };
+  return snapshot.promptContext?.providerObservability?.capturedWirePayload?.body;
+}
+
+describe('SessionStore captured wire-body CogSec gating (psfn-framework-eb14)', () => {
+  // HISTORY-redaction path: a PRIOR-turn partner entry (present in plan.messages
+  // with provenance, the production shape for history) is tombstoned. This
+  // exercises the plan.messages-suppression withhold key. The CURRENT-turn entry
+  // path — the entry plan.messages structurally excludes — is covered by the
+  // dedicated regression below (blocker 1); this test deliberately does NOT stand
+  // in for it.
+  it('withholds a captured wire body once a PRIOR-history partner L0 entry it embedded is tombstoned, across every read and the Loom', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'api:wire';
+
+    const secretId = store.append({ channelId, role: 'user', content: 'my SECRET wire line', timestamp: 1_000 });
+    store.append({ channelId, role: 'assistant', content: 'kept companion line', timestamp: 2_000 });
+    const entries = store.getRecent(channelId, 10);
+
+    // The captured provider request body embeds the verbatim conversation.
+    const wireBody = {
+      model: 'test/model',
+      system: 'a static system prompt',
+      messages: entries.map(entry => ({ role: entry.role, content: entry.content })),
+    };
+    const record = buildWireTurnRecord(channelId, entries, entries.map(message), wireBody);
+    store.appendTurnRecord(record);
+
+    // Before any redaction: the raw body is served verbatim (the 80f6 contract).
+    const before = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(capturedBody(before[0]!))).toContain('my SECRET wire line');
+
+    // CogSec-tombstone the partner L0 entry the body embedded.
+    const caseId = 'cogsec_20260715T000000Z_wire';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({ channelId, caseId, eventStore, forensicArchive, messageIds: [secretId] });
+
+    // getRecentTurnRecords: the raw body is withheld — no verbatim plaintext.
+    const read = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(read)).not.toContain('my SECRET wire line');
+    expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+    // The summary attestation (api/model/byteLength/toolCount) survives.
+    const summary = (read[0]!.observability!.snapshot as unknown as {
+      promptContext: { providerObservability: { capturedWirePayload: Record<string, unknown> } };
+    }).promptContext.providerObservability.capturedWirePayload;
+    expect(summary.model).toBe('test/model');
+    expect(summary.toolCount).toBe(0);
+
+    // findTurnRecord: same gating.
+    const found = store.findTurnRecord(channelId, record.turnId);
+    expect(JSON.stringify(found)).not.toContain('my SECRET wire line');
+
+    // Loom "Raw Wire Body" panel: served from the gated record → no plaintext.
+    const loom = buildPromptLoomData(
+      read[0]!,
+      read[0]!.observability!.snapshot as unknown as AdminTurnSnapshotData,
+    );
+    expect(JSON.stringify(loom.providerWire.capturedWirePayload)).not.toContain('my SECRET wire line');
+    expect(loom.providerWire.capturedWirePayload?.body).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+  });
+
+  // ── blocker 1: the CURRENT turn's own partner entry ─────────────────────────
+  // Production shape: the current-turn partner entry is EXCLUDED from both
+  // recentEntries and plan.messages, yet its plaintext is the wire body's final
+  // user message. Before the fix, tombstoning it left NO plan.messages provenance
+  // signal, so the body served the redacted plaintext verbatim. The fix keys the
+  // withhold on userMessage.sessionEntryId directly.
+  it('withholds the wire body when the CURRENT turn\'s own partner entry is tombstoned, though it is absent from plan.messages', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'api:wire-current';
+
+    // Prior history (stays live) precedes the current turn's own partner entry.
+    store.append({ channelId, role: 'user', content: 'earlier partner line', timestamp: 1_000 });
+    store.append({ channelId, role: 'assistant', content: 'earlier companion line', timestamp: 2_000 });
+    const history = store.getRecent(channelId, 10);
+    const currentId = store.append({ channelId, role: 'user', content: 'my SECRET current line', timestamp: 3_000 });
+    const currentEntry = store.getRecent(channelId, 10).find(entry => entry.id === currentId)!;
+
+    // recentEntries + plan.messages carry ONLY the history (production exclusion);
+    // the wire body appends the current-turn partner text as its final message.
+    const wireBody = {
+      model: 'test/model',
+      system: 'a static system prompt',
+      messages: [...history, currentEntry].map(entry => ({ role: entry.role, content: entry.content })),
+    };
+    // Note: only the wire body (and the L0 journal) carry the secret here. The
+    // turn record's frozen userMessage.content is a SEPARATE persistence surface
+    // outside eb14's wire-body scope, so it is left at its default and the
+    // assertions below target the wire body specifically.
+    const record = buildWireTurnRecord(channelId, history, history.map(message), wireBody, {
+      currentTurnPartnerEntryId: currentId,
+    });
+    store.appendTurnRecord(record);
+
+    // Before redaction: the current-turn line is served verbatim (80f6 contract).
+    const before = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(capturedBody(before[0]!))).toContain('my SECRET current line');
+
+    // Tombstone the CURRENT turn's own partner entry — the entry plan.messages
+    // structurally never carried.
+    const caseId = 'cogsec_20260715T000000Z_current';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({ channelId, caseId, eventStore, forensicArchive, messageIds: [currentId] });
+
+    const read = store.getRecentTurnRecords(channelId, 10);
+    // The history in plan.messages is untouched (its entries are still live) —
+    // proving the plan.messages mask alone did NOT drive this withhold.
+    const planMessages = (read[0]!.observability!.snapshot as unknown as {
+      plan: { messages: Array<{ content: string }> };
+    }).plan.messages;
+    expect(planMessages.map(m => m.content)).toEqual(['earlier partner line', 'earlier companion line']);
+    // The wire body is withheld across every read and the Loom — no plaintext.
+    expect(JSON.stringify(read)).not.toContain('my SECRET current line');
+    expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+
+    const found = store.findTurnRecord(channelId, record.turnId);
+    expect(JSON.stringify(found)).not.toContain('my SECRET current line');
+
+    const loom = buildPromptLoomData(
+      read[0]!,
+      read[0]!.observability!.snapshot as unknown as AdminTurnSnapshotData,
+    );
+    expect(JSON.stringify(loom.providerWire.capturedWirePayload)).not.toContain('my SECRET current line');
+    expect(loom.providerWire.capturedWirePayload?.body).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+  });
+
+  // ── blocker 1: empty plan.messages must not skip the wire-body gate ──────────
+  // Before the fix, gateRenderedViews early-returned when plan.messages was empty,
+  // leaving a present wire body ungated. Here plan.messages is empty but the
+  // recentEntries window (and the wire body) embed a partner entry that is later
+  // tombstoned; the body must still be withheld.
+  it('withholds a body with EMPTY plan.messages once a recentEntries window entry it embedded is tombstoned', async () => {
+    const dir = makeDir();
+    const companionRoot = join(dir, 'companion-data');
+    const store = new SessionStore(dir);
+    const channelId = 'api:wire-empty-plan';
+
+    const secretId = store.append({ channelId, role: 'user', content: 'my SECRET windowed line', timestamp: 1_000 });
+    const entries = store.getRecent(channelId, 10);
+    // Empty plan.messages, but the recentEntries window + wire body carry the entry.
+    const wireBody = { model: 'test/model', messages: entries.map(entry => ({ role: entry.role, content: entry.content })) };
+    store.appendTurnRecord(buildWireTurnRecord(channelId, entries, [], wireBody));
+
+    // Before redaction: empty plan.messages, body served verbatim.
+    const before = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(capturedBody(before[0]!))).toContain('my SECRET windowed line');
+    expect(JSON.stringify(before)).not.toContain(WITHHELD_WIRE_BODY_MARKER);
+
+    const caseId = 'cogsec_20260715T000000Z_emptyplan';
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId,
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      safeAgentSummary: 'sealed and removed from active cognition',
+    });
+    await store.applyCogSecTombstones({ channelId, caseId, eventStore, forensicArchive, messageIds: [secretId] });
+
+    const read = store.getRecentTurnRecords(channelId, 10);
+    expect(JSON.stringify(read)).not.toContain('my SECRET windowed line');
+    expect(capturedBody(read[0]!)).toMatchObject({ withheld: WITHHELD_WIRE_BODY_MARKER });
+  });
+
+  it('serves the captured wire body verbatim while all embedded L0 entries remain live', () => {
+    const dir = makeDir();
+    const store = new SessionStore(dir);
+    const channelId = 'api:wire-live';
+    store.append({ channelId, role: 'user', content: 'ordinary partner line', timestamp: 1_000 });
+    const entries = store.getRecent(channelId, 10);
+    const wireBody = { model: 'test/model', messages: entries.map(e => ({ role: e.role, content: e.content })) };
+    store.appendTurnRecord(buildWireTurnRecord(channelId, entries, entries.map(message), wireBody));
+
+    const read = store.getRecentTurnRecords(channelId, 10);
+    // No redaction ⇒ byte-identical body, no withhold marker.
+    expect(JSON.stringify(capturedBody(read[0]!))).toContain('ordinary partner line');
+    expect(JSON.stringify(read)).not.toContain(WITHHELD_WIRE_BODY_MARKER);
   });
 });

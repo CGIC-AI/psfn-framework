@@ -290,6 +290,26 @@ export async function executeAutoRollback(
     return { status: 'no_previous_revision', detail };
   }
 
+  // Target-revision safety invariant. `resolveRollbackTarget` is an injected
+  // (currently unimplemented) seam; the rollback surface must defend its own
+  // invariant rather than trust the target it is handed. Only ever roll back to
+  // a strictly-earlier, positive integer revision — a roll-forward, same-revision,
+  // or non-integer/zero/negative "rollback" is a catastrophic failure mode.
+  // Fail closed: throw before calling api.rollback (a thrown error propagates as
+  // an operator escalation, never a silent proceed), so the unsafe target is
+  // never enacted.
+  if (
+    !Number.isInteger(target.targetRevision)
+    || target.targetRevision <= 0
+    || target.targetRevision >= decision.fromHelmRevision
+  ) {
+    throw new Error(
+      'Refusing automatic Helm rollback to an unsafe target revision '
+      + `${target.targetRevision}: it must be a positive integer strictly earlier `
+      + `than the failed revision ${decision.fromHelmRevision}.`,
+    );
+  }
+
   const startedAt = now();
   const rollbackResult = await options.api.rollback(
     options.namespace,

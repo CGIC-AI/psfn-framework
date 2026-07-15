@@ -300,6 +300,36 @@ describe('executeAutoRollback — orchestrator', () => {
     expect(readKubeRollbackHistory(dir)).toHaveLength(0);
   });
 
+  it('refuses an unsafe target revision (same or roll-forward) and never calls api.rollback', async () => {
+    // CURRENT.helmRevision (the failed revision) is 9; a target >= 9 is a
+    // same-revision or roll-forward "rollback" — catastrophic, must be rejected.
+    for (const unsafe of [9, 10]) {
+      writePostRolloutValidationVerdict(dir, verdict({ healthy: false }));
+      const rollback = api();
+      await expect(executeAutoRollback({
+        namespace: NAMESPACE, release: RELEASE, resourcePrefix: RESOURCE_PREFIX,
+        systemDataDir: dir, currentRollout: CURRENT, api: rollback,
+        resolveRollbackTarget: async () => ({ kind: 'target', targetRevision: unsafe }),
+      })).rejects.toThrow(/unsafe target revision/i);
+      expect(rollback.rollback).not.toHaveBeenCalled();
+      expect(readKubeRollbackHistory(dir)).toHaveLength(0);
+    }
+  });
+
+  it('refuses a zero/negative/non-integer target revision and never calls api.rollback', async () => {
+    for (const unsafe of [0, -1, 2.5]) {
+      writePostRolloutValidationVerdict(dir, verdict({ healthy: false }));
+      const rollback = api();
+      await expect(executeAutoRollback({
+        namespace: NAMESPACE, release: RELEASE, resourcePrefix: RESOURCE_PREFIX,
+        systemDataDir: dir, currentRollout: CURRENT, api: rollback,
+        resolveRollbackTarget: async () => ({ kind: 'target', targetRevision: unsafe }),
+      })).rejects.toThrow(/unsafe target revision/i);
+      expect(rollback.rollback).not.toHaveBeenCalled();
+      expect(readKubeRollbackHistory(dir)).toHaveLength(0);
+    }
+  });
+
   it('healthy rollout is a no-op', async () => {
     writePostRolloutValidationVerdict(dir, verdict({ healthy: true }));
     const rollback = api();

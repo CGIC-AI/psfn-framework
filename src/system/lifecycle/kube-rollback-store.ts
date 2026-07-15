@@ -1,20 +1,21 @@
 // ── Kube Helm rollback record store ──
 //
-// Persists the latest Helm rollback action atomically (temp + rename) plus a
-// bounded JSONL history. The history is the ACT-ONCE ledger the automatic
-// rollback surface (x5rt.8) reads to guarantee it never rolls back twice away
-// from the same failed revision: after a rollback, the post-rollout verdict file
-// still holds the FAILED verdict of the rolled-back-from revision, so the auto
-// surface keys its decision on (release, fromHelmRevision) and consults this
-// ledger before acting again.
+// Persists the latest Helm rollback action durably (fsync + dirsync via
+// writeFileDurableAtomicSync) plus a bounded JSONL history. The history is the
+// ACT-ONCE ledger the automatic rollback surface (x5rt.8) reads to guarantee it
+// never rolls back twice away from the same failed revision: after a rollback,
+// the post-rollout verdict file still holds the FAILED verdict of the
+// rolled-back-from revision, so the auto surface keys its decision on
+// (release, fromHelmRevision) and consults this ledger before acting again.
 //
-// Kept deliberately parallel to kube-post-rollout-validation-store.ts (same
-// atomic-write + bounded-history shape). System-owned/trusted: reads use raw
-// JSON.parse and throw on corruption (fail-safe), never silently coerce.
+// Durability is load-bearing here: the ledger is the loop-prevention anchor, so
+// a power-loss window between `helm rollback` and disk commit must not be able
+// to drop the just-written act-once entry. Both writes fsync the file and the
+// directory before returning. System-owned/trusted: reads use raw JSON.parse and
+// throw on corruption (fail-safe), never silently coerce.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { writeFileDurableAtomicSync } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   resolveKubeRollbackHistoryPath,
@@ -59,41 +60,29 @@ export interface KubeRollbackRecord {
   detail?: string;
 }
 
-function atomicWriteText(path: string, body: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-  try {
-    writeFileSync(tmpPath, body, 'utf-8');
-    renameSync(tmpPath, path);
-  } catch (error) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Best-effort cleanup only.
-    }
-    throw error;
-  }
-}
-
 function appendBoundedHistory(historyPath: string, record: KubeRollbackRecord): void {
   const existingLines = existsSync(historyPath)
     ? readFileSync(historyPath, 'utf-8').split('\n').map(line => line.trim()).filter(Boolean)
     : [];
   existingLines.push(JSON.stringify(record));
   const bounded = existingLines.slice(-KUBE_ROLLBACK_HISTORY_LIMIT);
-  atomicWriteText(historyPath, `${bounded.join('\n')}\n`);
+  writeFileDurableAtomicSync(historyPath, `${bounded.join('\n')}\n`);
 }
 
 /**
- * Persist a rollback action: atomic latest write plus a bounded history append.
- * The latest write happens first so a failed history append cannot leave the
- * latest file missing.
+ * Persist a rollback action: durable latest write plus a bounded history append.
+ * Both writes fsync the file and its directory (writeFileDurableAtomicSync) so a
+ * power-loss window cannot drop the just-written act-once entry. The latest write
+ * happens first so a failed history append cannot leave the latest file missing.
  */
 export function writeKubeRollbackRecord(
   systemDataDir: string,
   record: KubeRollbackRecord,
 ): void {
-  writeJsonAtomic(resolveKubeRollbackLatestPath(systemDataDir), record);
+  writeFileDurableAtomicSync(
+    resolveKubeRollbackLatestPath(systemDataDir),
+    `${JSON.stringify(record, null, 2)}\n`,
+  );
   appendBoundedHistory(resolveKubeRollbackHistoryPath(systemDataDir), record);
 }
 

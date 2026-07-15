@@ -60,4 +60,28 @@ describe('executeAccountReapproval input validation', () => {
       at: 'yesterday',
     })).rejects.toThrow(/at must be an ISO timestamp/);
   });
+
+  it('surfaces both the transaction failure and a failed rollback', async () => {
+    const operationFailure = new Error('reapproval operation failed');
+    const rollbackFailure = new Error('rollback failed');
+    const client = {
+      query: async (sql: string) => {
+        if (sql === 'BEGIN') return { rows: [] };
+        if (sql === 'ROLLBACK') throw rollbackFailure;
+        throw operationFailure;
+      },
+      release: () => undefined,
+    };
+    const pool = {
+      connect: async () => client,
+    } as unknown as Pool;
+
+    const rejection = await executeAccountReapproval(pool, baseRequest())
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect(rejection).toMatchObject({
+      message: expect.stringMatching(/rollback failed after reapproval transaction error/i),
+      errors: [operationFailure, rollbackFailure],
+    });
+  });
 });

@@ -282,6 +282,44 @@ describe('fleet-auth owner-file configuration', () => {
       protectedRestoreRoots: [],
       companionDatabaseUrl: 'postgres://fleet_auth_runtime:different@db.example.test/psfn',
     })).toThrow(/must not authenticate as a fleet auth role/);
+    for (const query of [
+      'host=alternate.example.test',
+      'hostaddr=192.0.2.10',
+      'port=6543',
+      'dbname=other',
+      'database=other',
+      'user=fleet_auth_migration',
+      'password=alternate',
+      'service=shadow',
+      'servicefile=%2Ftmp%2Fpg_service.conf',
+      'passfile=%2Ftmp%2Fpgpass',
+      'options=-c%20role%3Dfleet_auth_migration',
+      'target_session_attrs=read-write',
+    ]) {
+      expect(() => resolveGatewayFleetAuthSecrets({
+        config,
+        credentialVault: createStaticCredentialVault({
+          ...credentials,
+          FLEET_AUTH_RUNTIME_DATABASE_URL: `${credentials.FLEET_AUTH_RUNTIME_DATABASE_URL}?${query}`,
+        }),
+        protectedRestoreRoots: [],
+      })).toThrow(/must not use PostgreSQL routing or authentication query override/);
+    }
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [],
+      companionDatabaseUrl: 'postgres://companion_runtime:secret@db.example.test/psfn?user=fleet_auth_runtime',
+    })).toThrow(/routing or authentication query override|role-routing override/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_RUNTIME_DATABASE_URL:
+          'postgres://fleet_auth_runtime:runtime@db.example.test/psfn?user=fleet_auth_backup',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/routing or authentication query override/);
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {

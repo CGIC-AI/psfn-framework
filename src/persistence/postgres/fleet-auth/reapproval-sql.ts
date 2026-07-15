@@ -266,8 +266,11 @@ AS $$
 DECLARE
   v_generation bigint;
   v_epoch bigint;
+  v_restore_checkpoint bigint;
   v_new_epoch bigint;
   v_lineage text;
+  v_now timestamptz;
+  v_expected_scope jsonb;
   v_ceremony fleet_auth.trusted_host_ceremonies%ROWTYPE;
   v_principal fleet_auth.human_principals%ROWTYPE;
   v_subject fleet_auth.provider_subjects%ROWTYPE;
@@ -284,8 +287,8 @@ BEGIN
   END IF;
 
   -- Current durable authority under lock.
-  SELECT authority_generation, global_auth_epoch, authority_lineage_id
-    INTO v_generation, v_epoch, v_lineage
+  SELECT authority_generation, global_auth_epoch, restore_checkpoint, authority_lineage_id
+    INTO v_generation, v_epoch, v_restore_checkpoint, v_lineage
   FROM fleet_auth.authority_state
   WHERE singleton = TRUE
   FOR UPDATE;
@@ -309,9 +312,6 @@ BEGIN
   END IF;
   IF v_ceremony.status <> 'pending' THEN
     RAISE EXCEPTION 'trusted-host ceremony is not pending' USING ERRCODE = '42501';
-  END IF;
-  IF v_ceremony.expires_at <= p_at THEN
-    RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
   IF v_ceremony.global_auth_epoch <> v_epoch THEN
     RAISE EXCEPTION 'trusted-host ceremony is bound to a stale auth epoch' USING ERRCODE = '42501';
@@ -402,6 +402,29 @@ BEGIN
     RAISE EXCEPTION 'role grant conflicts with a live grant' USING ERRCODE = '42501';
   END IF;
 
+  -- The trusted host binds the exact authority being promoted, including the
+  -- role value and the current non-restored floor projection. JSONB equality
+  -- is intentionally exact: missing or extra fields reject rather than being
+  -- ignored by a permissive partial parser.
+  v_expected_scope := jsonb_build_object(
+    'schemaVersion', 1,
+    'principalId', p_principal_id::text,
+    'provider', p_provider,
+    'providerSubjectId', p_provider_subject_id,
+    'companionId', p_companion_id::text,
+    'contactId', p_contact_id,
+    'bindingId', p_binding_id::text,
+    'roleGrantId', p_role_grant_id::text,
+    'role', v_grant.role,
+    'authorityLineageId', v_lineage,
+    'authorityGeneration', v_generation,
+    'restoreCheckpoint', v_restore_checkpoint
+  );
+  IF v_ceremony.exact_scope IS DISTINCT FROM v_expected_scope THEN
+    RAISE EXCEPTION 'trusted-host ceremony exact scope does not match the requested authority'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Escalate atomically. current_user is the definer (schema owner), so the
   -- restore_quarantine_activation_guard permits these transitions.
   v_new_epoch := v_epoch + 1;
@@ -410,39 +433,49 @@ BEGIN
   v_new_binding_version := v_binding.version + 1;
   v_new_role_version := v_grant.version + 1;
 
+  -- A procedure may have waited on any authority row above after the ceremony
+  -- was observed. Use a fresh database clock only after every relevant lock and
+  -- validation, immediately before the first mutation, so a ceremony cannot be
+  -- consumed after expiring during lock contention. This same instant stamps
+  -- every atomic write below.
+  v_now := clock_timestamp();
+  IF v_ceremony.expires_at <= v_now THEN
+    RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
+  END IF;
+
   UPDATE fleet_auth.provider_subjects
   SET state = 'active', restore_state = 'live',
-      authority_generation = v_generation, updated_at = p_at
+      authority_generation = v_generation, updated_at = v_now
   WHERE provider = p_provider AND subject_id = p_provider_subject_id;
 
   UPDATE fleet_auth.human_principals
   SET status = 'active', restore_state = 'live',
       authn_version = v_new_authn, authz_version = v_new_authz,
-      authority_generation = v_generation, updated_at = p_at
+      authority_generation = v_generation, updated_at = v_now
   WHERE principal_id = p_principal_id;
 
   UPDATE fleet_auth.principal_contact_bindings
   SET state = 'active', restore_state = 'live', version = v_new_binding_version,
-      authority_generation = v_generation, updated_at = p_at
+      authority_generation = v_generation, updated_at = v_now
   WHERE binding_id = p_binding_id;
 
   UPDATE fleet_auth.principal_role_grants
   SET lifecycle = 'active', restore_state = 'live', version = v_new_role_version,
-      authority_generation = v_generation, updated_at = p_at
+      authority_generation = v_generation, updated_at = v_now
   WHERE grant_id = p_role_grant_id;
 
   -- Advance the ephemeral auth epoch and revoke affected ephemeral authority so
   -- no pre-reapproval session/grant/challenge survives.
   UPDATE fleet_auth.authority_state
-  SET global_auth_epoch = v_new_epoch, updated_at = p_at
+  SET global_auth_epoch = v_new_epoch, updated_at = v_now
   WHERE singleton = TRUE;
 
   UPDATE fleet_auth.browser_sessions
-  SET revoked_at = p_at
+  SET revoked_at = v_now
   WHERE principal_id = p_principal_id AND revoked_at IS NULL;
 
   UPDATE fleet_auth.jit_authorization_grants
-  SET revoked_at = p_at
+  SET revoked_at = v_now
   WHERE principal_id = p_principal_id AND revoked_at IS NULL;
 
   UPDATE fleet_auth.step_up_challenges
@@ -451,7 +484,7 @@ BEGIN
 
   -- Consume the ceremony exactly once.
   UPDATE fleet_auth.trusted_host_ceremonies
-  SET status = 'consumed', consumed_at = p_at
+  SET status = 'consumed', consumed_at = v_now
   WHERE ceremony_id = p_ceremony_id;
 
   -- One immutable audit event bound to the new epoch.

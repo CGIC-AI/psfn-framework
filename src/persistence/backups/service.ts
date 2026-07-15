@@ -122,6 +122,14 @@ export interface BackupRunOptions {
   /** When set, a pg_dump custom-format archive of this database is captured. */
   postgres?: BackupPostgresOptions;
   /**
+   * A pg_dump archive already captured by the fleet-auth coordinator under its
+   * exported snapshot. When present, the recovery artifact copies this dump
+   * instead of opening PostgreSQL again. This is intentionally a backup-run
+   * input (not a database credential option): callers must still provide the
+   * schema-scoped postgres metadata used to bind the artifact identity.
+   */
+  preCapturedPostgresDumpPath?: string;
+  /**
    * When set, the full companion-data file tree is captured with a per-file
    * hash manifest (sessions and backup targets excluded — sessions are
    * captured separately).
@@ -359,6 +367,27 @@ async function dumpPostgresDatabase(
   return dumpPath;
 }
 
+function stagePreCapturedPostgresDump(
+  sourcePath: string,
+  postgres: BackupPostgresOptions,
+  databaseDir: string,
+): string {
+  const source = resolve(sourcePath);
+  if (!existsSync(source) || !statSync(source).isFile() || statSync(source).size === 0) {
+    throw new Error(`Pre-captured Postgres dump is missing or empty: ${source}`);
+  }
+  mkdirSync(databaseDir, { recursive: true });
+  const destination = join(
+    databaseDir,
+    postgresDumpFileName(postgres.databaseUrl, postgres.schema),
+  );
+  if (resolve(destination) === source) {
+    throw new Error('Pre-captured Postgres dump must be outside its recovery artifact destination');
+  }
+  copyFileSync(source, destination);
+  return destination;
+}
+
 /**
  * Validates that a pg_dump custom-format archive is readable and non-trivial
  * by listing its table of contents. Full restore-into-scratch-database
@@ -419,7 +448,13 @@ export async function runBackupCycle(
   try {
     mkdirSync(databaseDir, { recursive: true });
 
-    const postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
+    const postgresDumpPath = options.preCapturedPostgresDumpPath
+      ? stagePreCapturedPostgresDump(
+        options.preCapturedPostgresDumpPath,
+        options.postgres,
+        databaseDir,
+      )
+      : await dumpPostgresDatabase(options.postgres, databaseDir);
 
     const copiedSessionFiles = copySessionSnapshotFiles(
       options.sessionsDir,
@@ -502,6 +537,16 @@ export async function runBackupCycle(
       backupDir,
       kubernetesHelmRecovery: Boolean(kubernetesHelm),
       ...(fleetArtifactIdentitySha256 ? { fleetArtifactIdentitySha256 } : {}),
+      ...(options.preCapturedPostgresDumpPath
+        ? {
+            sessionSnapshots: copiedSessionFiles.map(name => ({
+              name,
+              sha256: createHash('sha256')
+                .update(readFileSync(join(sessionSnapshotDir, name)))
+                .digest('hex'),
+            })),
+          }
+        : {}),
       now,
     });
 
@@ -627,10 +672,8 @@ export async function runFleetAuthConsistentBackupCycle(
 ): Promise<FleetAuthConsistentBackupCycleResult> {
   return await runFleetAuthConsistentBackupCycleImplementation(options, {
     formatTimestamp,
-    verifyDumpArchive: async (dumpPath) => {
-      await verifyPostgresDumpArchive(dumpPath);
-    },
     mirrorBackup: mirrorBackupToDir,
+    runFleetBackup: runFleetBackupCycle,
   });
 }
 
@@ -821,6 +864,12 @@ export interface FleetBackupRunOptions {
   verifyRestore?: boolean;
   encryption?: BackupEncryptionRuntimeConfig;
   now?: () => number;
+  /**
+   * Same-snapshot archives supplied by the gateway fleet-auth coordinator.
+   * Keys are the exact companion/shared schema names. When present every unit
+   * must consume one of these archives; no unit may fall back to pg_dump.
+   */
+  consistentSnapshotDumpPaths?: Readonly<Record<string, string>>;
 }
 
 export type FleetBackupUnitKind = 'companion' | 'cluster' | 'group';
@@ -933,14 +982,39 @@ export async function runFleetBackupCycle(
   const now = options.now ?? (() => Date.now());
   const sharedSchema = options.sharedSchema?.trim() || DEFAULT_SHARED_WORLD_SCHEMA;
   const mode: 'per-companion' | 'group' = options.groupMode ? 'group' : 'per-companion';
+  const consistentSnapshotDumpPaths = options.consistentSnapshotDumpPaths;
+  if (consistentSnapshotDumpPaths && mode === 'group') {
+    throw new Error(
+      'Fleet-auth same-snapshot recovery requires schema-scoped per-companion mode; refusing a whole-database fallback',
+    );
+  }
+  if (consistentSnapshotDumpPaths) {
+    const expectedSchemas = [
+      ...options.companions.map(companion => assertValidPostgresSchemaName(companion.postgresSchema)),
+      assertValidPostgresSchemaName(sharedSchema),
+    ].sort();
+    const suppliedSchemas = Object.keys(consistentSnapshotDumpPaths).sort();
+    if (JSON.stringify(expectedSchemas) !== JSON.stringify(suppliedSchemas)) {
+      throw new Error(
+        `Fleet-auth same-snapshot dump coverage mismatch: expected [${expectedSchemas.join(', ')}], `
+        + `received [${suppliedSchemas.join(', ')}]`,
+      );
+    }
+  }
 
   const retentionFields = {
     ...(options.maxRotatingBackups !== undefined ? { maxRotatingBackups: options.maxRotatingBackups } : {}),
     ...(options.maxWeeklyBackups !== undefined ? { maxWeeklyBackups: options.maxWeeklyBackups } : {}),
     ...(options.maxMonthlyBackups !== undefined ? { maxMonthlyBackups: options.maxMonthlyBackups } : {}),
-    ...(options.mirrorDir !== undefined ? { mirrorDir: options.mirrorDir } : {}),
-    ...(options.verifyRestore !== undefined ? { verifyRestore: options.verifyRestore } : {}),
-    ...(options.encryption !== undefined ? { encryption: options.encryption } : {}),
+    ...(!consistentSnapshotDumpPaths && options.mirrorDir !== undefined
+      ? { mirrorDir: options.mirrorDir }
+      : {}),
+    ...(!consistentSnapshotDumpPaths && options.verifyRestore !== undefined
+      ? { verifyRestore: options.verifyRestore }
+      : {}),
+    ...(!consistentSnapshotDumpPaths && options.encryption !== undefined
+      ? { encryption: options.encryption }
+      : {}),
     now,
   };
 
@@ -1051,6 +1125,9 @@ export async function runFleetBackupCycle(
               ? { restoreVerifyDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl }
               : {}),
           },
+          ...(consistentSnapshotDumpPaths
+            ? { preCapturedPostgresDumpPath: consistentSnapshotDumpPaths[companion.postgresSchema] }
+            : {}),
           companionDataDir: companion.companionDataDir,
           sessionsDir: companion.sessionsDir,
           workspacePath: companion.personalWorkspacePath,
@@ -1078,6 +1155,9 @@ export async function runFleetBackupCycle(
       { kind: 'cluster', postgresSchema: sharedSchema },
       {
         postgres: { ...basePostgres, schema: sharedSchema },
+        ...(consistentSnapshotDumpPaths
+          ? { preCapturedPostgresDumpPath: consistentSnapshotDumpPaths[sharedSchema] }
+          : {}),
         systemDataDir: options.systemDataDir,
         workspacePath: options.sharedWorkspacePath,
         workspaceProtectedPaths: [

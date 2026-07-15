@@ -427,11 +427,19 @@ export class SessionManager {
     return this.activeContextSessionId;
   }
 
-  async awaitPendingAutoCompaction(channelId: string): Promise<void> {
+  /**
+   * mmo9.4: report whether a durable auto-compaction job is in flight for the
+   * turn's resolved channel. Foreground turns no longer await compaction; they
+   * build context on the last-committed session revision and surface this as a
+   * compactionPending marker (see buildContext -> compactionManifest.pending)
+   * and the compaction_wait telemetry marker. Synchronous by design: a
+   * pending-state probe, never a wait. The durable job (see
+   * scheduleAutoCompactionBetweenTurns) runs to completion and commits
+   * atomically regardless of foreground turns (welfare: never abandoned).
+   */
+  hasPendingAutoCompaction(channelId: string): boolean {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const pending = this.pendingAutoCompactions.get(resolvedChannelId);
-    if (!pending) return;
-    await pending;
+    return this.pendingAutoCompactions.has(resolvedChannelId);
   }
 
   listRecentSessions(limit?: number, offset = 0): SessionActivitySummary[] {

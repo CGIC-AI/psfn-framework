@@ -390,6 +390,7 @@ function makeMockSessionManager(): SessionManager {
     findRecordedTurn: vi.fn().mockReturnValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
+    hasPendingAutoCompaction: vi.fn(() => false),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
     captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
       channelId: resolveSessionChannelId(input.channelId),

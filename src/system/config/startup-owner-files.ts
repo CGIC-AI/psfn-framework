@@ -58,6 +58,15 @@ import {
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
+  /**
+   * Companion-owned config root (companionDataDir). Roots the per-companion
+   * owner files verified here — currently only capability-tier.json (dnll.2).
+   * When omitted it resolves to {@link StartupOwnerFileLoadOptions.dataDir},
+   * matching the legacy shared-root layout. The underlying loader still fails
+   * closed on a missing per-companion file; this is a rooting default, not a
+   * config fallback.
+   */
+  companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
   /**
@@ -205,6 +214,9 @@ export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
   const seedDir = ownerFileSeedDir(options);
+  // capability-tier.json is a per-companion owner file (dnll.2): verify it at the
+  // companion root. Defaults to dataDir for the legacy shared-root layout.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
   const checks: Array<{ label: string; dataPath: string; seedPath: string; run: () => unknown }> = [
     {
       label: 'settings',
@@ -245,9 +257,9 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'capability-tier',
-      dataPath: join(options.dataDir, CAPABILITY_TIER_FILE_NAME),
+      dataPath: join(companionDataDir, CAPABILITY_TIER_FILE_NAME),
       seedPath: join(seedDir, 'capability-tier.seed.json'),
-      run: () => loadStartupCapabilityTierOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupCapabilityTierOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'charge-policy',

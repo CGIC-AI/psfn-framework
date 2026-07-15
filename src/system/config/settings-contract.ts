@@ -49,10 +49,31 @@ export type SettingsFieldType =
   | 'enum'
   | 'object';
 
+/**
+ * Owner files whose WHOLE file is rooted per-companion (companionDataDir) rather
+ * than cluster-global (systemDataDir). Distinct from settings.overlay.json keys
+ * (dnll.1), which override individual settings.json fields: these relocate the
+ * entire owner file. capability-tier.json is per-companion (dnll.2).
+ */
+export const PER_COMPANION_OWNER_FILES: ReadonlySet<string> = new Set<string>([
+  CAPABILITY_TIER_FILE_NAME,
+]);
+
+/** Ownership scope for a whole owner file, derived from its rooting. */
+export function ownerFileScope(ownerFile: string): SettingsFieldScope {
+  return PER_COMPANION_OWNER_FILES.has(ownerFile) ? 'perCompanion' : 'global';
+}
+
 export interface SettingsContractSubsystem {
   id: SettingsSubsystemId;
   ownerFile: string;
   mode: 'structured' | 'raw_only';
+  /**
+   * Whether this subsystem's owner file is rooted per-companion or cluster-global
+   * (bead dnll.2). Must equal {@link ownerFileScope}(ownerFile); the settings
+   * contract guard enforces the consistency.
+   */
+  scope: SettingsFieldScope;
 }
 
 /**
@@ -85,56 +106,67 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     id: 'runtime',
     ownerFile: SETTINGS_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(SETTINGS_FILE_NAME),
   },
   models: {
     id: 'models',
     ownerFile: MODELS_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(MODELS_FILE_NAME),
   },
   providers: {
     id: 'providers',
     ownerFile: PROVIDERS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(PROVIDERS_FILE_NAME),
   },
   scheduler: {
     id: 'scheduler',
     ownerFile: SCHEDULER_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(SCHEDULER_FILE_NAME),
   },
   capabilities: {
     id: 'capabilities',
     ownerFile: CAPABILITY_TIER_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(CAPABILITY_TIER_FILE_NAME),
   },
   chargePolicy: {
     id: 'chargePolicy',
     ownerFile: CHARGE_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(CHARGE_POLICY_FILE_NAME),
   },
   skills: {
     id: 'skills',
     ownerFile: SKILLS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(SKILLS_FILE_NAME),
   },
   trustPolicy: {
     id: 'trustPolicy',
     ownerFile: TRUST_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(TRUST_POLICY_FILE_NAME),
   },
   intakePolicy: {
     id: 'intakePolicy',
     ownerFile: INTAKE_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(INTAKE_POLICY_FILE_NAME),
   },
   backup: {
     id: 'backup',
     ownerFile: BACKUP_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(BACKUP_FILE_NAME),
   },
   channels: {
     id: 'channels',
     ownerFile: CHANNELS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(CHANNELS_FILE_NAME),
   },
 };
 

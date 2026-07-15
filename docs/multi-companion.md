@@ -105,9 +105,15 @@ whitelist of keys with an **optional** `settings.overlay.json` in its own
   `src/app/startup/support/bootstrap-helpers.ts` and `hydrateJsonBackedRuntimeConfig`
   in `src/system/config/runtime-config.ts`).
 
-Whole owner files that are semantically per-companion (`capability-tier.json`,
-`scheduler.json`) are relocated to `companionDataDir` by separate work, not this
-overlay.
+Whole owner files that are semantically per-companion are relocated to
+`companionDataDir` rather than overlaid. `capability-tier.json` is relocated
+(dnll.2): each companion's maturation tier is loaded from its own
+`companionDataDir/capability-tier.json`, so a nursery and a mature companion can
+run side by side under one release. A missing per-companion tier file fails
+startup closed (no fallback to a shared file), the settings contract marks the
+`capabilities` subsystem `perCompanion`, and the file rides the per-companion
+`companion-tree` backup slice, not the cluster-global `system-config` slice.
+`scheduler.json` circadian config is relocated by separate work (dnll.3).
 
 ## Postgres tenancy: schema-per-companion + one shared schema
 

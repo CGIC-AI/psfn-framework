@@ -96,6 +96,36 @@ type PatchedAgent = {
   streamFn: Parameters<typeof agentLoopWithScheduler>[4];
 };
 
+export type AgentRunAbortResult =
+  | { status: 'signaled' }
+  | { status: 'already_aborted' }
+  | { status: 'not_active' }
+  | { status: 'not_signaled' };
+
+function hasObservedAbort(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+/**
+ * Abort the canonical parent run and report what the active AbortSignal proves.
+ *
+ * `Agent.abort()` is intentionally void upstream, so invoking it alone cannot
+ * distinguish a real active-run transition from its documented idle no-op.
+ * AbortSignal changes synchronously; checking the exact signal captured before
+ * the call keeps cancellation acknowledgements truthful without exposing the
+ * patched agent's private `activeRun` shape outside this boundary.
+ */
+export function abortActiveAgentRun(agent: Agent): AgentRunAbortResult {
+  const signal = agent.signal;
+  if (!signal) return { status: 'not_active' };
+  if (hasObservedAbort(signal)) return { status: 'already_aborted' };
+
+  agent.abort();
+  return hasObservedAbort(signal)
+    ? { status: 'signaled' }
+    : { status: 'not_signaled' };
+}
+
 export function installAgentToolSchedulerPatch(
   agent: Agent,
   schedulerOptions: ToolCallSchedulerOptions,

@@ -118,7 +118,7 @@ describe('AgentApiBackend chat completion deadlines', () => {
   it('aborts the substrate turn and returns request_timeout when the RPC deadline expires', async () => {
     vi.useFakeTimers();
     try {
-      const abort = vi.fn();
+      const abort = vi.fn(() => ({ status: 'signaled' as const }));
       const eventBus = new EventBus();
       const abortEvents: Array<{ reason: string }> = [];
       const cancellationOutcomes: string[] = [];
@@ -167,6 +167,111 @@ describe('AgentApiBackend chat completion deadlines', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('acknowledges client cancellation only after the active parent signal is proven', async () => {
+    let resolveTurn!: (response: any) => void;
+    const turnPromise = new Promise<any>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const abortEvents: Array<{ reason: string }> = [];
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('api.turn.abort', event => abortEvents.push({ reason: event.reason }));
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const handleMessage = vi.fn(() => turnPromise);
+    const abort = vi.fn(() => ({ status: 'signaled' as const }));
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort } as any,
+      eventBus,
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-cancel-active-prompt',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Run until cancelled' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-session-id': 'cancel-active-prompt-session' },
+    });
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledOnce();
+    });
+
+    await expect(backend.cancelChatCompletion({ requestId: 'req-cancel-active-prompt' })).resolves.toEqual({
+      cancelled: true,
+    });
+    expect(abort).toHaveBeenCalledOnce();
+    expect(abortEvents).toEqual([{ reason: 'client_disconnected' }]);
+    expect(cancellationOutcomes).toEqual(['acknowledged']);
+
+    resolveTurn({
+      content: 'cancelled turn settled',
+      channelId: 'api:principal-1:cancel-active-prompt-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
+  });
+
+  it('does not acknowledge cancellation before the parent Pi run becomes active', async () => {
+    let resolveTurn!: (response: any) => void;
+    const turnPromise = new Promise<any>((resolve) => {
+      resolveTurn = resolve;
+    });
+    const eventBus = new EventBus();
+    const abortEvents: Array<{ reason: string }> = [];
+    const cancellationOutcomes: string[] = [];
+    eventBus.on('api.turn.abort', event => abortEvents.push({ reason: event.reason }));
+    eventBus.on('agent.turn.performance', event => {
+      if (event.stage === 'cancellation_ack' && event.cancellationOutcome) {
+        cancellationOutcomes.push(event.cancellationOutcome);
+      }
+    });
+    const handleMessage = vi.fn(() => turnPromise);
+    const abort = vi.fn(() => ({ status: 'not_active' as const }));
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort } as any,
+      eventBus,
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-cancel-pre-prompt',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Search before answering' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-session-id': 'cancel-pre-prompt-session' },
+    });
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledOnce();
+    });
+
+    await expect(backend.cancelChatCompletion({ requestId: 'req-cancel-pre-prompt' })).resolves.toEqual({
+      cancelled: false,
+    });
+    expect(abort).toHaveBeenCalledOnce();
+    expect(abortEvents).toEqual([]);
+    expect(cancellationOutcomes).toEqual(['failed']);
+
+    resolveTurn({
+      content: 'eventual answer',
+      channelId: 'api:principal-1:cancel-pre-prompt-session',
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    });
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
+
+    await expect(backend.cancelChatCompletion({ requestId: 'req-cancel-pre-prompt' })).resolves.toEqual({
+      cancelled: false,
+    });
+    expect(cancellationOutcomes).toEqual(['failed', 'failed']);
   });
 
   it('reports failed cancellation when the active agent abort throws', async () => {
@@ -237,7 +342,10 @@ describe('AgentApiBackend direct model completions', () => {
     const handleMessage = overrides.handleMessage ?? vi.fn(() => new Promise(() => undefined));
     const eventBus = overrides.eventBus ?? new EventBus();
     const backend = new AgentApiBackend({
-      agentLoop: { handleMessage, abort: vi.fn() } as any,
+      agentLoop: {
+        handleMessage,
+        abort: vi.fn(() => ({ status: 'not_active' as const })),
+      } as any,
       eventBus,
       sessionManager: createSessionManagerStub(),
       ...(overrides.llmProvider === false

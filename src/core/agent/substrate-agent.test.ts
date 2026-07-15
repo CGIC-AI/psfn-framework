@@ -7396,15 +7396,15 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
   });
 
-  it('abort delegates to agent.abort', () => {
+  it('reports when there is no active parent run to abort', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
     );
 
     const abortSpy = vi.spyOn(Agent.prototype, 'abort').mockImplementation(() => {});
 
-    agent.abort();
-    expect(abortSpy).toHaveBeenCalled();
+    expect(agent.abort()).toEqual({ status: 'not_active' });
+    expect(abortSpy).not.toHaveBeenCalled();
 
     abortSpy.mockRestore();
   });

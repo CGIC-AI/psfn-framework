@@ -138,32 +138,93 @@ export async function requestAgentVoiceStream({
     metadata: options.metadata,
   } as const;
 
-  const invokeWithTimeout = async <T>(request: () => PromiseLike<T>): Promise<T> => {
-    if (options.signal?.aborted) {
-      throw new Error('Voice stream aborted before dispatch');
-    }
+  const reverseVoiceMethods = PRIMARY_REVERSE_VOICE_RPC_METHODS;
 
-    return await Promise.race([
+  // Races a reverse RPC against the agent timeout only. Used for the cancel
+  // frame itself, which must still be sent while the turn is being aborted and
+  // therefore must NOT lose to the abort rejection below.
+  const timeoutRace = <T>(request: () => PromiseLike<T>): Promise<T> =>
+    Promise.race([
       Promise.resolve(request()),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Agent voice stream timed out')), timeoutMs),
       ),
     ]);
-  };
 
-  const reverseVoiceMethods = PRIMARY_REVERSE_VOICE_RPC_METHODS;
+  let sequence = 0;
+  let cancelled = false;
+  let cancelSent = false;
 
-  const sendCancel = async (sequence: number, reason: string): Promise<void> => {
+  // mmo9.6.5: send voice.stream.cancel at most once per turn. The gateway's
+  // handleVoiceStreamCancel keys off correlationId+streamId, aborts the
+  // per-stream controller, and that abort trips the AbortSignal threaded into
+  // the in-flight model turn — reaching SubstrateAgent.cancelTurn(cancellationId)
+  // (mmo9.6.1) and the provider-port cancel, so upstream model + TTS generation
+  // stops rather than only local transport state. A transport failure on the
+  // cancel itself is swallowed: the local turn is torn down regardless, and a
+  // lost cancel frame must not mask the original error being propagated.
+  const sendCancel = async (cancelSequence: number, reason: string): Promise<void> => {
+    if (cancelSent) {
+      return;
+    }
+    cancelSent = true;
     const cancelPayload: VoiceStreamCancelParams = {
       ...baseFrame,
-      sequence,
+      sequence: cancelSequence,
       reason,
     };
-    await invokeWithTimeout(() => client.request(reverseVoiceMethods.cancel, cancelPayload))
+    await timeoutRace(() => client.request(reverseVoiceMethods.cancel, cancelPayload))
       .catch(() => undefined);
   };
 
-  let sequence = 0;
+  // mmo9.6.5: attach a WHOLE-TURN abort listener, not just the chunk-loop poll.
+  // In production the WS voice path (api-surface handleAssistantTurn ->
+  // requestAgentVoiceStream) blocks awaiting voice.stream.end while the agent
+  // generates the model turn. A barge-in that aborts options.signal during that
+  // window previously did nothing: no cancel frame was sent and the await hung
+  // until the agent timeout, so the model kept generating (defeating mmo9.6's
+  // preemptive-interrupt goal). This listener rejects the in-flight reverse RPC
+  // the instant the turn is aborted AND sends voice.stream.cancel so the agent
+  // turn is actually cancelled end-to-end.
+  const signal = options.signal;
+  let detachAbortListener: (() => void) | undefined;
+  const abortRejection = new Promise<never>((_, reject) => {
+    if (!signal) {
+      return;
+    }
+    const onAbort = (): void => {
+      cancelled = true;
+      // Fire-and-forget so the awaiting RPC unblocks immediately; sendCancel is
+      // idempotent and swallows its own transport errors.
+      void sendCancel(sequence + 1, 'aborted');
+      reject(new Error('Voice stream aborted'));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    detachAbortListener = () => signal.removeEventListener('abort', onAbort);
+  });
+  // Keep the abort rejection considered handled even when no RPC is currently
+  // racing it (an abort landing between awaits), preventing an unhandled
+  // rejection while still surfacing to any active race.
+  abortRejection.catch(() => undefined);
+
+  const invokeWithTimeout = async <T>(request: () => PromiseLike<T>): Promise<T> => {
+    if (signal?.aborted) {
+      throw new Error('Voice stream aborted before dispatch');
+    }
+
+    const rpc = timeoutRace(request);
+    // When the abort rejection wins the race the underlying RPC promise is
+    // abandoned mid-flight; keep its eventual settlement handled so a later
+    // rejection (the gateway's cancelled voice.stream.end) never surfaces as an
+    // unhandled rejection.
+    rpc.catch(() => undefined);
+    return await Promise.race([rpc, abortRejection]);
+  };
+
   const serializedMessage = serializeMessage({
     ...routedMessage,
     content: '',
@@ -175,76 +236,78 @@ export async function requestAgentVoiceStream({
   };
 
   try {
-    await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
-  } catch (error) {
-    if (isMethodNotFoundError(error)) {
-      return requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
-    }
-    throw error;
-  }
-
-  let cancelled = false;
-
-  try {
-    while (queue.size > 0) {
-      if (options.signal?.aborted) {
-        cancelled = true;
-        await sendCancel(sequence + 1, 'aborted');
-        throw new Error('Voice stream aborted');
+    try {
+      await invokeWithTimeout(() => client.request(reverseVoiceMethods.start, startParams));
+    } catch (error) {
+      if (isMethodNotFoundError(error)) {
+        return requestAgentViaHandlePath(client, serializedMessage, timeoutMs);
       }
+      throw error;
+    }
 
-      const text = queue.dequeue();
-      if (text === undefined) {
-        break;
+    try {
+      while (queue.size > 0) {
+        if (signal?.aborted) {
+          cancelled = true;
+          await sendCancel(sequence + 1, 'aborted');
+          throw new Error('Voice stream aborted');
+        }
+
+        const text = queue.dequeue();
+        if (text === undefined) {
+          break;
+        }
+
+        sequence += 1;
+        const chunkParams: VoiceStreamChunkParams = {
+          ...baseFrame,
+          sequence,
+          text,
+        };
+
+        const ack = await invokeWithTimeout(() =>
+          client.request(reverseVoiceMethods.chunk, chunkParams) as Promise<{
+            accepted: boolean;
+            droppedChunks?: number;
+          }>,
+        );
+
+        if (!ack.accepted) {
+          droppedChunks += 1;
+        } else if (typeof ack.droppedChunks === 'number') {
+          droppedChunks = Math.max(droppedChunks, ack.droppedChunks);
+        }
       }
 
       sequence += 1;
-      const chunkParams: VoiceStreamChunkParams = {
+      const endParams: VoiceStreamEndParams = {
         ...baseFrame,
         sequence,
-        text,
+        metadata: {
+          ...(options.metadata ?? {}),
+          droppedChunks,
+        },
       };
 
-      const ack = await invokeWithTimeout(() =>
-        client.request(reverseVoiceMethods.chunk, chunkParams) as Promise<{
-          accepted: boolean;
-          droppedChunks?: number;
-        }>,
+      const streamResult = await invokeWithTimeout(() =>
+        client.request(reverseVoiceMethods.end, endParams) as Promise<VoiceStreamEndResult>,
       );
 
-      if (!ack.accepted) {
-        droppedChunks += 1;
-      } else if (typeof ack.droppedChunks === 'number') {
-        droppedChunks = Math.max(droppedChunks, ack.droppedChunks);
+      return {
+        content: streamResult.content,
+        channelId: streamResult.channelId,
+        ...(streamResult.attachments ? { attachments: streamResult.attachments } : {}),
+        model: streamResult.model,
+        durationMs: streamResult.durationMs,
+      };
+    } catch (error) {
+      if (!cancelled) {
+        await sendCancel(sequence + 1, 'stream-error');
       }
+      throw error;
     }
-
-    sequence += 1;
-    const endParams: VoiceStreamEndParams = {
-      ...baseFrame,
-      sequence,
-      metadata: {
-        ...(options.metadata ?? {}),
-        droppedChunks,
-      },
-    };
-
-    const streamResult = await invokeWithTimeout(() =>
-      client.request(reverseVoiceMethods.end, endParams) as Promise<VoiceStreamEndResult>,
-    );
-
-    return {
-      content: streamResult.content,
-      channelId: streamResult.channelId,
-      ...(streamResult.attachments ? { attachments: streamResult.attachments } : {}),
-      model: streamResult.model,
-      durationMs: streamResult.durationMs,
-    };
-  } catch (error) {
-    if (!cancelled) {
-      await sendCancel(sequence + 1, 'stream-error');
-    }
-    throw error;
+  } finally {
+    detachAbortListener?.();
   }
 }
 

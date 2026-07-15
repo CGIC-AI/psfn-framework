@@ -13,6 +13,7 @@ import type {
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
+  TelemetryVisibility,
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type {
@@ -95,6 +96,7 @@ export interface GatewayCorrelationParams {
   toolName?: string;
   toolCallId?: string;
   purpose?: string;
+  telemetryVisibility?: TelemetryVisibility;
   service?: string;
   process?: string;
   chargeLane?: ChargePolicyRuntimeLane;
@@ -716,6 +718,12 @@ export interface CompanionMessageSendParams {
   };
   /** Episode-bound lineage for a non-initial autonomous conversation reply. */
   correlation?: IcpConversationCorrelation;
+  /**
+   * Gateway-issued inbound message id this send directly answers. For room
+   * messages, the gateway may use the matching delivery receipt as a
+   * short-lived, one-shot stale-presence reply capability.
+   */
+  replyToMessageId?: string;
 }
 
 export interface CompanionMessageSendResult {

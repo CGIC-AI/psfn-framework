@@ -20,8 +20,6 @@ import { resolveInstalledAgentTurnTools } from '../../boundary/pi-agent/agent-lo
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { ShardFoldReviewController } from './fold-review.js';
-import { createBoundedSubagentLaunchTool } from './tools.js';
-import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -372,7 +370,7 @@ describe('ShardManager', () => {
     expect(promptSpy).toHaveBeenCalledTimes(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
   });
 
-  it('charges bounded subagent launches and nested shard execution with lineage', async () => {
+  it('charges shard execution with lineage', async () => {
     mockShardContent = 'charged shard response';
     const chargeEvents: Array<Record<string, unknown>> = [];
     eventBus.on('agent.charge', (event) => {
@@ -406,7 +404,7 @@ describe('ShardManager', () => {
         lane: 'interactive',
         runId: 'launch-request',
       }, async () => {
-        await manager.executeSubagent({
+        await manager.spawn({
           name: 'launch-charge',
           task: 'Do charged work',
         });
@@ -414,29 +412,18 @@ describe('ShardManager', () => {
       }),
     );
 
-    expect(chargeEvents.map((event) => event.surface)).toEqual([
-      'subagentLaunch',
-      'shardLaunch',
-    ]);
-    expect(chargeEvents[0].spentAfter).toBe(1);
-    expect(chargeEvents[1].spentAfter).toBe(8);
+    expect(chargeEvents.map((event) => event.surface)).toEqual(['shardLaunch']);
+    expect(chargeEvents[0].spentAfter).toBe(8);
     expect(chargeEvents[0].lineage).toEqual(expect.objectContaining({
-      runId: 'launch-request',
-      rootRunId: 'launch-request',
-    }));
-    expect(chargeEvents[1].lineage).toEqual(expect.objectContaining({
       runId: expect.stringMatching(/^shard-/),
       parentRunId: 'launch-request',
       rootRunId: 'launch-request',
     }));
     expect(parentSnapshot).toEqual(expect.objectContaining({
       spentByLane: expect.objectContaining({
-        interactive: 1,
         shard: 8,
       }),
-      directSpentByLane: expect.objectContaining({
-        interactive: 1,
-      }),
+      directSpentByLane: {},
       foldedSpentByLane: expect.objectContaining({
         shard: 8,
       }),
@@ -444,7 +431,7 @@ describe('ShardManager', () => {
         expect.objectContaining({
           disposition: 'folded',
           lineage: expect.objectContaining({
-            runId: chargeEvents[1].lineage.runId,
+            runId: chargeEvents[0].lineage.runId,
             parentRunId: 'launch-request',
             rootRunId: 'launch-request',
           }),
@@ -458,7 +445,6 @@ describe('ShardManager', () => {
       ],
       orphanedChildren: [],
       quotaSpentByLane: expect.objectContaining({
-        interactive: 1,
         shard: 8,
       }),
     }));
@@ -485,12 +471,12 @@ describe('ShardManager', () => {
       lane: 'interactive',
       runId: 'parent-run',
     }, async () => {
-      await manager.executeSubagent({
+      await manager.spawn({
         name: 'parent-fold',
         task: 'Charge once',
       });
       const afterFold = getRunChargeSnapshot();
-      const followUpCharge = manager.executeSubagent({
+      const followUpCharge = manager.spawn({
         name: 'parent-follow-up',
         task: 'Charge twice',
       });
@@ -498,24 +484,20 @@ describe('ShardManager', () => {
       return {
         afterFold,
         afterSecondShard: getRunChargeSnapshot(),
-        secondShardId: secondResult.subagentId,
+        secondShardId: secondResult.shardId,
       };
     });
 
     expect(outcome.afterFold).toEqual(expect.objectContaining({
       spentByLane: expect.objectContaining({
-        interactive: 1,
         shard: 8,
       }),
     }));
     expect(outcome.afterSecondShard).toEqual(expect.objectContaining({
       spentByLane: expect.objectContaining({
-        interactive: 2,
         shard: 16,
       }),
-      directSpentByLane: expect.objectContaining({
-        interactive: 2,
-      }),
+      directSpentByLane: {},
       foldedSpentByLane: expect.objectContaining({
         shard: 16,
       }),
@@ -531,7 +513,6 @@ describe('ShardManager', () => {
         }),
       ],
       quotaSpentByLane: expect.objectContaining({
-        interactive: 2,
         shard: 16,
       }),
     }));
@@ -563,33 +544,25 @@ describe('ShardManager', () => {
       lane: 'interactive',
       runId: 'parent-run-orphan',
     }, async () => {
-      await expect(manager.executeSubagent({
+      await expect(manager.spawn({
         name: 'failed-child',
         task: 'Charge and fail',
       })).rejects.toThrow('LLM failed before fold-back');
       return getRunChargeSnapshot();
     });
 
-    expect(chargeEvents.map((event) => event.surface)).toEqual([
-      'subagentLaunch',
-      'shardLaunch',
-    ]);
-    expect(chargeEvents[0].spentAfter).toBe(1);
-    expect(chargeEvents[1].spentAfter).toBe(8);
+    expect(chargeEvents.map((event) => event.surface)).toEqual(['shardLaunch']);
+    expect(chargeEvents[0].spentAfter).toBe(8);
     expect(parentSnapshot).toEqual(expect.objectContaining({
-      spentByLane: expect.objectContaining({
-        interactive: 1,
-      }),
-      directSpentByLane: expect.objectContaining({
-        interactive: 1,
-      }),
+      spentByLane: {},
+      directSpentByLane: {},
       foldedSpentByLane: {},
       foldBacks: [],
       orphanedChildren: [
         expect.objectContaining({
           disposition: 'orphaned',
           lineage: expect.objectContaining({
-            runId: chargeEvents[1].lineage.runId,
+            runId: chargeEvents[0].lineage.runId,
             parentRunId: 'parent-run-orphan',
             rootRunId: 'parent-run-orphan',
           }),
@@ -602,7 +575,6 @@ describe('ShardManager', () => {
         }),
       ],
       quotaSpentByLane: expect.objectContaining({
-        interactive: 1,
         shard: 8,
       }),
     }));
@@ -1472,7 +1444,90 @@ describe('ShardManager', () => {
     );
   });
 
-  it('stamps shard source provenance on shard memory writes and quarantines imports behind review', async () => {
+  it('stages shard memory writes with both companion identities without calling the core writer', async () => {
+    const memoryTool = makeTestTool('memory');
+    const foldReviewController = new ShardFoldReviewController(
+      join(dir, 'state', 'shard-fold-reviews.json'),
+    );
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryTool.tool],
+        extended: [],
+      }),
+      foldReviewController,
+    });
+
+    const result = await manager.spawn({ name: 'memory-write-review', task: 'test' });
+    const tools = agentRunConfigs.at(-1)?.tools as Array<{
+      name: string;
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const wrappedMemory = tools.find(tool => tool.name === 'memory');
+    if (!wrappedMemory) {
+      throw new Error('Expected wrapped memory tool to be present');
+    }
+
+    const writeResult = await wrappedMemory.execute('memory-write-call', {
+      action: 'write',
+      text: 'Partner needs follow-up after the deploy.',
+      type: 'emotional',
+      tags: 'relationship,partner',
+      sensitivity: 'intimate',
+    });
+
+    expect(memoryTool.execute).not.toHaveBeenCalled();
+    expect(writeResult).toEqual(expect.objectContaining({
+      details: expect.objectContaining({
+        mutationWorkflow: 'fold_review_only',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        foldReview: expect.objectContaining({
+          outputs: expect.arrayContaining([
+            expect.objectContaining({
+              source: 'memory_write',
+              provenance: expect.objectContaining({
+                coreCompanionId: 'companion-test',
+                shardCompanionId: `companion-test::${result.shardId}`,
+                shardId: result.shardId,
+                source: 'memory_write',
+                sourceToolName: 'memory',
+                toolCallId: 'memory-write-call',
+              }),
+            }),
+          ]),
+        }),
+      }),
+    }));
+
+    const review = await manager.getFoldReview(result.shardId);
+    expect(review).toMatchObject({
+      lineage: {
+        coreCompanionId: 'companion-test',
+        shardCompanionId: `companion-test::${result.shardId}`,
+      },
+      memoryItems: [
+        expect.objectContaining({
+          output: expect.objectContaining({
+            source: 'memory_write',
+            provenance: expect.objectContaining({
+              coreCompanionId: 'companion-test',
+              shardCompanionId: `companion-test::${result.shardId}`,
+            }),
+          }),
+        }),
+      ],
+    });
+  });
+
+  it('quarantines imports behind review with shard provenance', async () => {
     const memoryTool = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
@@ -1496,22 +1551,13 @@ describe('ShardManager', () => {
     const wrappedMemory = tools.find((tool) => tool.name === 'memory');
     expect(wrappedMemory).toBeDefined();
 
-    await wrappedMemory?.execute('mem-call', { action: 'write', text: 'x', type: 'semantic' });
     const importResult = await wrappedMemory?.execute('import-call', {
       action: 'import',
       records: [{ text: 'x', type: 'semantic', tags: 'archive' }],
       source: 'backup',
     });
 
-    expect(memoryTool.execute).toHaveBeenCalledWith(
-      'mem-call',
-      expect.objectContaining({
-        action: 'write',
-        __psfnShardSource: `shard:${result.shardId}`,
-      }),
-      undefined,
-    );
-    expect(memoryTool.execute).toHaveBeenCalledTimes(1);
+    expect(memoryTool.execute).not.toHaveBeenCalled();
     expect(importResult).toEqual(expect.objectContaining({
       content: expect.arrayContaining([
         expect.objectContaining({
@@ -2265,168 +2311,5 @@ describe('ShardManager', () => {
     expect(manager.getActiveCount()).toBe(0);
     // Failure handoffs stay off the transcript entirely.
     expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
-  });
-});
-
-describe('createBoundedSubagentLaunchTool', () => {
-  let dir: string;
-  let sessionStore: SessionStore;
-  let eventBus: EventBus;
-
-  beforeEach(() => {
-    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
-    dir = mkdtempSync(join(tmpdir(), 'psfn-shard-tool-'));
-    sessionStore = new SessionStore(dir);
-    eventBus = new EventBus();
-    mockShardContent = 'shard response';
-    mockShardDelayMs = 0;
-    mockShardError = null;
-    promptSpy.mockClear();
-    agentRunConfigs.length = 0;
-    restoreDefaultPromptMock();
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-    resetRunChargeRollingWindowForTests();
-  });
-
-  it('returns a valid AgentTool', () => {
-    const manager = new ShardManager({
-      eventBus,
-      llmProvider: mockLLM(),
-      sessionStore,
-      embeddingService: null,
-      memoryProvider: null,
-      config: TEST_CONFIG,
-      parentSystemPrompt: 'test',
-    });
-
-    const tool = createBoundedSubagentLaunchTool(manager);
-
-    expect(tool.name).toBe('spawn_subagent');
-    expect(tool.description).toBeTruthy();
-    expect(tool.label).toBe('spawn_subagent');
-    expect(tool.parameters).toBeDefined();
-    expect(typeof tool.execute).toBe('function');
-  });
-
-  it('formats result content with stats', async () => {
-    mockShardContent = 'tool output';
-    const manager = new ShardManager({
-      eventBus,
-      llmProvider: mockLLM(),
-      sessionStore,
-      embeddingService: null,
-      memoryProvider: null,
-      config: TEST_CONFIG,
-      parentSystemPrompt: 'test',
-    });
-
-    const tool = createBoundedSubagentLaunchTool(manager);
-    const result = await tool.execute('call-1', { name: 'test-tool', task: 'do something' });
-
-    const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('Bounded subagent "test-tool" completed');
-    expect(text).toContain('1 turn(s)');
-    expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
-    expect(text).toContain('[State reason: completed]');
-    expect(text).not.toContain('tool output');
-    expect(text).toContain('do not forward raw worker text directly to a partner');
-  });
-
-  it('surfaces explicit lifecycle failure diagnostics from bounded subagent results', async () => {
-    const executeSubagent = vi.fn(async () => ({
-      subagentId: 'subagent-failure',
-      name: 'degraded-shard',
-      content: 'partial output',
-      model: 'mock-model',
-      inputTokens: 1,
-      outputTokens: 2,
-      durationMs: 33,
-      turns: 1,
-      lifecycleState: 'offline' as const,
-      health: 'failed' as const,
-      stateReason: 'heartbeat_timeout',
-      failureReason: 'Heartbeat stale for 4200ms exceeded recovery window (4000ms).',
-      capabilities: ['general'],
-      requiredCapabilities: [],
-    }));
-    const tool = createBoundedSubagentLaunchTool({ executeSubagent } as unknown as SubagentExecutionPort);
-
-    const result = await tool.execute('call-failure', {
-      name: 'degraded-shard',
-      task: 'diagnostic run',
-    });
-
-    const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('[State reason: heartbeat_timeout]');
-    expect(text).toContain('[Failure reason: Heartbeat stale for 4200ms exceeded recovery window (4000ms).]');
-  });
-
-  it('passes source request context into bounded subagent launches', async () => {
-    const executeSubagent = vi.fn(async () => ({
-      subagentId: 'subagent-test',
-      name: 'ctx',
-      content: 'ok',
-      model: 'mock-model',
-      inputTokens: 0,
-      outputTokens: 0,
-      durationMs: 1,
-      turns: 1,
-      lifecycleState: 'offline' as const,
-      health: 'healthy' as const,
-      stateReason: 'completed',
-      capabilities: ['general'],
-      requiredCapabilities: [],
-    }));
-    const tool = createBoundedSubagentLaunchTool({ executeSubagent } as unknown as SubagentExecutionPort);
-
-    await runWithRequestContext(
-      {
-        channelId: 'api:source-context',
-        requestId: 'req-source-context',
-        turnId: 'turn-source-context',
-      },
-      async () => {
-        await tool.execute('call-context', {
-          name: 'ctx',
-          task: 'Inspect source context',
-        });
-      },
-    );
-
-    expect(executeSubagent).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'ctx',
-      task: 'Inspect source context',
-      sourceContext: {
-        channelId: 'api:source-context',
-        requestId: 'req-source-context',
-        turnId: 'turn-source-context',
-      },
-    }));
-  });
-
-  it('returns error content on failure', async () => {
-    promptSpy.mockImplementation(async function () {
-      throw new Error('boom');
-    });
-
-    const manager = new ShardManager({
-      eventBus,
-      llmProvider: mockLLM(),
-      sessionStore,
-      embeddingService: null,
-      memoryProvider: null,
-      config: TEST_CONFIG,
-      parentSystemPrompt: 'test',
-    });
-
-    const tool = createBoundedSubagentLaunchTool(manager);
-    const result = await tool.execute('call-2', { name: 'fail', task: 'test' });
-
-    const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('Bounded subagent error');
-    expect(result.details.isError).toBe(true);
   });
 });

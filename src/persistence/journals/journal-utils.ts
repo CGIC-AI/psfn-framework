@@ -4,11 +4,13 @@ export {
 
 export {
   appendJournalEntry,
+  fingerprintJournalArchive,
   parseJournalText,
   persistQuarantinedEntries,
   quarantineSidecarPath,
   readJournalFile,
   readJournalFirstEntry,
+  readJournalEntriesBefore,
   readJournalTailEntries,
   scanJournalLinesBackward,
   scanJournalFileMetadata,
@@ -38,6 +40,7 @@ export {
 
 export type {
   JournalFileMetadata,
+  JournalBoundedReadStats,
   JournalIntegrityVerificationResult,
   JournalMarkerEntry,
   JournalTurnTombstoneEntry,
@@ -45,6 +48,8 @@ export type {
   LegacyChatSourceRecord,
   ParsedLegacyChatSource,
   QuarantinedJournalEntry,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,

@@ -4,6 +4,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { formatActiveDate } from '../../../shared/time/active-timezone.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { sleep } from '../../../shared/utils/timing.js';
 
@@ -191,7 +192,7 @@ export class VaultOps implements VaultOperations {
   }
 
   async daily(opts?: { content?: string }): Promise<VaultDailyResult> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = formatActiveDate(new Date());
 
     if (opts?.content) {
       const args = [

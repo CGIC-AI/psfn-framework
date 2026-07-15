@@ -85,6 +85,11 @@ import {
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
 import {
+  MISSING_IMAGE_ATTACHMENT_CORRECTION,
+  rejectsMissingImageAttachmentClaim,
+} from '../../../primitives/images/attachment-claim-guard.js';
+import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
+import {
   invokeAgentForTurn,
   type AgentInvocationMutableState,
   type AgentInvocationResult,
@@ -398,6 +403,7 @@ export interface TurnExecutionRuntime {
     continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
     recoveryResponse?: AgentResponse,
+    runtimeFallbackProvenance?: import('../../../shared/contracts/runtime.js').RuntimeFallbackProvenance,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {
@@ -1165,11 +1171,15 @@ export async function handleMessageForTurn(
     const {
       firstTokenAt,
       turnUsage,
-      responseText,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
+      runtimeFallbackProvenance,
       turnIntent,
     } = invocationResult;
+    // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
+    // applied where the model's turn text is accepted so persistence,
+    // channel dispatch, and TTS all see clean output.
+    const responseText = stripLeadingHistoryStamps(invocationResult.responseText);
     const noReplyDecision = recoveredResponse?.metadata.noReply
       ?? runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
@@ -1308,6 +1318,24 @@ export async function handleMessageForTurn(
           },
         });
 
+    if (rejectsMissingImageAttachmentClaim({
+      responseText: safeResponseText,
+      attachmentCount: responseAttachments.length,
+    })) {
+      safeResponseText = MISSING_IMAGE_ATTACHMENT_CORRECTION;
+      log.warn('Rejected assistant image-attachment claim without a current-turn attachment', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.image_attachment_claim.rejected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_attachment_claim.rejected'),
+      });
+    }
+
     // Fail loud, never silently: if a charged image deliverable was produced this
     // turn but is not riding out on the reply, surface it. The response_control
     // guard should prevent the no-reply case; this is the last-resort audit trail.
@@ -1378,6 +1406,7 @@ export async function handleMessageForTurn(
         durationMs: completedAt - startTime,
         turnId,
         requestId,
+        ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),
         ...(message.routing?.icpCorrelation
           ? { icpCorrelation: message.routing.icpCorrelation }
           : {}),
@@ -1417,6 +1446,7 @@ export async function handleMessageForTurn(
         continuitySubjectKey,
         preTurnState.emotionSnapshot,
         durableRecoveryResponse,
+        runtimeFallbackProvenance,
       );
       durableRecoveryResponsePersisted = durableRecoveryResponse !== undefined;
     }
@@ -1522,7 +1552,6 @@ export async function handleMessageForTurn(
         runtime.sessionManager.appendSystemNote(message.channelId, nudge);
       }
     }
-
     await schedulePostTurnWork({
       runtime,
       message,

@@ -214,10 +214,10 @@ export function parseIcpPeerAvailabilityReadParams(value: unknown): { peerCompan
 export function parseIcpOwnAvailabilityReadParams(value: unknown): IcpOwnAvailabilityReadParams {
   if (!isRecord(value)) throw new Error('ICP own availability params must be an object');
   assertNoUnknownKeys(value, ['companionId'], 'ICP own availability params');
-  if (value.companionId !== undefined) {
-    requireUuid(value.companionId, 'companionId');
-  }
-  return value.companionId === undefined ? {} : { companionId: value.companionId };
+  const companionId = value.companionId === undefined
+    ? undefined
+    : requireUuid(value.companionId, 'companionId');
+  return companionId === undefined ? {} : { companionId };
 }
 
 export function parseIcpInitiationHandoffPrepareParams(value: unknown): {

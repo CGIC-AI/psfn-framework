@@ -63,6 +63,7 @@ import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ReflectionNudgeTracker } from '../../faculties/skills/reflection-nudge.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
@@ -1147,6 +1148,12 @@ export class SubstrateAgent {
 
   setInternalStateStore(store: InternalStateStorePort | null): void {
     this.internalStateStore = store;
+  }
+
+  setIntrospectionTurnSensitivityDecisions(
+    decisions: IntrospectionTurnSensitivityDecisions | null,
+  ): void {
+    this.turnSupportRuntime.setIntrospectionTurnSensitivityDecisions(decisions);
   }
 
   /** Restores a validated persisted snapshot as the current running state (startup rehydration). */

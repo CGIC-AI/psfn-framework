@@ -16,7 +16,10 @@ import {
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
-import { saveChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import {
+  loadChargePolicySeedDefaults,
+  saveChargePolicyConfig,
+} from '../../../system/config/charge-policy-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import {
   loadSchedulerSeedDefaults,
@@ -1223,6 +1226,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
       fatigue: makeTestFatiguePolicyConfig(),
+      icpCostBreaker: loadChargePolicySeedDefaults().icpCostBreaker,
     });
 
     const result = hydrateCanonicalStartupConfig(config, {

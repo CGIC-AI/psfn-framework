@@ -15,6 +15,7 @@ import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
+import type { SessionTailCachePort } from '../../persistence/sessions/session-tail-cache-port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -83,8 +84,11 @@ import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sideca
 import {
   resolveContactsDir,
   resolveContactBlockListPath,
+  resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
+import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
+import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -159,6 +163,7 @@ export interface AgentCoreRuntime {
   memoryStore: MemoryStorePort;
   contactStore: ContactStorePort;
   coreMemoryStore: CoreMemoryStorePort;
+  introspectionConsentStore: IntrospectionConsentStore;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
@@ -167,6 +172,8 @@ export interface AgentCoreRuntime {
   personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
   appCache: AppCache;
+  /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
+  sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
@@ -500,11 +507,21 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pendingFollowUpProvider: null,
     behavioralPatternProvider: null,
   });
+  const introspectionConsentStore = new IntrospectionConsentStore(
+    resolveIntrospectionConsentLedgerPath(pathSnapshot.companionDataDir),
+  );
+  // Read the complete append-only chain at startup. Corruption or tampering is
+  // fatal; an absent ledger remains safely unconfigured/disabled.
+  introspectionConsentStore.load();
+  const introspectionTurnSensitivityDecisions = new IntrospectionTurnSensitivityDecisions();
+  agentLoop.setIntrospectionTurnSensitivityDecisions(introspectionTurnSensitivityDecisions);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
     config,
     concernStore: intentionRuntime.concernStore,
+    introspectionConsentStore,
+    introspectionTurnSensitivityDecisions,
   });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
@@ -557,6 +574,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
@@ -565,6 +583,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     personaPreamble,
     imageVisionReviewer,
     appCache,
+    sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),

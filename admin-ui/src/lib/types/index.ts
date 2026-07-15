@@ -115,6 +115,7 @@ export type {
   AdminPromptDetailData,
   AdminPromptListData,
   AdminSessionListData,
+  AdminSessionDetailData,
   AdminSessionMessagesData,
   AdminSessionRouteListData,
   AdminSessionRouteResetData,
@@ -123,6 +124,7 @@ export type {
   AdminSessionSearchData,
   AdminSessionSearchHitView,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
   AdminPromptLoomData,
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
@@ -323,7 +325,10 @@ export interface AdminMemoryScopeMutationResult {
 }
 
 // Sessions
-export type ChannelInfo = CanonicalAdminSessionListData['channels'][number];
+export type ChannelInfo = CanonicalAdminSessionListData['channels'][number] & {
+  linkedContactId?: string;
+  linkedContactName?: string;
+};
 
 export interface SessionEntry {
   id: number;
@@ -1164,13 +1169,16 @@ export interface AuditEntry {
   id: string;
   timestamp: number;
   source: AuditHistorySource;
-  sourceRecordId?: string;
   actionType: AuditActionType;
   decision: AuditDecision;
   narrative: string;
   details?: string;
   actor?: 'operator' | 'companion';
-  raw?: Record<string, unknown>;
+}
+
+export interface AuditHistoryDetailData {
+  entry: AuditEntry;
+  raw: Record<string, unknown> | null;
 }
 
 export interface AuditFilters {

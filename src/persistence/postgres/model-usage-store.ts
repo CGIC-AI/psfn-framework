@@ -105,6 +105,7 @@ interface ModelUsageEventRow {
   call_kind: ModelUsageCallKind;
   call_type: ModelUsageEvent['attribution']['callType'];
   purpose: string;
+  telemetry_visibility: NonNullable<ModelUsageEvent['telemetryVisibility']>;
   origin_type: ModelUsageEvent['attribution']['originType'] | null;
   origin_stage: string | null;
   service: string | null;
@@ -357,6 +358,14 @@ function optionalText(value: string | undefined): string | undefined {
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeTelemetryVisibility(
+  value: unknown,
+): NonNullable<ModelUsageEvent['telemetryVisibility']> {
+  if (value === undefined || value === 'operator_visible') return 'operator_visible';
+  if (value === 'companion_private') return 'companion_private';
+  throw new Error(`Unsupported model usage telemetry visibility: ${String(value)}`);
+}
+
 function asNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim().length > 0) {
@@ -583,6 +592,8 @@ function normalizeEvent(
   const effectiveCostUsd = accounting.effectiveCost.total;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
   const attempt = inputNonNegativeInteger(input.attempt, 'attempt');
+  const telemetryVisibility = normalizeTelemetryVisibility(input.telemetryVisibility);
+  const operatorVisible = telemetryVisibility === 'operator_visible';
   const declaredCompanionId = optionalText(input.attribution.companionId);
   if (!expectedCompanionId && !declaredCompanionId) {
     throw new Error('Fleet model usage events require an explicit companionId attribution');
@@ -596,6 +607,17 @@ function normalizeEvent(
   const attribution = normalizeModelUsageAttribution({
     ...input.attribution,
     ...(expectedCompanionId ? { companionId: expectedCompanionId } : {}),
+    // companion_private calls (e.g. blinded introspection audits) must not persist
+    // turn/request/channel/tool linkage that could re-identify the private context.
+    ...(operatorVisible
+      ? {}
+      : {
+          turnId: undefined,
+          requestId: undefined,
+          channelId: undefined,
+          toolName: undefined,
+          toolCallId: undefined,
+        }),
   });
 
   return {
@@ -612,6 +634,7 @@ function normalizeEvent(
     status: input.status,
     settlement: input.settlement ?? (input.status === 'success' ? 'complete' : 'unknown'),
     callKind: input.callKind,
+    telemetryVisibility,
     attribution,
     provider: normalizeText(input.provider, 'unknown'),
     model: normalizeText(input.model, 'unknown'),
@@ -652,6 +675,7 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     status: row.status,
     settlement: row.settlement,
     callKind: row.call_kind,
+    telemetryVisibility: normalizeTelemetryVisibility(row.telemetry_visibility),
     attribution: normalizeModelUsageAttribution({
       companionId: row.companion_id,
       sessionId: row.session_id,
@@ -1531,7 +1555,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         effective_input_cost_usd, effective_output_cost_usd,
         effective_cache_read_cost_usd, effective_cache_write_cost_usd, effective_cost_usd,
         cost_source, currency, stop_reason, error_code, error_message, metadata_json,
-        event_fingerprint
+        event_fingerprint, telemetry_visibility
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
@@ -1547,7 +1571,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         $55, $56, $57, $58, $59,
         $60, $61, $62, $63, $64,
         $65, $66, $67, $68, $69, $70::jsonb,
-        $71
+        $71, $72
       )
       ON CONFLICT (logical_call_id, attempt) DO UPDATE
         SET id = model_usage_events.id
@@ -1625,6 +1649,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.errorMessage ?? null,
       JSON.stringify(event.metadata),
       eventFingerprint(event),
+      event.telemetryVisibility,
       ])).rows.at(0);
       if (!inserted) {
         throw new Error(
@@ -2080,6 +2105,7 @@ const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<strin
   sortBy: new Set(MODEL_USAGE_GROUP_SORTS),
   sortDirection: new Set(MODEL_USAGE_SORT_DIRECTIONS),
   eventOrder: new Set(MODEL_USAGE_EVENT_ORDERS),
+  telemetryVisibility: new Set(['operator_visible', 'companion_private']),
 };
 const GROUP_DIMENSION_SET: ReadonlySet<string> = new Set(MODEL_USAGE_GROUP_DIMENSIONS);
 const QUERY_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
@@ -2190,6 +2216,7 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
   if (query.untilMs !== undefined) push('recorded_at_ms <', query.untilMs);
   if (query.provider) push('provider =', query.provider);
   if (query.model) push('model =', query.model);
+  if (query.telemetryVisibility) push('telemetry_visibility =', query.telemetryVisibility);
   const dimensionFilters: ReadonlyArray<[ModelUsageGroupDimension, unknown]> = [
     ['companionId', query.companionId],
     ['sessionId', query.sessionId],

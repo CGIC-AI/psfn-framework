@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
-import { sanitizeExternalTelemetryIngested } from './server-telemetry-transport.js';
+import {
+  sanitizeExternalTelemetryIngested,
+  sanitizeGardenQueueChanged,
+} from './server-telemetry-transport.js';
 
 function telemetryEvent(payload: Record<string, unknown>): ExternalTelemetryEvent {
   return {
@@ -68,5 +71,18 @@ describe('sanitizeExternalTelemetryIngested (Sprint-10 H5 defense-in-depth)', ()
     expect(typeof payload.detail).toBe('string');
     expect((payload.detail as string).length).toBeLessThan(huge.length);
     expect((payload.detail as string).length).toBeLessThanOrEqual(257);
+  });
+});
+
+describe('sanitizeGardenQueueChanged', () => {
+  it('projects queue refresh events to a coarse signal with no queue contents', () => {
+    const sanitized = sanitizeGardenQueueChanged({
+      queue: 'contact-approvals',
+      timestamp: 1_789_000_000_000,
+      entryId: 'private-entry-id',
+      preview: 'private message text',
+    } as never);
+
+    expect(sanitized).toEqual({ queue: 'contact-approvals' });
   });
 });

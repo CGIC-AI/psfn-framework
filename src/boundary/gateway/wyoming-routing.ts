@@ -1,6 +1,8 @@
 import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { VoiceStreamMetadata } from './protocol.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { createGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
 
 interface WyomingStreamMetadataFields {
   source?: string;
@@ -20,7 +22,7 @@ export function applyWyomingRoutingPolicy(
   message: SubstrateMessage,
   metadata: VoiceStreamMetadata | undefined,
   config: WyomingShardRoutingConfig,
-  companionId: string,
+  companionId: CompanionId,
 ): SubstrateMessage {
   const evaluation = resolveWyomingRoutingMetadata(message, metadata);
   if (!evaluation.isWyoming) {
@@ -59,10 +61,15 @@ export function applyWyomingRoutingPolicy(
     routing: {
       ...(message.routing ?? {}),
       source: 'wyoming',
-      gateway: {
-        schemaVersion: 1,
+      gateway: createGatewayRoutingEnvelope({
         companionId,
-      },
+        ...(message.routing?.gateway?.shard
+          ? { shard: message.routing.gateway.shard }
+          : {}),
+        ...(message.routing?.gateway?.subagentAddress
+          ? { subagentAddress: message.routing.gateway.subagentAddress }
+          : {}),
+      }),
       wyoming: {
         ...routing,
         shardDelegation: {

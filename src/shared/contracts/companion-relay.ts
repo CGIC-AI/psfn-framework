@@ -11,6 +11,7 @@ import type { SatelliteTelemetryScope } from './satellite-registry.js';
  * HTTP surface (served by the gateway-hosted API edge):
  * - `GET  /v1/companion/events`                 — authenticated SSE stream
  * - `POST /v1/companion/approvals/{id}`         — approval decision
+ * - `POST /v1/companion/stimuli`                — typed physical interaction
  * - `GET  /v1/companion/artifacts/{id}/preview` — read-only artifact preview
  *
  * These payload shapes mirror hub protocol messages 1:1 — do not deviate.
@@ -128,6 +129,40 @@ export interface CompanionApprovalDecisionRequest {
 export interface CompanionApprovalDecisionResponse {
   id: string;
   status: string;
+}
+
+export const COMPANION_TOUCH_STIMULUS_KINDS = [
+  'headpat',
+  'petting',
+  'hug',
+  'kiss',
+] as const;
+
+export type CompanionTouchStimulusKind = typeof COMPANION_TOUCH_STIMULUS_KINDS[number];
+
+export const COMPANION_TOUCH_REGIONS = ['head', 'cheek', 'body'] as const;
+
+export type CompanionTouchRegion = typeof COMPANION_TOUCH_REGIONS[number];
+
+/** Body of `POST /v1/companion/stimuli`. No caller-authored prompt text is accepted. */
+export interface CompanionTouchStimulusRequest {
+  satelliteId: string;
+  endpointId: string;
+  claimType: string;
+  sessionId: string;
+  deviceId: string;
+  kind: CompanionTouchStimulusKind;
+  region: CompanionTouchRegion;
+  count: number;
+  durationMs: number;
+  responseMode: 'respond' | 'observe';
+}
+
+/** 200 body of `POST /v1/companion/stimuli`. */
+export interface CompanionTouchStimulusResponse {
+  status: 'accepted';
+  messageId: string;
+  response?: string;
 }
 
 /**

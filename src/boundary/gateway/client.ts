@@ -5,6 +5,7 @@
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import {
@@ -54,6 +55,8 @@ import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js'
 import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
+import { isGardenQueueName, type GardenQueueName } from '../../shared/event-bus.js';
+import { isRecord } from '../../shared/utils/types.js';
 import type {
   GitCommitResult,
   GitDiffResult,
@@ -108,7 +111,6 @@ import type {
   RuntimeHealthResult,
   GatewayCredentialPresenceResult,
   RpcSubstrateMessage,
-  VoiceStreamStartParams,
   VoiceStreamChunkParams,
   VoiceStreamEndParams,
   VoiceStreamCancelParams,
@@ -172,6 +174,13 @@ import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conver
 import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
+import {
+  createCompanionId,
+  type CompanionId,
+  type OptionalCompanionRoutingBinding,
+} from '../../shared/routing/companion-id.js';
+import { parseGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
@@ -179,7 +188,44 @@ const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
 const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 
-export interface GatewayClientOptions {
+function assertRpcSubstrateMessage(
+  value: unknown,
+  options: { fieldName: string; allowEmptyContent?: boolean },
+): asserts value is RpcSubstrateMessage {
+  const { fieldName, allowEmptyContent = false } = options;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  for (const field of ['id', 'channelId', 'authorId', 'authorName'] as const) {
+    if (typeof value[field] !== 'string' || !value[field].trim()) {
+      throw new Error(`${fieldName}.${field} must be a non-empty string`);
+    }
+  }
+  if (typeof value.content !== 'string' || (!allowEmptyContent && !value.content.trim())) {
+    throw new Error(
+      `${fieldName}.content must be ${allowEmptyContent ? 'a string' : 'a non-empty string'}`,
+    );
+  }
+  if (typeof value.channelType !== 'string'
+    || !CHANNEL_TYPES.some(channelType => channelType === value.channelType)) {
+    throw new Error(`${fieldName}.channelType is not supported`);
+  }
+  const timestamp = value.timestamp;
+  if (!(timestamp instanceof Date) && typeof timestamp !== 'string') {
+    throw new Error(`${fieldName}.timestamp must be a Date or ISO string`);
+  }
+  const timestampMs = timestamp instanceof Date
+    ? timestamp.getTime()
+    : Date.parse(timestamp);
+  if (!Number.isFinite(timestampMs)) {
+    throw new Error(`${fieldName}.timestamp must be valid`);
+  }
+  if (!isRecord(value.routing)) {
+    throw new Error(`${fieldName}.routing must be an object`);
+  }
+}
+
+export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   voiceStreamQueueSize?: number;
   voiceStreamOverflowPolicy?: QueueOverflowPolicy;
   sessionIntegritySocketPath?: string;
@@ -191,7 +237,7 @@ export interface GatewayClientOptions {
    * (COMPANION_ID via load-config). Stamped on gateway.client.identify and on
    * LLM correlation params so the gateway can verify companion identity.
    */
-  companionId?: string;
+  companionId?: CompanionId;
   /** Fleet-scoped proof paired with companionId during gateway identification. */
   companionAuthToken?: string;
   /** Role-bound proof exposed only to the isolated session-integrity worker. */
@@ -247,19 +293,24 @@ function buildOutboundUsageCorrelation(
   const canonicalIcpChargeLane = resolvedCorrelation?.icpCorrelation
     ? resolvedCorrelation.chargeLane
     : undefined;
+  // #49: companion_private work (e.g. blinded introspection audits) must not
+  // carry re-identifying turn/request/channel/tool linkage to the gateway. The
+  // visibility flag still rides along so downstream telemetry stays filtered.
+  const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
   return {
     ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
-    ...(resolvedCorrelation?.sessionId ? { sessionId: resolvedCorrelation.sessionId } : {}),
-    ...(resolvedCorrelation?.turnId ? { turnId: resolvedCorrelation.turnId } : {}),
-    ...(resolvedCorrelation?.requestId ? { requestId: resolvedCorrelation.requestId } : {}),
-    ...(resolvedCorrelation?.channelId ? { channelId: resolvedCorrelation.channelId } : {}),
+    ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.turnId ? { turnId: resolvedCorrelation.turnId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.requestId ? { requestId: resolvedCorrelation.requestId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.channelId ? { channelId: resolvedCorrelation.channelId } : {}),
     ...(resolvedCorrelation?.channelType ? { channelType: resolvedCorrelation.channelType } : {}),
     ...(resolvedCorrelation?.callType ? { callType: resolvedCorrelation.callType } : {}),
     ...(resolvedCorrelation?.originType ? { originType: resolvedCorrelation.originType } : {}),
     ...(resolvedCorrelation?.originStage ? { originStage: resolvedCorrelation.originStage } : {}),
-    ...(resolvedCorrelation?.toolName ? { toolName: resolvedCorrelation.toolName } : {}),
-    ...(resolvedCorrelation?.toolCallId ? { toolCallId: resolvedCorrelation.toolCallId } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.toolName ? { toolName: resolvedCorrelation.toolName } : {}),
+    ...(!companionPrivate && resolvedCorrelation?.toolCallId ? { toolCallId: resolvedCorrelation.toolCallId } : {}),
     ...(resolvedCorrelation?.purpose ? { purpose: resolvedCorrelation.purpose } : {}),
+    ...(companionPrivate ? { telemetryVisibility: 'companion_private' as const } : {}),
     ...(resolvedCorrelation?.service ? { service: resolvedCorrelation.service } : {}),
     ...(resolvedCorrelation?.process ? { process: resolvedCorrelation.process } : {}),
     ...(canonicalIcpChargeLane
@@ -295,7 +346,7 @@ function buildOutboundUsageCorrelation(
 interface VoiceStreamState {
   correlationId: string;
   streamId: string;
-  baseMessage: RpcSubstrateMessage;
+  baseMessage: SubstrateMessage;
   expectedSequence: number;
   chunkQueue: BoundedQueue<string>;
   chunks: string[];
@@ -338,7 +389,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
-  private readonly companionId?: string;
+  private readonly companionId?: CompanionId;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -347,11 +398,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.conn = conn;
     this.embeddingDims = embeddingDims;
     if (options.companionId !== undefined) {
-      const trimmed = options.companionId.trim();
-      if (!trimmed) {
-        throw new Error('GatewayClient companionId must be a non-empty string when provided');
-      }
-      this.companionId = trimmed;
+      this.companionId = createCompanionId(options.companionId, 'GatewayClient companionId');
     }
     if (options.companionAuthToken !== undefined) {
       const trimmed = options.companionAuthToken.trim();
@@ -517,7 +564,6 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
-        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
       }) as LLMChatResult;
@@ -688,8 +734,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     channelId: string,
     content: string,
     authorName?: string,
-    correlation?: IcpConversationCorrelation,
+    correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
   ): Promise<CompanionMessageSendResult> {
+    const correlation = typeof correlationOrReplyToMessageId === 'object'
+      ? correlationOrReplyToMessageId
+      : undefined;
+    const replyToMessageId = typeof correlationOrReplyToMessageId === 'string'
+      ? correlationOrReplyToMessageId
+      : correlation?.messageId;
     const messageId = correlation ? deriveIcpTransportMessageId(correlation) : undefined;
     return await this.rpcInstance.request('companion.message.send', {
       channelId,
@@ -697,6 +749,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(authorName ? { authorName } : {}),
       ...(correlation ? { correlation } : {}),
       ...(messageId ? { messageId } : {}),
+      ...(replyToMessageId ? { replyToMessageId } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
   }
@@ -1212,6 +1265,17 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
+  /** Coarse queue invalidation relayed from the gateway approval boundary. */
+  onGardenQueueChanged(handler: (queue: GardenQueueName) => void): () => void {
+    return this.onNotification('garden.queue.changed', (params) => {
+      if (!isRecord(params) || !isGardenQueueName(params.queue)) {
+        log.warn('Rejected invalid garden.queue.changed notification');
+        return;
+      }
+      handler(params.queue);
+    });
+  }
+
   /** Inbound peer-companion messages (gateway `companion.message` lane, W6). */
   onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): () => void {
     return this.onNotification('companion.message', (params) => {
@@ -1389,7 +1453,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
-  private async dispatchHandleMessage(message: RpcSubstrateMessage): Promise<VoiceHandleMessageResult> {
+  private async dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult> {
     if (!this.handleMessageHandler) {
       throw new Error('No voice.handleMessage handler registered');
     }
@@ -1439,17 +1503,46 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return await this.apiHealthHandler();
   }
 
-  private handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult {
-    const key = this.voiceStreamKey(params.correlationId, params.streamId);
+  private handleVoiceStreamStart(params: unknown): VoiceStreamAckResult {
+    if (!isRecord(params)) {
+      throw new Error('voice.stream.start params must be an object');
+    }
+    const correlationId = typeof params.correlationId === 'string'
+      ? params.correlationId.trim()
+      : '';
+    const streamId = typeof params.streamId === 'string' ? params.streamId.trim() : '';
+    if (!correlationId || correlationId !== params.correlationId) {
+      throw new Error('voice.stream.start params.correlationId must be a canonical non-empty string');
+    }
+    if (!streamId || streamId !== params.streamId) {
+      throw new Error('voice.stream.start params.streamId must be a canonical non-empty string');
+    }
+    if (typeof params.sequence !== 'number'
+      || !Number.isSafeInteger(params.sequence)
+      || params.sequence < 0) {
+      throw new Error('voice.stream.start params.sequence must be a non-negative safe integer');
+    }
+    if (params.metadata !== undefined && !isRecord(params.metadata)) {
+      throw new Error('voice.stream.start params.metadata must be an object when provided');
+    }
+    if (!Object.hasOwn(params, 'message')) {
+      throw new Error('voice.stream.start params.message is required');
+    }
+    const message = this.deserializeMessage(params.message, {
+      fieldName: 'voice.stream.start params.message',
+      allowEmptyContent: true,
+    });
+    const sequence = params.sequence;
+    const key = this.voiceStreamKey(correlationId, streamId);
     if (this.voiceStreams.has(key)) {
       throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
     }
 
     const state: VoiceStreamState = {
-      correlationId: params.correlationId,
-      streamId: params.streamId,
-      baseMessage: params.message,
-      expectedSequence: params.sequence + 1,
+      correlationId,
+      streamId,
+      baseMessage: message,
+      expectedSequence: sequence + 1,
       chunkQueue: new BoundedQueue<string>({
         maxSize: this.voiceStreamQueueSize,
         overflowPolicy: this.voiceStreamOverflowPolicy,
@@ -1460,7 +1553,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     };
     this.voiceStreams.set(key, state);
 
-    return this.streamAck(state, params.sequence, true);
+    return this.streamAck(state, sequence, true);
   }
 
   private handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult {
@@ -1582,9 +1675,31 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
   }
 
-  private deserializeMessage(message: RpcSubstrateMessage): SubstrateMessage {
+  private deserializeMessage(
+    message: unknown,
+    options: { fieldName?: string; allowEmptyContent?: boolean } = {},
+  ): SubstrateMessage {
+    const fieldName = options.fieldName ?? 'voice.handleMessage params.message';
+    assertRpcSubstrateMessage(message, {
+      fieldName,
+      ...(options.allowEmptyContent ? { allowEmptyContent: true } : {}),
+    });
+    const gatewayRouting = parseGatewayRoutingEnvelope(
+      message.routing?.gateway,
+      `${fieldName}.routing.gateway`,
+    );
+    if (this.companionId && gatewayRouting.companionId !== this.companionId) {
+      throw new Error(
+        `${fieldName} routing companionId does not match this gateway client binding: `
+        + `expected ${JSON.stringify(this.companionId)}, got ${JSON.stringify(gatewayRouting.companionId)}`,
+      );
+    }
     return {
       ...message,
+      routing: {
+        ...message.routing,
+        gateway: gatewayRouting,
+      },
       timestamp: typeof message.timestamp === 'string'
         ? new Date(message.timestamp)
         : message.timestamp,

@@ -25,6 +25,7 @@ import {
   INTAKE_RISK_LABELS,
   type IntakeRiskLabel,
 } from '../../../../shared/contracts/intake-envelope.js';
+import { isRecord } from '../../../../shared/utils/types.js';
 import {
   buildBoundedFillerPattern,
   buildCharWindowPattern,

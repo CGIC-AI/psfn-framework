@@ -9,6 +9,7 @@
   } from '$lib/api/endpoints/scheduler';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
   import { schedulerLoadErrorMessage, shouldUseSchedulerFallback } from '$lib/scheduler/fallback';
+  import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import type {
     RecurringCadence,
     ReflectionTemplate,
@@ -552,16 +553,17 @@
     }
   }
 
-  // ── Auto-refresh every 30s ──
-  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+  const refreshPoller = createVisibilityAwarePoller({
+    refresh: loadData,
+    intervalMs: 30_000,
+  });
 
   onMount(() => {
-    loadData();
-    refreshInterval = setInterval(loadData, 30_000);
+    refreshPoller.start();
   });
 
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    refreshPoller.stop();
   });
 </script>
 

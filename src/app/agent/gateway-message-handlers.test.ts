@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   AgentResponse,
   Attachment,
@@ -21,6 +24,7 @@ import {
   type IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
+import { materializeGatewayAttachment } from '../../boundary/gateway/attachment-materialization.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -91,7 +95,7 @@ function createHarness(overrides?: {
     channelId: string,
     content: string,
     authorName?: string,
-    correlation?: IcpConversationCorrelation,
+    correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
   ) => Promise<{
     channelId: string;
     messageId: string;
@@ -523,6 +527,46 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
   });
 
+  it('delivers generated local media through authenticated gateway materialization as immutable bytes', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'psfn-agent-discord-media-'));
+    try {
+      const localPath = join(workspace, 'purr.png');
+      writeFileSync(localPath, 'generated-png-bytes');
+      const adapterSendMedia = vi.fn(async () => {});
+      const harness = createHarness({
+        handleMessage: async () => ({
+          ...makeResponse(''),
+          attachments: [{
+            url: 'https://images.example.test/purr.png',
+            contentType: 'image/png',
+            name: 'purr.png',
+            localPath,
+          }],
+        }),
+        discordSendMedia: async (channelId, media) => {
+          await adapterSendMedia(channelId, materializeGatewayAttachment(media, workspace));
+        },
+      });
+
+      await harness.onDiscordMessage(makeMessage({
+        channelId: 'discord:general',
+        channelType: 'discord',
+        routing: undefined,
+      }));
+
+      await vi.waitFor(() => {
+        expect(adapterSendMedia).toHaveBeenCalledWith('discord:general', {
+          url: 'https://images.example.test/purr.png',
+          contentType: 'image/png',
+          name: 'purr.png',
+          dataBase64: Buffer.from('generated-png-bytes').toString('base64'),
+        });
+      });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('records diagnostics when discord agent handling fails', async () => {
     const harness = createHarness({
       handleMessage: async () => {
@@ -839,6 +883,31 @@ describe('registerGatewayMessageHandlers', () => {
       channelId: message.channelId,
       messageId: 'msg-dup-2',
       disposition: 'cached',
+    });
+  });
+
+  it('records observation-only reverse-RPC messages without generating a response', async () => {
+    const harness = createHarness();
+    const message = makeMessage({
+      id: 'stimulus-observe-1',
+      routing: {
+        source: 'satellite',
+        responseMode: 'observe',
+      },
+    });
+
+    const response = await harness.onHandleMessage(message);
+
+    expect(response.content).toBe('');
+    expect(response.channelId).toBe(message.channelId);
+    expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.observed', {
+      route: 'handle',
+      channelId: message.channelId,
+      messageId: message.id,
+      authorId: message.authorId,
     });
   });
 
@@ -1519,7 +1588,16 @@ describe('registerGatewayMessageHandlers', () => {
     const harness = createHarness({
       handleMessage: async () => makeResponse('companion reply'),
     });
-    const message = makeCompanionMessage({ timestamp: '2026-03-02T02:00:00.000Z' });
+    const message = makeCompanionMessage({
+      timestamp: '2026-03-02T02:00:00.000Z',
+      replyToMessageId: 'cmsg-opening',
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        channelPrivacy: 'private',
+        room: { placeId: 'living_room', privacy: 'private' },
+      },
+    });
 
     await harness.onCompanionMessage(message);
 
@@ -1529,11 +1607,17 @@ describe('registerGatewayMessageHandlers', () => {
         'companion-room:living_room',
         'companion reply',
         'Selene',
+        'cmsg-1',
       );
     });
     // Timestamp deserialized before the turn pipeline sees it.
     const handled = harness.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
     expect(handled.timestamp).toBeInstanceOf(Date);
+    expect(handled.replyToMessageId).toBe('cmsg-opening');
+    expect(handled.routing).toMatchObject({
+      channelPrivacy: 'private',
+      room: { placeId: 'living_room', privacy: 'private' },
+    });
     expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
     // The reply never leaks onto another channel surface.
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();

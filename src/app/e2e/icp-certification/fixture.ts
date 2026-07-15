@@ -219,7 +219,12 @@ function makeCompanion(input: {
   workspacePath: string;
 }): IcpCertificationCompanionFixture {
   const characterCardPath = join(input.companionDataDir, 'character-card.json');
+  const postgresCredentialPath = join(
+    input.authSocketDir,
+    `postgres-${input.companionId}.url`,
+  );
   writeJson(characterCardPath, createBootstrapStarterCard(input.name));
+  writeFileSync(postgresCredentialPath, `${input.databaseUrl}\n`, { encoding: 'utf8', mode: 0o600 });
   mkdirSync(input.workspacePath, { recursive: true });
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -235,7 +240,7 @@ function makeCompanion(input: {
     PSFN_BACKUP_ENCRYPTION_KEY: 'icp-certification-backup-key-not-for-production',
     CONFIG_DIR: input.configDir,
     PERSISTENCE_BACKEND: 'postgres',
-    POSTGRES_DATABASE_URL: input.databaseUrl,
+    POSTGRES_DATABASE_URL_FILE: postgresCredentialPath,
     PSFN_MULTI_COMPANION: '1',
     COMPANION_ID: input.companionId,
     COMPANION_PG_SCHEMA: input.postgresSchema,
@@ -255,6 +260,8 @@ function makeCompanion(input: {
     TELEGRAM_ENABLED: 'false',
     OBSERVER_EVAL_SIDECAR_ENABLED: 'false',
   };
+  delete baseEnv.POSTGRES_DATABASE_URL;
+  delete baseEnv.POSTGRES_DATABASE_URL_FD;
   baseEnv.ADMIN_TRANSPORT_SOCKET = resolveCompanionAdminTransportSocketPath(
     input.companionId,
     { ...baseEnv, ADMIN_TRANSPORT_SOCKET: join(input.authSocketDir, 'garden-admin.sock') },
@@ -313,9 +320,17 @@ export function createIcpCertificationFixture(input: {
         ? {
             inputPer1MUsd: 0,
             outputPer1MUsd: costProfile === 'lowered_hard' ? 15 : 10,
+            cacheReadPer1MUsd: 0,
+            cacheWritePer1MUsd: 0,
             currency: 'USD',
           }
-        : { inputPer1MUsd: 0, outputPer1MUsd: 0, currency: 'USD' };
+        : {
+            inputPer1MUsd: 0,
+            outputPer1MUsd: 0,
+            cacheReadPer1MUsd: 0,
+            cacheWritePer1MUsd: 0,
+            currency: 'USD',
+          };
       if (chatCapable && costProfile !== 'permissive') {
         model.capabilities = {
           ...(model.capabilities as Record<string, unknown>),
@@ -395,7 +410,7 @@ export function createIcpCertificationFixture(input: {
       postgresSchema: CERTIFICATION_SCHEMA_A,
       runtimeRoot,
       systemDataDir,
-      workspacePath: join(rootDir, 'workspace-a'),
+      workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_A),
     }),
     makeCompanion({
       authSocketDir: socketDir,
@@ -408,7 +423,7 @@ export function createIcpCertificationFixture(input: {
       postgresSchema: CERTIFICATION_SCHEMA_B,
       runtimeRoot,
       systemDataDir,
-      workspacePath: join(rootDir, 'workspace-b'),
+      workspacePath: join(runtimeRoot, 'workspaces', 'personal', CERTIFICATION_COMPANION_B),
     }),
   ] as const;
   const topology = input.topology ?? 'multi_companion';

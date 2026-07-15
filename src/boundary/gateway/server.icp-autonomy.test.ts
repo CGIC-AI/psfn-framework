@@ -412,6 +412,11 @@ function multiCompanion(): GatewayMultiCompanionConfig {
     fleetCompanionIds: [A, B, C],
     channelRouting: {},
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      [A]: '/workspace/a',
+      [B]: '/workspace/b',
+      [C]: '/workspace/c',
+    },
   };
 }
 

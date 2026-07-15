@@ -772,6 +772,7 @@ describe('Postgres ICP intention retry and dampening lifecycle', () => {
       const database = await harness.createDatabase();
       const schema = 'companion_icp_suppressed_dampening';
       let nowMs = Date.parse('2026-07-14T04:00:00.000Z');
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
       const pool = createPostgresPool(database.databaseUrl, {
         applicationName: 'psfn-icp-suppressed-dampening',
         allowExitOnIdle: true,
@@ -899,6 +900,7 @@ describe('Postgres ICP intention retry and dampening lifecycle', () => {
         expect(issuePermit).toHaveBeenCalledOnce();
         expect(delivery).toHaveBeenCalledOnce();
       } finally {
+        nowSpy.mockRestore();
         if (candidateStore) await candidateStore.close();
         await pool.end();
       }

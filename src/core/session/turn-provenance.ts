@@ -13,6 +13,7 @@ interface SessionTurnEnvelope {
   turnId?: string;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
   role: SessionEntry['role'];
   speakerRole?: SessionEntry['role'];
   actorKind?: SessionActorKind;
@@ -30,6 +31,7 @@ export interface SessionEntryTurnContext {
   turnId: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
 }
 
 
@@ -69,6 +71,7 @@ export function buildSessionMetadataWithTurn(
     turnId: TurnID;
     requestId: string;
     sourceMessageId?: string;
+    replyToMessageId?: string;
     role: SessionEntry['role'];
     actorKind?: SessionActorKind;
   },
@@ -91,6 +94,7 @@ export function buildSessionMetadataWithTurn(
     speakerRole: input.role,
     ...(input.actorKind ? { actorKind: input.actorKind } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
   };
 
   return JSON.stringify({
@@ -159,11 +163,13 @@ export function resolveSessionEntryTurnContext(
     ?? backfillLegacyTurnId(legacySeed(entry));
   const requestId = parseOptionalStringField(rawTurn.requestId, 'metadata.turn.requestId');
   const sourceMessageId = parseOptionalStringField(rawTurn.sourceMessageId, 'metadata.turn.sourceMessageId');
+  const replyToMessageId = parseOptionalStringField(rawTurn.replyToMessageId, 'metadata.turn.replyToMessageId');
 
   return {
     turnId,
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(replyToMessageId ? { replyToMessageId } : {}),
   };
 }
 

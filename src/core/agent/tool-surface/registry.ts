@@ -300,8 +300,8 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'contact',
     domain: 'contacts',
     exposure: 'core',
-    description: 'Canonical contact, trust, identity-link, blocking, and known-peer coarse-availability surface.',
-    actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
+    description: 'Canonical contact, trust, relationship, note, identity-link, channel-privacy, blocking, and known-peer coarse-availability surface.',
+    actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'set_relationship', 'propose_relationship', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('contact_list', 'contact', 'retired', 'list', 'Contact reads belong on contact.'),
@@ -461,17 +461,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('spawn_subagent', 'subagent', 'retired', 'spawn', 'Bounded worker launch belongs on subagent.'),
-    ],
-  },
-  {
-    name: 'shard',
-    domain: 'subagents',
-    exposure: 'extended',
-    description: 'Future canonical long-horizon shard control plane.',
-    actions: ['spawn'],
-    capabilityMetadata: { kind: 'external_policy', source: 'docs/tool-surface.md' },
-    retiredAliases: [
-      retiredAlias('spawn_shard', 'shard', 'hidden', 'spawn', 'Long-horizon shard launch belongs on shard.'),
     ],
   },
   {

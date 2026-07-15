@@ -149,6 +149,7 @@ describe('scheduler config seed defaults', () => {
       const loaded = loadSchedulerSeedDefaults({ seedDir });
       expect(loaded.temporalWakeup).toEqual({
         enabled: true,
+        activeChannelLookbackHours: DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
         morningWake: {
           ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake,
           localTime: '07:15',
@@ -288,6 +289,39 @@ describe('scheduler config seed defaults', () => {
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'temporalWakeup.wakeSummary must be an object',
       );
+    });
+  });
+
+  describe('scheduler config active-channel + cadence defaults', () => {
+    it('defaults activeChannelLookbackHours to 72h and fails closed on non-positive values', () => {
+      withSeedDir((seedDir) => {
+        expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours).toBe(72);
+
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+          ...buildValidSchedulerConfig(),
+          temporalWakeup: { morningWake: { localTime: '08:00' } },
+        });
+        expect(loadSchedulerSeedDefaults({ seedDir }).temporalWakeup.activeChannelLookbackHours).toBe(72);
+
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+          ...buildValidSchedulerConfig(),
+          temporalWakeup: { activeChannelLookbackHours: 24 },
+        });
+        expect(loadSchedulerSeedDefaults({ seedDir }).temporalWakeup.activeChannelLookbackHours).toBe(24);
+
+        writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+          ...buildValidSchedulerConfig(),
+          temporalWakeup: { activeChannelLookbackHours: 0 },
+        });
+        expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+          'temporalWakeup.activeChannelLookbackHours must be an integer >= 1',
+        );
+      });
+    });
+
+    it('defaults the idle refresher thresholds to the 2h temporal-update cadence', () => {
+      expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minIdleMinutes).toBe(120);
+      expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher.minNoteIntervalMinutes).toBe(120);
     });
   });
 

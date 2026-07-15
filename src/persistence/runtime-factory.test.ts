@@ -193,6 +193,8 @@ describe('createAgentPersistenceRuntime', () => {
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
+      introspectionLandmarkStore: expect.any(Object),
+      weightedThoughtStore: undefined,
     });
     expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(
@@ -239,7 +241,7 @@ describe('createAgentPersistenceRuntime', () => {
     // pool anywhere was schema-pinned rather than "no pool at all".
     expect(runtimeFactoryMocks.ensurePostgresSchemaExists).not.toHaveBeenCalled();
     for (const call of runtimeFactoryMocks.createPostgresPool.mock.calls) {
-      expect(call[1]).not.toHaveProperty('schema');
+      expect(call[1]?.schema).toBeUndefined();
     }
     // Multi-companion flag off: the shared schema is never touched and no
     // presence store exists.

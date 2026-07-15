@@ -21,7 +21,10 @@ import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import { dispatchObserverEvalTurn } from '../../../eval/observer-sidecar/runtime.js';
-import type { ObserverEvalLifecycleState } from '../../../eval/observer-sidecar/types.js';
+import type {
+  ObserverEvalLifecycleState,
+  ObserverEvalRoutingSource,
+} from '../../../eval/observer-sidecar/types.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
@@ -39,6 +42,16 @@ const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
 function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
   return authorContext.actorKind;
+}
+
+function resolveObserverEvalRoutingSource(message: SubstrateMessage): ObserverEvalRoutingSource {
+  if (message.routing?.source) {
+    return message.routing.source;
+  }
+  if (message.channelType === 'api' || message.channelType === 'terminal') {
+    return message.channelType;
+  }
+  return 'unspecified';
 }
 
 export interface PreparedTurnIdentityState {
@@ -430,6 +443,93 @@ export async function prepareTurnIdentityState(input: {
   };
 }
 
+export interface StaleSessionWindowHealPort {
+  reconcileSessionChannelFromDisk: (
+    channelId: string,
+  ) => Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null>;
+}
+
+/**
+ * Detect-and-heal guard for stale captured session windows
+ * (psfn-framework-hgw3.1). The turn just recorded session entry
+ * `currentSessionEntryId`, so a fresh store read MUST see that id in the raw
+ * capture window; a lower `storeWindowMaxEntryId` means the store served a
+ * stale in-memory cache and the window is missing the latest turn(s) —
+ * including the previous assistant reply, which makes the model regenerate it.
+ * Heals by forcing a disk reconcile and recapturing ONCE.
+ *
+ * OPERATOR DECISION: this guard must NEVER block, abort, or suppress the
+ * reply. After the single heal attempt the turn proceeds with whatever
+ * context it has — a duplicate reply is better than no reply — so heal
+ * failures are logged and telemetered, never rethrown.
+ */
+export async function healStaleCapturedSessionWindow(input: {
+  snapshot: TurnSessionContextSnapshot;
+  currentSessionEntryId: number | null;
+  channelId: string;
+  turnId: TurnID;
+  requestId: string;
+  sessionManager: StaleSessionWindowHealPort;
+  recapture: () => Promise<TurnSessionContextSnapshot>;
+  emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
+}): Promise<TurnSessionContextSnapshot> {
+  const { snapshot, currentSessionEntryId } = input;
+  if (currentSessionEntryId === null) return snapshot;
+  const staleWindowMaxEntryId = snapshot.storeWindowMaxEntryId ?? null;
+  if (staleWindowMaxEntryId !== null && staleWindowMaxEntryId >= currentSessionEntryId) {
+    return snapshot;
+  }
+  try {
+    const reconciled = await input.sessionManager.reconcileSessionChannelFromDisk(input.channelId);
+    const recaptured = await input.recapture();
+    const recapturedWindowMaxEntryId = recaptured.storeWindowMaxEntryId ?? null;
+    const healed = recapturedWindowMaxEntryId !== null
+      && recapturedWindowMaxEntryId >= currentSessionEntryId;
+    log.warn('Captured session window was stale; reconciled channel from disk and recaptured once', {
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      expectedMinEntryId: currentSessionEntryId,
+      staleWindowMaxEntryId,
+      reconciledMaxEntryId: reconciled?.maxEntryId ?? null,
+      recapturedWindowMaxEntryId,
+      healed,
+    });
+    input.emitTelemetry('session.context.stale_window_heal', {
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      expectedMinEntryId: currentSessionEntryId,
+      staleWindowMaxEntryId,
+      reconciledMaxEntryId: reconciled?.maxEntryId ?? null,
+      recapturedWindowMaxEntryId,
+      healed,
+      timestamp: Date.now(),
+    });
+    return recaptured;
+  } catch (error) {
+    const errorText = toErrorMessage(error);
+    log.warn('Stale session window heal failed; proceeding with the originally captured context', {
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      expectedMinEntryId: currentSessionEntryId,
+      staleWindowMaxEntryId,
+      error: errorText,
+    });
+    input.emitTelemetry('session.context.stale_window_heal_failed', {
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      expectedMinEntryId: currentSessionEntryId,
+      staleWindowMaxEntryId,
+      error: errorText,
+      timestamp: Date.now(),
+    });
+    return snapshot;
+  }
+}
+
 export async function computePreTurnState(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
@@ -480,13 +580,25 @@ export async function computePreTurnState(input: {
   // Single session-context derivation for the turn (E2.2): captured once here,
   // it feeds the retrieval query, the live context build (assembleTurnPrompt
   // passes it to buildContext), and the persisted PromptPlan turn snapshot.
-  const sessionContextSnapshot = await runtime.sessionManager.captureTurnSessionContext({
+  const captureSessionContext = (): Promise<TurnSessionContextSnapshot> => (
+    runtime.sessionManager.captureTurnSessionContext({
+      channelId: message.channelId,
+      userId: input.continuitySubjectKey,
+      channelMeta,
+      continuityFallbackUserIds: authorContext.continuityFallbackKeys,
+      turnBudgetCharacteristics,
+      ...(currentSessionEntryId !== null ? { excludeSessionEntryId: currentSessionEntryId } : {}),
+    })
+  );
+  const sessionContextSnapshot = await healStaleCapturedSessionWindow({
+    snapshot: await captureSessionContext(),
+    currentSessionEntryId,
     channelId: message.channelId,
-    userId: input.continuitySubjectKey,
-    channelMeta,
-    continuityFallbackUserIds: authorContext.continuityFallbackKeys,
-    turnBudgetCharacteristics,
-    ...(currentSessionEntryId !== null ? { excludeSessionEntryId: currentSessionEntryId } : {}),
+    turnId,
+    requestId,
+    sessionManager: runtime.sessionManager,
+    recapture: captureSessionContext,
+    emitTelemetry: (event, payload) => runtime.emitTelemetry(event, payload),
   });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);
@@ -593,7 +705,7 @@ export async function computePreTurnState(input: {
         ...(taskKind ? { taskKind } : {}),
       },
       source: {
-        routingSource: message.routing?.source ?? 'unspecified',
+        routingSource: resolveObserverEvalRoutingSource(message),
         isDirectMessage: message.isDirectMessage ?? false,
         ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
       },

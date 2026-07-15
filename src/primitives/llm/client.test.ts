@@ -47,6 +47,7 @@ import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { createSubstrateStreamFn, resolveModel } from '../../core/agent/stream-adapter.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { registerLLMMethods } from '../../boundary/gateway/methods/llm.js';
@@ -164,6 +165,12 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 }
 
 const tempDirs: string[] = [];
+
+// Mirrors client-prompt-cache's provider-facing session token: raw channel /
+// request ids are hashed before they reach provider adapters.
+function providerCacheSessionId(raw: string): string {
+  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
+}
 
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
@@ -1460,7 +1467,7 @@ describe('LLMClient prompt caching', () => {
     expect(model.api).toBe('openai-responses');
     expect(requestOptions).toMatchObject({
       cacheRetention: 'long',
-      sessionId: 'discord:cache-channel',
+      sessionId: providerCacheSessionId('discord:cache-channel'),
     });
     expect(response.providerObservability).toMatchObject({
       backendApi: 'openai-responses',
@@ -1470,7 +1477,7 @@ describe('LLMClient prompt caching', () => {
         strategy: 'openai_responses',
         retention: 'long',
         scope: 'channel',
-        sessionId: 'discord:cache-channel',
+        sessionId: providerCacheSessionId('discord:cache-channel'),
       },
     });
   });
@@ -1637,7 +1644,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
     expect(typeof requestOptions.onPayload).toBe('function');
 
     // Exercise the transformer against the completions payload shape pi-ai builds.
@@ -1666,7 +1673,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
         mechanism: 'openrouter_cache_control_passthrough',
         retention: 'short',
         scope: 'channel',
-        sessionId: 'discord:e24-channel',
+        sessionId: providerCacheSessionId('discord:e24-channel'),
         boundaries: {
           staticPrefixChars: STATIC_PREFIX.length,
           sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
@@ -1680,7 +1687,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('z-ai/glm-5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
     expect(requestOptions.onPayload).toBeUndefined();
     expect(response.providerObservability).toMatchObject({
       promptCaching: {
@@ -2730,6 +2737,50 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getProviders.mockReturnValue(['openrouter']);
     mocks.getModels.mockReturnValue([]);
     mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('cost-accounts companion-private calls without persisting source correlation', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'private result' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 25, output: 5, cost: 0.123 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Private background work' }],
+      },
+      'background',
+      {
+        disableRetry: true,
+        correlation: {
+          ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      telemetryVisibility: 'companion_private',
+      inputTokens: 25,
+      outputTokens: 5,
+      providerCostUsd: 0.123,
+    });
+    expect(event?.logicalCallId).not.toContain('source-request');
+    expect(event).not.toHaveProperty('turnId');
+    expect(event).not.toHaveProperty('requestId');
+    expect(event).not.toHaveProperty('channelId');
   });
 
   it('uses propagated logical identity and disables nested retries when the caller owns retry sequencing', async () => {

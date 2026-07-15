@@ -62,6 +62,7 @@ export type {
 
 export type {
   AdminAdaptiveToolTelemetryEvent,
+  AdminToolInvocationEvent,
   AdminToolFailureEvent,
   AdminToolAvailabilityView,
   AdminToolHealthView,
@@ -160,7 +161,9 @@ export type {
 } from './types/continuity.js';
 
 export type {
+  AdminSessionListRow,
   AdminSessionListData,
+  AdminSessionDetailData,
   AdminSessionRouteView,
   AdminSessionRouteListData,
   AdminSessionRouteResetInput,
@@ -180,6 +183,7 @@ export type {
   AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
 export type {

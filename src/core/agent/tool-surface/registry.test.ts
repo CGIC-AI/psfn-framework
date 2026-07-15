@@ -136,6 +136,11 @@ describe('first-party tool surface registry', () => {
     );
   });
 
+  it('does not publish an unregistered shard control plane as canonical', () => {
+    expect(getCanonicalToolSurface('shard')).toBeUndefined();
+    expect(isCanonicalFirstPartyToolName('shard')).toBe(false);
+  });
+
   it('keeps journal canonical actions aligned with the actual tool schema', () => {
     const journalTool = createJournalTool({
       list: async () => ({ root: '/tmp/journal', notes: [] }),
@@ -213,7 +218,7 @@ describe('first-party tool surface registry', () => {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be core`).toBe('core');
     }
     // Extended = dev / admin / infrequent / heavy, reached via toolset + promotion.
-    const expectedExtended = ['repo', 'shell', 'north_star', 'beads', 'notify', 'shard', 'vault'];
+    const expectedExtended = ['repo', 'shell', 'north_star', 'beads', 'notify', 'vault'];
     for (const name of expectedExtended) {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be extended`).toBe('extended');
     }

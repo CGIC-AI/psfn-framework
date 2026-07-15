@@ -74,5 +74,5 @@ Memory context note:
 
 <relevant_memories>
 Relevant memories for this person:
-- [semantic] Offsite venue shortlist for the townsquare group
+- [semantic] Offsite venue shortlist for the townsquare group (today)
 </relevant_memories>

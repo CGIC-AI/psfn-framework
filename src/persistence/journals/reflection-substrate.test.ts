@@ -13,16 +13,29 @@ import {
   toReflectionJournalProvenanceRef,
 } from './reflection-substrate.js';
 import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
+import {
+  resetActiveTimezone,
+  setActiveTimezone,
+} from '../../shared/time/active-timezone.js';
+
+const ORIGINAL_TZ = process.env.TZ;
 
 describe('reflection substrate stores', () => {
   let tempDir: string;
 
   beforeEach(() => {
+    setActiveTimezone('America/New_York');
     tempDir = mkdtempSync(join(tmpdir(), 'reflection-substrate-'));
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+    resetActiveTimezone();
+    if (ORIGINAL_TZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
   });
 
   it('appends reflection daily journal entries into per-day append-only files', () => {
@@ -55,6 +68,21 @@ describe('reflection substrate stores', () => {
     expect(persisted.executionSource).toBe('scheduled');
     expect(persisted.reflection).toContain('long afternoon');
     expect(persisted.reflectionJournalEntryId).toBe('reflection-1');
+  });
+
+  it('derives the daily reflection date from the active calendar day', () => {
+    const store = new ReflectionDailyJournalStore(join(tempDir, 'daily'));
+
+    const entry = store.append({
+      source: 'heartbeat_template',
+      executionSource: 'scheduled',
+      reflection: 'The late evening remains part of Monday.',
+      createdAt: '2026-03-03T04:30:00.000Z',
+    });
+
+    expect(entry.date).toBe('2026-03-02');
+    expect(entry.createdAt).toBe('2026-03-03T04:30:00.000Z');
+    expect(readdirSync(join(tempDir, 'daily'))).toEqual(['2026-03-02.jsonl']);
   });
 
   it('appends long-process reflection entries into a per-process log', () => {

@@ -1,4 +1,10 @@
-import type { CompletionPurpose, CorrelationMetadata, ModelPurpose, ObservabilityCallType } from '../../shared/contracts/runtime.js';
+import {
+  COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+  type CompletionPurpose,
+  type CorrelationMetadata,
+  type ModelPurpose,
+  type ObservabilityCallType,
+} from '../../shared/contracts/runtime.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
@@ -66,6 +72,18 @@ export function resolveCorrelationMetadata(
     ...(optionCorrelation ?? {}),
   };
 
+  const companionPrivate = merged.telemetryVisibility === 'companion_private';
+  if (companionPrivate) {
+    return {
+      requestId: 'companion-private',
+      callType: 'background',
+      purpose: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+      originType: 'background',
+      originStage: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+      telemetryVisibility: 'companion_private',
+    };
+  }
+
   const rawIcpCorrelation = optionCorrelation?.icpCorrelation
     ?? contextCorrelation?.icpCorrelation;
   const icpCorrelation = rawIcpCorrelation === undefined
@@ -88,7 +106,6 @@ export function resolveCorrelationMetadata(
   if (icpCorrelation && (merged.shardId !== undefined || merged.subagentId !== undefined)) {
     throw new Error('ICP conversation correlation cannot share shard or subagent budget scope');
   }
-
   const turnId = normalizeCorrelationValue(merged.turnId);
   const companionId = icpCorrelation
     ? requireIcpMatch('companionId', merged.companionId, icpCorrelation.localCompanionId)
@@ -182,6 +199,14 @@ export function toCorrelationLogFields(
   toolName?: string;
   toolCallId?: string;
 } {
+  const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
+  if (companionPrivate) {
+    return {
+      requestId: 'companion-private',
+      originType: 'background',
+      originStage: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+    };
+  }
   const turnId = normalizeCorrelationValue(correlation?.turnId);
   const requestId = normalizeCorrelationValue(correlation?.requestId) ?? turnId ?? 'unknown';
   const channelId = normalizeCorrelationValue(correlation?.channelId);

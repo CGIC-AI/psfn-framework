@@ -49,12 +49,15 @@ import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
-  resolveGeneratedImagesDir,
   resolveChargeLedgerPath,
+  resolvePersonalImagesDir,
 } from '../../persistence/layout.js';
+import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
+import { migrateLegacyWorkspaceForFleet } from '../../persistence/workspaces/legacy-workspace-migration.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -156,7 +159,16 @@ async function main(): Promise<void> {
   if (bootstrap.gatewayRpcEndpoint.kind === 'unix') {
     mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
   }
-  ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  if (config.companionFleet) {
+    migrateLegacyWorkspaceForFleet({
+      fleet: config.companionFleet,
+      legacyWorkspacePath: process.env.WORKSPACE_PATH,
+      env: process.env,
+    });
+    provisionFleetWorkspaces(config.companionFleet);
+  } else {
+    ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  }
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
       workspaceRoot: bootstrap.workspaceRoot,
@@ -247,7 +259,10 @@ async function main(): Promise<void> {
         startupHydration.chargePolicyConfig,
         {
           read: ({ senderCompanionId, nowMs }) => {
-            const fleetEntry = fleetByCompanionId.get(senderCompanionId);
+            const fleetEntry = fleetByCompanionId.get(createCompanionId(
+              senderCompanionId,
+              'ICP social charge balance senderCompanionId',
+            ));
             if (!fleetEntry) {
               throw new Error('ICP social charge balance requires a known fleet sender');
             }
@@ -336,7 +351,14 @@ async function main(): Promise<void> {
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
-    previewRoots: [resolveGeneratedImagesDir(startupHydration.companionDataDir)],
+    ...(config.companionFleet
+      ? {
+        previewRootByCompanionId: Object.fromEntries(config.companionFleet.companions.map(companion => [
+          companion.companionId,
+          resolvePersonalImagesDir(companion.personalWorkspacePath),
+        ])),
+      }
+      : { previewRoots: [resolvePersonalImagesDir(bootstrap.workspaceRoot)] }),
   });
 
   const apiServer = await startOptionalGatewayApiServer({

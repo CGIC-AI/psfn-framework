@@ -119,6 +119,15 @@ function attributionPrefixes(participants: readonly AttributionParticipant[]): s
   return participants.map(participant => `${participant.name} (${participant.id}):`);
 }
 
+// Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps ahead of
+// speaker attribution; strip them before prefix checks. Stamp semantics are
+// pinned in context-support.test.ts.
+const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
+function stripHistoryStamp(line: string): string {
+  return line.replace(HISTORY_STAMP_RE, '');
+}
+
 /**
  * Assert that the human turns in an assembled group history carry per-speaker
  * attribution prefixes of the form `Name (stable-id): ...`.
@@ -142,7 +151,7 @@ export function expectAttributedHistory(
   const prefixes = attributionPrefixes(participants);
 
   for (const message of userMessages) {
-    const firstLine = message.content.trimStart().split('\n', 1)[0] ?? '';
+    const firstLine = stripHistoryStamp(message.content.trimStart().split('\n', 1)[0] ?? '');
     if (!prefixes.some(prefix => firstLine.startsWith(prefix))) {
       throw new Error(
         `expectAttributedHistory: group history message is not speaker-attributed with a `
@@ -154,7 +163,7 @@ export function expectAttributedHistory(
 
   const allUserLines = userMessages
     .flatMap(message => message.content.split('\n'))
-    .map(line => line.trimStart());
+    .map(line => stripHistoryStamp(line.trimStart()));
   for (const participant of participants) {
     const prefix = `${participant.name} (${participant.id}):`;
     if (!allUserLines.some(line => line.startsWith(prefix))) {
@@ -181,7 +190,7 @@ export function expectUnattributedHistory(
   const prefixes = attributionPrefixes(participants);
   for (const message of userMessages) {
     for (const prefix of prefixes) {
-      if (message.content.trimStart().startsWith(prefix)) {
+      if (stripHistoryStamp(message.content.trimStart()).startsWith(prefix)) {
         throw new Error(
           `expectUnattributedHistory: DM history line unexpectedly carries a group attribution `
           + `prefix "${prefix}".`,

@@ -8,7 +8,7 @@ import {
 } from './route-matchers.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
-import { sendJson, sendRedirect } from '../../channels/backplane/http/primitives.js';
+import { bindRequestForResponse, sendJson, sendRedirect } from '../../channels/backplane/http/primitives.js';
 import { sendGardenLoginPage } from './auth-pages.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import type {
@@ -41,6 +41,7 @@ export function dispatchAdminRoute(
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
+    bindRequestForResponse(res, req);
     route.handle(req, res, params);
     return true;
   }
@@ -150,6 +151,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       subsystemHealthService: deps.services.subsystemHealth ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,
+      sharedWorkspaceService: deps.services.sharedWorkspace ?? null,
       intakeQuarantineService: deps.services.intakeQuarantine,
       driftReviewService: deps.services.driftReviews,
       identityService: deps.services.identity,

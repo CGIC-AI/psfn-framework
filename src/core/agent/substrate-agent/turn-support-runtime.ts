@@ -4,7 +4,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -50,6 +50,7 @@ import {
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -126,6 +127,7 @@ export class TurnSupportRuntime {
   private readonly sessionManager: SessionManager;
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
+  private introspectionTurnSensitivityDecisions: IntrospectionTurnSensitivityDecisions | null = null;
 
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private activeTurnTaskKind: string | null = null;
@@ -147,6 +149,12 @@ export class TurnSupportRuntime {
     this.sessionManager = options.sessionManager;
     this.hashPromptText = options.hashPromptText;
     this.resolveContextWindow = options.resolveContextWindow;
+  }
+
+  setIntrospectionTurnSensitivityDecisions(
+    decisions: IntrospectionTurnSensitivityDecisions | null,
+  ): void {
+    this.introspectionTurnSensitivityDecisions = decisions;
   }
 
   getActiveTurnCorrelation(): CorrelationMetadata | null {
@@ -644,6 +652,7 @@ export class TurnSupportRuntime {
     continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
     recoveryResponse?: AgentResponse,
+    runtimeFallbackProvenance?: RuntimeFallbackProvenance,
   ): number | null {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
@@ -655,6 +664,7 @@ export class TurnSupportRuntime {
       continuityUserId,
       emotionSnapshot,
       recoveryResponse,
+      runtimeFallbackProvenance,
     });
   }
 
@@ -708,10 +718,16 @@ export class TurnSupportRuntime {
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
       ],
     );
+    const introspectionSensitivityDecision = this.introspectionTurnSensitivityDecisions?.consume({
+      turnId: input.turnId,
+      requestId: input.requestId,
+    });
     return buildTurnRecordForTurn({
       ...input,
+      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
+      ...(introspectionSensitivityDecision ? { introspectionSensitivityDecision } : {}),
     });
   }
 

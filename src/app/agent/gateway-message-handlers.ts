@@ -48,6 +48,8 @@ const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
   'source',
   'authorIsMachineIntelligence',
   'icpCorrelation',
+  'channelPrivacy',
+  'room',
 ]);
 
 interface QueuedDiscordMessage {
@@ -83,6 +85,8 @@ function bindRecordedCompanionSourceEnvelope(
 ): void {
   const incomingCorrelation = parseIcpConversationCorrelation(message.routing?.icpCorrelation);
   const expectedIsDirectMessage = incomingCorrelation.surface === 'companion_dm';
+  const channelPrivacy = message.routing?.channelPrivacy;
+  const room = message.routing?.room;
   const routingKeys = Object.keys(message.routing ?? {});
   if (!recorded.correlation
     || JSON.stringify(incomingCorrelation) !== JSON.stringify(recorded.correlation)
@@ -113,6 +117,8 @@ function bindRecordedCompanionSourceEnvelope(
     source: 'companion',
     authorIsMachineIntelligence: true,
     icpCorrelation: recorded.correlation,
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+    ...(room ? { room } : {}),
   };
 }
 
@@ -138,7 +144,7 @@ export interface GatewayMessageGateway {
     channelId: string,
     content: string,
     authorName?: string,
-    correlation?: IcpConversationCorrelation,
+    correlationOrReplyToMessageId?: IcpConversationCorrelation | string,
   ): Promise<{
     channelId: string;
     messageId: string;
@@ -503,6 +509,25 @@ export function registerGatewayMessageHandlers(
 
     const processMessage = async (): Promise<AgentResponse> => {
       trackSessionActivity(message);
+      if (message.routing?.responseMode === 'observe') {
+        await agentLoop.observeMessage(message);
+        safeguardAuditTrail.append('gateway.message.observed', {
+          route: 'handle',
+          channelId: message.channelId,
+          messageId: message.id,
+          authorId: message.authorId,
+        });
+        return {
+          content: '',
+          channelId: message.channelId,
+          metadata: {
+            model: 'observation-only',
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          },
+        };
+      }
       log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
       const routingDecision = satelliteRouting.evaluateDelegation(
         message,
@@ -800,7 +825,12 @@ export function registerGatewayMessageHandlers(
           }
           if (!correlatedDeliveryLifecycle && response.content.trim()) {
             failureReason = 'reply_delivery_failed';
-            await gateway.companionSend(message.channelId, response.content, companionAuthorName);
+            await gateway.companionSend(
+              message.channelId,
+              response.content,
+              companionAuthorName,
+              message.id,
+            );
           }
           completed = true;
         } catch (err) {

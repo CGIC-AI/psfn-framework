@@ -197,7 +197,7 @@ build_agent_env() {
     NODE_OPTIONS \
     PATH \
     PERSISTENCE_BACKEND \
-    POSTGRES_DATABASE_URL \
+    POSTGRES_DATABASE_URL_FD \
     PRIMARY_TELEGRAM_USER_ID \
     PRIMARY_USER_ID \
     PSFN_DEBUG_EVENTS \
@@ -207,6 +207,11 @@ build_agent_env() {
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
     PSFN_MULTI_COMPANION \
+    PSFN_REDIS_PASSWORD \
+    PSFN_REDIS_TLS_CA_CERT_PATH \
+    PSFN_REDIS_TLS_REJECT_UNAUTHORIZED \
+    PSFN_REDIS_URL \
+    PSFN_REDIS_USERNAME \
     PSFN_RUNTIME_LAYOUT_MODE \
     PSFN_RUNTIME_MODE \
     PSFN_RUNTIME_ROOT \
@@ -221,6 +226,9 @@ build_agent_env() {
     SHELL_EXEC_ENV_ALLOWLIST \
     SHELL_EXEC_MAX_OUTPUT_CHARS \
     SHELL_EXEC_MAX_TIMEOUT_MS \
+    SHARED_WORKSPACE_COGSEC_TOKEN \
+    SHARED_WORKSPACE_PROPOSER_TOKEN \
+    SHARED_WORKSPACE_REVIEWER_TOKEN \
     SHUTDOWN_FORCE_EXIT_TIMEOUT_MS \
     SYSTEM_DATA_DIR \
     TELEGRAM_PRIMARY_USER_ID \
@@ -452,12 +460,21 @@ start_gateway() {
 }
 
 spawn_agent_process() {
+  if [ -z "${POSTGRES_DATABASE_URL:-}" ]; then
+    echo "[${MODE_LABEL}] POSTGRES_DATABASE_URL is required by the launcher credential boundary" >&2
+    return 1
+  fi
+
+  local postgres_database_url_fd
+  exec {postgres_database_url_fd}<<<"${POSTGRES_DATABASE_URL}"
+  local POSTGRES_DATABASE_URL_FD="${postgres_database_url_fd}"
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts
   else
     launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
+  exec {postgres_database_url_fd}<&-
 }
 
 start_agent() {
@@ -475,15 +492,17 @@ export_companion_env() {
   local companion_data_dir="$2"
   local character_card_path="$3"
   local postgres_schema="$4"
-  local companion_auth_token="$5"
-  local session_integrity_auth_token="$6"
-  local admin_transport_socket="$7"
-  local garden_port="$8"
+  local personal_workspace_path="$5"
+  local companion_auth_token="$6"
+  local session_integrity_auth_token="$7"
+  local admin_transport_socket="$8"
+  local garden_port="$9"
 
   export COMPANION_ID="${companion_id}"
   export COMPANION_DATA_DIR="${companion_data_dir}"
   export CHARACTER_CARD_PATH="${character_card_path}"
   export COMPANION_PG_SCHEMA="${postgres_schema}"
+  export WORKSPACE_PATH="${personal_workspace_path}"
   export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
   export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
   export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"
@@ -570,6 +589,18 @@ resolve_companion_fleet() {
   fi
 }
 
+provision_companion_fleet() {
+  if [ "${SUPERVISOR_MODE}" -ne 1 ]; then
+    return 0
+  fi
+  echo "[supervisor] provisioning fleet workspaces under the launcher lock..."
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx scripts/provision-companion-fleet.ts
+  else
+    npm run provision:companion-fleet
+  fi
+}
+
 resolve_single_companion_auth() {
   if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
     return 0
@@ -600,12 +631,12 @@ resolve_single_companion_auth() {
 }
 
 print_supervisor_plan() {
-  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
   echo "[supervisor]   gateway: ${SOCKET_PATH}"
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
-    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} card=${character_card_path} adminSocket=${admin_transport_socket}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} workspace=${personal_workspace_path} card=${character_card_path} adminSocket=${admin_transport_socket}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor]   operator: companionId=${companion_id} gardenPort=${garden_port} adminSocket=${admin_transport_socket}"
     else
@@ -615,14 +646,14 @@ print_supervisor_plan() {
 }
 
 supervise_companion_agents() {
-  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
     echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
-    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor] starting operator for companion ${companion_id} (gardenPort=${garden_port}, adminSocket=${admin_transport_socket})"
-      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
+      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     fi
   done
 
@@ -721,6 +752,8 @@ trap 'handle_shutdown_signal TERM' TERM
 trap cleanup EXIT
 
 acquire_launcher_lock
+
+provision_companion_fleet
 
 echo "[${MODE_LABEL}] verifying startup owner files..."
 if [ -x "./node_modules/.bin/tsx" ]; then

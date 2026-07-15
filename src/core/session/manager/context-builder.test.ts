@@ -14,6 +14,18 @@ import {
 import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
 import type { SessionEntry } from '../types.js';
 
+// Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps; strip
+// them so content assertions stay deterministic across timezones. Stamp
+// semantics are pinned in context-support.test.ts.
+const HISTORY_STAMP_RE = /^\[[A-Z][a-z]{2} \d{2}-\d{2}-\d{2} \d{2}:\d{2}\] /;
+
+function stripHistoryStamps(content: string): string {
+  return content
+    .split('\n')
+    .map(line => line.replace(HISTORY_STAMP_RE, ''))
+    .join('\n');
+}
+
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
     primaryModel: 'test-model',
@@ -107,7 +119,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'first message intentionally received no reply',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'PrimaryUser',
         timestamp: 1_700_000_000_000,
       },
       {
@@ -116,7 +128,7 @@ describe('orientation context surface wiring', () => {
         role: 'user',
         content: 'second message should be prompted once',
         authorId: 'u1',
-        authorName: 'Vega',
+        authorName: 'PrimaryUser',
         timestamp: 1_700_000_001_000,
       },
     ];
@@ -149,12 +161,11 @@ describe('orientation context surface wiring', () => {
       excludeSessionEntryId: 42,
     });
 
-    expect(context.messages).toEqual([
-      expect.objectContaining({
-        role: 'user',
-        content: 'first message intentionally received no reply',
-      }),
-    ]);
+    expect(context.messages).toHaveLength(1);
+    expect(context.messages[0]).toMatchObject({ role: 'user' });
+    expect(context.messages[0]?.content).toMatch(HISTORY_STAMP_RE);
+    expect(stripHistoryStamps(context.messages[0]?.content ?? ''))
+      .toBe('first message intentionally received no reply');
     expect(context.messages).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ content: expect.stringContaining('second message should be prompted once') }),
     ]));
@@ -207,6 +218,60 @@ describe('orientation context surface wiring', () => {
 
     expect(JSON.stringify(snapshot)).not.toContain(currentContent);
     expect(snapshot.sourceEntryCount).toBe(11);
+  });
+
+  it('records the raw store window max entry id, including the excluded current entry', async () => {
+    const nowMs = Date.now();
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 41,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'previous turn question',
+        timestamp: nowMs - 120_000,
+      },
+      {
+        id: 42,
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'previous turn reply',
+        timestamp: nowMs - 60_000,
+      },
+      {
+        id: 43,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'current turn question',
+        timestamp: nowMs,
+      },
+    ];
+    const store = {
+      getRecent: () => recentEntries,
+      getCompactionSummaries: () => [],
+    } as never;
+
+    const snapshot = await captureTurnSessionContext({
+      channelId: 'api:main',
+      sourceChannelId: 'api:main',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      config: makeConfig(),
+      store,
+      activityStore: store,
+      crossChannelContinuity: { getMerged: () => [] },
+      focusCompactionRanges: [],
+      focusKnowledgeTexts: [],
+      wakeReturnArtifacts: [],
+      compactionPromptText: 'Summarize history.',
+      promptRegistry: null,
+      excludeSessionEntryId: 43,
+    });
+
+    // The raw window max is captured BEFORE exclusion so a caller that just
+    // recorded entry 43 can verify the store actually served it
+    // (psfn-framework-hgw3.1 stale-window guard).
+    expect(snapshot.storeWindowMaxEntryId).toBe(43);
+    expect(snapshot.recentEntries.map(entry => entry.id)).not.toContain(43);
   });
 
   it('measures orientation from the latest prior activity after excluding the current turn', async () => {
@@ -617,7 +682,11 @@ describe('orientation context surface wiring', () => {
       const assembled = await assembleSessionHistoryForContextWithLlmSummary({
         entries: spanBound.entries,
         channelVisibility: 'private',
-        tokenBudget: 180,
+        // History stamps ('[Ddd MM-DD-YY HH:mm] ' = 21 chars/tokens under the
+        // 1-token-per-char test tokenizer) inflate rendered user/system
+        // messages only — assistant turns are unstamped (2x37.10) — so the
+        // budget leaves the same relative summary headroom as before.
+        tokenBudget: 220,
         characterName: 'Companion',
         renderGroupUserAttribution: false,
         channelId: 'api:main',

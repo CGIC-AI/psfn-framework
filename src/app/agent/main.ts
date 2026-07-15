@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
@@ -59,10 +60,13 @@ import {
   resolveDriftReviewCardsPath,
   resolveChargeLedgerPath,
   resolveIntakeQuarantinePath,
+  resolveIntrospectionValuesFindingsPath,
+  resolveLegacyValuesJournalPath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
   resolveSocialGraphBuilderWatermarkPath,
+  resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { createFilePendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import {
@@ -102,15 +106,29 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
-import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
 import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
-import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
+import {
+  createLLMCompanionLandmarkReflector,
+  createLLMIntrospectionAuditor,
+} from '../../faculties/introspection/model-runtime.js';
+import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
+import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
+import {
+  createLLMValuesConsistencyEvaluator,
+  IntrospectionValuesConsistencyRuntime,
+  ValuesConsistencyFindingStore,
+} from '../../faculties/introspection/values-consistency.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { hydrateStartupContinuity } from './startup-continuity.js';
 import {
   createOptionalJournalAutoPublisher,
   registerMarkdownJournalTools,
@@ -158,7 +176,7 @@ async function main(): Promise<void> {
 
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
   const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
-    ...(config.companionId ? { companionId: config.companionId } : {}),
+    companionId: resolveCoreCompanionIdFromConfig(config),
     ...(config.gatewayCompanionAuthToken
       ? { companionAuthToken: config.gatewayCompanionAuthToken }
       : {}),
@@ -276,6 +294,7 @@ async function main(): Promise<void> {
       });
     },
     logger: log,
+    onQueueChanged: () => emitGardenQueueChanged(eventBus, 'contact-approvals'),
   });
 
   // ── Load identity (mounted read-only in container) ──
@@ -328,6 +347,7 @@ async function main(): Promise<void> {
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
@@ -354,20 +374,29 @@ async function main(): Promise<void> {
   // classifier stays gateway-side; the agent process runs deterministic L1
   // scanners only.
   const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
+  const intakeQuarantineWriter = intakePolicy.mode !== 'off'
+    ? createIntakeQuarantineStore(
+      resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+      {
+        itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+        maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+      },
+    )
+    : null;
   const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
-    ...(intakePolicy.mode !== 'off'
+    ...(intakeQuarantineWriter
       ? {
-        quarantine: createIntakeQuarantineStore(
-          resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
-          {
-            itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-            maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+        quarantine: {
+          hold: (input: Parameters<typeof intakeQuarantineWriter.hold>[0]) => {
+            const entry = intakeQuarantineWriter.hold(input);
+            emitGardenQueueChanged(eventBus, 'intake-quarantine');
+            return entry;
           },
-        ),
+        },
       }
       : {}),
   });
@@ -385,23 +414,10 @@ async function main(): Promise<void> {
     pathSnapshot.companionDataDir,
     config.sessionRestartBehavior ?? 'reuse_latest_session',
   );
-  try {
-    await hydrateStartupActiveMemoryContexts({
-      memoryProvider: agentLoop.memoryProvider,
-      sessionManager,
-    });
-  } catch (error) {
-    log.warn('Startup active memory hydration failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  try {
-    hydrateStartupActiveCoreMemoryBlocks({ sessionManager });
-  } catch (error) {
-    log.warn('Startup active core-memory hydration failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await hydrateStartupContinuity({
+    memoryProvider: agentLoop.memoryProvider,
+    sessionManager,
+  });
 
   agentLoop.setInternalStateStore(persistenceRuntime.internalStateStore);
   const internalStateRehydration = await rehydratePersistedInternalState({
@@ -465,6 +481,58 @@ async function main(): Promise<void> {
     contactStore,
     weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
     lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+  });
+
+  const introspectionAuditConfig = schedulerConfig.introspectionAudit
+    ?? DEFAULT_INTROSPECTION_AUDIT_CONFIG;
+  const introspectionAuditRuntime = new IntrospectionAuditRuntime({
+    config: introspectionAuditConfig,
+    consentStore: introspectionConsentStore,
+    source: createTurnRecordIntrospectionSource({
+      listRecentSessions: (limit, offset) => sessionManager.listRecentSessions(limit, offset).map((session) => ({
+        sessionId: session.sessionId,
+        sourceChannelId: sessionManager.getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
+          ?? session.channelId,
+      })),
+      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
+        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
+      ),
+      isSessionRetiredOrQuarantined: sessionId => (
+        sessionManager.isSessionRetiredOrQuarantined(sessionId)
+      ),
+      isSourceTurnRecordEligible: (sourceChannelId, ownerSessionId, turnId) => (
+        sessionStore.isSourceTurnRecordEligible(sourceChannelId, ownerSessionId, turnId)
+      ),
+    }),
+    auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),
+    reflector: createLLMCompanionLandmarkReflector(
+      llmProvider,
+      systemPrompt,
+      introspectionAuditConfig,
+    ),
+    persistence: persistenceRuntime.introspectionLandmarkStore,
+  });
+  const introspectionValuesConsistencyRuntime = new IntrospectionValuesConsistencyRuntime({
+    landmarks: persistenceRuntime.introspectionLandmarkStore,
+    consentStore: introspectionConsentStore,
+    claimedValues: new ValuesJournalStore(
+      resolveValuesJournalPath(pathSnapshot.companionDataDir),
+      { legacyFilePaths: [resolveLegacyValuesJournalPath(pathSnapshot.companionDataDir)] },
+    ),
+    findings: new ValuesConsistencyFindingStore(
+      resolveIntrospectionValuesFindingsPath(pathSnapshot.companionDataDir),
+    ),
+    evaluator: createLLMValuesConsistencyEvaluator({
+      llmProvider,
+      companionSystemPrompt: systemPrompt,
+      maxTokens: introspectionAuditConfig.reflectionMaxTokens,
+    }),
+  });
+  registerIntrospectionAuditTask({
+    scheduler,
+    runtime: introspectionAuditRuntime,
+    valuesConsistencyRuntime: introspectionValuesConsistencyRuntime,
+    config: introspectionAuditConfig,
   });
 
   const moduleLoader = new ModuleLoader({
@@ -697,7 +765,7 @@ async function main(): Promise<void> {
   // config selects this companion's own bot account entry.
   const discordChannelView = resolveDiscordCompanionView(
     channelsConfig.discord,
-    config.companionId,
+    resolveCoreCompanionIdFromConfig(config),
   );
   // Hydrate and subscribe before any gateway callback can execute. Prompt and
   // quota decisions must see the canonical rolling 24-hour balance even when
@@ -739,6 +807,9 @@ async function main(): Promise<void> {
   const detachCompanionEventForwarder = attachCompanionEventForwarder({
     eventBus,
     publisher: gateway,
+  });
+  const detachGatewayQueueChange = gateway.onGardenQueueChanged((queue) => {
+    emitGardenQueueChanged(eventBus, queue);
   });
 
   // ── Admin transport (optional) ──
@@ -810,6 +881,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.introspectionLandmarkStore.close();
     },
     scheduler,
     moduleLoader,
@@ -841,6 +913,7 @@ async function main(): Promise<void> {
   stopFn = async () => {
     detachCompanionEventForwarder();
     unregisterIcpCoLocationThoughtAdapter();
+    detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
     // the read-side staleness TTL — see companion-presence-runtime.ts).
@@ -856,6 +929,7 @@ async function main(): Promise<void> {
     shutdownTargets.fatigueRegulationReservations =
       coreRuntime.fatigueRegulationReservations;
   }
+  shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

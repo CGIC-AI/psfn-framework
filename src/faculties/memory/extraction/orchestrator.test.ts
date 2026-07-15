@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ExtractionIntegrityError,
+  resolveExtractionChannelVisibility,
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from './orchestrator.js';
@@ -16,6 +17,35 @@ interface PendingChunkCompletion {
   resolve: (content: string) => void;
   reject: (error: Error) => void;
 }
+
+describe('resolveExtractionChannelVisibility', () => {
+  const entry = (channelVisibility?: string) => ({
+    id: 1,
+    channelId: 'companion-room:den',
+    role: 'user' as const,
+    content: 'room line',
+    timestamp: 1,
+    ...(channelVisibility ? { channelVisibility } : {}),
+  });
+
+  it('uses persisted public/private room visibility instead of the channel-id default', () => {
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:living_room',
+      [entry('public')],
+    )).toBe('public');
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:den',
+      [entry('private')],
+    )).toBe('private');
+  });
+
+  it('fails closed to the most restrictive persisted visibility in a mixed batch', () => {
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:den',
+      [entry('public'), entry('invite_only'), entry('private')],
+    )).toBe('private');
+  });
+});
 
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
   const recoveredEntries = [

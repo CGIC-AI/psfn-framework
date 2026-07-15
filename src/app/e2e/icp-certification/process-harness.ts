@@ -468,6 +468,12 @@ export async function startIcpCertificationProcessHarness(input: {
     fleetCompanionIds: companionIds,
     channelRouting: {},
     discordAccounts: {},
+    personalWorkspaceByCompanionId: Object.fromEntries(
+      input.fixture.companions.map(companion => [
+        companion.companionId,
+        companion.workspacePath,
+      ]),
+    ),
   };
   const eventBus = new EventBus();
   const createGateway = () => new GatewayServer({

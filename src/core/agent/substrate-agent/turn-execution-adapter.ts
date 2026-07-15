@@ -405,6 +405,7 @@ export function createTurnExecutionRuntimeAdapter(
       continuityUserId,
       emotionSnapshot,
       recoveryResponse,
+      runtimeFallbackProvenance,
     ) => options.turnSupportRuntime.recordAssistantMessage(
       message,
       turnId,
@@ -414,6 +415,7 @@ export function createTurnExecutionRuntimeAdapter(
       continuityUserId,
       emotionSnapshot,
       recoveryResponse,
+      runtimeFallbackProvenance,
     ),
     buildTurnToolSummary: (turnMessages) => options.turnSupportRuntime.buildTurnToolSummary(turnMessages),
     inferPostTurnActions: (context) => options.turnSupportRuntime.inferPostTurnActions(context),

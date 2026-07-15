@@ -103,6 +103,14 @@ export interface AdminSettingsData {
   status: AdminSettingsStatus;
   effectiveChargeQuota: EffectiveChargeQuotaState;
   effectiveIcpAutonomy: EffectiveIcpAutonomySettingsState;
+  workspaceLayout?: {
+    mode: 'single' | 'fleet';
+    personalWorkspacePath: string | null;
+    sharedWorkspacePath: string | null;
+    companionSharedAccess: 'none' | 'read_only';
+    executableAutoLoad: false;
+    promptAutoLoad: false;
+  };
 }
 
 export interface SettingsValidationError {

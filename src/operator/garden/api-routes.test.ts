@@ -720,6 +720,7 @@ describe('AdminServer JSON API routes', () => {
 
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
+      env: { GATEWAY_SESSION_HMAC_KEY: 'garden-api-routes-test-session-hmac-key' },
       memoryStore,
       episodicStore,
       sessionStore,
@@ -1415,6 +1416,23 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
+    await eventBus.emit('agent.toolcall.end', {
+      channelId: 'api-session',
+      contentIndex: 0,
+      toolCallId: 'contact-1',
+      toolName: 'contact',
+      arguments: { action: 'lookup', contactId: 'private-contact-id' },
+      turnId: 'turn-contact-1',
+      requestId: 'request-contact-1',
+    });
+    await eventBus.emit('agent.tool.end', {
+      channelId: 'api-session',
+      toolCallId: 'contact-1',
+      toolName: 'contact',
+      isError: false,
+      turnId: 'turn-contact-1',
+      requestId: 'request-contact-1',
+    });
     await eventBus.emit('agent.tool.end', {
       channelId: 'api-session',
       toolCallId: 'notify-1',
@@ -1495,6 +1513,12 @@ describe('AdminServer JSON API routes', () => {
         };
       }>;
       recentFailures: Array<{ toolName: string; message: string }>;
+      recentInvocations: Array<{
+        toolName: string;
+        action?: string;
+        status: string;
+        channelId: string;
+      }>;
       recentTelemetry: Array<{
         type: 'decision' | 'snapshot';
         payload: Record<string, unknown>;
@@ -1561,6 +1585,15 @@ describe('AdminServer JSON API routes', () => {
         message: 'notify: failure (503 Service Unavailable).',
       }),
     ]));
+    expect(adaptivePayload.recentInvocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: 'contact',
+        action: 'lookup',
+        status: 'ok',
+        channelId: 'api-session',
+      }),
+    ]));
+    expect(JSON.stringify(adaptivePayload.recentInvocations)).not.toContain('private-contact-id');
     expect(adaptivePayload.recentTelemetry).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'decision',

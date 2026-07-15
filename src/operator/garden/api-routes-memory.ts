@@ -565,7 +565,9 @@ export function buildAdminMemoryRoutes(options: {
               sendJson(res, 404, { error: 'Memory not found' });
               return;
             }
-            sendJson(res, 200, detail);
+            // Detail bodies can be unredacted under an elevated session:
+            // never eligible for any cache storage.
+            sendJson(res, 200, detail, { 'Cache-Control': 'no-store' });
           },
           (error) => {
             sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory detail') });

@@ -134,6 +134,7 @@ describe('AdminDashboardDataService', () => {
           },
         ],
         inventory: [],
+        recentInvocations: [],
         recentFailures: [],
         recentTelemetry: [],
       })),

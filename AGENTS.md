@@ -103,12 +103,12 @@ databases, L0/session state, telemetry, backups, active identity artifacts, and
 system/default skill config belong in `DATA_DIR` or split system/companion
 runtime roots.
 
-In the current multi-companion runtime, `WORKSPACE_PATH` is still inherited
-globally by the fleet launcher, so it is not yet a per-companion isolation
-boundary. The target contract is one validated Personal Workspace per companion
-plus an explicitly governed Shared Companion Workspace; do not create ad hoc
-shared roots or claim personal-workspace isolation until that runtime contract
-exists.
+In the multi-companion runtime, the fleet launcher derives and validates one
+Personal Workspace per companion beneath the runtime root, injects only that
+root as the process `WORKSPACE_PATH`, and exposes the separate Shared Companion
+Workspace through its governed Garden surface. Do not add manifest path
+overrides, a `SHARED_WORKSPACE_PATH` environment variable, or ad hoc shared
+roots; shared material must retain review, provenance, and CogSec policy.
 
 Guardrails:
 

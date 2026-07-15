@@ -65,6 +65,7 @@ function toView(entry: PendingContactApprovalEntry): AdminPendingContactApproval
 export function createAdminPendingContactsService(options: {
   pendingApprovals: PendingContactApprovalStore;
   contactStore: ContactStorePort | null;
+  onQueueChanged?: () => void;
 }): AdminPendingContactsService {
   const { pendingApprovals, contactStore } = options;
 
@@ -90,6 +91,7 @@ export function createAdminPendingContactsService(options: {
         entry.displayName,
       );
       await pendingApprovals.remove(id);
+      options.onQueueChanged?.();
       return { ok: true, contactId: contact.id };
     },
 
@@ -98,6 +100,7 @@ export function createAdminPendingContactsService(options: {
       if (!denied) {
         return { ok: false, message: 'Pending contact approval not found' };
       }
+      options.onQueueChanged?.();
       return { ok: true };
     },
 
@@ -106,6 +109,7 @@ export function createAdminPendingContactsService(options: {
       if (!removed) {
         return { ok: false, message: 'Pending contact approval not found' };
       }
+      options.onQueueChanged?.();
       return { ok: true };
     },
   };

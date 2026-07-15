@@ -97,6 +97,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
         async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.stream(
@@ -149,6 +150,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: normalizePurpose(p.purpose) ?? (resolveShardChannelRouting(p.channelId) ? 'shard.execution' : 'chat'),
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
@@ -173,6 +175,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose: params.purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
         async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.complete(
@@ -222,6 +225,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: p.purpose,
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
@@ -310,12 +314,14 @@ function requireModelDiscovery(
 function buildCorrelation(params: GatewayCorrelationParams & {
   callType: ObservabilityCallType;
   purpose: string;
+  telemetryVisibility?: CorrelationMetadata['telemetryVisibility'];
 }): CorrelationMetadata {
   return resolveCorrelationMetadata(
     {
       ...params,
       callType: params.callType,
       purpose: params.purpose,
+      ...(params.telemetryVisibility ? { telemetryVisibility: params.telemetryVisibility } : {}),
     },
     undefined,
     params.purpose === 'chat' ? 'chat' : 'background',

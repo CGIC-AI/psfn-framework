@@ -25,6 +25,7 @@ export interface JournalFileMetadata {
   maxId: number;
   messageCount: number;
   activeTurnTombstoneCount: number;
+  activeTurnTombstoneIds: string[];
   lastTimestamp: number;
   lastHmac: string | null;
   lastEntry: JournalEntry | null;
@@ -62,6 +63,31 @@ export interface JournalBackwardMatch {
 export interface ReadJournalMatchingResult {
   matches: JournalBackwardMatch[];
   quarantined: QuarantinedJournalEntry[];
+}
+
+export interface JournalBoundedReadStats {
+  bytesRead: number;
+  readCalls: number;
+  filesRead: number;
+}
+
+export interface ReadJournalBeforeOptions {
+  beforeId: number;
+  messageLimit: number;
+  includeBoundaryEntry?: boolean;
+  scanChunkBytes?: number;
+  stats?: JournalBoundedReadStats;
+  /**
+   * Integrity-aware seek gate. Cursor metadata may exclude archive bytes only
+   * when the sampled row verifies against the immediately preceding HMAC.
+   */
+  trustSeekEntry?: (entry: JournalEntry, previousHmac: string | null) => boolean;
+}
+
+export interface ReadJournalBeforeResult {
+  entries: JournalEntry[];
+  quarantined: QuarantinedJournalEntry[];
+  truncated: boolean;
 }
 
 export interface SessionHmacKeyring {

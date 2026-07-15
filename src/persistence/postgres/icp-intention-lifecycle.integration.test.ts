@@ -202,6 +202,8 @@ describe('Postgres ICP intention lifecycle recovery', () => {
     async () => {
       if (!harness) throw new Error('Postgres integration harness is unavailable');
       const database = await harness.createDatabase();
+      let nowMs = Date.parse('2026-07-14T01:00:00.000Z');
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
       const pool = createPostgresPool(database.databaseUrl, {
         applicationName: 'psfn-icp-intention-lifecycle-recovery',
         allowExitOnIdle: true,
@@ -317,6 +319,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         expect(createFileOutreachOutboxStore(outboxPath)
           .getIcpDeliveredCompletion(pending.id)).toBeDefined();
 
+        nowMs = Date.parse('2026-07-14T01:01:00.000Z');
         const restartedPorts = createPostgresIntentionPortsFromPool(pool, {
           now: () => new Date('2026-07-14T01:01:00.000Z'),
         });
@@ -356,6 +359,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         expect(issuePermit).toHaveBeenCalledOnce();
         expect(delivery).toHaveBeenCalledOnce();
       } finally {
+        nowSpy.mockRestore();
         await pool.end();
       }
     },
@@ -368,6 +372,8 @@ describe('Postgres ICP intention lifecycle recovery', () => {
       if (!harness) throw new Error('Postgres integration harness is unavailable');
       const database = await harness.createDatabase();
       const schema = 'companion_icp_delivery_marker_recovery';
+      let nowMs = Date.parse('2026-07-14T02:00:00.000Z');
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
       const pool = createPostgresPool(database.databaseUrl, {
         applicationName: 'psfn-icp-delivery-marker-recovery',
         allowExitOnIdle: true,
@@ -517,6 +523,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
           database.databaseUrl,
           { schema },
         );
+        nowMs = Date.parse('2026-07-14T02:01:00.000Z');
         const restartedPorts = createPostgresIntentionPortsFromPool(pool, {
           now: () => new Date('2026-07-14T02:01:00.000Z'),
         });
@@ -568,6 +575,7 @@ describe('Postgres ICP intention lifecycle recovery', () => {
         expect(issuePermit).toHaveBeenCalledOnce();
         expect(delivery).toHaveBeenCalledOnce();
       } finally {
+        nowSpy.mockRestore();
         if (candidateStore) await candidateStore.close();
         await pool.end();
       }

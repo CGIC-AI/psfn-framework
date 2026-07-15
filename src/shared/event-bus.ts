@@ -92,6 +92,20 @@ export interface DeterministicGateEvent {
   channelId?: string;
 }
 
+export const GARDEN_QUEUE_NAMES = [
+  'confirmations',
+  'contact-approvals',
+  'graph-proposals',
+  'intake-quarantine',
+] as const;
+
+export type GardenQueueName = typeof GARDEN_QUEUE_NAMES[number];
+
+export function isGardenQueueName(value: unknown): value is GardenQueueName {
+  return typeof value === 'string'
+    && (GARDEN_QUEUE_NAMES as readonly string[]).includes(value);
+}
+
 export interface EventMap {
   'icp.availability.changed': {
     companionId: string;
@@ -362,6 +376,13 @@ export interface EventMap {
     deduped: number;
     watermarkAdvancedToMs: number;
     runAtMs: number;
+    timestamp: number;
+  };
+  /** Authenticated Garden refresh hint. Never carries queue entries, ids, or content. */
+  'garden.queue.changed': {
+    queue: GardenQueueName;
+    /** Gateway-internal owner used only to route the hint to one companion. */
+    companionId?: string;
     timestamp: number;
   };
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
@@ -1004,16 +1025,31 @@ export interface EventMap {
   // fire at the confirmation-queue choke points (gateway process); artifact
   // events fire when generated media is persisted post-turn (agent process);
   // tool activity re-emits on the gateway bus after crossing the RPC boundary.
-  'companion.approval.requested': { payload: CompanionApprovalRequestedPayload; timestamp: number };
-  'companion.approval.resolved': { payload: CompanionApprovalResolvedPayload; timestamp: number };
+  'companion.approval.requested': {
+    companionId: string;
+    payload: CompanionApprovalRequestedPayload;
+    timestamp: number;
+  };
+  'companion.approval.resolved': {
+    companionId: string;
+    payload: CompanionApprovalResolvedPayload;
+    timestamp: number;
+  };
   'companion.artifact.created': {
     payload: CompanionArtifactCreatedPayload;
     /** In-process preview source; stripped before anything leaves for the hub. */
     preview?: CompanionArtifactPreviewSource;
     channelId?: string;
+    /** Authenticated gateway connection identity; never accepted from event JSON. */
+    companionId?: string;
     timestamp: number;
   };
-  'companion.tool.activity': { payload: CompanionToolActivityPayload; channelId?: string; timestamp: number };
+  'companion.tool.activity': {
+    payload: CompanionToolActivityPayload;
+    channelId?: string;
+    companionId?: string;
+    timestamp: number;
+  };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {

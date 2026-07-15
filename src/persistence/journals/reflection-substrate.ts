@@ -1,7 +1,10 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
-import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
+import {
+  formatActiveDate,
+  formatActiveDateTimeLabel,
+} from '../../shared/time/active-timezone.js';
 import type { EmotionalTimeSeriesPoint } from '../../core/contacts/store/emotional-baseline.js';
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
@@ -853,7 +856,10 @@ export class ReflectionDailyJournalStore {
 
   append(input: ReflectionDailyJournalAppendInput): ReflectionDailyJournalEntry {
     const createdAt = normalizeCreatedAt(input.createdAt, this.now);
-    const date = normalizeIsoDate(input.date ?? createdAt.slice(0, 10), 'date');
+    const date = normalizeIsoDate(
+      input.date ?? formatActiveDate(new Date(createdAt)),
+      'date',
+    );
     const entry: ReflectionDailyJournalEntry = {
       id: buildEntryId('daily-reflection', this.now),
       kind: 'daily_journal_entry',

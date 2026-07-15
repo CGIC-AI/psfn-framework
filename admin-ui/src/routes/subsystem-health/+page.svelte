@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { getSubsystemHealth } from '$lib/api/endpoints/subsystem-health';
+  import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import type {
     SubsystemHealthSnapshot,
     SubsystemLaneHealth,
@@ -84,17 +85,17 @@
     }
   }
 
-  let timer: ReturnType<typeof setInterval> | null = null;
+  const poller = createVisibilityAwarePoller({
+    refresh: loadData,
+    intervalMs: 15_000,
+  });
 
   onMount(() => {
-    void loadData();
-    timer = setInterval(() => {
-      void loadData();
-    }, 15_000);
+    poller.start();
   });
 
   onDestroy(() => {
-    if (timer) clearInterval(timer);
+    poller.stop();
   });
 </script>
 

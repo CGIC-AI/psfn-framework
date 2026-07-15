@@ -33,15 +33,24 @@ import type {
   AdminContinuityProvenanceView,
 } from './continuity.js';
 
+export type AdminSessionListRow = Pick<
+  ChannelInfo,
+  'sessionId' | 'channelId' | 'messageCount' | 'lastActivityAt' | 'displayLabel'
+>;
+
 export interface AdminSessionListData {
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
+}
+
+export interface AdminSessionDetailData {
+  channel: AdminSessionListRow & Pick<ChannelInfo, 'linkedContactId' | 'linkedContactName'>;
 }
 
 export type AdminSessionRouteView = SourceChannelSessionRoute;
 
 export interface AdminSessionRouteListData {
   routes: AdminSessionRouteView[];
-  channels: ChannelInfo[];
+  channels: AdminSessionListRow[];
 }
 
 export interface AdminSessionRouteResetInput {
@@ -160,6 +169,15 @@ export interface AdminSessionMessagePaginationOptions {
    * page cheaply.
    */
   messagesOnly?: boolean;
+  /**
+   * Skip the up-to-50 full turn snapshots and role-envelope previews while
+   * still returning compaction audit views. Defaults to true (turns included)
+   * for backward compatibility with the prompt-monitor/Loom fetch. The session
+   * browser sends `false` so its initial page carries messages, ontology, and
+   * compaction summaries without the multi-MB turn payload; individual turn
+   * detail is fetched lazily via `getSessionTurnDetail`.
+   */
+  includeTurns?: boolean;
 }
 
 export interface AdminSessionSearchHitView {
@@ -188,9 +206,26 @@ export interface AdminSessionMessagePaginationData {
   returnedMessages: number;
 }
 
+export interface AdminSessionTurnDetailData {
+  sessionId: string;
+  channelId: string;
+  turn: AdminSessionTurnData;
+}
+
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
+  getSessionDetail(sessionId: string): Promise<AdminSessionDetailData>;
+  /**
+   * Garden transport read path. The newest page may use the optional shared
+   * session tail; older cursor pages stay on the canonical bounded reader.
+   */
+  getSessionMessagesForAdminRead(
+    sessionId: string,
+    options?: AdminSessionMessagePaginationOptions,
+  ): Promise<AdminSessionMessagesData>;
+  /** Canonical synchronous reader used by non-transport callers and fallback. */
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
+  getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData;
   searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;
   listSessionRoutes(): Promise<AdminSessionRouteListData>;
   resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;

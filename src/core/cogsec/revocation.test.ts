@@ -93,7 +93,7 @@ function basePreview(caseId: string): CogSecLineagePreview {
 
 function makeCompactionInvalidator(sessionStore: SessionStore) {
   return {
-    invalidateCompactionSummaries: (input: {
+    invalidateCompactionSummaries: async (input: {
       caseId: string;
       compactionSummaries: readonly CogSecLineageCompactionRef[];
     }) => {
@@ -105,7 +105,7 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
         bySession.set(summary.logicalSessionId, current);
       }
       for (const [channelId, compactionIds] of bySession.entries()) {
-        const result = sessionStore.applyCogSecCompactionInvalidations({
+        const result = await sessionStore.applyCogSecCompactionInvalidations({
           channelId,
           caseId: input.caseId,
           compactionIds,

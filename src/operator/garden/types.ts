@@ -135,6 +135,15 @@ export interface AdminAuditHistoryEntry extends AdminAuditTimelineEntry {
   raw?: Record<string, unknown>;
 }
 
+export interface AdminAuditHistoryListEntry extends AdminAuditTimelineEntry {
+  source: AdminAuditHistorySource;
+}
+
+export interface AdminAuditHistoryDetailData {
+  entry: AdminAuditHistoryListEntry;
+  raw: Record<string, unknown> | null;
+}
+
 export interface AdminAuditHistoryFilters extends AdminAuditTimelineFilters {
   source: AdminAuditHistorySource | 'all';
   query?: string;
@@ -151,7 +160,7 @@ export interface AdminAuditHistoryPagination {
 }
 
 export interface AdminAuditHistoryData {
-  entries: AdminAuditHistoryEntry[];
+  entries: AdminAuditHistoryListEntry[];
   filters: AdminAuditHistoryFilters;
   pagination: AdminAuditHistoryPagination;
   sources: {

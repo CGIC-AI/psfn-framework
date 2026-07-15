@@ -715,12 +715,15 @@ export class LLMClient {
     purpose: RoutingPurpose,
     correlation: ResolvedCorrelationMetadata | undefined,
   ): string {
+    const requestCorrelation = correlation?.telemetryVisibility === 'companion_private'
+      ? 'companion-private'
+      : (correlation?.requestId ?? 'unknown');
     return [
       'llm',
       randomUUID(),
       callKind,
       purpose,
-      correlation?.requestId ?? 'unknown',
+      requestCorrelation,
       correlation?.toolCallId ?? 'none',
     ].join(':');
   }
@@ -749,6 +752,7 @@ export class LLMClient {
       metadata?: Record<string, unknown>;
     },
   ): Promise<void> {
+    const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
     const chargeSnapshot = getRunChargeSnapshot();
@@ -858,12 +862,14 @@ export class LLMClient {
         ? 'partial'
         : options.settlement,
       callKind,
+      telemetryVisibility: companionPrivate ? 'companion_private' : 'operator_visible',
       attribution: {
         ...(correlation?.companionId
           ? { companionId: correlation.companionId }
           : (this.config.companionId ? { companionId: this.config.companionId } : {})),
         ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
-        ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+        // #49: companion_private work never persists re-identifying linkage.
+        ...(!companionPrivate && correlation?.channelId ? { channelId: correlation.channelId } : {}),
         ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
         callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
         purpose,
@@ -871,10 +877,10 @@ export class LLMClient {
         ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
         service: correlation?.service ?? service,
         process: correlation?.process ?? process,
-        ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-        ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-        ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-        ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(!companionPrivate && correlation?.turnId ? { turnId: correlation.turnId } : {}),
+        ...(!companionPrivate && correlation?.requestId ? { requestId: correlation.requestId } : {}),
+        ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
+        ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
         ...(chargeSnapshot?.lane
           ? { chargeLane: chargeSnapshot.lane }
           : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,8 @@ import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
-import type { SessionManager } from '../../session/manager.js';
+import { SessionManager } from '../../session/manager.js';
+import { SessionStore } from '../../../persistence/sessions/store.js';
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
@@ -27,6 +28,7 @@ import type {
   ObserverEvalSidecarRuntime,
 } from '../../eval/observer-sidecar/types.js';
 import { drainObserverEvalSidecarQueue } from '../../eval/observer-sidecar/runtime.js';
+import { sanitizeObserverEvalInput } from '../../eval/observer-sidecar/privacy.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type {
@@ -49,6 +51,7 @@ import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
+import { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
@@ -58,6 +61,7 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
+import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -183,6 +187,36 @@ function makeChargePolicy(): ChargePolicyConfig {
       premium_cloud: 4,
     },
     fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+function makePersistenceConfig(dataDir: string): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir,
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16_384,
+    extractionMaxTokens: 8_192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 4_096 },
+    },
   };
 }
 
@@ -743,6 +777,52 @@ function createRuntime(params: {
   return runtime;
 }
 
+function createPersistenceBackedRuntime(dataDir: string, eventBus: EventBus) {
+  const store = new SessionStore(dataDir);
+  const sessionManager = new SessionManager(store, makePersistenceConfig(dataDir));
+  const turnSupportRuntime = new TurnSupportRuntime({
+    eventBus,
+    sessionManager,
+    hashPromptText: text => `hash:${text.length}`,
+    resolveContextWindow: () => 4_096,
+  });
+  const buildContext = vi.fn(async () => ({
+    systemPrompt: 'System prompt',
+    messages: [],
+    manifest: undefined,
+  }));
+  const runtime = createRuntime({
+    eventBus,
+    sessionManager: {} as SessionManager,
+    buildContext,
+    scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+    awaitPendingAutoCompaction: vi.fn(async () => undefined),
+    recordUserMessage: vi.fn((...args: Parameters<TurnSupportRuntime['recordUserMessage']>) => (
+      turnSupportRuntime.recordUserMessage(...args)
+    )),
+    recordAssistantMessage: vi.fn((...args: Parameters<TurnSupportRuntime['recordAssistantMessage']>) => (
+      turnSupportRuntime.recordAssistantMessage(...args)
+    )),
+  });
+  runtime.sessionManager.recordTurn = sessionManager.recordTurn.bind(sessionManager);
+  runtime.buildTurnRecord = turnSupportRuntime.buildTurnRecord.bind(turnSupportRuntime);
+  runtime.extractResponseText = vi.fn(() => {
+    const latestAssistant = [...(runtime.agent.state.messages as any[])]
+      .reverse()
+      .find(message => message.role === 'assistant');
+    return Array.isArray(latestAssistant?.content)
+      ? latestAssistant.content
+        .filter((block: any) => block.type === 'text')
+        .map((block: any) => block.text)
+        .join('')
+      : typeof latestAssistant?.content === 'string'
+        ? latestAssistant.content
+        : '';
+  });
+
+  return { runtime, store };
+}
+
 describe('handleMessageForTurn intentional no-reply', () => {
   it('returns structured no-reply metadata and skips assistant persistence', async () => {
     const eventBus = new EventBus();
@@ -841,12 +921,117 @@ describe('handleMessageForTurn intentional no-reply', () => {
   });
 });
 
+describe('handleMessageForTurn outbound reply hygiene', () => {
+  it('strips mimicked history stamps before persistence and channel dispatch', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    // The model mimicked the rendered-history stamp prefix on its own reply
+    // (psfn-framework-2x37.10): the accepted turn text must reach persistence
+    // and AgentResponse.content clean, on every line, including doubled stamps.
+    runtime.extractResponseText = vi.fn(
+      () => '[Mon 07-13-26 14:32] the kettle is on\n[Mon 07-13-26 14:32] [Mon 07-13-26 14:33] tea in five',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-stamped'));
+
+    expect(response.content).toBe('the kettle is on\ntea in five');
+    expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe('the kettle is on\ntea in five');
+  });
+
+  it('leaves a stamp quoted mid-sentence in the reply untouched', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    const quoted = 'you sent that at [Mon 07-13-26 14:32] if I remember right';
+    runtime.extractResponseText = vi.fn(() => quoted);
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-quoted-stamp'));
+
+    expect(response.content).toBe(quoted);
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(quoted);
+  });
+
+  it('rejects an image-attachment claim when no attachment exists this turn', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => '*image attached*\nFresh selfie, exactly like you asked for.',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-false-image-claim'));
+
+    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
+      + 'I need to call selfie_create or generate_image before saying an image is attached.';
+    expect(response.content).toBe(correction);
+    expect(response.attachments).toBeUndefined();
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(correction);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-false-image-claim',
+      }),
+    );
+  });
+});
+
 describe('handleMessageForTurn generated media delivery', () => {
   it('turns successful media tool results into response attachments for chat egress', async () => {
     const eventBus = new EventBus();
     const emitSpy = vi.spyOn(eventBus, 'emit');
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'generated-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'generated-purr.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -862,6 +1047,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       recordAssistantMessage: vi.fn(() => 2),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
@@ -948,7 +1134,9 @@ describe('handleMessageForTurn generated media delivery', () => {
   it('recovers response attachments from tracked paid deliverables when the turn transcript misses the tool result', async () => {
     const eventBus = new EventBus();
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'missed-transcript-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'missed-transcript-purr.png');
     writeFileSync(localPath, Buffer.from('png-bytes'));
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -965,6 +1153,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       recordAssistantMessage: vi.fn(() => 2),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
@@ -1030,7 +1219,9 @@ describe('handleMessageForTurn generated media delivery', () => {
   it('drops a paid deliverable and emits no attachments when the turn ends in intentional no-reply', async () => {
     const eventBus = new EventBus();
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'no-reply-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'no-reply-purr.png');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1059,6 +1250,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       consumeIntentionalNoReplyDecision: vi.fn(() => noReply),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
@@ -2763,7 +2955,10 @@ function cloneTestEmotionSnapshot(): EmotionStateSnapshot {
   };
 }
 
-async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarRuntime | null) {
+async function runObserverSidecarTurn(
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null,
+  messageOverrides: Partial<SubstrateMessage> = {},
+) {
   const eventBus = new EventBus();
   const emotionSnapshot = cloneTestEmotionSnapshot();
   const observeEmotionState = vi.fn(async () => emotionSnapshot);
@@ -2799,6 +2994,7 @@ async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarR
       source: 'api',
       channelPrivacy: 'private',
     },
+    ...messageOverrides,
   }));
 
   return {
@@ -2819,7 +3015,137 @@ function expectProductionEmotionSnapshotUnchanged(result: Awaited<ReturnType<typ
   expect(result.recordAssistantMessage.mock.calls[0]?.[6]).toEqual(TEST_EMOTION_SNAPSHOT);
 }
 
+async function captureObserverSidecarInput(
+  messageOverrides: Partial<SubstrateMessage>,
+): Promise<ObserverEvalInput> {
+  const receivedInputs: ObserverEvalInput[] = [];
+  const sidecarRuntime: ObserverEvalSidecarRuntime = {
+    config: { enabled: true, sidecarId: 'observer-source-metadata-test' },
+    observer: {
+      observeTurn: vi.fn((input: ObserverEvalInput) => {
+        receivedInputs.push(input);
+      }),
+    },
+  };
+
+  await runObserverSidecarTurn(sidecarRuntime, messageOverrides);
+  await drainObserverEvalSidecarQueue(sidecarRuntime);
+
+  expect(receivedInputs).toHaveLength(1);
+  return receivedInputs[0]!;
+}
+
 describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('keeps internal scheduler terminal turns fail-closed and redacts their emotion snapshot', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'internal:reflection:temporal-wakeup',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Temporal Wakeup',
+      isDirectMessage: false,
+      routing: undefined,
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'terminal',
+      isDirectMessage: false,
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'fail_closed',
+        channelVisibility: null,
+        derivedTelemetryPermitted: false,
+        redactionReason: 'missing_channel_privacy_metadata',
+      },
+      emotion: {
+        snapshot: null,
+        snapshotRedacted: true,
+      },
+    });
+  });
+
+  it('classifies genuine interactive console turns as private observations', async () => {
+    const consoleMessage = createInteractiveTerminalMessage({
+      id: 'cli-observer-test',
+      content: OBSERVER_TEST_MESSAGE_CONTENT,
+      timestamp: new Date('2026-03-08T12:00:00Z'),
+    });
+    const receivedInput = await captureObserverSidecarInput(consoleMessage);
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'terminal',
+      isDirectMessage: false,
+      channelPrivacy: 'private',
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'private',
+        channelVisibility: 'private',
+        derivedTelemetryPermitted: true,
+      },
+      emotion: {
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        snapshotRedacted: false,
+      },
+    });
+  });
+
+  it('preserves a classified API session privacy level without defaulting it to private', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'api:shared-session',
+      channelType: 'api',
+      isDirectMessage: false,
+      routing: {
+        source: 'api',
+        channelPrivacy: 'invite_only',
+      },
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'api',
+      isDirectMessage: false,
+      channelPrivacy: 'invite_only',
+    });
+  });
+
+  it('leaves Discord observer source metadata unchanged', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'discord:guild-room',
+      channelType: 'discord',
+      isDirectMessage: false,
+      routing: {
+        source: 'discord',
+        channelPrivacy: 'public',
+      },
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'discord',
+      isDirectMessage: false,
+      channelPrivacy: 'public',
+    });
+  });
+
+  it('keeps an unclassified API session fail-closed instead of guessing privacy', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'api:unclassified-session',
+      channelType: 'api',
+      isDirectMessage: false,
+      routing: undefined,
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'api',
+      isDirectMessage: false,
+    });
+    expect(sanitizeObserverEvalInput(receivedInput).privacy).toMatchObject({
+      privacyClass: 'fail_closed',
+      channelVisibility: null,
+      derivedTelemetryPermitted: false,
+      redactionReason: 'missing_channel_privacy_metadata',
+    });
+  });
+
   it('leaves the production emotion snapshot unchanged when the sidecar is absent', async () => {
     const result = await runObserverSidecarTurn();
 
@@ -5241,6 +5567,114 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         question: 'Describe exactly what is visible in the current image input.',
         summary: 'A catgirl sits on a server rack holding a pink rifle.',
       },
+    });
+  });
+
+  it('persists forced vision-failure provenance at the session and turn record boundary', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    runtime.agent.prompt = vi.fn(async () => {
+      throw new Error('vision provider unavailable');
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-persisted-fallback', {
+      channelType: 'discord',
+      content: 'what is in the image?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
+    expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_nonfabricating_notice',
+      },
+    });
+    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
+    expect(turnRecord.assistantMessage).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_nonfabricating_notice',
+      },
+    });
+  });
+
+  it('persists runtime datetime refusal provenance after a contradictory retry', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, store } = createPersistenceBackedRuntime(dataDir, eventBus);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
+      active_timezone: 'America/New_York',
+      runtime_current_weekday: 'Wednesday',
+      runtime_current_date_human: 'March 18, 2026',
+      runtime_current_time_human: '9:30 AM',
+      runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+      runtime_current_today: '2026-03-18',
+      runtime_current_yesterday: '2026-03-17',
+      runtime_current_tomorrow: '2026-03-19',
+      runtime_current_part_of_day: 'late morning',
+    }));
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The time is wrong. Are you sure this is right?' }],
+        api: 'openai-completions',
+        provider: 'test',
+        model: 'test-model',
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      });
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-datetime-persisted-fallback', {
+      content: 'What time is it?',
+    }));
+
+    expect(response.metadata.diagnostics?.runtimeContradiction).toMatchObject({
+      retryAttempted: true,
+      retrySucceeded: false,
+      refusalApplied: true,
+    });
+    expect(response.metadata.runtimeFallbackProvenance).toEqual({
+      schemaVersion: 1,
+      authoredBy: 'runtime',
+      model: 'runtime-fallback',
+      strategy: 'runtime_datetime_contradiction_refusal',
+    });
+    const assistantEntry = store.getRecent('ch1', 10).find(entry => entry.role === 'assistant');
+    expect(JSON.parse(assistantEntry?.metadata ?? '{}')).toMatchObject({
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_datetime_contradiction_refusal',
+      },
+    });
+    const turnRecord = store.getRecentTurnRecords('ch1', 1)[0];
+    expect(turnRecord.assistantMessage?.runtimeFallbackProvenance).toEqual({
+      schemaVersion: 1,
+      authoredBy: 'runtime',
+      model: 'runtime-fallback',
+      strategy: 'runtime_datetime_contradiction_refusal',
     });
   });
 

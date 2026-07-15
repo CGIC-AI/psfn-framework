@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
@@ -8,7 +16,7 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from './generated-media.js';
-import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
+import { resolvePersonalImagesDir } from '../../persistence/layout.js';
 
 describe('collectGeneratedImageAttachments', () => {
   const tempDirs: string[] = [];
@@ -27,7 +35,7 @@ describe('collectGeneratedImageAttachments', () => {
     tempDirs.push(companionDataDir);
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: companionDataDir,
       galleryContext: {
         channelId: 'discord:gallery',
         channelType: 'discord',
@@ -74,6 +82,7 @@ describe('collectGeneratedImageAttachments', () => {
     expect(attachments[0]?.contentType).toBe('image/png');
     expect(attachments[0]?.name).toBe('purr.png');
     expect(attachments[0]?.localPath).toBeTruthy();
+    expect(attachments[0]?.localPath?.startsWith(`${resolvePersonalImagesDir(companionDataDir)}/`)).toBe(true);
     expect(existsSync(attachments[0]!.localPath!)).toBe(true);
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-bytes'));
     const metadata = JSON.parse(readFileSync(`${attachments[0]!.localPath!}.image-meta.json`, 'utf-8')) as {
@@ -113,7 +122,7 @@ describe('collectGeneratedImageAttachments', () => {
     tempDirs.push(companionDataDir);
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: companionDataDir,
       turnMessages: [
         {
           role: 'toolResult',
@@ -157,7 +166,7 @@ describe('collectGeneratedImageAttachments', () => {
     tempDirs.push(companionDataDir);
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: companionDataDir,
       turnMessages: [
         {
           role: 'toolResult',
@@ -200,10 +209,12 @@ describe('collectGeneratedImageAttachments', () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
     tempDirs.push(companionDataDir, personalDir);
-    const localPath = join(personalDir, 'purr-existing.png');
+    const localPath = join(resolvePersonalImagesDir(personalDir), 'purr-existing.png');
+    mkdirSync(resolvePersonalImagesDir(personalDir), { recursive: true });
+    writeFileSync(localPath, 'existing image');
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: personalDir,
       turnMessages: [
         {
           role: 'toolResult',
@@ -238,17 +249,56 @@ describe('collectGeneratedImageAttachments', () => {
         localPath,
       },
     ]);
-    expect(existsSync(resolveGeneratedImagesDir(companionDataDir))).toBe(false);
+    expect(existsSync(resolvePersonalImagesDir(companionDataDir))).toBe(false);
+  });
+
+  it('returns the canonical Personal Workspace image path instead of a mutable symlink alias', async () => {
+    const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
+    tempDirs.push(personalDir);
+    const imagesDir = resolvePersonalImagesDir(personalDir);
+    mkdirSync(imagesDir, { recursive: true });
+    const canonicalPath = join(imagesDir, 'canonical.png');
+    const aliasPath = join(imagesDir, 'alias.png');
+    writeFileSync(canonicalPath, 'existing image');
+    symlinkSync(canonicalPath, aliasPath);
+
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir: personalDir,
+      turnMessages: [{
+        role: 'toolResult',
+        toolName: 'media',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            provider: 'fal',
+            mode: 'create',
+            images: [{
+              url: 'https://images.example.test/alias.png',
+              contentType: 'image/png',
+              localPath: aliasPath,
+            }],
+          }),
+        }],
+      } as any],
+      fetchImpl: async () => {
+        throw new Error('fetch should not be called for existing local image paths');
+      },
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.localPath).toBe(canonicalPath);
   });
 
   it('recovers paid image attachments from tracked deliverables when turn messages miss the tool result', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
     tempDirs.push(companionDataDir, personalDir);
-    const localPath = join(personalDir, 'missed-transcript.jpg');
+    const localPath = join(resolvePersonalImagesDir(personalDir), 'missed-transcript.jpg');
+    mkdirSync(resolvePersonalImagesDir(personalDir), { recursive: true });
+    writeFileSync(localPath, 'existing image');
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: personalDir,
       turnMessages: [],
       paidDeliverables: [{
         surface: 'paidImageGeneration',
@@ -305,7 +355,7 @@ describe('collectGeneratedImageAttachments', () => {
     tempDirs.push(companionDataDir);
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: companionDataDir,
       turnMessages: [
         {
           role: 'toolResult',
@@ -360,7 +410,7 @@ describe('collectGeneratedImageAttachments', () => {
     tempDirs.push(companionDataDir);
 
     const attachments = await collectGeneratedImageAttachments({
-      companionDataDir,
+      personalFilesDir: companionDataDir,
       turnMessages: [
         {
           role: 'toolResult',

@@ -828,6 +828,14 @@ export class AdminSettingsDataService implements AdminSettingsService {
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
       effectiveIcpAutonomy: this.buildEffectiveIcpAutonomyState(editors),
+      workspaceLayout: {
+        mode: this.deps.config.multiCompanion === true ? 'fleet' : 'single',
+        personalWorkspacePath: this.deps.config.workspacePath?.trim() || null,
+        sharedWorkspacePath: this.deps.config.sharedWorkspacePath?.trim() || null,
+        companionSharedAccess: this.deps.config.sharedWorkspacePath ? 'read_only' : 'none',
+        executableAutoLoad: false,
+        promptAutoLoad: false,
+      },
     };
   }
 

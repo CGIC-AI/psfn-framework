@@ -1,10 +1,24 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { listSessions, getSessionMessages, SESSION_MESSAGE_PAGE_SIZE } from '$lib/api/endpoints/sessions';
+  import {
+    getCachedSessionList,
+    getSessionDetail,
+    getSessionMessages,
+    getSessionTurnDetail,
+    revalidateSessionList,
+    SESSION_MESSAGE_PAGE_SIZE,
+  } from '$lib/api/endpoints/sessions';
+  import {
+    loadSelectedSessionData,
+    loadSessionIndex,
+  } from './session-data-loader';
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import type {
+    AdminSessionDetailData,
+    AdminSessionListData,
     ChannelInfo,
     AdminSessionMessagesData,
+    AdminSessionTurnDetailData,
     SessionEntry,
   } from '$lib/types';
 
@@ -12,6 +26,7 @@
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
+  let selectedSessionDetail = $state<AdminSessionDetailData | null>(null);
   let messages = $state<SessionEntry[]>([]);
   let messageOntologyViews = $state<AdminSessionMessagesData['messageOntologyViews']>([]);
   let compactionAudits = $state<AdminSessionMessagesData['compactionAuditViews']>([]);
@@ -24,12 +39,20 @@
   let messageScrollContainer = $state<HTMLDivElement | null>(null);
 
   let expandedToolCall = $state<number | null>(null);
+  let expandedTurnId = $state<string | null>(null);
+  let turnDetail = $state<AdminSessionTurnDetailData | null>(null);
+  let turnDetailLoading = $state(false);
+  let turnDetailError = $state('');
   let channelLastActivity = $state<Map<string, number>>(new Map());
   let channelSearch = $state('');
   let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
   let messageSearch = $state('');
   const companionName = $derived(getCompanionName());
-  const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
+  const selectedChannel = $derived(
+    selectedSessionDetail?.channel
+      ?? channels.find(channel => channel.sessionId === selectedSessionId)
+      ?? null,
+  );
 
   // Channel type labels matching the htmx admin
   const CHANNEL_TYPE_LABELS: Record<string, string> = {
@@ -72,22 +95,34 @@
     return Number.isFinite(timestamp) ? timestamp : null;
   }
 
+  function applySessionList(data: AdminSessionListData) {
+    channels = data.channels;
+    const seeded = new Map(channelLastActivity);
+    for (const channel of data.channels) {
+      const ts = toTimestampMs(channel.lastActivityAt);
+      if (ts !== null && ts > (seeded.get(channel.sessionId) ?? 0)) {
+        seeded.set(channel.sessionId, ts);
+      }
+    }
+    channelLastActivity = seeded;
+  }
+
   async function loadChannels() {
     loadingChannels = true;
     error = '';
     try {
-      const data = await listSessions();
-      channels = data.channels;
-      const seeded = new Map<string, number>();
-      for (const channel of data.channels) {
-        const ts = toTimestampMs(channel.lastActivityAt);
-        if (ts !== null) {
-          seeded.set(channel.sessionId, ts);
-        }
-      }
-      channelLastActivity = seeded;
+      await loadSessionIndex({
+        getCached: getCachedSessionList,
+        revalidate: revalidateSessionList,
+        onList: (data, source) => {
+          applySessionList(data);
+          if (source === 'cache') loadingChannels = false;
+        },
+      });
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load sessions';
+      if (channels.length === 0) {
+        error = e instanceof Error ? e.message : 'Failed to load sessions';
+      }
     } finally {
       loadingChannels = false;
     }
@@ -133,6 +168,7 @@
 
   async function selectChannel(sessionId: string) {
     selectedSessionId = sessionId;
+    selectedSessionDetail = null;
     const requestSessionId = sessionId;
     loadingMessages = true;
     loadingOlderMessages = false;
@@ -142,16 +178,32 @@
     messageOntologyViews = [];
     compactionAudits = [];
     expandedToolCall = null;
+    resetTurnDetail();
     try {
-      const data = await getSessionMessages(sessionId, { limit: SESSION_MESSAGE_PAGE_SIZE });
-      if (selectedSessionId !== requestSessionId) return;
-      messages = data.messages;
-      messageOntologyViews = data.messageOntologyViews ?? [];
-      compactionAudits = data.compactionAuditViews ?? [];
-      updatePaginationState(data);
-      updateLastActivityFromMessages(data);
-      loadingMessages = false;
-      await scrollMessagesToBottom();
+      await loadSelectedSessionData({
+        sessionId,
+        loadMessages: requestSessionId => getSessionMessages(requestSessionId, {
+          // Initial page: keep compaction summaries but drop the up-to-50 full
+          // turn snapshots — turn detail is fetched lazily on expand.
+          limit: SESSION_MESSAGE_PAGE_SIZE,
+          includeTurns: false,
+        }),
+        loadDetail: getSessionDetail,
+        onMessages: async (data) => {
+          if (selectedSessionId !== requestSessionId) return;
+          messages = data.messages;
+          messageOntologyViews = data.messageOntologyViews ?? [];
+          compactionAudits = data.compactionAuditViews ?? [];
+          updatePaginationState(data);
+          updateLastActivityFromMessages(data);
+          loadingMessages = false;
+          await scrollMessagesToBottom();
+        },
+        onDetail: (data) => {
+          if (selectedSessionId !== requestSessionId) return;
+          selectedSessionDetail = data;
+        },
+      });
     } catch (e) {
       if (selectedSessionId === requestSessionId) {
         error = e instanceof Error ? e.message : 'Failed to load messages';
@@ -179,9 +231,12 @@
     const previousScrollHeight = scrollContainer?.scrollHeight ?? 0;
     loadingOlderMessages = true;
     try {
+      // Pagination pages carry messages + ontology only (no turns, previews, or
+      // compaction) so deep scrolling stays cheap over WAN (bead t5z7.1).
       const data = await getSessionMessages(requestSessionId, {
         limit: SESSION_MESSAGE_PAGE_SIZE,
         beforeId: oldestLoadedMessageId,
+        messagesOnly: true,
       });
       if (selectedSessionId !== requestSessionId) return;
 
@@ -208,6 +263,52 @@
   function handleMessagesScroll() {
     if (!messageScrollContainer || messageScrollContainer.scrollTop > 48) return;
     void loadOlderMessages();
+  }
+
+  // Turn identity lives on the message metadata envelope ({ turn: { turnId } }).
+  // Malformed metadata simply yields no turn-detail affordance for that row.
+  function extractTurnId(msg: SessionEntry): string | null {
+    if (!msg.metadata) return null;
+    try {
+      const parsed = JSON.parse(msg.metadata) as { turn?: { turnId?: unknown } };
+      const turnId = parsed?.turn?.turnId;
+      return typeof turnId === 'string' && turnId.trim() ? turnId.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resetTurnDetail() {
+    expandedTurnId = null;
+    turnDetail = null;
+    turnDetailError = '';
+    turnDetailLoading = false;
+  }
+
+  async function toggleTurnDetail(turnId: string) {
+    if (expandedTurnId === turnId) {
+      resetTurnDetail();
+      return;
+    }
+    if (!selectedSessionId) return;
+    const requestSessionId = selectedSessionId;
+    expandedTurnId = turnId;
+    turnDetail = null;
+    turnDetailError = '';
+    turnDetailLoading = true;
+    try {
+      const data = await getSessionTurnDetail(requestSessionId, turnId);
+      if (selectedSessionId !== requestSessionId || expandedTurnId !== turnId) return;
+      turnDetail = data;
+    } catch (e) {
+      if (selectedSessionId === requestSessionId && expandedTurnId === turnId) {
+        turnDetailError = e instanceof Error ? e.message : 'Failed to load turn detail';
+      }
+    } finally {
+      if (selectedSessionId === requestSessionId && expandedTurnId === turnId) {
+        turnDetailLoading = false;
+      }
+    }
   }
 
   function roleColor(role: string): string {
@@ -237,8 +338,7 @@
 
     // For person turns, try to use the linked contact name from the selected channel.
     if (msg.role === 'user') {
-      const channel = channels.find(c => c.sessionId === selectedSessionId);
-      if (channel?.linkedContactName) return channel.linkedContactName;
+      if (selectedChannel?.linkedContactName) return selectedChannel.linkedContactName;
     }
 
     // Fallback to role
@@ -305,8 +405,7 @@
       if (!needle) return true;
       return channelLabel(ch).toLowerCase().includes(needle)
         || ch.channelId.toLowerCase().includes(needle)
-        || ch.sessionId.toLowerCase().includes(needle)
-        || (ch.linkedContactName ?? '').toLowerCase().includes(needle);
+        || ch.sessionId.toLowerCase().includes(needle);
     });
 
     const sorted = [...list].sort((a, b) => {
@@ -421,10 +520,6 @@
                 <span class="text-sm text-shadow-600">
                   {ch.messageCount} messages
                 </span>
-                {#if ch.linkedContactName}
-                  <span class="text-sm text-shadow-600">&middot;</span>
-                  <span class="text-sm text-moss-700">{ch.linkedContactName}</span>
-                {/if}
               </div>
               {#if lastActivityTs}
                 <span class="text-sm text-shadow-600 block mt-0.5">
@@ -457,6 +552,9 @@
             {/if}
             {#if selectedChannel && selectedChannel.sessionId !== selectedChannel.channelId}
               <p class="text-sm text-shadow-600 font-mono truncate">session: {selectedChannel.sessionId}</p>
+            {/if}
+            {#if selectedChannel?.linkedContactName}
+              <p class="text-sm text-moss-700 truncate">Contact: {selectedChannel.linkedContactName}</p>
             {/if}
           </div>
           <span class="text-sm text-shadow-600">
@@ -558,6 +656,27 @@
                     </button>
                     {#if expandedToolCall === i}
                       <pre class="mt-1 text-sm bg-bark-100 p-2 rounded overflow-x-auto text-shadow-700 border border-bark-300">{JSON.stringify(msg.toolCalls, null, 2)}</pre>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if extractTurnId(msg)}
+                  {@const turnId = extractTurnId(msg)}
+                  <div class="mt-2">
+                    <button
+                      onclick={() => turnId && void toggleTurnDetail(turnId)}
+                      class="text-sm text-gold-700 hover:text-gold-600"
+                    >
+                      {expandedTurnId === turnId ? 'Hide turn detail' : 'Show turn detail'}
+                    </button>
+                    {#if expandedTurnId === turnId}
+                      {#if turnDetailLoading}
+                        <p class="mt-1 text-sm text-shadow-600">Loading turn detail...</p>
+                      {:else if turnDetailError}
+                        <p class="mt-1 text-sm text-wilt-600">{turnDetailError}</p>
+                      {:else if turnDetail}
+                        <pre class="mt-1 max-h-96 text-sm bg-bark-100 p-2 rounded overflow-auto text-shadow-700 border border-bark-300">{JSON.stringify(turnDetail.turn, null, 2)}</pre>
+                      {/if}
                     {/if}
                   </div>
                 {/if}

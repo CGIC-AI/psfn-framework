@@ -225,11 +225,16 @@ export class SessionJournalRuntime {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: null,
       recentEntriesByLimit: new Map(),
     };
 
     if (!existsSync(filePath)) return cache;
 
+    // Fingerprint BEFORE reading: an append that races the read leaves the
+    // fingerprint older than the file, so the next staleness check reloads
+    // (fail closed) instead of serving a cache missing the racing entry.
+    cache.archiveFingerprint = this.archivePort.fingerprintArchive(archive);
     const { entries, maxId, quarantined } = this.archivePort.readJournalFile(archive);
     if (quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
@@ -389,6 +394,9 @@ export class SessionJournalRuntime {
     this.archivePort.appendJournalEntry(params.archive, signed);
     applyJournalState(params.cache, signed);
     params.cache.lastHmac = nextHmac;
+    // Every caller holds the cross-process journal write lock here, so the
+    // refreshed fingerprint cannot absorb a concurrent foreign append.
+    params.cache.archiveFingerprint = this.archivePort.fingerprintArchive(params.archive);
     try {
       params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
     } catch (error) {
@@ -507,5 +515,75 @@ export class SessionJournalRuntime {
       if (message && message.id >= startId && message.id <= endId) found.push(message);
     }
     return found.sort((left, right) => left.id - right.id);
+  }
+
+  readEntriesBefore(
+    archive: SessionArchiveHandle,
+    beforeId: number,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    const boundedMessageLimit = tombstones.size > 0
+      ? Math.max(limit * 4, limit + tombstones.size * 4)
+      : limit;
+    const window = this.archivePort.readJournalEntriesBefore(archive, {
+      beforeId,
+      messageLimit: boundedMessageLimit,
+      includeBoundaryEntry: true,
+      ...(this.integrityProvider
+        ? {
+          trustSeekEntry: (entry: JournalEntry, previousHmac: string | null): boolean => (
+            this.integrityProvider?.verify(entry, previousHmac).verified === true
+          ),
+        }
+        : {}),
+    });
+    if (window.quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        window.quarantined.length,
+        window.entries.length,
+      );
+    }
+    if (window.entries.length === 0) return [];
+
+    const messageIndexes: number[] = [];
+    for (let index = 0; index < window.entries.length; index += 1) {
+      if (window.entries[index].type === 'message') messageIndexes.push(index);
+    }
+    if (messageIndexes.length === 0) return [];
+
+    const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - boundedMessageLimit)];
+    let previousHmacCandidates: Array<string | null> = [null];
+    if (oldestMessageIndex > 0) {
+      const boundaryEntry = window.entries[oldestMessageIndex - 1];
+      previousHmacCandidates = typeof boundaryEntry._hmac === 'string'
+        ? [boundaryEntry._hmac]
+        : [null];
+    }
+
+    const messages: SessionEntry[] = [];
+    let verificationFailed = false;
+    for (let index = oldestMessageIndex; index < window.entries.length; index += 1) {
+      const rawEntry = window.entries[index];
+      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+      previousHmacCandidates = normalized.nextHmacCandidates;
+      verificationFailed = verificationFailed || !normalized.verified;
+      const message = journalToSessionEntry(normalized.entry);
+      if (message) messages.push(message);
+    }
+
+    // A boundary-backed partial chain cannot safely distinguish a tampered
+    // boundary/window from a key transition. Replay the canonical archive so
+    // integrity normalization remains byte-identical to full history reads.
+    if (verificationFailed && oldestMessageIndex > 0) {
+      const loaded = this.loadChannel(archive);
+      const eligible = loaded.entries.filter(entry => entry.id < beforeId);
+      return eligible.length <= limit ? eligible : eligible.slice(-limit);
+    }
+
+    const visibleMessages = applyTurnTombstonesToSessionEntries(messages, tombstones);
+    return visibleMessages.length <= limit ? visibleMessages : visibleMessages.slice(-limit);
   }
 }

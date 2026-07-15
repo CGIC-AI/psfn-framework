@@ -8,6 +8,8 @@ import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity 
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
@@ -30,6 +32,32 @@ function appendSessionMessages(
       timestamp: 1_700_000_000_000 + index,
     });
   }
+}
+
+function buildTurnRecordFixture(
+  channelId: string,
+  index: number,
+  turnId: TurnRecord['turnId'],
+): TurnRecord {
+  const startedAt = 1_700_000_000_000 + index * 1_000;
+  return {
+    schemaVersion: 1,
+    turnId,
+    requestId: `req-${index}`,
+    channelId,
+    channelType: 'api',
+    startedAt,
+    completedAt: startedAt + 500,
+    status: 'completed',
+    userMessage: { role: 'user', content: `prompt-${index}`, timestamp: startedAt },
+    assistantMessage: { role: 'assistant', content: `reply-${index}`, timestamp: startedAt + 500 },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: 'test/model' },
+    provenanceRefs: [],
+  };
 }
 
 function findSessionJournalPath(rootDir: string, filenameFragment: string): string {
@@ -350,7 +378,11 @@ describe('SessionStore', () => {
     expect(readFileSync(turnFile, 'utf-8').trim().split('\n')).toHaveLength(1);
   });
 
-  it('fails closed on malformed turn records', () => {
+  it('quarantines malformed turn records loudly instead of failing the whole read', () => {
+    // Policy (bead hgw3.4): a malformed line is preserved as evidence in the
+    // .quarantine sidecar and warned about, while surrounding valid records
+    // stay readable — reported, never silently skipped, never bricking the
+    // channel's records.
     const channelId = 'api:bad-turn-record';
     const turnDir = join(dir, '_turn_records');
     mkdirSync(turnDir, { recursive: true });
@@ -379,10 +411,12 @@ describe('SessionStore', () => {
       provenanceRefs: [],
     })}\n`);
 
-    expect(() => store.getRecentTurnRecords(channelId, 10)).toThrow();
+    expect(store.getRecentTurnRecords(channelId, 10)).toEqual([]);
+    const quarantine = readFileSync(`${turnFile}.quarantine`, 'utf-8').trim();
+    expect(JSON.parse(quarantine)).toMatchObject({ channelId });
   });
 
-  it('applies append-only turn tombstones to session reads and supports deterministic restore', () => {
+  it('applies append-only turn tombstones to session reads and supports deterministic restore', async () => {
     const channelId = 'api:turn-tombstone-session';
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -449,7 +483,7 @@ describe('SessionStore', () => {
       metadata: secondTurnAssistantMeta,
     });
 
-    store.redactTurn(channelId, firstTurnId, {
+    await store.redactTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
       timestamp: 1_400,
@@ -486,7 +520,7 @@ describe('SessionStore', () => {
       tombstoneTargetId: firstTurnId,
     });
 
-    reloaded.restoreTurn(channelId, firstTurnId, {
+    await reloaded.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'undo',
       timestamp: 1_500,
@@ -503,7 +537,7 @@ describe('SessionStore', () => {
     expect(restoredAgain.count(channelId)).toBe(4);
   });
 
-  it('excludes tombstoned turn ids from turn-record reads and restores deterministically', () => {
+  it('excludes tombstoned turn ids from turn-record reads and restores deterministically', async () => {
     const channelId = 'api:turn-tombstone-records';
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -545,13 +579,14 @@ describe('SessionStore', () => {
       provenanceRefs: [],
     });
 
-    store.redactTurn(channelId, firstTurnId, {
+    await store.redactTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
 
-    store.restoreTurn(channelId, firstTurnId, {
+    await store.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
       reason: 'undo',
     });
@@ -559,6 +594,148 @@ describe('SessionStore', () => {
       firstTurnId,
       secondTurnId,
     ]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
+      firstTurnId,
+      secondTurnId,
+    ]);
+  });
+
+  it('applies logical-session tombstones to routed physical-source records after disk reload', async () => {
+    const sourceChannelId = 'discord:public-room';
+    const logicalSessionId = 'session:logical-after-reset';
+    const redactedTurnId = createTurnId(1_700_000_000_000);
+    const visibleTurnId = createTurnId(1_700_000_000_100);
+    store.append({
+      channelId: logicalSessionId,
+      role: 'user',
+      content: 'logical session owner',
+      timestamp: 1_700_000_000_000,
+      turnId: redactedTurnId,
+    });
+    for (const [turnId, requestId, completedAt] of [
+      [redactedTurnId, 'req-redacted', 1_700_000_000_010],
+      [visibleTurnId, 'req-visible', 1_700_000_000_110],
+    ] as const) {
+      store.appendTurnRecord({
+        schemaVersion: 1,
+        turnId,
+        requestId,
+        sessionId: logicalSessionId,
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        startedAt: completedAt - 10,
+        completedAt,
+        status: 'completed',
+        userMessage: { role: 'user', content: requestId, timestamp: completedAt - 10 },
+        assistantMessage: { role: 'assistant', content: 'reply', timestamp: completedAt },
+        toolCalls: [],
+        extractedMemoryIds: [],
+        concernDeltaRefs: [],
+        contactDeltaRefs: [],
+        versionPointers: { model: 'test/model' },
+        provenanceRefs: [],
+      });
+    }
+
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
+      .toEqual([logicalSessionId, logicalSessionId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(true);
+    await store.redactTurn(logicalSessionId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
+      .toBe(true);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
+  });
+
+  it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {
+    const channelId = 'api:tombstone-overscan';
+    const requestedLimits: number[] = [];
+    const basePort = createFilesystemTurnRecordStorePort(dir);
+    const countingStore = new SessionStore(dir, {
+      turnRecordStore: {
+        appendTurnRecord: record => basePort.appendTurnRecord(record),
+        readRecentTurnRecords: (channel, limit) => {
+          requestedLimits.push(limit);
+          return basePort.readRecentTurnRecords(channel, limit);
+        },
+        findTurnRecord: (channel, turnId) => basePort.findTurnRecord(channel, turnId),
+      },
+    });
+
+    const turnIds = Array.from({ length: 12 }, () => createTurnId());
+    turnIds.forEach((turnId, index) => {
+      countingStore.appendTurnRecord(buildTurnRecordFixture(channelId, index, turnId));
+    });
+
+    // One tombstoned turn near the tail: a single bounded overscan pass must
+    // satisfy the read without touching the whole archive (and never anything
+    // like Number.MAX_SAFE_INTEGER).
+    await countingStore.redactTurn(channelId, turnIds[11], { actor: 'admin:test', reason: 'privacy request' });
+    requestedLimits.length = 0;
+    expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
+      .toEqual([turnIds[9], turnIds[10]]);
+    expect(requestedLimits).toEqual([8]);
+
+    // Enough tombstones that the first pass yields nothing: the overscan
+    // doubles once, then stops as soon as the archive is exhausted.
+    for (const turnId of turnIds.slice(3, 11)) {
+      await countingStore.redactTurn(channelId, turnId, { actor: 'admin:test', reason: 'privacy request' });
+    }
+    requestedLimits.length = 0;
+    expect(countingStore.getRecentTurnRecords(channelId, 2).map(record => record.turnId))
+      .toEqual([turnIds[1], turnIds[2]]);
+    expect(requestedLimits).toEqual([8, 16]);
+  });
+
+  it('sees a sibling store instance\'s new turn tombstones without restart (fingerprint-gated fast path)', async () => {
+    const channelId = 'api:cross-process-tombstones';
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+    const storeA = new SessionStore(dir);
+    storeA.append({ channelId, role: 'user', content: 'seed message', timestamp: 1_000 });
+    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 0, firstTurnId));
+    storeA.appendTurnRecord(buildTurnRecordFixture(channelId, 1, secondTurnId));
+
+    // A second process attaches to the same sessions dir and serves a read
+    // first, caching "no tombstones" plus the journal fingerprint.
+    const storeB = new SessionStore(dir);
+    expect(storeB.getRecentTurnRecords(channelId, 10)).toHaveLength(2);
+
+    // A (another process in production) tombstones a turn. B's cached zero is
+    // now stale; the fingerprint gate must force a reload before trusting it.
+    await storeA.redactTurn(channelId, firstTurnId, { actor: 'admin:test', reason: 'privacy request', timestamp: 2_000 });
+    expect(storeB.getRecentTurnRecords(channelId, 10).map(record => record.turnId))
+      .toEqual([secondTurnId]);
+  });
+
+  it('serves count and session activity across a sibling instance\'s appends instead of a frozen cache', () => {
+    const channelId = 'api:cross-process-count';
+    const storeA = new SessionStore(dir);
+    storeA.append({ channelId, role: 'user', content: 'first message', timestamp: 1_000 });
+
+    // A second process attaches to the same sessions dir and fully loads the
+    // channel, so its cache carries a journal fingerprint.
+    const storeB = new SessionStore(dir);
+    expect(storeB.getRecent(channelId, 10)).toHaveLength(1);
+    expect(storeB.count(channelId)).toBe(1);
+
+    storeA.append({ channelId, role: 'assistant', content: 'second message', timestamp: 2_000 });
+    expect(storeB.count(channelId)).toBe(2);
+    const activity = storeB.getSessionActivity(channelId);
+    expect(activity?.messageCount).toBe(2);
+    expect(activity?.lastMessagePreview).toBe('second message');
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {
@@ -679,7 +856,7 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    const result = searchStore.applyCogSecTombstones({
+    const result = await searchStore.applyCogSecTombstones({
       channelId: 'api:cogsec-l0',
       caseId: 'cogsec_20260701T000000Z_l0',
       eventStore,
@@ -743,7 +920,7 @@ describe('SessionStore', () => {
     expect(reloaded.listCogSecTombstoneDiagnostics({ channelId: 'api:cogsec-l0' })[0]?.rowCount).toBe(1);
   });
 
-  it('does not modify companion L0 when sealed forensic archive write fails', () => {
+  it('does not modify companion L0 when sealed forensic archive write fails', async () => {
     const eventStore = new CogSecEventStore(join(dir, 'cogsec-events.json'));
     eventStore.createEvent({
       caseId: 'cogsec_20260701T000000Z_sealfail',
@@ -759,7 +936,7 @@ describe('SessionStore', () => {
       timestamp: 1_000,
     });
 
-    expect(() => store.applyCogSecTombstones({
+    await expect(store.applyCogSecTombstones({
       channelId: 'api:cogsec-seal-fail',
       caseId: 'cogsec_20260701T000000Z_sealfail',
       eventStore,
@@ -769,14 +946,14 @@ describe('SessionStore', () => {
         },
       },
       messageIds: [dirtyId],
-    })).toThrow('seal failed');
+    })).rejects.toThrow('seal failed');
 
     const journalPath = findSessionJournalPath(dir, 'cogsec-seal-fail');
     expect(readFileSync(journalPath, 'utf-8')).toContain('dirty payload survives because seal failed');
     expect(eventStore.getEvent('cogsec_20260701T000000Z_sealfail')?.tombstonedL0RowCount).toBe(0);
   });
 
-  it('re-signs integrity-protected journals after CogSec tombstoning', () => {
+  it('re-signs integrity-protected journals after CogSec tombstoning', async () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:integrity-key',
       activeVersion: 'v1',
@@ -807,7 +984,7 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    signedStore.applyCogSecTombstones({
+    await signedStore.applyCogSecTombstones({
       channelId: 'api:cogsec-hmac',
       caseId: 'cogsec_20260701T000000Z_hmac',
       eventStore,
@@ -835,7 +1012,7 @@ describe('SessionStore', () => {
     ]);
   });
 
-  it('replaces CogSec-affected compaction summaries with safe invalidation markers', () => {
+  it('replaces CogSec-affected compaction summaries with safe invalidation markers', async () => {
     store.append({
       channelId: 'api:cogsec-summary',
       role: 'user',
@@ -850,7 +1027,7 @@ describe('SessionStore', () => {
     const compactionId = store.getCompactionSummaries('api:cogsec-summary')[0]?.id;
     expect(compactionId).toBeDefined();
 
-    const result = store.applyCogSecCompactionInvalidations({
+    const result = await store.applyCogSecCompactionInvalidations({
       channelId: 'api:cogsec-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       compactionIds: [compactionId!],
@@ -871,7 +1048,7 @@ describe('SessionStore', () => {
     );
   });
 
-  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', () => {
+  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', async () => {
     store.append({
       channelId: 'api:cogsec-regenerated-summary',
       role: 'user',
@@ -885,13 +1062,13 @@ describe('SessionStore', () => {
     );
     const compactionId = store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.id;
     expect(compactionId).toBeDefined();
-    store.applyCogSecCompactionInvalidations({
+    await store.applyCogSecCompactionInvalidations({
       channelId: 'api:cogsec-regenerated-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       compactionIds: [compactionId!],
     });
 
-    const result = store.applyCogSecCompactionRegenerations({
+    const result = await store.applyCogSecCompactionRegenerations({
       channelId: 'api:cogsec-regenerated-summary',
       caseId: 'cogsec_20260701T000000Z_summary',
       summaries: [{
@@ -917,7 +1094,7 @@ describe('SessionStore', () => {
     );
   });
 
-  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', () => {
+  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', async () => {
     store.append({
       channelId: 'api:cogsec-bad-regeneration',
       role: 'user',
@@ -932,14 +1109,14 @@ describe('SessionStore', () => {
     const compactionId = store.getCompactionSummaries('api:cogsec-bad-regeneration')[0]?.id;
     expect(compactionId).toBeDefined();
 
-    expect(() => store.applyCogSecCompactionRegenerations({
+    await expect(store.applyCogSecCompactionRegenerations({
       channelId: 'api:cogsec-bad-regeneration',
       caseId: 'cogsec_20260701T000000Z_summary',
       summaries: [{
         compactionId: compactionId!,
         summary: '[CogSec redaction: cogsec_20260701T000000Z_summary]',
       }],
-    })).toThrow(/must not contain CogSec tombstone/u);
+    })).rejects.toThrow(/must not contain CogSec tombstone/u);
   });
 
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {
@@ -1274,6 +1451,207 @@ describe('SessionStore', () => {
     ]);
     expect(Math.min(...visitedIds)).toBe(1_489);
     expect(visitedIds.size).toBeLessThanOrEqual(12);
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads entries before a cursor without loading the complete journal', () => {
+    const channelId = 'api:before-cursor';
+    appendSessionMessages(store, channelId, 8);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 3);
+
+    expect(entries.map(entry => entry.id)).toEqual([4, 5, 6]);
+    expect(entries.map(entry => entry.content)).toEqual(['Message 3', 'Message 4', 'Message 5']);
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(beforeSpy).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 7,
+      messageLimit: 3,
+      includeBoundaryEntry: true,
+    });
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to canonical replay when a bounded integrity window is tampered', () => {
+    const channelId = 'api:before-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'signed');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const journalPath = findSessionJournalPath(dir, 'before-integrity');
+    const lines = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[4].content = 'tampered selected message';
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).toHaveBeenCalledOnce();
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered selected message');
+  });
+
+  it('does not let an unauthenticated first-row id exclude a signed before-cursor page', () => {
+    const channelId = 'api:before-first-row-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-first-row-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'signed');
+
+    const journalPath = findSessionJournalPath(dir, 'before-first-row-integrity');
+    const lines = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[0].id = 999;
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries.map(entry => entry.content)).toEqual(['signed 4', 'signed 5']);
+  });
+
+  it('uses segmented canonical replay when a sealed before-cursor window is tampered', () => {
+    const channelId = 'api:before-sealed-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-sealed-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'sealed');
+
+    const journalPath = findSessionJournalPath(dir, 'before-sealed-integrity');
+    const lines = readFileSync(journalPath, 'utf8').trim().split('\n');
+    const sealedRows = lines.slice(0, 6).map(line => JSON.parse(line) as Record<string, unknown>);
+    sealedRows[4].content = 'tampered sealed message';
+    const sealedPath = journalPath.replace(/\.jsonl$/u, '.00001.jsonl');
+    writeFileSync(sealedPath, `${sealedRows.map(row => JSON.stringify(row)).join('\n')}\n`, 'utf8');
+    writeFileSync(journalPath, `${lines.slice(6).join('\n')}\n`, 'utf8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered sealed message');
+    expect(entries[1].content).toBe('sealed 5');
+  });
+
+  it('preserves tombstone filtering during bounded cursor reads', async () => {
+    const channelId = 'api:before-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'redacted user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'redacted assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['visible user']);
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes sibling-writer tombstones before bounded pages without a full replay', async () => {
+    const channelId = 'api:before-sibling-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'sibling secret user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'sibling secret assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'sibling visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reader = new SessionStore(dir, { sessionArchivePort: archivePort });
+    expect(reader.getEntriesBefore(channelId, 10, 10).map(entry => entry.content)).toEqual([
+      'sibling secret user',
+      'sibling secret assistant',
+      'sibling visible user',
+    ]);
+    fullReadSpy.mockClear();
+
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+    const entries = reader.getEntriesBefore(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['sibling visible user']);
+    expect(entries.every(entry => !entry.content.includes('sibling secret'))).toBe(true);
     expect(fullReadSpy).not.toHaveBeenCalled();
   });
 

@@ -599,6 +599,16 @@ export function buildTimeOfDayRefreshNote(input: TimeOfDayRefreshNoteInput): str
 
 export interface TemporalWakeupSessionManagerPort {
   resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
+  /**
+   * Recently-active conversational channels for wake-note fan-out (bead
+   * psfn-framework-2x37.3): every channel with partner (role 'user') activity
+   * within `lookbackMs`, most-recent-activity first. Wire to
+   * SessionManager.listRecentlyActiveChannels. Optional for interface
+   * tolerance; when absent the lanes fall back to the single latest session
+   * (pre-fan-out behavior) so the module never assumes an enumeration surface
+   * that a caller has not provided.
+   */
+  listRecentlyActiveChannels?(input: { lookbackMs: number; nowMs?: number }): StartupSessionMetadata[];
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
   /** Context-visible system-note lane; see SessionManager.appendContextSystemNote. */
@@ -696,30 +706,61 @@ export function resolveMorningWakeSnapshot(input: {
 }
 
 interface ResolvedWakeupSessionContext {
-  session: StartupSessionMetadata | null;
+  session: StartupSessionMetadata;
   recentEntries: SessionEntry[];
   lastWakeupNoteAtMs?: number;
 }
 
-function resolveWakeupSessionContext(
+/**
+ * Recently-active conversational channels the wake lanes fan out to (bead
+ * psfn-framework-2x37.3). When the session manager exposes enumeration, every
+ * channel with partner activity inside `activeChannelLookbackHours` is a
+ * candidate; per-channel eligibility (internal/public/idle/anti-loop) still
+ * gates each one downstream. The latest session is always a candidate even
+ * when the partner has been idle past the lookback window — a multi-day
+ * absence is exactly when the new-day frame matters most, and pre-fan-out
+ * behavior always evaluated it. Without the enumeration surface the module
+ * falls back to that single latest session alone, so it never assumes a
+ * capability the caller did not wire.
+ */
+function enumerateWakeupChannels(
+  options: TemporalWakeupRuntimeOptions,
+  nowMs: number,
+): StartupSessionMetadata[] {
+  const latest = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
+  if (!options.sessionManager.listRecentlyActiveChannels) {
+    return latest ? [latest] : [];
+  }
+  const lookbackMs = Math.max(0, options.config.activeChannelLookbackHours) * HOUR_MS;
+  const channels = options.sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs });
+  if (latest && !channels.some(channel => channel.sessionId === latest.sessionId)) {
+    channels.push(latest);
+  }
+  return channels;
+}
+
+/**
+ * Per-channel wake context: the recent entries the eligibility check reads plus
+ * the anti-loop last-note timestamp for THAT channel (persisted-note scan +
+ * in-memory map, both keyed by the channel's own sessionId).
+ */
+function resolveWakeupChannelContext(
   options: TemporalWakeupRuntimeOptions,
   inMemoryNoteBySession: Map<string, number>,
+  channel: StartupSessionMetadata,
   recentLimit: number,
   noteSources: ReadonlySet<string> = WAKEUP_NOTE_SOURCES,
 ): ResolvedWakeupSessionContext {
-  const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
-  const sessionId = session?.sessionId;
-  const recentEntries = sessionId
-    ? options.sessionManager.getRecentMessages(sessionId, recentLimit)
-    : [];
-  const persistedEntries = sessionId && options.sessionManager.getRecentSessionEntries
+  const sessionId = channel.sessionId;
+  const recentEntries = options.sessionManager.getRecentMessages(sessionId, recentLimit);
+  const persistedEntries = options.sessionManager.getRecentSessionEntries
     ? options.sessionManager.getRecentSessionEntries(sessionId, 64)
     : [];
   const persistedLastNoteAt = findLatestTemporalWakeupNoteAt(persistedEntries, noteSources);
-  const inMemoryLastNoteAt = sessionId ? inMemoryNoteBySession.get(sessionId) : undefined;
+  const inMemoryLastNoteAt = inMemoryNoteBySession.get(sessionId);
   const lastWakeupNoteAtMs = Math.max(persistedLastNoteAt ?? 0, inMemoryLastNoteAt ?? 0) || undefined;
   return {
-    session,
+    session: channel,
     recentEntries,
     ...(lastWakeupNoteAtMs !== undefined ? { lastWakeupNoteAtMs } : {}),
   };
@@ -731,12 +772,25 @@ async function buildCatchUpSummary(
   recentEntries: readonly SessionEntry[],
 ): Promise<string> {
   if (!options.summarizeCatchUp) return '';
-  const conversational = recentEntries
-    .filter(entry => entry.role === 'user' || entry.role === 'assistant')
-    .slice(-Math.max(1, options.config.morningWake.catchUpEntryLimit));
+  const conversational = recentEntries.filter(
+    entry => entry.role === 'user' || entry.role === 'assistant',
+  );
   if (conversational.length === 0) return '';
+  // Day-scope the catch-up (bead psfn-framework-2x37.5): the wake note should
+  // summarize the LATEST chat day only, not an all-time last-N tail. Keep just
+  // the entries sharing the local date of the most recent conversational entry,
+  // then apply the count cap. Same active timezone the note builders render in.
+  const timeZone = resolveActiveTimezone();
+  const latestConversational = conversational.reduce(
+    (latest, entry) => (entry.timestamp > latest.timestamp ? entry : latest),
+  );
+  const latestDayKey = localDateKey(latestConversational.timestamp, timeZone);
+  const sameDay = conversational
+    .filter(entry => localDateKey(entry.timestamp, timeZone) === latestDayKey)
+    .slice(-Math.max(1, options.config.morningWake.catchUpEntryLimit));
+  if (sameDay.length === 0) return '';
   try {
-    return (await options.summarizeCatchUp({ channelId, entries: conversational })).trim();
+    return (await options.summarizeCatchUp({ channelId, entries: sameDay })).trim();
   } catch (error) {
     // The summary is an enrichment; its failure must not block the frame
     // update. Surfaced via warn, never swallowed silently.
@@ -863,65 +917,99 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       intervalMs: 24 * HOUR_MS,
       cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
       handler: async () => {
-        const context = resolveWakeupSessionContext(
-          options,
-          morningNoteBySession,
-          Math.max(morning.catchUpEntryLimit, 8),
-          MORNING_WAKEUP_NOTE_SOURCES,
-        );
-        const decision = evaluateMorningWakeEligibility({
-          session: context.session,
-          recentEntries: context.recentEntries,
-          fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
-          minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
-          ...(context.lastWakeupNoteAtMs !== undefined
-            ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
-            : {}),
-        });
-        if (!decision.allowed) {
-          // Fires at most once per day; log at info so a skipped morning wake is
-          // visible without turning on debug.
-          log.info('Morning wake skipped', {
-            reason: decision.reason,
-            sessionId: decision.sessionId,
+        // Fan the internal new-day frame out to EVERY recently-active channel
+        // (bead psfn-framework-2x37.3), each gated by its own eligibility +
+        // anti-loop state. Outward delivery stays single-target (below) to
+        // avoid multi-channel proactive spam.
+        const channels = enumerateWakeupChannels(options, Date.now());
+        const eligible: Array<{
+          decision: Extract<MorningWakeDecision, { allowed: true }>;
+          note: string;
+          channelType: ChannelType;
+        }> = [];
+
+        for (const channel of channels) {
+          const context = resolveWakeupChannelContext(
+            options,
+            morningNoteBySession,
+            channel,
+            Math.max(morning.catchUpEntryLimit, 8),
+            MORNING_WAKEUP_NOTE_SOURCES,
+          );
+          const decision = evaluateMorningWakeEligibility({
+            session: context.session,
+            recentEntries: context.recentEntries,
+            fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+            minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+            ...(context.lastWakeupNoteAtMs !== undefined
+              ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
+              : {}),
           });
-          return;
+          if (!decision.allowed) {
+            // Fires at most once per day; log at info so a skipped morning wake
+            // is visible without turning on debug.
+            log.info('Morning wake skipped', {
+              reason: decision.reason,
+              sessionId: decision.sessionId,
+            });
+            continue;
+          }
+
+          const catchUpSummary = await buildCatchUpSummary(
+            options,
+            decision.sessionId,
+            context.recentEntries,
+          );
+          const note = buildMorningWakeNote({
+            nowMs: decision.nowMs,
+            lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs,
+            timeTexture: decision.timeTexture,
+            ...(catchUpSummary ? { catchUpSummary } : {}),
+          });
+
+          // Internal frame update FIRST — outward delivery failures must never
+          // undo or block it.
+          options.sessionManager.appendContextSystemNote(
+            decision.sessionId,
+            note,
+            TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+          );
+          morningNoteBySession.set(decision.sessionId, decision.nowMs);
+          combinedNoteBySession.set(decision.sessionId, decision.nowMs);
+          log.info('Morning wake note injected', {
+            sessionId: decision.sessionId,
+            texture: decision.timeTexture.kind,
+            invokeFullTurn: decision.invokeFullTurn,
+            hasCatchUpSummary: Boolean(catchUpSummary),
+          });
+
+          eligible.push({
+            decision,
+            note,
+            channelType: resolveWakeupChannelType(channel.channelType),
+          });
         }
 
-        const catchUpSummary = await buildCatchUpSummary(
-          options,
-          decision.sessionId,
-          context.recentEntries,
-        );
-        const note = buildMorningWakeNote({
-          nowMs: decision.nowMs,
-          lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs,
-          timeTexture: decision.timeTexture,
-          ...(catchUpSummary ? { catchUpSummary } : {}),
-        });
+        if (eligible.length === 0) return;
 
-        // Internal frame update FIRST — outward delivery failures must never
-        // undo or block it.
-        options.sessionManager.appendContextSystemNote(
-          decision.sessionId,
-          note,
-          TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+        // Single outward target: the channel with the most recent partner
+        // activity. Only the internal frame notes fan out; proactive outbound
+        // stays one-target so a multi-channel wake never spams every surface.
+        const outwardTarget = eligible.reduce((best, candidate) =>
+          candidate.decision.lastPartnerActivityAtMs > best.decision.lastPartnerActivityAtMs
+            ? candidate
+            : best,
         );
-        morningNoteBySession.set(decision.sessionId, decision.nowMs);
-        combinedNoteBySession.set(decision.sessionId, decision.nowMs);
-        log.info('Morning wake note injected', {
-          sessionId: decision.sessionId,
-          texture: decision.timeTexture.kind,
-          invokeFullTurn: decision.invokeFullTurn,
-          hasCatchUpSummary: Boolean(catchUpSummary),
-        });
-
-        const channelType = resolveWakeupChannelType(context.session?.channelType);
         try {
-          await runOutwardPhase(options, decision, channelType, note);
+          await runOutwardPhase(
+            options,
+            outwardTarget.decision,
+            outwardTarget.channelType,
+            outwardTarget.note,
+          );
         } catch (error) {
           log.error('Morning wake outward phase failed; internal frame update stands', {
-            sessionId: decision.sessionId,
+            sessionId: outwardTarget.decision.sessionId,
             error: String(error),
           });
         }
@@ -938,60 +1026,66 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       type: 'every',
       intervalMs: Math.max(1_000, refresher.checkIntervalMs),
       handler: async () => {
-        const context = resolveWakeupSessionContext(options, combinedNoteBySession, 32);
-        const decision = evaluateIdleRefresherEligibility({
-          session: context.session,
-          recentEntries: context.recentEntries,
-          minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
-          minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
-          ...(context.lastWakeupNoteAtMs !== undefined
-            ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
-            : {}),
-        });
-        if (!decision.allowed) {
-          log.debug('Idle refresher skipped', {
-            reason: decision.reason,
+        // Fan the time-of-day refresh out to every recently-active channel
+        // (bead psfn-framework-2x37.3); each channel keeps its own idle guard
+        // and anti-loop spacing. No outward delivery on this lane.
+        const channels = enumerateWakeupChannels(options, Date.now());
+        for (const channel of channels) {
+          const context = resolveWakeupChannelContext(options, combinedNoteBySession, channel, 32);
+          const decision = evaluateIdleRefresherEligibility({
+            session: context.session,
+            recentEntries: context.recentEntries,
+            minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
+            minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
+            ...(context.lastWakeupNoteAtMs !== undefined
+              ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
+              : {}),
+          });
+          if (!decision.allowed) {
+            log.debug('Idle refresher skipped', {
+              reason: decision.reason,
+              sessionId: decision.sessionId,
+              idleGapMs: decision.idleGapMs,
+            });
+            continue;
+          }
+
+          let note: string;
+          if (decision.kind === 'new_day') {
+            // Overnight/multi-day texture: full new-day framing, including the
+            // shared catch-up summary when available.
+            const catchUpSummary = await buildCatchUpSummary(
+              options,
+              decision.sessionId,
+              context.recentEntries,
+            );
+            note = buildMorningWakeNote({
+              nowMs: decision.nowMs,
+              lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs ?? decision.lastActivityAtMs,
+              timeTexture: decision.timeTexture,
+              ...(catchUpSummary ? { catchUpSummary } : {}),
+            });
+          } else {
+            note = buildTimeOfDayRefreshNote({
+              nowMs: decision.nowMs,
+              lastActivityAtMs: decision.lastActivityAtMs,
+              timeTexture: decision.timeTexture,
+            });
+          }
+
+          options.sessionManager.appendContextSystemNote(
+            decision.sessionId,
+            note,
+            TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
+          );
+          combinedNoteBySession.set(decision.sessionId, decision.nowMs);
+          log.info('Idle time-of-day refresher note injected', {
             sessionId: decision.sessionId,
+            kind: decision.kind,
+            texture: decision.timeTexture.kind,
             idleGapMs: decision.idleGapMs,
           });
-          return;
         }
-
-        let note: string;
-        if (decision.kind === 'new_day') {
-          // Overnight/multi-day texture: full new-day framing, including the
-          // shared catch-up summary when available.
-          const catchUpSummary = await buildCatchUpSummary(
-            options,
-            decision.sessionId,
-            context.recentEntries,
-          );
-          note = buildMorningWakeNote({
-            nowMs: decision.nowMs,
-            lastPartnerActivityAtMs: decision.lastPartnerActivityAtMs ?? decision.lastActivityAtMs,
-            timeTexture: decision.timeTexture,
-            ...(catchUpSummary ? { catchUpSummary } : {}),
-          });
-        } else {
-          note = buildTimeOfDayRefreshNote({
-            nowMs: decision.nowMs,
-            lastActivityAtMs: decision.lastActivityAtMs,
-            timeTexture: decision.timeTexture,
-          });
-        }
-
-        options.sessionManager.appendContextSystemNote(
-          decision.sessionId,
-          note,
-          TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
-        );
-        combinedNoteBySession.set(decision.sessionId, decision.nowMs);
-        log.info('Idle time-of-day refresher note injected', {
-          sessionId: decision.sessionId,
-          kind: decision.kind,
-          texture: decision.timeTexture.kind,
-          idleGapMs: decision.idleGapMs,
-        });
       },
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',

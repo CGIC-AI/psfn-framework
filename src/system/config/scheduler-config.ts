@@ -347,6 +347,15 @@ export interface TemporalWakeupWakeSummaryConfig {
  */
 export interface TemporalWakeupConfig {
   enabled: boolean;
+  /**
+   * Lookback window (hours) for wake-note fan-out (bead psfn-framework-2x37.3).
+   * A channel is "recently active" — and therefore a fan-out target for the
+   * morning wake / idle refresher internal notes — when it has partner
+   * (role 'user') activity within this window. Notes fan out to every such
+   * channel; outward delivery still targets only the single most-recent
+   * partner channel. Positive integer.
+   */
+  activeChannelLookbackHours: number;
   morningWake: TemporalWakeupMorningConfig;
   idleRefresher: TemporalWakeupIdleRefresherConfig;
   wakeSummary: TemporalWakeupWakeSummaryConfig;
@@ -354,6 +363,7 @@ export interface TemporalWakeupConfig {
 
 export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
   enabled: true,
+  activeChannelLookbackHours: 72,
   morningWake: {
     enabled: true,
     timing: 'fixed',
@@ -380,8 +390,8 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
   idleRefresher: {
     enabled: true,
     checkIntervalMs: 900_000,
-    minIdleMinutes: 240,
-    minNoteIntervalMinutes: 240,
+    minIdleMinutes: 120,
+    minNoteIntervalMinutes: 120,
   },
   wakeSummary: {
     sessionSummaryMaxTokens: 160,
@@ -554,6 +564,32 @@ export const DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG: WeightedThoughtOutreachCo
   },
 };
 
+export interface IntrospectionAuditConfig {
+  enabled: boolean;
+  intervalMs: number;
+  recentSessionLimit: number;
+  recentTurnLimit: number;
+  maxCandidatesPerRun: number;
+  maxSourceChars: number;
+  minConfidence: number;
+  estimatorMaxTokens: number;
+  comparisonMaxTokens: number;
+  reflectionMaxTokens: number;
+}
+
+export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
+  enabled: false,
+  intervalMs: 86_400_000,
+  recentSessionLimit: 16,
+  recentTurnLimit: 64,
+  maxCandidatesPerRun: 3,
+  maxSourceChars: 4_000,
+  minConfidence: 0.7,
+  estimatorMaxTokens: 500,
+  comparisonMaxTokens: 300,
+  reflectionMaxTokens: 300,
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -572,6 +608,7 @@ export interface SchedulerRuntimeConfig {
   freeTime: FreeTimeConfig;
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
+  introspectionAudit?: IntrospectionAuditConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -1045,6 +1082,7 @@ function validateTemporalWakeupConfig(
   if (raw === undefined) {
     return {
       enabled: DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled,
+      activeChannelLookbackHours: DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
       morningWake: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake },
       idleRefresher: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher },
       wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
@@ -1071,6 +1109,11 @@ function validateTemporalWakeupConfig(
 
   return {
     enabled: toBoolean(raw.enabled ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled, 'temporalWakeup.enabled'),
+    activeChannelLookbackHours: toPositiveInteger(
+      raw.activeChannelLookbackHours ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
+      'temporalWakeup.activeChannelLookbackHours',
+      1,
+    ),
     morningWake: {
       enabled: toBoolean(morningRaw.enabled ?? morningDefaults.enabled, 'temporalWakeup.morningWake.enabled'),
       timing: toWakeTimingMode(morningRaw.timing ?? morningDefaults.timing, 'temporalWakeup.morningWake.timing'),
@@ -1328,6 +1371,28 @@ function validateWeightedThoughtOutreachConfig(
   };
 }
 
+function validateIntrospectionAuditConfig(
+  value: unknown,
+  sourcePath: string,
+): IntrospectionAuditConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: introspectionAudit must be an object`);
+  }
+  return {
+    enabled: toBoolean(value.enabled, 'introspectionAudit.enabled'),
+    intervalMs: toInterval(value.intervalMs, 'introspectionAudit.intervalMs'),
+    recentSessionLimit: toPositiveInteger(value.recentSessionLimit, 'introspectionAudit.recentSessionLimit', 1),
+    recentTurnLimit: toPositiveInteger(value.recentTurnLimit, 'introspectionAudit.recentTurnLimit', 1),
+    maxCandidatesPerRun: toPositiveInteger(value.maxCandidatesPerRun, 'introspectionAudit.maxCandidatesPerRun', 1),
+    maxSourceChars: toPositiveInteger(value.maxSourceChars, 'introspectionAudit.maxSourceChars', 256),
+    minConfidence: toUnitFactor(value.minConfidence, 'introspectionAudit.minConfidence'),
+    estimatorMaxTokens: toPositiveInteger(value.estimatorMaxTokens, 'introspectionAudit.estimatorMaxTokens', 64),
+    comparisonMaxTokens: toPositiveInteger(value.comparisonMaxTokens, 'introspectionAudit.comparisonMaxTokens', 64),
+    reflectionMaxTokens: toPositiveInteger(value.reflectionMaxTokens, 'introspectionAudit.reflectionMaxTokens', 64),
+  };
+}
+
 function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
@@ -1359,6 +1424,9 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     freeTime: validateFreeTimeConfig(raw.freeTime, sourcePath),
     weightedThoughtOutreach: validateWeightedThoughtOutreachConfig(raw.weightedThoughtOutreach, sourcePath),
     icpAutonomy: parseIcpAutonomySchedulerConfig(raw.icpAutonomy),
+    ...(raw.introspectionAudit === undefined
+      ? {}
+      : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
   };
 }
 

@@ -20,7 +20,7 @@
       "name": "Runtime Response Style",
       "priority": 105,
       "required": false,
-      "content": "<response_style_guidance>\n<style>{{runtime_response_style}}</style>\n{{#if runtime_response_style_is_concise}}<delivery>Answer directly and keep wording tight.</delivery>\n<expansion>Expand only when the user asks for more detail.</expansion>{{/if}}{{#if runtime_response_style_is_expressive}}<delivery>Keep your voice warm and vivid.</delivery>\n<expansion>Add personality-rich detail when it helps clarity.</expansion>{{/if}}\n</response_style_guidance>"
+      "content": "<response_style_guidance>\n<style>{{runtime_response_style}}</style>\n{{#if runtime_response_style_is_concise}}<delivery>Answer directly and keep wording tight.</delivery>\n<expansion>Expand only when the user asks for more detail.</expansion>{{/if}}{{#if runtime_response_style_is_concise_voice}}\n<voice_delivery>This is a voice channel. Reply only with words intended to be spoken aloud: do not narrate or emote actions, and keep replies concise for voice chat unless the user explicitly asks for more.</voice_delivery>{{/if}}{{#if runtime_response_style_is_expressive}}<delivery>Keep your voice warm and vivid.</delivery>\n<expansion>Add personality-rich detail when it helps clarity.</expansion>{{/if}}\n</response_style_guidance>"
     },
     {
       "identifier": "runtime.tooling",

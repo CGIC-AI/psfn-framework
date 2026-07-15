@@ -135,6 +135,11 @@ function cloneComputedInternalStateForResponse(internalState: InternalState): In
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
 }
 
+export interface TurnSessionIdentity {
+  readonly sourceChannelId: string;
+  readonly logicalSessionId: string;
+}
+
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
@@ -409,6 +414,7 @@ export interface TurnExecutionRuntime {
   }) => Promise<InferredPostTurnAction[]>;
   buildTurnRecord: (input: {
     message: SubstrateMessage;
+    turnSessionIdentity: TurnSessionIdentity;
     turnId: TurnID;
     requestId: string;
     startedAt: number;
@@ -710,6 +716,30 @@ export async function handleMessageForTurn(
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  const activeLogicalSessionId = turnCorrelationBase.sessionId?.trim();
+  if (!activeLogicalSessionId) {
+    throw new Error('Turn execution requires a logical session id');
+  }
+  const recoveredSourceRecord = recoveredResponse
+    ? runtime.sessionManager.findUniqueSourceRecordedTurn(message.channelId, turnId)
+    : null;
+  if (recoveredSourceRecord && recoveredSourceRecord.status !== 'completed') {
+    throw new Error('Recovered delivery source TurnRecord is not completed');
+  }
+  const recoveredLogicalSessionId = recoveredSourceRecord
+    ? (recoveredSourceRecord.sessionId ?? recoveredSourceRecord.channelId).trim()
+    : '';
+  const logicalSessionId = recoveredLogicalSessionId || activeLogicalSessionId;
+  const turnSessionIdentity: TurnSessionIdentity = Object.freeze({
+    sourceChannelId: message.channelId,
+    logicalSessionId,
+  });
+  if (logicalSessionId !== activeLogicalSessionId) {
+    turnCorrelationBase = {
+      ...turnCorrelationBase,
+      sessionId: logicalSessionId,
+    };
+  }
   const performanceCompanionId = turnCorrelationBase.companionId
     ?? runtime.config.companionId?.trim();
   void emitTurnPerformance(runtime.eventBus, {
@@ -730,10 +760,6 @@ export async function handleMessageForTurn(
       error: toErrorMessage(error),
     });
   });
-  const logicalSessionId = turnCorrelationBase.sessionId?.trim();
-  if (!logicalSessionId) {
-    throw new Error('Turn execution requires a logical session id');
-  }
   const foregroundLease = runtime.beginForegroundBackgroundWork(logicalSessionId);
   if (foregroundLease) await foregroundLease.ready;
   const abortRunAfterForegroundLoss = foregroundLease
@@ -975,6 +1001,7 @@ export async function handleMessageForTurn(
       });
       const suppressedTurnRecord = runtime.buildTurnRecord({
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         startedAt: startTime,
@@ -1551,9 +1578,9 @@ export async function handleMessageForTurn(
       : turnId;
     const recoveredTurnRecord = recoveredResponse === undefined
       ? null
-      : runtime.sessionManager.findSourceRecordedTurn(
-          message.channelId,
-          logicalSessionId,
+      : recoveredSourceRecord ?? runtime.sessionManager.findSourceRecordedTurn(
+          turnSessionIdentity.sourceChannelId,
+          turnSessionIdentity.logicalSessionId,
           recoveredSourceTurnId,
         );
     if (recoveredTurnRecord?.status === 'completed') {
@@ -1580,6 +1607,7 @@ export async function handleMessageForTurn(
     await schedulePostTurnWork({
       runtime,
       message,
+      turnSessionIdentity,
       response: agentResponse,
       turnMessages,
       turnId,
@@ -1711,13 +1739,14 @@ export async function handleMessageForTurn(
     // replay the manifest; appending a second failed record for the same turn
     // would destroy the source uniqueness gate and make recovery impossible.
     const completedSourceRecord = runtime.sessionManager.findSourceRecordedTurn(
-      message.channelId,
-      logicalSessionId,
+      turnSessionIdentity.sourceChannelId,
+      turnSessionIdentity.logicalSessionId,
       turnId,
     );
     if (completedSourceRecord?.status !== 'completed') {
       await runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         startedAt: startTime,

@@ -118,6 +118,10 @@ describe('TurnSupportRuntime role-envelope projections', () => {
         content: 'Please check in tomorrow if I disappear.',
         timestamp,
       },
+      turnSessionIdentity: {
+        sourceChannelId: channelId,
+        logicalSessionId: channelId,
+      },
       turnId,
       requestId,
       startedAt: timestamp.getTime(),
@@ -171,6 +175,10 @@ describe('TurnSupportRuntime role-envelope projections', () => {
         timestamp: new Date('2026-07-13T14:00:00.000Z'),
         isDirectMessage: false,
         routing: { channelPrivacy: 'public' as const },
+      },
+      turnSessionIdentity: {
+        sourceChannelId: 'api:public-room',
+        logicalSessionId: 'api:public-room',
       },
       turnId,
       requestId,

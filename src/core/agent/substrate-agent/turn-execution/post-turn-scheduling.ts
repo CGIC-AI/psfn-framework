@@ -40,6 +40,7 @@ import {
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
@@ -107,6 +108,7 @@ function createBackgroundWorkInput(input: {
 export async function schedulePostTurnWork(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   response: AgentResponse;
   turnMessages: AgentMessage[];
   turnId: TurnID;
@@ -150,6 +152,7 @@ export async function schedulePostTurnWork(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     response,
     turnMessages,
     turnId,
@@ -208,32 +211,33 @@ export async function schedulePostTurnWork(input: {
       : {}),
   });
   const turnRecord = runtime.buildTurnRecord({
-      message,
-      turnId,
-      requestId,
-      startedAt: startTime,
-      completedAt,
-      userSessionEntryId,
-      assistantSessionEntryId,
-      response,
-      turnMessages,
-      promptMode,
-      promptText: fullPrompt,
-      contextMessageCount,
-      memoryContextChars,
-      trustLevel,
-      speakerRole,
-      canonicalContactKey,
-      retrievalProvenanceRefs,
-      ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
-      turnSnapshot,
-      turnObservability: {
-        stages: observability.getObservedTurnStages(),
-        retrievals: observability.getObservedTurnRetrievals(),
-        ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
-      },
-      internalStateSnapshotRef,
-    });
+    message,
+    turnSessionIdentity,
+    turnId,
+    requestId,
+    startedAt: startTime,
+    completedAt,
+    userSessionEntryId,
+    assistantSessionEntryId,
+    response,
+    turnMessages,
+    promptMode,
+    promptText: fullPrompt,
+    contextMessageCount,
+    memoryContextChars,
+    trustLevel,
+    speakerRole,
+    canonicalContactKey,
+    retrievalProvenanceRefs,
+    ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
+    turnSnapshot,
+    turnObservability: {
+      stages: observability.getObservedTurnStages(),
+      retrievals: observability.getObservedTurnRetrievals(),
+      ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
+    },
+    internalStateSnapshotRef,
+  });
 
   await runtime.eventBus.emit('agent.turn.end', {
     message,
@@ -254,17 +258,16 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
   });
 
-  const logicalSessionId = runtime.resolveSessionChannelId(message.channelId).trim();
-  if (!logicalSessionId) {
-    throw new Error('Post-turn background work requires a logical session id');
-  }
-  if (turnRecord.sessionId && turnRecord.sessionId !== logicalSessionId) {
-    throw new Error('TurnRecord logical session does not match the active session route');
+  const logicalSessionId = turnSessionIdentity.logicalSessionId;
+  const turnRecordLogicalSessionId = turnRecord.sessionId ?? turnRecord.channelId;
+  if (turnRecord.channelId !== turnSessionIdentity.sourceChannelId
+    || turnRecordLogicalSessionId !== logicalSessionId) {
+    throw new Error('TurnRecord source does not match the captured turn identity');
   }
   const source: BackgroundWorkSourceRef = {
     schemaVersion: 1,
     logicalSessionId,
-    channelId: turnRecord.channelId,
+    channelId: turnSessionIdentity.sourceChannelId,
     turnId,
     requestId,
     turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(turnRecord),

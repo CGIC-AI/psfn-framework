@@ -47,6 +47,7 @@ import type {
   ForegroundWorkLease,
 } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import type { TurnSessionIdentity } from './turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -422,6 +423,7 @@ export class TurnSupportRuntime {
 
   buildTurnRecord(input: {
     message: SubstrateMessage;
+    turnSessionIdentity: TurnSessionIdentity;
     turnId: TurnID;
     requestId: string;
     startedAt: number;
@@ -447,8 +449,11 @@ export class TurnSupportRuntime {
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
   }): TurnRecord {
+    if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
+      throw new Error('TurnRecord physical source does not match the captured turn identity');
+    }
     const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       [
         ...(input.userSessionEntryId != null ? [input.userSessionEntryId] : []),
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
@@ -458,9 +463,10 @@ export class TurnSupportRuntime {
       turnId: input.turnId,
       requestId: input.requestId,
     });
+    const { turnSessionIdentity, ...turnRecordInput } = input;
     return buildTurnRecordForTurn({
-      ...input,
-      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
+      ...turnRecordInput,
+      sessionId: turnSessionIdentity.logicalSessionId,
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
       ...(introspectionSensitivityDecision ? { introspectionSensitivityDecision } : {}),

@@ -609,6 +609,7 @@ function createRuntime(params: {
       hasRecordedTurn: vi.fn(() => false),
       findRecordedTurn: vi.fn(() => null),
       findSourceRecordedTurn: vi.fn(() => null),
+      findUniqueSourceRecordedTurn: vi.fn(() => null),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
@@ -784,8 +785,8 @@ function createRuntime(params: {
             },
           }
         : {}),
-      sessionId: input.message.channelId,
-      channelId: input.message.channelId,
+      sessionId: input.turnSessionIdentity.logicalSessionId,
+      channelId: input.turnSessionIdentity.sourceChannelId,
       channelType: input.message.channelType,
       requestId: input.requestId,
       startedAt: input.startedAt,
@@ -859,45 +860,6 @@ function createPersistenceBackedRuntime(
   });
 
   return { runtime, store, sessionManager };
-}
-
-function buildPersistenceTestTurnRecord(
-  input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0],
-  logicalSessionId: string,
-): TurnRecord {
-  return {
-    schemaVersion: 1,
-    turnId: input.turnId,
-    requestId: input.requestId,
-    sessionId: logicalSessionId,
-    channelId: input.message.channelId,
-    channelType: input.message.channelType,
-    startedAt: input.startedAt,
-    completedAt: input.completedAt,
-    status: input.status ?? 'completed',
-    userMessage: {
-      role: 'user',
-      content: input.message.content,
-      timestamp: input.message.timestamp.getTime(),
-    },
-    assistantMessage: {
-      role: 'assistant',
-      content: input.response?.content ?? input.assistantMessageContent ?? 'assistant reply',
-      timestamp: input.completedAt,
-    },
-    toolCalls: [],
-    extractedMemoryIds: [],
-    concernDeltaRefs: [],
-    contactDeltaRefs: [],
-    versionPointers: { model: input.response?.metadata.model ?? input.model ?? 'test-model' },
-    provenanceRefs: [],
-    ...(input.internalStateSnapshotRef
-      ? { internalStateSnapshotRef: input.internalStateSnapshotRef }
-      : {}),
-    ...(input.message.routing?.icpCorrelation
-      ? { icpCorrelation: input.message.routing.icpCorrelation }
-      : {}),
-  };
 }
 
 describe('handleMessageForTurn intentional no-reply', () => {
@@ -3828,7 +3790,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     );
   });
 
-  it('recovers one exact routed-session manifest after a live enqueue failure', async () => {
+  it('keeps an in-flight routed handoff on its turn-start owner across a route reset', async () => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();
     const { runtime, store, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus, {
@@ -3844,7 +3806,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       reason: 'exercise physical-source handoff recovery',
       mode: 'fresh_split',
     });
-    const logicalSessionId = reset.newLogicalSessionId;
+    const turnStartLogicalSessionId = reset.newLogicalSessionId;
     runtime.sessionManager = sessionManager;
     runtime.resolveSessionChannelId = (channelId: string) => (
       sessionManager.resolveSessionChannelId(channelId)
@@ -3857,25 +3819,53 @@ describe('handleMessageForTurn compaction scheduling', () => {
       channelId: message.channelId,
       sessionId: sessionManager.resolveSessionChannelId(message.channelId),
     });
-    runtime.buildTurnRecord = input => buildPersistenceTestTurnRecord(input, logicalSessionId);
+    runtime.memoryExtractor = {
+      maybeExtract: vi.fn(async () => undefined),
+      getBoundedExtractionSnapshotLimit: () => 10,
+    };
+    const promptStarted = createDeferred<void>();
+    const releasePrompt = createDeferred<void>();
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      promptStarted.resolve();
+      await releasePrompt.promise;
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'assistant reply' }],
+      });
+    });
     const liveEnqueue = vi.fn()
-      .mockRejectedValueOnce(new Error('injected routed enqueue failure'));
+      .mockRejectedValueOnce(new Error('injected routed enqueue failure'))
+      .mockResolvedValue(undefined);
     runtime.enqueuePostTurnBackgroundWork = liveEnqueue;
 
-    await expect(handleMessageForTurn(runtime, createMessage('msg-routed-handoff', {
+    const inFlight = handleMessageForTurn(runtime, createMessage('msg-routed-handoff', {
       channelId: sourceChannelId,
       channelType: 'discord',
       isDirectMessage: false,
-    }))).rejects.toThrow('injected routed enqueue failure');
+    }));
+    await promptStarted.promise;
+    const futureRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'move only future turns to a new logical session',
+      mode: 'fresh_split',
+    });
+    releasePrompt.resolve();
+    await expect(inFlight).rejects.toThrow('injected routed enqueue failure');
 
     const physicalRecords = store.getRecentSourceTurnRecords(sourceChannelId, 10);
     expect(physicalRecords).toHaveLength(1);
     expect(physicalRecords[0]).toMatchObject({
       channelId: sourceChannelId,
-      sessionId: logicalSessionId,
+      sessionId: turnStartLogicalSessionId,
       status: 'completed',
     });
     const exactManifest = parseTurnRecordBackgroundWorkHandoff(physicalRecords[0]!);
+    expect(exactManifest).toHaveLength(4);
+    expect(new Set(exactManifest.map(job => job.logicalSessionId))).toEqual(
+      new Set([turnStartLogicalSessionId]),
+    );
     const recoveryEnqueue = vi.fn(async () => undefined);
     expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
       1,
@@ -3887,6 +3877,21 @@ describe('handleMessageForTurn compaction scheduling', () => {
       1,
       async record => recoveryEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
     )).toBe(0);
+
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'future reply' }],
+      });
+    });
+    await expect(handleMessageForTurn(runtime, createMessage('msg-future-route', {
+      channelId: sourceChannelId,
+      channelType: 'discord',
+      isDirectMessage: false,
+    }))).resolves.toMatchObject({ content: 'future reply' });
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
+      .toEqual([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]);
   });
 
   it('replays the exact TurnRecord handoff after a record-to-queue crash gap', async () => {
@@ -3938,10 +3943,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
       channelId: message.channelId,
       sessionId: sessionManager.resolveSessionChannelId(message.channelId),
     });
-    runtime.buildTurnRecord = input => buildPersistenceTestTurnRecord(input, logicalSessionId);
     runtime.resolveAuthorContext = vi.fn(() => machineIntelligenceAuthorContext({
       canonicalContactKey: correlation.peerContactId,
     }));
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'assistant reply' }],
+      });
+    });
     const message = createMessage(sourceMessageId, {
       channelId,
       channelType: 'companion',
@@ -3970,6 +3981,13 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     const recordedJobs = recordedTurn.backgroundWorkHandoff?.jobs;
     expect(recordedJobs).toHaveLength(3);
+    const futureRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId: channelId,
+      actor: 'test',
+      reason: 'route only future deliveries to a fresh logical session',
+      mode: 'fresh_split',
+    });
+    expect(futureRoute.newLogicalSessionId).not.toBe(logicalSessionId);
 
     const recoveredResponse: AgentResponse = {
       content: 'assistant reply',

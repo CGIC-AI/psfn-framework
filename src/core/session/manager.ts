@@ -1083,6 +1083,10 @@ export class SessionManager {
     return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
   }
 
+  findUniqueSourceRecordedTurn(sourceChannelId: string, turnId: string): TurnRecord | null {
+    return this.store.findUniqueSourceTurnRecord(sourceChannelId, turnId);
+  }
+
   isSourceRecordedTurnEligible(
     sourceChannelId: string,
     logicalSessionId: string,

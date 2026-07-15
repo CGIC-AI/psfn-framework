@@ -34,4 +34,29 @@ describe('fleet auth legacy surface startup guard', () => {
     })).not.toThrow();
     expect(env).toEqual(before);
   });
+
+  it('distinguishes bootstrap-only OAuth routes from a future principal resolver', () => {
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787', API_KEY: 'machine-api-key' },
+      fleetAuthBootstrapRoutesWired: true,
+      principalAuthenticationWired: false,
+    })).not.toThrow();
+
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787' },
+      principalAuthenticationWired: false,
+    })).toThrow(/before listen/i);
+
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787', ADMIN_TOKEN: 'legacy-admin-token' },
+      fleetAuthBootstrapRoutesWired: true,
+      principalAuthenticationWired: false,
+    })).toThrow(/legacy/i);
+  });
 });

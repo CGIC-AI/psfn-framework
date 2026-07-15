@@ -111,6 +111,8 @@ async function main(): Promise<void> {
     fleetAuthEnabled: config.fleetAuth !== undefined,
     processMode: 'gateway',
     env,
+    principalAuthenticationWired: false,
+    fleetAuthBootstrapRoutesWired: config.fleetAuth !== undefined,
   });
   applyGatewayTlsConfig({
     caPath: config.gatewayTlsCaPath,
@@ -517,6 +519,7 @@ async function main(): Promise<void> {
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },
+    ...(fleetAuthPersistence ? { fleetAuthBroker: fleetAuthPersistence.broker } : {}),
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

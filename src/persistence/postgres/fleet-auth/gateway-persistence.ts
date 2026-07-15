@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
+import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import { resolveGatewayFleetAuthSecrets } from '../../../system/config/fleet-auth-config.js';
 import { createPostgresPool } from '../../postgres.js';
@@ -21,6 +22,10 @@ import {
   type AccountReapprovalResult,
 } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import {
+  PostgresFleetAuthBrokerStore,
+  type ProviderRevocationAuthorityPort,
+} from './oauth-session-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -30,6 +35,7 @@ import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
  */
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
+  broker: GatewayFleetAuthBroker;
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
@@ -174,10 +180,12 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   for (const table of [
     'jit_authorization_grants',
     'step_up_challenges',
+    // Completed OAuth rows reference their minted browser session. Remove the
+    // transaction receipt before the session while fencing the whole epoch.
+    'oauth_transactions',
     'browser_sessions',
     'provider_token_custody',
     'discord_evidence_snapshots',
-    'oauth_transactions',
     'trusted_host_ceremonies',
   ]) {
     await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}."${table}"`);
@@ -207,6 +215,63 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
               'authority.reconcile', 'fleet_auth', 'deny', 'restored_authority_quarantined',
               $2, $3)
     `, [auditEventId, trusted.authorityGeneration, nextEpoch]);
+}
+
+/** Gateway-internal bridge from browser revocation to the non-restored floor. */
+export function createGatewayProviderRevocationAuthorityPort(
+  authorityFloors: FleetAuthAuthorityFloorStore,
+): ProviderRevocationAuthorityPort {
+  return {
+    fence: async (input) => {
+      const fencedFloor = authorityFloors.revokeAccountAuthority({
+        kind: 'provider_subject',
+        resourceId: `${input.provider}:${input.subjectId}`,
+        reason: input.reasonDigest,
+        at: input.at.toISOString(),
+      });
+      return {
+        authorityGeneration: fencedFloor.trustedHost.authorityGeneration,
+        reconcile: async (client) => {
+          await reconcileFleetAuthAuthorityStateInTransaction(
+            client,
+            fencedFloor,
+            randomUUID(),
+          );
+          const state = await client.query<{ global_auth_epoch: string }>(`
+            SELECT global_auth_epoch
+            FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+            WHERE singleton = TRUE
+          `);
+          const row = state.rows.at(0);
+          if (!row) throw new Error('fleet_auth authority_state singleton is missing');
+          return {
+            globalAuthEpoch: parseStateInteger(row.global_auth_epoch, 'global_auth_epoch'),
+          };
+        },
+      };
+    },
+  };
+}
+
+/**
+ * Keep trusted-host reapproval subordinate to the non-restored provider floor.
+ * This guard remains authoritative even when a prior database transaction
+ * rolled back after publishing its floor tombstone.
+ */
+export function createGatewayAccountReapprovalAuthority(
+  pool: Pool,
+  authorityFloors: FleetAuthAuthorityFloorStore,
+): GatewayFleetAuthPersistence['reapproveAccountAuthority'] {
+  return async (request) => {
+    const providerResourceId = `${request.provider}:${request.providerSubjectId}`;
+    if (authorityFloors.isAccountAuthorityTombstoned(
+      'provider_subject',
+      providerResourceId,
+    )) {
+      throw new Error('Provider subject is permanently tombstoned by non-restored authority');
+    }
+    return await executeAccountReapproval(pool, request);
+  };
 }
 
 export async function initializeGatewayFleetAuthPersistence(options: {
@@ -279,9 +344,21 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lineageId,
       floor.trustedHost.lastLifecycleTransitionId,
     );
+    const broker = new GatewayFleetAuthBroker({
+      config: options.config,
+      store: new PostgresFleetAuthBrokerStore({
+        pool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: createGatewayProviderRevocationAuthorityPort(authorityFloors),
+      }),
+      oauthClientSecret: secrets.oauthClientSecret,
+      sessionPepper: secrets.sessionPepper,
+    });
     return {
       authorityFloors,
-      reapproveAccountAuthority: request => executeAccountReapproval(pool, request),
+      broker,
+      reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
       close: async () => await pool.end(),
     };
   } catch (error) {

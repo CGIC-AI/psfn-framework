@@ -26,9 +26,13 @@ import {
   migrateFleetAuthSchema,
   type FleetAuthDatabaseRoles,
 } from './schema.js';
-import { reconcileFleetAuthAuthorityState } from './gateway-persistence.js';
+import {
+  createGatewayProviderRevocationAuthorityPort,
+  reconcileFleetAuthAuthorityState,
+} from './gateway-persistence.js';
 import { executeAccountReapproval } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import {
   runFleetAuthConsistentBackup,
   restoreFleetAuthSnapshot,
@@ -1163,12 +1167,50 @@ describe('fleet_auth Postgres authority boundary', () => {
         replacement: keyB,
         at: '2026-07-15T11:00:00.000Z',
       });
-      floors.revokeAccountAuthority({
-        kind: 'provider_subject',
-        resourceId: 'discord:123456789012345678',
-        reason: 'provider unlinked after backup',
-        at: '2026-07-15T11:30:00.000Z',
+      const browserStore = new PostgresFleetAuthBrokerStore({
+        pool: sourceRuntime,
+        sessionPepper: 'browser-revocation-session-pepper-32-bytes',
+        tokenEncryptionKey: 'browser-revocation-token-key-32-bytes',
+        providerRevocationAuthority: createGatewayProviderRevocationAuthorityPort(floors),
       });
+      const transactionId = randomUUID();
+      await browserStore.createOAuthTransaction({
+        transactionId,
+        stateDigest: 'a'.repeat(64),
+        initiatingBrowserDigest: 'b'.repeat(64),
+        pkceVerifier: 'restore-proof-pkce-verifier',
+        callbackUri: 'https://fleet.example.test/auth/discord/callback',
+        returnPath: '/fleet',
+        kind: 'login',
+        createdAt: new Date('2026-07-15T11:20:00.000Z'),
+        expiresAt: new Date('2026-07-15T11:25:00.000Z'),
+      });
+      await browserStore.consumeOAuthTransaction({
+        stateDigest: 'a'.repeat(64),
+        initiatingBrowserDigest: 'b'.repeat(64),
+        now: new Date('2026-07-15T11:21:00.000Z'),
+      });
+      const browserSession = await browserStore.createLoginSession({
+        transactionId,
+        providerSubjectId: '123456789012345678',
+        providerMetadata: {},
+        token: 'browser-provider-revocation-token',
+        csrfToken: 'browser-provider-revocation-csrf',
+        audience: 'fleet',
+        now: new Date('2026-07-15T11:21:00.000Z'),
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      await browserStore.revokeProvider({
+        token: browserSession.token,
+        csrfToken: browserSession.csrfToken,
+        now: new Date('2026-07-15T11:30:00.000Z'),
+        reasonDigest: 'e'.repeat(64),
+      });
+      expect(floors.isAccountAuthorityTombstoned(
+        'provider_subject',
+        'discord:123456789012345678',
+      )).toBe(true);
 
       const target = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });

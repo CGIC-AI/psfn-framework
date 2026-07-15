@@ -567,6 +567,48 @@ DROP TRIGGER IF EXISTS provider_subject_history_registry_guard ON provider_subje
 CREATE TRIGGER provider_subject_history_registry_guard
   AFTER INSERT ON provider_subject_history
   FOR EACH ROW EXECUTE FUNCTION enforce_provider_subject_history_registry();
+
+`;
+
+const OAUTH_BROKER_SESSION_SQL = `
+ALTER TABLE oauth_transactions
+  ADD COLUMN pkce_verifier_ciphertext BYTEA,
+  ADD COLUMN completed_session_id UUID
+    REFERENCES browser_sessions(record_id);
+
+-- Transactions created before the broker could retain its PKCE verifier only
+-- contain a digest and can never complete a code exchange. Revoke them rather
+-- than attempting a compatibility fallback or accepting PKCE-less callbacks.
+UPDATE oauth_transactions
+SET status = 'revoked'
+WHERE pkce_verifier_ciphertext IS NULL
+  AND status = 'pending';
+
+ALTER TABLE browser_sessions
+  ADD CONSTRAINT browser_sessions_replacement_fk
+  FOREIGN KEY (replaced_by) REFERENCES browser_sessions(record_id);
+
+CREATE INDEX oauth_transactions_expiry_idx
+  ON oauth_transactions (status, expires_at);
+CREATE INDEX browser_sessions_token_lookup_idx
+  ON browser_sessions (token_digest, revoked_at);
+`;
+
+const OAUTH_INITIATING_BROWSER_SQL = `
+ALTER TABLE oauth_transactions
+  ADD COLUMN initiating_browser_digest TEXT
+    CHECK (initiating_browser_digest ~ '^[0-9a-f]{64}$');
+
+-- Transactions created before browser binding cannot safely complete. Preserve
+-- historical receipts but revoke every still-pending unbound transaction.
+UPDATE oauth_transactions
+SET status = 'revoked'
+WHERE initiating_browser_digest IS NULL
+  AND status = 'pending';
+
+ALTER TABLE oauth_transactions
+  ADD CONSTRAINT oauth_transactions_pending_browser_bound
+  CHECK (status <> 'pending' OR initiating_browser_digest IS NOT NULL);
 `;
 
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
@@ -575,4 +617,6 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
   { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
   { version: 5, name: 'restored_history_identity_guard', sql: RESTORED_HISTORY_IDENTITY_GUARD_SQL },
+  { version: 6, name: 'oauth_broker_sessions', sql: OAUTH_BROKER_SESSION_SQL },
+  { version: 7, name: 'oauth_initiating_browser_binding', sql: OAUTH_INITIATING_BROWSER_SQL },
 ] as const;

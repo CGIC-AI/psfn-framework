@@ -167,6 +167,8 @@ export interface EditableSettings {
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  analysisWorkbenchExecutionTimeoutMs?: number;
+  analysisWorkbenchOutputTruncation?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
@@ -230,6 +232,9 @@ export interface EditableSettings {
   deepgramListenEndpoint?: string;
   elevenLabsModelId?: string;
   elevenLabsEndpointBase?: string;
+  voiceSessionTimeoutMs?: number;
+  voiceMaxFrameBytes?: number;
+  voiceMaxPendingFrames?: number;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordTriggerWords?: string;
@@ -305,6 +310,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchExecutionTimeoutMs',
+  'analysisWorkbenchOutputTruncation',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'openRouterProviderOrder',
@@ -360,6 +367,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   'deepgramListenEndpoint',
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
+  'voiceSessionTimeoutMs',
+  'voiceMaxFrameBytes',
+  'voiceMaxPendingFrames',
   // Channels
   'discordTriggerWords',
   'discordTriggerReactions',

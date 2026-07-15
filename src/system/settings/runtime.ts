@@ -120,6 +120,11 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchExecutionTimeoutMs',
+  'analysisWorkbenchOutputTruncation',
+  'voiceSessionTimeoutMs',
+  'voiceMaxFrameBytes',
+  'voiceMaxPendingFrames',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'moaMaxRounds',
@@ -246,6 +251,10 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
     analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
+    analysisWorkbenchExecutionTimeoutMs:
+      config.analysisWorkbenchExecutionTimeoutMs ?? null,
+    analysisWorkbenchOutputTruncation:
+      config.analysisWorkbenchOutputTruncation ?? null,
     observerEvalSidecar: structuredClone(
       config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
     ),
@@ -275,6 +284,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchMaxTokens'
     | 'analysisWorkbenchMaxWallTimeMs'
     | 'analysisWorkbenchMaxSubQueries'
+    | 'analysisWorkbenchExecutionTimeoutMs'
+    | 'analysisWorkbenchOutputTruncation'
     | 'observerEvalSidecar'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
@@ -391,6 +402,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     deepgramListenEndpoint: config.deepgramListenEndpoint ?? null,
     elevenLabsModelId: config.elevenLabsModelId ?? null,
     elevenLabsEndpointBase: config.elevenLabsEndpointBase ?? null,
+    voiceSessionTimeoutMs: config.voiceSessionTimeoutMs ?? null,
+    voiceMaxFrameBytes: config.voiceMaxFrameBytes ?? null,
+    voiceMaxPendingFrames: config.voiceMaxPendingFrames ?? null,
   } satisfies SnapshotSection<
     | 'voiceEnabled'
     | 'ttsProvider'
@@ -407,6 +421,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     | 'deepgramListenEndpoint'
     | 'elevenLabsModelId'
     | 'elevenLabsEndpointBase'
+    | 'voiceSessionTimeoutMs'
+    | 'voiceMaxFrameBytes'
+    | 'voiceMaxPendingFrames'
   >;
 }
 

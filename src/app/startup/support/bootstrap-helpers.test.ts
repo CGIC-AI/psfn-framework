@@ -16,6 +16,7 @@ import {
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { COMPANION_SETTINGS_OVERLAY_FILE_NAME } from '../../../system/config/settings-overlay.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
 import {
   loadChargePolicySeedDefaults,
@@ -135,11 +136,16 @@ const HYDRATION_OWNER_FILES = [
   'charge-policy.json',
 ] as const;
 
-function writeHydrationOwnerExamples(systemDataDir: string): void {
+function writeHydrationOwnerExamples(systemDataDir: string, companionDataDir: string): void {
   for (const ownerFile of HYDRATION_OWNER_FILES) {
     const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+    // Per-companion owner files (capability-tier.json dnll.2, scheduler.json
+    // dnll.3) are rooted at companionDataDir; the rest stay cluster-global at
+    // systemDataDir. Registry-driven via PER_COMPANION_OWNER_FILES so future
+    // per-companion relocations inherit the correct seed target automatically.
+    const targetDir = PER_COMPANION_OWNER_FILES.has(ownerFile) ? companionDataDir : systemDataDir;
     writeFileSync(
-      join(systemDataDir, ownerFile),
+      join(targetDir, ownerFile),
       readFileSync(join(process.cwd(), 'config', exampleFile), 'utf8'),
       'utf-8',
     );
@@ -1017,7 +1023,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
     saveSettings(systemDataDir, {
       voiceEnabled: true,
     });
@@ -1045,7 +1051,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.discordToken = 'discord-secret';
@@ -1070,7 +1076,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1101,7 +1107,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1152,7 +1158,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     saveSettings(systemDataDir, {
@@ -1167,7 +1173,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       2048,
       65_536,
     ));
-    saveSchedulerConfig(systemDataDir, {
+    saveSchedulerConfig(companionDataDir, {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
@@ -1272,7 +1278,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const observerEvalSidecar = {
       ...createDefaultObserverEvalSidecarSettings(),
@@ -1323,7 +1329,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const globalSidecar = {
       ...createDefaultObserverEvalSidecarSettings(),
@@ -1382,7 +1388,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, { activeTimezone: 'UTC', uiThemeId: 'default' });
 
@@ -1409,7 +1415,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, { activeTimezone: 'UTC' });
     writeFileSync(
@@ -1438,7 +1444,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, {
       observerEvalSidecar: {
@@ -1480,7 +1486,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, {
       sessionMessageLimit: 41,
@@ -1492,7 +1498,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       3072,
       131_072,
     ));
-    saveSchedulerConfig(systemDataDir, {
+    saveSchedulerConfig(companionDataDir, {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,
@@ -1546,7 +1552,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1580,7 +1586,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1617,7 +1623,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(

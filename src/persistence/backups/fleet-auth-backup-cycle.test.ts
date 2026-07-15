@@ -36,6 +36,7 @@ import {
   SCHEDULED_BACKUP_TASK_ID,
   type FleetAuthConsistentBackupCycleOptions,
 } from './service.js';
+import { restoreFleetCompanionSlice } from './fleet-restore.js';
 
 const ROLES: FleetAuthDatabaseRoles = {
   runtime: 'auth_runtime',
@@ -207,6 +208,23 @@ function makeCycleOptions(
   };
 }
 
+async function restoreCompanionSliceForCycleVerification(
+  root: string,
+  fleetManifestPath: string,
+): Promise<void> {
+  await restoreFleetCompanionSlice({
+    fleetManifestPath,
+    companionId: COMPANION_ID,
+    destinations: {
+      companionDataDir: join(root, 'scratch', 'companion-data'),
+      personalWorkspacePath: join(root, 'scratch', 'workspace'),
+    },
+    postgres: {
+      databaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app_restore_verify',
+    },
+  });
+}
+
 beforeEach(() => {
   resetRuntimeDiagnosticsForTests();
 });
@@ -325,6 +343,74 @@ describe('runFleetAuthConsistentBackupCycle', () => {
         verifyWorkspaceTreeSnapshot(artifactDir);
       },
     ))).rejects.toThrow(/missing|mismatch/i);
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
+  });
+
+  it('rejects a deleted session snapshot member before publishing the encrypted family', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: true });
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir),
+      async ({ fleetManifestPath }) => {
+        rmSync(join(
+          dirname(fleetManifestPath),
+          'companions',
+          COMPANION_ID,
+          BACKUP_TIMESTAMP,
+          'sessions',
+          'channel.jsonl',
+        ));
+        await restoreCompanionSliceForCycleVerification(root, fleetManifestPath);
+      },
+    ))).rejects.toThrow(/session snapshot membership mismatch/u);
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
+  });
+
+  it('rejects a tampered session snapshot member before publishing the encrypted family', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: true });
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir),
+      async ({ fleetManifestPath }) => {
+        writeFileSync(join(
+          dirname(fleetManifestPath),
+          'companions',
+          COMPANION_ID,
+          BACKUP_TIMESTAMP,
+          'sessions',
+          'channel.jsonl',
+        ), '{"session":"tampered"}\n');
+        await restoreCompanionSliceForCycleVerification(root, fleetManifestPath);
+      },
+    ))).rejects.toThrow(/session snapshot digest mismatch/u);
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
+  });
+
+  it('rejects a partial session JSONL line before publishing the encrypted family', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: true });
+    const options = makeCycleOptions(
+      root,
+      config,
+      async coordinatorOptions => writeFakeFamily(coordinatorOptions.backupDir),
+      async ({ fleetManifestPath }) => {
+        await restoreCompanionSliceForCycleVerification(root, fleetManifestPath);
+      },
+    );
+    writeFileSync(
+      join(root, 'companion-data', COMPANION_ID, 'state', 'sessions', 'channel.jsonl'),
+      '{"session":',
+    );
+
+    await expect(runFleetAuthConsistentBackupCycle(options))
+      .rejects.toThrow(/session snapshot has invalid JSONL/u);
     expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
   });
 

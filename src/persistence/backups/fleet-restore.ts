@@ -69,6 +69,7 @@ import {
   verifyFleetAuthBackupManifest,
 } from './fleet-auth-coordinator.js';
 import type { FleetAuthRestoreResult } from './fleet-auth-restore.js';
+import { resolvePostgresUrlDatabaseName } from './postgres-restore.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -438,28 +439,40 @@ export async function restoreFleetAuthConsistentFamily(options: {
   return { restoredSchemas, fleetAuth };
 }
 
-function assertDedicatedRestoreVerificationDatabase(databaseUrl: string): void {
-  let databaseName: string;
-  try {
-    databaseName = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\//u, ''));
-  } catch {
-    throw new Error('Fleet auth restore verification requires a PostgreSQL URL');
-  }
+function assertDedicatedRestoreVerificationDatabase(databaseUrl: string): string {
+  const databaseName = resolvePostgresUrlDatabaseName(
+    databaseUrl,
+    'Fleet auth restore verification',
+  );
   if (!databaseName.endsWith('_restore_verify')) {
     throw new Error(
       'Fleet auth restore verification refuses a database without the _restore_verify suffix',
     );
   }
+  return databaseName;
 }
 
 async function dropScratchSchemas(
   databaseUrl: string,
   schemas: readonly string[],
+  expectedDatabaseName: string,
 ): Promise<void> {
   const validated = [...new Set(schemas.map(assertValidPostgresSchemaName))];
-  const sql = validated
-    .map(schema => `DROP SCHEMA IF EXISTS "${schema.replaceAll('"', '""')}" CASCADE`)
-    .join('; ');
+  const expectedDatabaseLiteral = `'${expectedDatabaseName.replaceAll("'", "''")}'`;
+  const databaseGuard = [
+    'DO $psfn_restore_verify$',
+    'BEGIN',
+    `  IF current_database() IS DISTINCT FROM ${expectedDatabaseLiteral} THEN`,
+    "    RAISE EXCEPTION 'Fleet auth restore verification connected to the wrong database'",
+    '      USING DETAIL = current_database();',
+    '  END IF;',
+    'END',
+    '$psfn_restore_verify$',
+  ].join('\n');
+  const sql = [
+    databaseGuard,
+    ...validated.map(schema => `DROP SCHEMA IF EXISTS "${schema.replaceAll('"', '""')}" CASCADE`),
+  ].join(';\n');
   const { connectionArg, password } = sanitizePostgresConnection(
     databaseUrl,
     'Fleet auth restore verification',
@@ -496,7 +509,7 @@ async function dropScratchSchemas(
 export async function verifyFleetAuthConsistentFamilyRestore(
   options: FleetAuthConsistentFamilyRestoreVerificationOptions,
 ): Promise<void> {
-  assertDedicatedRestoreVerificationDatabase(options.scratchDatabaseUrl);
+  const scratchDatabaseName = assertDedicatedRestoreVerificationDatabase(options.scratchDatabaseUrl);
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'per-companion') {
     throw new Error('Fleet auth restore verification requires schema-scoped recovery artifacts');
@@ -512,7 +525,11 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       join(floorRoot, FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME),
     );
     const scratchFloors = new FleetAuthAuthorityFloorStore(floorRoot);
-    await dropScratchSchemas(options.scratchDatabaseUrl, expectedSchemas);
+    await dropScratchSchemas(
+      options.scratchDatabaseUrl,
+      expectedSchemas,
+      scratchDatabaseName,
+    );
     for (const unit of manifest.units.filter(
       (candidate): candidate is typeof candidate & { companionId: string } => (
         candidate.kind === 'companion' && typeof candidate.companionId === 'string'
@@ -557,7 +574,11 @@ export async function verifyFleetAuthConsistentFamilyRestore(
     failure = error;
   }
   try {
-    await dropScratchSchemas(options.scratchDatabaseUrl, expectedSchemas);
+    await dropScratchSchemas(
+      options.scratchDatabaseUrl,
+      expectedSchemas,
+      scratchDatabaseName,
+    );
   } catch (cleanupError) {
     failure = failure
       ? new AggregateError([failure, cleanupError], 'Fleet auth restore verification and cleanup failed')

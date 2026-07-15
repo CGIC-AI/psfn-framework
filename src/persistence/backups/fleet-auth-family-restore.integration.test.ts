@@ -193,6 +193,21 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
       });
 
+      const sourceDatabaseName = decodeURIComponent(new URL(source.backupUrl).pathname.slice(1));
+      const routedScratchUrl = new URL(source.backupUrl);
+      routedScratchUrl.pathname = `/${sourceDatabaseName}_restore_verify`;
+      routedScratchUrl.searchParams.set('dbname', sourceDatabaseName);
+      await expect(verifyFleetAuthConsistentFamilyRestore({
+        manifestPath: backup.manifestPath,
+        fleetManifestPath: recovery.fleetManifestPath,
+        scratchDatabaseUrl: routedScratchUrl.toString(),
+        roles: ROLES,
+        authorityFloors: floors,
+        activationGeneration: floors.read().trustedHost.activationGeneration,
+      })).rejects.toThrow(/destination-routing parameter dbname/u);
+      await expect(sourceMigration.query('SELECT marker FROM companion_one.restore_probe'))
+        .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });
+
       const scratch = await freshRestoreVerifyDatabase();
       await migrateFleetAuthSchema({ databaseUrl: scratch.migrationUrl, roles: ROLES });
       const floorBeforeVerification = floors.read();

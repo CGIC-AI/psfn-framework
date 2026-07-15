@@ -537,6 +537,16 @@ export async function runBackupCycle(
       backupDir,
       kubernetesHelmRecovery: Boolean(kubernetesHelm),
       ...(fleetArtifactIdentitySha256 ? { fleetArtifactIdentitySha256 } : {}),
+      ...(options.preCapturedPostgresDumpPath
+        ? {
+            sessionSnapshots: copiedSessionFiles.map(name => ({
+              name,
+              sha256: createHash('sha256')
+                .update(readFileSync(join(sessionSnapshotDir, name)))
+                .digest('hex'),
+            })),
+          }
+        : {}),
       now,
     });
 

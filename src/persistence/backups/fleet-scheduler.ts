@@ -11,8 +11,10 @@ import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
 import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
+import { verifyFleetAuthConsistentFamilyRestore } from './fleet-restore.js';
 import {
   FleetBackupPartialFailureError,
   DEFAULT_SHARED_WORLD_SCHEMA,
@@ -234,12 +236,53 @@ export function buildFleetAuthBackupCycleOptions(params: {
   systemDataDir: string;
   backupRestoreDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
+  authorityFloors: FleetAuthAuthorityFloorStore;
   backupConfig: BackupRuntimeConfig;
+  kubernetesHelm?: KubernetesHelmBackupConfig;
   pgDumpBinary?: string;
 }): FleetAuthConsistentBackupCycleOptions {
   if (params.fleet.companions.length === 0) {
     throw new Error('Fleet auth consistent backup requires at least one companion schema');
   }
+  const restoreVerifyDatabaseUrl = params.backupConfig.verifyRestore
+    ? deriveRestoreVerifyDatabaseUrl(params.backupRestoreDatabaseUrl)
+    : undefined;
+  if (params.backupConfig.verifyRestore && !restoreVerifyDatabaseUrl) {
+    throw new Error(
+      'Fleet auth verifyRestore requires a derivable dedicated scratch database URL',
+    );
+  }
+  const companions: FleetBackupCompanionUnit[] = params.fleet.companions.map(companion => ({
+    companionId: companion.companionId,
+    postgresSchema: companion.postgresSchema,
+    companionDataDir: companion.companionDataDir,
+    sessionsDir: resolveSessionsDir(companion.companionDataDir),
+    personalWorkspacePath: companion.personalWorkspacePath,
+    characterCardPath: companion.characterCardPath,
+    characterCardHistoryPath: resolveCharacterCardHistoryPath(companion.companionDataDir),
+    memoriesJournalPath: resolveMemoryJournalPath(companion.companionDataDir),
+  }));
+  const fleetBackupOptions: FleetBackupRunOptions = {
+    postgres: {
+      databaseUrl: params.backupRestoreDatabaseUrl,
+      ...(restoreVerifyDatabaseUrl ? { restoreVerifyDatabaseUrl } : {}),
+      ...(params.pgDumpBinary ? { pgDumpBinary: params.pgDumpBinary } : {}),
+    },
+    companions,
+    systemDataDir: params.systemDataDir,
+    sharedWorkspacePath: params.fleet.sharedWorkspacePath,
+    ...(params.kubernetesHelm ? { kubernetesHelm: params.kubernetesHelm } : {}),
+    backupRootDir: params.backupConfig.rootDir,
+    // Fleet-auth uses schema-scoped artifacts in both configured modes so every
+    // database slice can consume the coordinator's one exported snapshot.
+    groupMode: false,
+    maxRotatingBackups: params.backupConfig.maxRotatingBackups,
+    maxWeeklyBackups: params.backupConfig.maxWeeklyBackups,
+    maxMonthlyBackups: params.backupConfig.maxMonthlyBackups,
+    ...(params.backupConfig.mirrorDir ? { mirrorDir: params.backupConfig.mirrorDir } : {}),
+    verifyRestore: params.backupConfig.verifyRestore,
+    encryption: params.backupConfig.encryption,
+  };
   return {
     backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
     roles: params.roles,
@@ -253,6 +296,9 @@ export function buildFleetAuthBackupCycleOptions(params: {
     systemDataDir: params.systemDataDir,
     backupRootDir: params.backupConfig.rootDir,
     config: params.backupConfig,
+    fleetBackupOptions,
+    authorityFloors: params.authorityFloors,
+    verifyFamilyRestore: verifyFleetAuthConsistentFamilyRestore,
     ...(params.pgDumpBinary ? { pgDumpBinary: params.pgDumpBinary } : {}),
   };
 }

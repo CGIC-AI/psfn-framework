@@ -22,7 +22,11 @@ import {
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import { runFleetAuthConsistentBackup } from './fleet-auth-coordinator.js';
-import { restoreFleetAuthConsistentFamily } from './fleet-restore.js';
+import {
+  restoreFleetAuthConsistentFamily,
+  verifyFleetAuthConsistentFamilyRestore,
+} from './fleet-restore.js';
+import { runFleetBackupCycle } from './service.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES: FleetAuthDatabaseRoles = {
@@ -86,6 +90,28 @@ async function freshDatabase() {
   };
 }
 
+async function freshRestoreVerifyDatabase() {
+  if (!harness) throw new Error('Postgres harness unavailable');
+  const databaseName = `psfn_${randomUUID().replaceAll('-', '')}_restore_verify`;
+  const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+  try {
+    await admin.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
+    await admin.query(
+      `GRANT CREATE, CONNECT ON DATABASE ${quoteIdentifier(databaseName)} TO `
+      + `${quoteIdentifier(ROLES.migration)}, ${quoteIdentifier(ROLES.backupRestore)}`,
+    );
+  } finally {
+    await admin.end();
+  }
+  const databaseUrl = new URL(harness.adminDatabaseUrl);
+  databaseUrl.pathname = `/${databaseName}`;
+  return {
+    migrationUrl: roleUrl(databaseUrl.toString(), ROLES.migration),
+    runtimeUrl: roleUrl(databaseUrl.toString(), ROLES.runtime),
+    backupUrl: roleUrl(databaseUrl.toString(), ROLES.backupRestore),
+  };
+}
+
 describe('fleet-auth consistent family restore against real Postgres', () => {
   it('restores companion/shared schemas before publishing the durable fleet-auth result', async () => {
     const source = await freshDatabase();
@@ -141,6 +167,71 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         backupDir,
         capturedAt: '2026-07-15T15:00:00.000Z',
       });
+
+      const companionDataDir = join(root, 'companion-data', 'companion-one');
+      const sessionsDir = join(companionDataDir, 'state', 'sessions');
+      const personalWorkspacePath = join(root, 'workspaces', 'personal', 'companion-one');
+      const sharedWorkspacePath = join(root, 'workspaces', 'shared');
+      mkdirSync(join(companionDataDir, 'vault'), { recursive: true });
+      mkdirSync(sessionsDir, { recursive: true });
+      mkdirSync(join(personalWorkspacePath, 'journal'), { recursive: true });
+      mkdirSync(join(sharedWorkspacePath, 'artifacts'), { recursive: true });
+      copyFileSync(join(process.cwd(), 'config', 'fleet-auth.seed.json'), join(systemDataDir, 'fleet-auth.json'));
+      const recovery = await runFleetBackupCycle({
+        postgres: { databaseUrl: source.backupUrl },
+        companions: [{
+          companionId: '11111111-1111-4111-8111-111111111111',
+          postgresSchema: 'companion_one',
+          companionDataDir,
+          sessionsDir,
+          personalWorkspacePath,
+        }],
+        systemDataDir,
+        sharedWorkspacePath,
+        backupRootDir: join(backupDir, 'recovery'),
+        consistentSnapshotDumpPaths: backup.schemaDumpPaths,
+        now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
+      });
+
+      const sourceDatabaseName = decodeURIComponent(new URL(source.backupUrl).pathname.slice(1));
+      const routedScratchUrl = new URL(source.backupUrl);
+      routedScratchUrl.pathname = `/${sourceDatabaseName}_restore_verify`;
+      routedScratchUrl.searchParams.set('dbname', sourceDatabaseName);
+      await expect(verifyFleetAuthConsistentFamilyRestore({
+        manifestPath: backup.manifestPath,
+        fleetManifestPath: recovery.fleetManifestPath,
+        scratchDatabaseUrl: routedScratchUrl.toString(),
+        roles: ROLES,
+        authorityFloors: floors,
+        activationGeneration: floors.read().trustedHost.activationGeneration,
+      })).rejects.toThrow(/destination-routing parameter dbname/u);
+      await expect(sourceMigration.query('SELECT marker FROM companion_one.restore_probe'))
+        .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });
+
+      const scratch = await freshRestoreVerifyDatabase();
+      await migrateFleetAuthSchema({ databaseUrl: scratch.migrationUrl, roles: ROLES });
+      const floorBeforeVerification = floors.read();
+      await verifyFleetAuthConsistentFamilyRestore({
+        manifestPath: backup.manifestPath,
+        fleetManifestPath: recovery.fleetManifestPath,
+        scratchDatabaseUrl: scratch.backupUrl,
+        roles: ROLES,
+        authorityFloors: floors,
+        activationGeneration: floorBeforeVerification.trustedHost.activationGeneration,
+      });
+      expect(floors.read()).toEqual(floorBeforeVerification);
+      const scratchRuntime = createPostgresPool(scratch.runtimeUrl, { max: 1 });
+      try {
+        await expect(scratchRuntime.query(
+          `SELECT count(*)::integer AS count FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals`,
+        )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+        await expect(scratchRuntime.query(
+          "SELECT to_regnamespace('companion_one') IS NULL AS absent, "
+          + "to_regnamespace('shared') IS NULL AS shared_absent",
+        )).resolves.toMatchObject({ rows: [{ absent: true, shared_absent: true }] });
+      } finally {
+        await scratchRuntime.end();
+      }
 
       const target = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });

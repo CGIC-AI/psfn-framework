@@ -16,6 +16,18 @@ describe('deriveRestoreVerifyDatabaseUrl', () => {
   it('returns null for non-URL connection strings', () => {
     expect(deriveRestoreVerifyDatabaseUrl('host=localhost dbname=psfn')).toBeNull();
   });
+
+  it.each([
+    'dbname=production',
+    'host=production.internal',
+    'hostaddr=192.0.2.10',
+    'port=6432',
+    'service=production',
+  ])('rejects destination-routing override %s', (query) => {
+    expect(deriveRestoreVerifyDatabaseUrl(
+      `postgresql://u:p@127.0.0.1:5432/psfn?${query}`,
+    )).toBeNull();
+  });
 });
 
 describe('verifyPostgresDumpRestore', () => {

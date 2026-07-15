@@ -31,6 +31,7 @@ import {
 } from '../postgres/fleet-auth/schema.js';
 import {
   restoreVerifiedFleetAuthSnapshot,
+  verifyVerifiedFleetAuthSnapshotRestore,
   type FleetAuthRestoreResult,
   type VerifiedFleetAuthRestoreOptions,
 } from './fleet-auth-restore.js';
@@ -427,6 +428,13 @@ export async function restoreFleetAuthSnapshot(
 ): Promise<FleetAuthRestoreResult> {
   const manifest = verifyFleetAuthBackupManifest(options.manifestPath);
   return await restoreVerifiedFleetAuthSnapshot({ ...options, manifest });
+}
+
+export async function verifyFleetAuthSnapshotRestore(
+  options: FleetAuthRestoreOptions,
+): Promise<FleetAuthRestoreResult> {
+  const manifest = verifyFleetAuthBackupManifest(options.manifestPath);
+  return await verifyVerifiedFleetAuthSnapshotRestore({ ...options, manifest });
 }
 
 // Deliberately local to avoid importing the authority-floor implementation

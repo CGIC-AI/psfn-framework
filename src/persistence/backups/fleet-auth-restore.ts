@@ -520,8 +520,9 @@ async function importDurableRows(
  * advances before database mutation. Any later failure therefore leaves
  * authority over-fenced and startup reconciliation retries the quarantine.
  */
-export async function restoreVerifiedFleetAuthSnapshot(
+async function executeVerifiedFleetAuthSnapshot(
   options: VerifiedFleetAuthRestoreOptions,
+  verificationOnly: boolean,
 ): Promise<FleetAuthRestoreResult> {
   if (!Number.isSafeInteger(options.activationGeneration) || options.activationGeneration < 1) {
     throw new Error('Fleet auth restore activation generation must be an integer >= 1');
@@ -581,7 +582,7 @@ export async function restoreVerifiedFleetAuthSnapshot(
       preparedFloor,
       randomUUID(),
     );
-    await client.query('COMMIT');
+    await client.query(verificationOnly ? 'ROLLBACK' : 'COMMIT');
     return {
       importedRows,
       authorityGeneration: preparedFloor.trustedHost.authorityGeneration,
@@ -594,4 +595,21 @@ export async function restoreVerifiedFleetAuthSnapshot(
     client?.release();
     await pool.end();
   }
+}
+
+export async function restoreVerifiedFleetAuthSnapshot(
+  options: VerifiedFleetAuthRestoreOptions,
+): Promise<FleetAuthRestoreResult> {
+  return await executeVerifiedFleetAuthSnapshot(options, false);
+}
+
+/**
+ * Exercise the complete fleet-auth import and reconciliation transaction
+ * without publishing it. Callers must supply an isolated scratch database and
+ * a cloned non-restored authority floor.
+ */
+export async function verifyVerifiedFleetAuthSnapshotRestore(
+  options: VerifiedFleetAuthRestoreOptions,
+): Promise<FleetAuthRestoreResult> {
+  return await executeVerifiedFleetAuthSnapshot(options, true);
 }

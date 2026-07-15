@@ -47,7 +47,7 @@ import {
 
 const log = createComponentLogger('SocialGraphBuilder');
 
-export const SOCIAL_GRAPH_BUILDER_TASK_ID = 'social-graph-builder';
+export const SOCIAL_GRAPH_BUILDER_OPERATION_ID = 'social-graph-builder';
 
 const CO_PRESENCE_CONFIDENCE = 0.5;
 const OVERHEARD_CONFIDENCE = 0.6;

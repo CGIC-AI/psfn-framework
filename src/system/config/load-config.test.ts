@@ -363,7 +363,6 @@ describe('loadConfig path defaults', () => {
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.continuityMessageLimit).toBe(10);
     expect(config.maintenanceIntervalMs).toBe(3_600_000);
-    expect(config.salienceDecayIntervalMs).toBe(3_600_000);
     expect(config.retryMaxAttempts).toBe(3);
     expect(config.sessionMirrorEnabled).toBe(true);
     expect(config.sessionMirrorMaxChars).toBe(220);

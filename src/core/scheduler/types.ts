@@ -39,9 +39,21 @@ export type RecurringCadence =
   | DailyRecurringCadence
   | WeeklyRecurringCadence;
 
+export interface ScheduledTaskOperation {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface ScheduledTask {
   id: string;
   name: string;
+  /** Operator-facing explanation of what the task does. */
+  description?: string;
+  /** Canonical owner and key for the task cadence, when one exists. */
+  scheduleSource?: string;
+  /** Operations sharing this task's cadence, in execution order. */
+  operations?: readonly ScheduledTaskOperation[];
   type: TaskType;
   /** Interval in milliseconds (for 'every' tasks with relative cadence). */
   intervalMs: number;

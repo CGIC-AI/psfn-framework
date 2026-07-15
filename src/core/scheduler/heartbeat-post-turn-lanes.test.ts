@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import {
+  BACKGROUND_MAINTENANCE_TASK_ID,
+  BackgroundMaintenanceRegistry,
+} from './background-maintenance.js';
 import { Scheduler } from './scheduler.js';
-import { SLEEPTIME_REST_WINDOW_TASK_ID } from './heartbeat-post-turn-runtime.js';
+import { SLEEPTIME_REST_WINDOW_OPERATION_ID } from './heartbeat-post-turn-runtime.js';
 import { SLEEPTIME_MEMORY_ACTION_KIND } from '../../faculties/memory/sleeptime-agent.js';
 import { NEAR_TURN_MEMORY_ACTION_KIND } from '../../faculties/memory/near-turn-memory-lane.js';
 import {
@@ -57,6 +62,15 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
       tickIntervalMs: 50,
       heartbeatIntervalMs: 1_000,
     });
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+      scheduler,
+      eligibilityGate: createEligibilityGate(() => ({
+        getTier: () => 'autonomous',
+        getGrantedTokens: () => new Set(),
+        has: () => true,
+      })),
+      intervalMs: 3_600_000,
+    });
     const postTurnActions = {
       registerHandler: vi.fn().mockReturnValue(() => {}),
       listQueued: vi.fn().mockReturnValue([]),
@@ -87,6 +101,7 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
       undefined,
       {
         eventBus,
+        backgroundMaintenance,
         postTurnActions: postTurnActions as any,
         llmProvider: llmProvider as any,
         memoryWriter: { write: vi.fn() },
@@ -174,9 +189,10 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
 
   it('registers the rest-window sleeptime task and gate timer in the scheduler task list', () => {
     const harness = wireLanes();
-    const task = harness.scheduler.getTask(SLEEPTIME_REST_WINDOW_TASK_ID);
-    expect(task).toBeDefined();
-    expect(task?.name).toContain('Rest-Window');
+    const task = harness.scheduler.getTask(BACKGROUND_MAINTENANCE_TASK_ID);
+    expect(task?.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: SLEEPTIME_REST_WINDOW_OPERATION_ID }),
+    ]));
     const timerTask = harness.scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID);
     expect(timerTask).toBeDefined();
     expect(timerTask?.intervalMs).toBe(30 * 60_000);

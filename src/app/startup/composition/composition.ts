@@ -20,6 +20,7 @@ import {
   resolveRedisConnectionConfigFromEnv,
 } from '../../../shared/cache/redis-cache.js';
 import { SessionManager } from '../../../core/session/manager.js';
+import type { CompressionGuidelineEvolutionPort } from '../../../core/session/compression-guideline-evolution.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
 import {
   createDisabledCrossChannelContinuityPort,
@@ -486,6 +487,7 @@ export interface ToolRuntimeOptions {
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
+  compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
@@ -515,6 +517,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     runtimeMode: options.runtimeMode,
     shardSessionMemorySyncAuditPath: resolveShardSessionMemorySyncAuditPath(companionDataDir),
     foldReviewController,
+    compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

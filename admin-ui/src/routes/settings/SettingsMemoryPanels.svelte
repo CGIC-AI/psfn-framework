@@ -30,7 +30,7 @@
     compactionThresholdPct = $bindable(70),
     extractionInterval = $bindable(5),
     compactionEmotionalSalienceThresholdPct = $bindable(75),
-    salienceDecayIntervalMs = $bindable(3600000),
+    backgroundMaintenanceIntervalMs = $bindable(3600000),
     memoryExtractionMinImportance = $bindable(0.3),
     memoryExtractionMinConfidence = $bindable(0.4),
     memoryExtractionMinNovelty = $bindable(0.1),
@@ -67,7 +67,7 @@
     compactionThresholdPct: number;
     extractionInterval: number;
     compactionEmotionalSalienceThresholdPct: number;
-    salienceDecayIntervalMs: number;
+    backgroundMaintenanceIntervalMs: number;
     memoryExtractionMinImportance: number;
     memoryExtractionMinConfidence: number;
     memoryExtractionMinNovelty: number;
@@ -202,15 +202,15 @@
       </div>
       <div>
         <SettingFieldLabel
-          label="Salience Decay Interval (ms)"
-          keys="salienceDecayIntervalMs"
-          source={getSource('salienceDecayIntervalMs')}
-          forId={settingControlId('salienceDecayIntervalMs')}
+          label="Bundled Background Maintenance Interval (ms)"
+          keys="backgroundMaintenanceIntervalMs"
+          source={getSource('backgroundMaintenanceIntervalMs')}
+          forId={settingControlId('backgroundMaintenanceIntervalMs')}
           class={labelClass}
         />
-        <input id={settingControlId('salienceDecayIntervalMs')} type="number" min="10000" step="1000" bind:value={salienceDecayIntervalMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">Persist salience decay hourly by default (3,600,000 ms); retrieval computes current decay lazily between sweeps.</p>
-        <SettingAuthorityHint info={getSettingAuthority('salienceDecayIntervalMs')} />
+        <input id={settingControlId('backgroundMaintenanceIntervalMs')} type="number" min="10000" step="1000" bind:value={backgroundMaintenanceIntervalMs} class={inputClass} />
+        <p class="text-sm text-shadow-500 mt-1">One shared hourly tick for salience decay, ambient presence, concern grooming, social-graph proposals, sleeptime eligibility, contact trust drift, drift velocity, and second-arrow checks. The Scheduler page lists the exact operations wired in this runtime.</p>
+        <SettingAuthorityHint info={getSettingAuthority('backgroundMaintenanceIntervalMs')} />
       </div>
       <div>
         <SettingFieldLabel

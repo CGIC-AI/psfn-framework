@@ -41,6 +41,7 @@ import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-st
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
+import type { BackgroundMaintenanceRegistrar } from './background-maintenance.js';
 import type { IcpIntentionCandidateAdapter } from '../icp/intention-candidate-adapter.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
@@ -251,6 +252,8 @@ export interface HeartbeatRuntimeOptions {
   orientationRewriteGate?: OrientationRewriteGateConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
+  /** Shared scheduler.json-owned tick for cheap background eligibility checks. */
+  backgroundMaintenance?: BackgroundMaintenanceRegistrar;
   vaultAutoPublisher?: { publishReflection(input: {
     templateId: string;
     templateName: string;

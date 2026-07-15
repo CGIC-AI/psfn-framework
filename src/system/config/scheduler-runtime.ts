@@ -26,7 +26,11 @@ export function resolveRuntimeSchedulerConfig(
   return {
     tickIntervalMs: persisted.tickIntervalMs,
     heartbeatIntervalMs: persisted.heartbeatIntervalMs,
-    salienceDecayIntervalMs: persisted.salienceDecayIntervalMs,
+    backgroundMaintenance: {
+      intervalMs: persisted.backgroundMaintenance.intervalMs,
+      ambientPresence: { ...persisted.backgroundMaintenance.ambientPresence },
+      concernGrooming: { ...persisted.backgroundMaintenance.concernGrooming },
+    },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {
@@ -74,6 +78,12 @@ export function resolveRuntimeSchedulerConfig(
         declineDampeningFactor: persisted.weightedThoughtOutreach.lifecycle.declineDampeningFactor,
         relevanceFloor: persisted.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
+    },
+    icpAutonomy: {
+      enabled: persisted.icpAutonomy.enabled,
+      candidate: { ...persisted.icpAutonomy.candidate },
+      permit: { ...persisted.icpAutonomy.permit },
+      availability: { ...persisted.icpAutonomy.availability },
     },
     ...(persisted.introspectionAudit
       ? { introspectionAudit: { ...persisted.introspectionAudit } }

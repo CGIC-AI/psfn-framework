@@ -20,7 +20,16 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
   return {
     tickIntervalMs: 60_000,
     heartbeatIntervalMs: 90_000,
-    salienceDecayIntervalMs: 123_000,
+    backgroundMaintenance: {
+      intervalMs: 3_600_000,
+      ambientPresence: {
+        minIdleMinutes: 180,
+        minNoteIntervalMinutes: 360,
+      },
+      concernGrooming: {
+        maxActiveConcerns: 7,
+      },
+    },
     artifactLifecycle: {
       scratchpadRetentionDays: 10,
       generatedMediaRetentionDays: 20,
@@ -81,7 +90,6 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       maxEpisodesPerRun: 60,
     },
     socialGraphBuilder: {
-      intervalMs: 900_000,
       coPresenceMinSessions: 4,
       coPresenceWindowMinutes: 720,
       scanMemoryLimit: 250,
@@ -123,8 +131,45 @@ describe('config validators', () => {
 });
 
 describe('scheduler config seed defaults', () => {
-  it('checks in an hourly salience-decay default', () => {
-    expect(loadSchedulerSeedDefaults().salienceDecayIntervalMs).toBe(3_600_000);
+  it('checks in one hourly background-maintenance cadence with owned ambient thresholds', () => {
+    expect(loadSchedulerSeedDefaults().backgroundMaintenance).toEqual({
+      intervalMs: 3_600_000,
+      ambientPresence: {
+        minIdleMinutes: 180,
+        minNoteIntervalMinutes: 360,
+      },
+      concernGrooming: {
+        maxActiveConcerns: 7,
+      },
+    });
+    expect(loadSchedulerSeedDefaults().socialGraphBuilder).not.toHaveProperty('intervalMs');
+  });
+
+  it('rejects retired per-operation cadence keys instead of silently aliasing them', () => {
+    withSeedDir((seedDir) => {
+      const topLevelLegacy = {
+        ...buildValidSchedulerConfig(),
+        salienceDecayIntervalMs: 300_000,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), topLevelLegacy);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /salienceDecayIntervalMs.*backgroundMaintenance\.intervalMs/s,
+      );
+
+      const nestedLegacy = buildValidSchedulerConfig();
+      nestedLegacy.socialGraphBuilder = {
+        ...(nestedLegacy.socialGraphBuilder as Record<string, unknown>),
+        intervalMs: 300_000,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), nestedLegacy);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /socialGraphBuilder\.intervalMs.*backgroundMaintenance\.intervalMs/s,
+      );
+    });
+  });
+
+  it('keeps weighted-thought outreach on its justified 30-minute cadence', () => {
+    expect(loadSchedulerSeedDefaults().weightedThoughtOutreach.checkIntervalMs).toBe(1_800_000);
   });
 
   it('reads seed defaults without requiring a data directory', () => {
@@ -374,6 +419,58 @@ describe('scheduler config seed defaults', () => {
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'episodicProcessing.startLocalTime must be HH:mm local time',
       );
+    });
+  });
+
+  it('fails before startup when the relative background cadence can phase-lock outside the rest window', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 8 * 60 * 60_000 + 29 * 60_000,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /backgroundMaintenance\.intervalMs.*plus tickIntervalMs.*must be less than.*rest-window duration.*phase-lock/s,
+      );
+    });
+  });
+
+  it('does not impose the rest-window coverage invariant when episodic processing is disabled', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 24 * 60 * 60_000,
+      };
+      config.episodicProcessing = {
+        ...(config.episodicProcessing as Record<string, unknown>),
+        enabled: false,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(loadSchedulerSeedDefaults({ seedDir }).backgroundMaintenance.intervalMs)
+        .toBe(24 * 60 * 60_000);
+    });
+  });
+
+  it('allows any relative cadence when equal rest-window endpoints mean all day', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 48 * 60 * 60_000,
+      };
+      config.episodicProcessing = {
+        ...(config.episodicProcessing as Record<string, unknown>),
+        startLocalTime: '00:00',
+        endLocalTime: '00:00',
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(loadSchedulerSeedDefaults({ seedDir }).backgroundMaintenance.intervalMs)
+        .toBe(48 * 60 * 60_000);
     });
   });
 

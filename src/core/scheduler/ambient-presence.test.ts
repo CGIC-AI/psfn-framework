@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
+import { BackgroundMaintenanceRegistry } from './background-maintenance.js';
 import { Scheduler } from './scheduler.js';
 import type { SessionEntry } from '../session/types.js';
 import {
   buildAmbientPresenceNote,
   evaluateAmbientPresenceEligibility,
-  registerAmbientPresenceTask,
+  registerAmbientPresenceOperation,
 } from './ambient-presence.js';
 
 const restWindow = {
@@ -24,6 +26,29 @@ function entry(overrides: Partial<SessionEntry> & Pick<SessionEntry, 'role' | 't
     content: overrides.content ?? 'hello',
     ...overrides,
   };
+}
+
+function registerAmbientOperation(options: {
+  scheduler: Scheduler;
+  sessionManager: Parameters<typeof registerAmbientPresenceOperation>[0]['sessionManager'];
+  eligibilityGate?: EligibilityGate;
+  intervalMs?: number;
+}): void {
+  const eligibilityGate = options.eligibilityGate ?? createEligibilityGate(() => ({
+    getTier: () => 'autonomous',
+    getGrantedTokens: () => new Set(),
+    has: () => true,
+  }));
+  const backgroundMaintenance = new BackgroundMaintenanceRegistry({
+    scheduler: options.scheduler,
+    eligibilityGate,
+    intervalMs: options.intervalMs ?? 3_600_000,
+  });
+  registerAmbientPresenceOperation({
+    backgroundMaintenance,
+    sessionManager: options.sessionManager,
+    restWindow,
+  });
 }
 
 describe('evaluateAmbientPresenceEligibility', () => {
@@ -102,7 +127,7 @@ describe('evaluateAmbientPresenceEligibility', () => {
   });
 });
 
-describe('registerAmbientPresenceTask', () => {
+describe('registerAmbientPresenceOperation', () => {
   it('rejects recent conversational metadata without reading session entries', async () => {
     const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
@@ -112,7 +137,7 @@ describe('registerAmbientPresenceTask', () => {
     const appendSystemNote = vi.fn();
 
     try {
-      registerAmbientPresenceTask({
+      registerAmbientOperation({
         scheduler,
         sessionManager: {
           resolveStartupSessionMetadata: () => ({
@@ -125,10 +150,9 @@ describe('registerAmbientPresenceTask', () => {
           getRecentSessionEntries,
           appendSystemNote,
         },
-        restWindow,
       });
 
-      const handler = scheduler.getTask('ambient-presence')?.handler;
+      const handler = scheduler.getTask('background-maintenance')?.handler;
       if (!handler) throw new Error('ambient presence task was not registered');
       await handler();
 
@@ -152,7 +176,7 @@ describe('registerAmbientPresenceTask', () => {
     const appendSystemNote = vi.fn();
 
     try {
-      registerAmbientPresenceTask({
+      registerAmbientOperation({
         scheduler,
         sessionManager: {
           resolveStartupSessionMetadata: () => ({
@@ -165,10 +189,9 @@ describe('registerAmbientPresenceTask', () => {
           getRecentSessionEntries,
           appendSystemNote,
         },
-        restWindow,
       });
 
-      const handler = scheduler.getTask('ambient-presence')?.handler;
+      const handler = scheduler.getTask('background-maintenance')?.handler;
       if (!handler) throw new Error('ambient presence task was not registered');
       await handler();
 
@@ -197,7 +220,7 @@ describe('registerAmbientPresenceTask', () => {
     const getRecentSessionEntries = vi.fn(() => persisted);
 
     try {
-      registerAmbientPresenceTask({
+      registerAmbientOperation({
         scheduler,
         sessionManager: {
           resolveStartupSessionMetadata: () => {
@@ -228,7 +251,6 @@ describe('registerAmbientPresenceTask', () => {
             }));
           },
         },
-        restWindow,
         intervalMs: 1_000,
       });
 
@@ -270,7 +292,7 @@ describe('registerAmbientPresenceTask', () => {
     const lastAt = Date.parse('2026-06-10T22:00:00.000Z');
 
     try {
-      registerAmbientPresenceTask({
+      registerAmbientOperation({
         scheduler,
         sessionManager: {
           resolveStartupSessionMetadata: () => ({ sessionId: 'api:main', channelType: 'api', timestamp: lastAt }),
@@ -279,7 +301,7 @@ describe('registerAmbientPresenceTask', () => {
           ],
           appendSystemNote,
         },
-        restWindow,
+        eligibilityGate: gate,
         intervalMs: 1_000,
       });
 
@@ -287,9 +309,8 @@ describe('registerAmbientPresenceTask', () => {
       await scheduler.tick();
 
       expect(appendSystemNote).not.toHaveBeenCalled();
-      expect(scheduler.getTask('ambient-presence')).toMatchObject({
-        lastOutcome: 'denied',
-        lastDeniedReason: 'missing_capability_tokens',
+      expect(scheduler.getTask('background-maintenance')).toMatchObject({
+        lastOutcome: 'succeeded',
       });
     } finally {
       nowSpy.mockRestore();

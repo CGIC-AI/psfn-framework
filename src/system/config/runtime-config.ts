@@ -28,12 +28,10 @@ export function hydrateJsonBackedRuntimeConfig(
   applySettings(config, modelsConfig);
   applyProvidersRuntimeConfig(config, loadProvidersConfig(dataDir, loadOptions));
 
-  const schedulerConfig = resolveRuntimeSchedulerConfig({
+  resolveRuntimeSchedulerConfig({
     dataDir,
     ...(seedDir ? { seedDir } : {}),
   });
-  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
-
   config.capabilityTier = loadCapabilityTierConfig(dataDir, loadOptions).tier;
   config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
 

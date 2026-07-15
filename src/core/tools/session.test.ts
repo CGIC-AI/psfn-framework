@@ -312,7 +312,7 @@ describe('session tool list/resume actions', () => {
     const result = await runWithRequestContext(
       {
         callType: 'background',
-        purpose: 'deferred_tool_handoff',
+        purpose: 'background_follow_up',
       },
       () => tool.execute('resume-bg-1', { action: 'resume', sessionId: 'api:session-two' }),
     );

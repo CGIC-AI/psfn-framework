@@ -340,14 +340,6 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   icpCorrelation?: IcpConversationCorrelation;
 }
 
-export interface GeneratedMessageProvenanceMetadata {
-  kind: 'deferred_tool_handoff';
-  sourceMessageId: string;
-  sourceChannelId: string;
-  sourceAuthorId: string;
-  sourceAuthorName: string;
-}
-
 /**
  * E1.7: self-contained ConversationScope decision for scheduler-dispatched
  * reflection/heartbeat turns. Deliberately structural (no core/session import)
@@ -433,8 +425,6 @@ export interface MessageRoutingMetadata {
     durationMs: number;
     deviceId: string;
   };
-  /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
-  generated?: GeneratedMessageProvenanceMetadata;
   /**
    * E1.7: explicit ConversationScope decision for scheduler-dispatched
    * reflection/heartbeat turns. When present with `kind: 'group'`, the turn

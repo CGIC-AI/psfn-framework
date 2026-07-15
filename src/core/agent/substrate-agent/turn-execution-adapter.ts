@@ -224,8 +224,6 @@ export function createTurnExecutionRuntimeAdapter(
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
     observerEvalSidecar: options.observerEvalSidecar ?? null,
-    pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => options.turnSupportRuntime
-      .pinDeferredContinuationSessionContext(deferredContinuationId, channelId),
     awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input),
     registerPostTurnBackgroundWork: (input) => options.turnSupportRuntime.registerPostTurnBackgroundWork(input),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),
@@ -370,8 +368,8 @@ export function createTurnExecutionRuntimeAdapter(
     getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => options.callbacks
       .getPersonaAdaptation(trustLevel, internalState, metacognitiveFlags, templateVariables),
     resolveContextWindow: () => options.callbacks.resolveContextWindow(),
-    preloadExtendedToolsForTurn: (message, taskKind, correlation) => options.toolRuntimeFacade
-      .preloadExtendedToolsForTurn(message, taskKind, correlation),
+    resolveToolTurnOutcome: (message, taskKind) => options.toolRuntimeFacade
+      .resolveToolTurnOutcome(message, taskKind),
     getAdaptiveToolRuntimeState: () => options.toolRuntimeFacade.getAdaptiveToolRuntimeState(),
     getActiveTurnTools: () => options.toolRuntimeFacade.getActiveTurnTools(),
     applyActiveToolsToAgentForTurn: (
@@ -379,13 +377,13 @@ export function createTurnExecutionRuntimeAdapter(
       taskKind,
       callType,
       correlation,
-      autoloadOutcome,
+      toolTurnOutcome,
     ) => options.toolRuntimeFacade.applyActiveToolsToAgentForTurn(
       message,
       taskKind,
       callType,
       correlation,
-      autoloadOutcome,
+      toolTurnOutcome,
     ),
     setActiveTurnContext: (correlation, taskKind, intent) => options.turnSupportRuntime
       .setActiveTurnContext(correlation, taskKind, intent),
@@ -420,25 +418,6 @@ export function createTurnExecutionRuntimeAdapter(
     buildTurnToolSummary: (turnMessages) => options.turnSupportRuntime.buildTurnToolSummary(turnMessages),
     inferPostTurnActions: (context) => options.turnSupportRuntime.inferPostTurnActions(context),
     buildTurnRecord: (input) => options.turnSupportRuntime.buildTurnRecord(input),
-    queueBackgroundContinuationCompletion: (
-      deferredContinuationId,
-      message,
-      response,
-      taskKind,
-      intent,
-    ) => options.turnSupportRuntime.queueBackgroundContinuationCompletion(
-      deferredContinuationId,
-      message,
-      response,
-      taskKind,
-      intent,
-    ),
-    emitBackgroundContinuationEvent: (
-      eventName,
-      payload,
-    ) => options.turnSupportRuntime.emitBackgroundContinuationEvent(eventName, payload),
-    dequeueBackgroundContinuationDeliveries: (deliverySessionId, limit) => options.turnSupportRuntime
-      .dequeueBackgroundContinuationDeliveries(deliverySessionId, limit),
     emitTelemetry: (eventName, payload) => options.turnSupportRuntime.emitTelemetry(eventName, payload),
     consumeIntentionalNoReplyDecision: (turnId) => options.turnSupportRuntime.consumeIntentionalNoReplyDecision(turnId),
     runIntentionPostTurnHooks: (context) => options.turnSupportRuntime.runIntentionPostTurnHooks(context),

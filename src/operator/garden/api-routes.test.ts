@@ -631,27 +631,14 @@ describe('AdminServer JSON API routes', () => {
         coreTools: ['tool_search', 'toolset'],
         extendedTools: ['repo_status', 'repo_diff', 'notify'],
         promotedToolsConfigured: ['repo_status', 'notify'],
-        promotedToolsActive: ['repo_status'],
-        promotedToolsSkipped: [
-          {
-            toolName: 'notify',
-            source: 'promoted',
-            reason: 'background_only',
-          },
-        ],
-        loadedExtendedTools: [
-          {
-            toolName: 'repo_diff',
-            source: 'autoload',
-            activatedAt: 1_701_234_560_000,
-            lastActivatedAt: 1_701_234_567_000,
-          },
-        ],
+        promotedToolsActive: ['repo_status', 'notify'],
+        promotedToolsSkipped: [],
         activeTools: [
           { toolName: 'tool_search', source: 'core' },
           { toolName: 'toolset', source: 'core' },
-          { toolName: 'repo_status', source: 'promoted' },
-          { toolName: 'repo_diff', source: 'autoload' },
+          { toolName: 'repo_status', source: 'extended' },
+          { toolName: 'notify', source: 'extended' },
+          { toolName: 'repo_diff', source: 'extended' },
         ],
         lastSnapshot: null,
       }),
@@ -660,12 +647,12 @@ describe('AdminServer JSON API routes', () => {
         tools: [
           {
             name: 'tool_search',
-            description: 'Search the non-default tool catalog.',
+            description: 'Look up long-form documentation for the callable tool catalog.',
             scope: 'core',
           },
           {
             name: 'toolset',
-            description: 'Manage non-default tool activation and pinned tools.',
+            description: 'Inspect the callable catalog and manage presentation-order pins.',
             scope: 'core',
           },
           {
@@ -1456,9 +1443,9 @@ describe('AdminServer JSON API routes', () => {
       purpose: 'agent.tools.adaptive.decision',
       timestamp: Date.now(),
       toolName: 'repo_diff',
-      source: 'autoload',
-      decision: 'activated',
-      reason: 'autoload_candidate',
+      source: 'extended',
+      decision: 'active',
+      reason: 'turn_active_set',
       taskKind: null,
       intent: 'dev',
     });
@@ -1474,24 +1461,22 @@ describe('AdminServer JSON API routes', () => {
       tools: [
         { toolName: 'tool_search', source: 'core' },
         { toolName: 'toolset', source: 'core' },
-        { toolName: 'repo_status', source: 'promoted' },
-        { toolName: 'repo_diff', source: 'autoload' },
+        { toolName: 'repo_status', source: 'extended' },
+        { toolName: 'repo_diff', source: 'extended' },
+        { toolName: 'notify', source: 'extended' },
       ],
       skipped: [
         {
           toolName: 'repo_apply_patch',
-          source: 'autoload',
+          source: 'extended',
           reason: 'capability_denied',
           missingTokens: ['git.write'],
         },
       ],
       counts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 0,
-        autoload: 1,
-        deferred: 0,
-        total: 3,
+        extended: 3,
+        total: 5,
       },
     });
 
@@ -1538,8 +1523,9 @@ describe('AdminServer JSON API routes', () => {
     expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
       expect.objectContaining({ toolName: 'toolset', source: 'core' }),
-      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
-      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+      expect.objectContaining({ toolName: 'repo_status', source: 'extended' }),
+      expect.objectContaining({ toolName: 'repo_diff', source: 'extended' }),
+      expect.objectContaining({ toolName: 'notify', source: 'extended' }),
     ]));
     expect(adaptivePayload.catalog?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'tool_search', scope: 'core' }),
@@ -1578,8 +1564,8 @@ describe('AdminServer JSON API routes', () => {
         name: 'notify',
         health: expect.objectContaining({ status: 'degraded' }),
         contexts: expect.objectContaining({
-          chat: expect.objectContaining({ status: 'available' }),
-          internalHeartbeat: expect.objectContaining({ status: 'available' }),
+          chat: expect.objectContaining({ status: 'active' }),
+          internalHeartbeat: expect.objectContaining({ status: 'active' }),
         }),
       }),
       expect.objectContaining({
@@ -1607,15 +1593,15 @@ describe('AdminServer JSON API routes', () => {
         type: 'decision',
         payload: expect.objectContaining({
           toolName: 'repo_diff',
-          source: 'autoload',
-          decision: 'activated',
+          source: 'extended',
+          decision: 'active',
         }),
       }),
       expect.objectContaining({
         type: 'snapshot',
         payload: expect.objectContaining({
           tools: expect.arrayContaining([
-            expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
+            expect.objectContaining({ toolName: 'repo_status', source: 'extended' }),
           ]),
           skipped: expect.arrayContaining([
             expect.objectContaining({ toolName: 'repo_apply_patch', reason: 'capability_denied' }),
@@ -2753,13 +2739,10 @@ describe('AdminServer JSON API routes', () => {
             callType: 'chat',
             purpose: 'agent.tools.adaptive.snapshot',
             tools: [{ toolName: 'contact_lookup', source: 'core' }],
-            skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
+            skipped: [{ toolName: 'notify', source: 'extended', reason: 'capability_denied' }],
             counts: {
               core: 1,
-              promoted: 0,
-              extendedLoaded: 0,
-              autoload: 0,
-              deferred: 0,
+              extended: 0,
               total: 1,
             },
             taskKind: null,
@@ -3022,7 +3005,7 @@ describe('AdminServer JSON API routes', () => {
     expect(messagesPayload.turns[0]?.snapshot?.toolContext?.adaptiveSnapshot?.skipped).toEqual([
       expect.objectContaining({
         toolName: 'notify',
-        reason: 'not_needed_for_turn',
+        reason: 'capability_denied',
       }),
     ]);
     expect(messagesPayload.turns[0]?.promptLoom?.providerPayload).toEqual({

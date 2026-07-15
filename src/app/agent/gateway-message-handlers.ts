@@ -244,7 +244,7 @@ export interface GatewayMessageHandlersDeps {
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   /**
    * Records primary replies delivered to Discord so replay-prone senders (the
-   * deferred-tool-handoff continuation) can detect and suppress a duplicate of
+   * internal continuation) can detect and suppress a duplicate of
    * an already-delivered reply. See `outbound-reply-dedupe.ts`.
    */
   outboundReplyGuard?: OutboundReplyGuardPort;
@@ -428,7 +428,7 @@ export function registerGatewayMessageHandlers(
             sendText: (channelId, content) => gateway.discordSend(channelId, content),
             sendMedia: (channelId, attachment) => gateway.discordSendMedia(channelId, attachment),
             onTextDelivered: (content) => {
-              // A deferred-tool-handoff continuation can now suppress a replay
+              // An internal continuation can now suppress a replay
               // of the primary text even when later media delivery fails.
               outboundReplyGuard?.noteDelivered({
                 channelId: message.channelId,

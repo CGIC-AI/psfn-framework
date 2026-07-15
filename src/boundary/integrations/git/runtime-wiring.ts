@@ -44,9 +44,8 @@ export function registerGitTools(
   }
 
   // Image-tools img2 audit: repo is a deliberate dev surface, not part of the
-  // companion's default social/expressive stack. Registered extended so it
-  // sits behind toolset/load + promotion; dev-flavoured turns resurface it via
-  // the 'dev' autoload candidate list (extended-tool-autoload-policy).
+  // companion's default social/expressive stack. It remains cataloged as an
+  // extended tool while capability and turn-policy gates decide callability.
   target.registerTool(tool, 'extended');
 }
 

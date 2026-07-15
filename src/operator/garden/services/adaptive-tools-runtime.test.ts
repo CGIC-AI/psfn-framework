@@ -9,7 +9,7 @@ describe('deriveToolHealthViews', () => {
         tools: [
           {
             name: 'tool_search',
-            description: 'Search the non-default tool catalog.',
+            description: 'Look up long-form documentation for the callable tool catalog.',
             scope: 'core',
           },
           {
@@ -42,7 +42,7 @@ describe('deriveToolHealthViews', () => {
                 exclusivityKey: 'extended:heartbeat_run_template',
                 interruptibility: 'cooperative',
                 eligibility: {
-                  foreground: false,
+                  foreground: true,
                   background: true,
                 },
               },
@@ -50,7 +50,7 @@ describe('deriveToolHealthViews', () => {
           },
           {
             name: 'toolset',
-            description: 'Manage non-default tool activation and pinned tools.',
+            description: 'Inspect the callable catalog and manage presentation-order pins.',
             scope: 'core',
           },
         ],
@@ -62,18 +62,11 @@ describe('deriveToolHealthViews', () => {
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
-        loadedExtendedTools: [
-          {
-            toolName: 'heartbeat_run_template',
-            source: 'autoload',
-            activatedAt: 2,
-            lastActivatedAt: 2,
-          },
-        ],
         activeTools: [
           { toolName: 'tool_search', source: 'core' },
           { toolName: 'toolset', source: 'core' },
-          { toolName: 'heartbeat_run_template', source: 'autoload' },
+          { toolName: 'notify', source: 'extended' },
+          { toolName: 'heartbeat_run_template', source: 'extended' },
         ],
         lastSnapshot: null,
       },
@@ -102,10 +95,12 @@ describe('deriveToolHealthViews', () => {
       },
       contexts: {
         chat: {
-          status: 'available',
+          status: 'active',
+          source: 'extended',
         },
         internalHeartbeat: {
-          status: 'available',
+          status: 'active',
+          source: 'extended',
         },
       },
     });
@@ -127,12 +122,12 @@ describe('deriveToolHealthViews', () => {
     expect(heartbeatTool).toMatchObject({
       contexts: {
         chat: {
-          status: 'not_applicable',
-          detail: 'Background-only tool; not available during direct turns.',
+          status: 'active',
+          source: 'extended',
         },
         internalHeartbeat: {
           status: 'active',
-          source: 'autoload',
+          source: 'extended',
         },
       },
     });
@@ -196,8 +191,7 @@ describe('deriveToolHealthViews', () => {
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
-        loadedExtendedTools: [],
-        activeTools: [],
+        activeTools: [{ toolName: 'vault', source: 'extended' }],
         lastSnapshot: null,
       },
       serviceHealth: [
@@ -227,12 +221,14 @@ describe('deriveToolHealthViews', () => {
         },
         contexts: {
           chat: {
-            status: 'available',
-            detail: 'Extended tool can be activated or pinned on demand.',
+            status: 'active',
+            detail: 'Extended tool currently active.',
+            source: 'extended',
           },
           internalHeartbeat: {
-            status: 'available',
-            detail: 'Extended tool can be activated or pinned on demand.',
+            status: 'active',
+            detail: 'Extended tool currently active.',
+            source: 'extended',
           },
         },
       }),
@@ -284,8 +280,10 @@ describe('deriveToolHealthViews', () => {
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
-        loadedExtendedTools: [],
-        activeTools: [],
+        activeTools: [
+          { toolName: 'media', source: 'extended' },
+          { toolName: 'selfie_create', source: 'extended' },
+        ],
         lastSnapshot: null,
       },
       serviceHealth: [

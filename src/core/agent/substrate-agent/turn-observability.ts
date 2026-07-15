@@ -1,5 +1,4 @@
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
-import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 
 export type TurnStageName = 'trust' | 'memory' | 'fatigue' | 'context' | 'prompt' | 'first-token' | 'end';
 
@@ -22,9 +21,6 @@ export function resolveTurnCallType(
   message: SubstrateMessage,
   taskKind: string | undefined,
 ): ObservabilityCallType {
-  if (isDeferredToolHandoffMessageId(message.id)) {
-    return 'background';
-  }
   if (taskKind === 'heartbeat' || taskKind === 'reflection') {
     return 'scheduled';
   }

@@ -10,7 +10,6 @@ import type { ChargePolicyConfig } from '../../../../shared/contracts/charge-pol
 import type { RunChargeSnapshot } from '../../../../shared/telemetry/run-charge.js';
 import type { SessionEntry } from '../../../session/types.js';
 import type { InternalState } from '../../../self-model/state.js';
-import type { AdaptiveLoadedExtendedToolState } from '../../adaptive-tools-telemetry.js';
 import { makeTestFatiguePolicyConfig } from '../../../../test-support/charge-policy.js';
 import {
   createDmConversationScope,
@@ -640,10 +639,7 @@ describe('emotion-appraisal producer', () => {
 });
 
 describe('tooling producers', () => {
-  it('classifies extended tools into activatable, active, and background-only guide lines', () => {
-    const loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>([
-      ['loaded_tool', { toolName: 'loaded_tool', source: 'autoload', activatedAt: 1, lastActivatedAt: 1 }],
-    ]);
+  it('renders every authorized extended tool as directly callable', () => {
     const guide = buildExtendedToolGuide({
       capabilityTier: 'nursery',
       extendedTools: [
@@ -651,16 +647,13 @@ describe('tooling producers', () => {
         makeExtendedTool('loaded_tool', 'Already active. More details.'),
         makeExtendedTool('background_tool', 'Runs in the background. Extra.'),
       ],
-      loadedExtended,
-      classifyExtendedToolForTurn: toolName => (toolName === 'background_tool' ? 'background' : 'overlay'),
-      promotedExtendedToolNames: new Set(),
     });
     expect(guide.lines).toEqual([
-      '- fresh_tool: Does a thing (use toolset action="activate")',
-      '- loaded_tool: Already active (autoload active)',
-      '- background_tool: Runs in the background (background-only; not callable in-turn)',
+      '- fresh_tool: Does a thing (call directly; no activation step)',
+      '- loaded_tool: Already active (call directly; no activation step)',
+      '- background_tool: Runs in the background (call directly; no activation step)',
     ]);
-    expect(guide.activatableCount).toBe(1);
+    expect(guide.callableCount).toBe(3);
     expect(guide.blockedCount).toBe(0);
   });
 
@@ -668,23 +661,23 @@ describe('tooling producers', () => {
     const variables = buildToolingPromptVariables({
       capabilityTier: 'nursery',
       analysisWorkbenchAvailable: true,
-      activeToolCounts: { core: 6, promoted: 2, extendedLoaded: 1, autoload: 1, deferred: 0, total: 10 },
+      activeToolCounts: { core: 6, extended: 4, total: 10 },
       availableExtendedCount: 7,
     });
     expect(variables.runtime_capability_tier).toBe('nursery');
     expect(variables.runtime_analysis_workbench_available).toBe('true');
     expect(variables.runtime_tooling_active_count).toBe('10');
-    expect(variables.runtime_tooling_promoted_count).toBe('2');
-    expect(variables.runtime_tooling_available_extended_count).toBe('7');
+    expect(variables.runtime_tooling_extended_count).toBe('4');
+    expect(variables.runtime_tooling_registered_extended_count).toBe('7');
   });
 
   it('renders the extended-tool directory variables from the guide', () => {
     const variables = buildExtendedToolPromptVariables({
       extendedTools: [makeExtendedTool('alpha', 'A.'), makeExtendedTool('beta', 'B.')],
-      extendedToolGuide: { lines: ['- alpha: A', '- beta: B'], activatableCount: 2, blockedCount: 0 },
+      extendedToolGuide: { lines: ['- alpha: A', '- beta: B'], callableCount: 2, blockedCount: 0 },
     });
     expect(variables.runtime_extended_tools_total).toBe('2');
-    expect(variables.runtime_extended_tools_activatable_count).toBe('2');
+    expect(variables.runtime_extended_tools_callable_count).toBe('2');
     expect(variables.runtime_extended_tool_names).toBe('alpha, beta');
     expect(variables.runtime_extended_tool_directory_lines).toBe('- alpha: A\n- beta: B');
   });
@@ -714,26 +707,24 @@ describe('self-presentation producer', () => {
     expect(resolveAppearanceContextFromTemplateVariables({})).toBe('');
   });
 
-  it('flags the self-image tool from core, promoted, or loaded state and blanks appearance on internal turns', () => {
-    const promoted = buildSelfPresentationPromptVariables({
+  it('flags the self-image tool from core or extended registration and blanks appearance on internal turns', () => {
+    const extended = buildSelfPresentationPromptVariables({
       internalTurn: false,
       templateVariables: { visual_description: 'A small black cat.' },
       skillsContext: '<skills_index>\nskill list body\n</skills_index>',
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map(),
-      promotedExtendedToolNames: new Set(['selfie_create']),
+      extendedToolNames: new Set(['selfie_create']),
     });
-    expect(promoted.runtime_self_image_tool_active).toBe('true');
-    expect(promoted.runtime_appearance_context_body).toBe('A small black cat.');
-    expect(promoted.runtime_skills_index_body).toBe('skill list body');
+    expect(extended.runtime_self_image_tool_active).toBe('true');
+    expect(extended.runtime_appearance_context_body).toBe('A small black cat.');
+    expect(extended.runtime_skills_index_body).toBe('skill list body');
 
     // selfie_create registered in the default core stack also flags the tool.
     const core = buildSelfPresentationPromptVariables({
       internalTurn: false,
       templateVariables: { visual_description: 'A small black cat.' },
       coreToolNames: new Set(['selfie_create']),
-      loadedExtended: new Map(),
-      promotedExtendedToolNames: new Set(),
+      extendedToolNames: new Set(),
     });
     expect(core.runtime_self_image_tool_active).toBe('true');
 
@@ -741,8 +732,7 @@ describe('self-presentation producer', () => {
       internalTurn: true,
       templateVariables: { visual_description: 'A small black cat.' },
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map(),
-      promotedExtendedToolNames: new Set(),
+      extendedToolNames: new Set(),
     });
     expect(internal.runtime_self_image_tool_active).toBe('false');
     expect(internal.runtime_appearance_context_body).toBe('');

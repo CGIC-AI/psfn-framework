@@ -50,7 +50,6 @@ export function cloneRuntimeState(state: AdaptiveToolRuntimeState): AdaptiveTool
       ...entry,
       ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
     })),
-    loadedExtendedTools: state.loadedExtendedTools.map(entry => ({ ...entry })),
     activeTools: state.activeTools.map(entry => ({ ...entry })),
     lastSnapshot: state.lastSnapshot
       ? {
@@ -167,7 +166,7 @@ export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): Ad
     groups.push({
       key: 'control_surface',
       title: 'Control Surface',
-      detail: 'Model-facing discovery and activation tools. Use tool_search to discover non-default tools, then toolset to activate or pin them.',
+      detail: 'Documentation lookup and presentation-order controls. All registered tools remain directly callable.',
       accent: 'bg-moss-400',
       tools: controlSurface,
     });
@@ -187,7 +186,7 @@ export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): Ad
     groups.push({
       key: 'managed_toolset',
       title: 'Managed Toolset',
-      detail: 'Extended tools surfaced through tool_search and activated or pinned with toolset.',
+      detail: 'Always-present extended tools; toolset pins affect presentation order only.',
       accent: 'bg-gold-400',
       tools: managedToolset,
     });
@@ -442,7 +441,7 @@ function resolveContextAvailability(
 
   return {
     status: 'available',
-    detail: 'Extended tool can be activated or pinned on demand.',
+    detail: 'Extended tool is registered and directly callable on ordinary turns.',
   };
 }
 
@@ -450,14 +449,8 @@ function describeActiveSource(source: string): string {
   switch (source) {
     case 'core':
       return 'Core tool currently active.';
-    case 'promoted':
-      return 'Pinned tool currently active.';
-    case 'autoload':
-      return 'Autoloaded tool currently active.';
-    case 'extended_loaded':
-      return 'Activated via toolset and currently active.';
-    case 'deferred':
-      return 'Deferred tool currently active.';
+    case 'extended':
+      return 'Extended tool currently active.';
     default:
       return 'Tool currently active.';
   }

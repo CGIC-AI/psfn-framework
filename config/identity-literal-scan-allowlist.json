@@ -655,12 +655,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/agent/extended-tool-autoload-policy.ts",
-      "contains": "psfn img2 audit",
-      "reason": "Audit comment identifies the project review that demoted risky tools from the core default.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/agent/no-reply-tool.ts",
       "contains": "psfn-framework-gu8m",
       "reason": "Implementation comment cites the bead that owns no-reply tool argument handling.",

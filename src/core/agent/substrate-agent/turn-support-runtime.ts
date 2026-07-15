@@ -13,16 +13,6 @@ import type {
 } from '../adaptive-tools-telemetry.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
-  pinDeferredContinuationSessionContext as pinDeferredContinuationSessionContextForTurn,
-  resolveSessionChannelId as resolveSessionChannelIdForTurn,
-  queueBackgroundContinuationCompletion as queueBackgroundContinuationCompletionForTurn,
-  dequeueBackgroundContinuationDeliveries as dequeueBackgroundContinuationDeliveriesForTurn,
-  emitBackgroundContinuationEvent as emitBackgroundContinuationEventForTurn,
-  type BackgroundContinuationTaskRecord,
-  type BackgroundContinuationCompletionSignal,
-  type PendingBackgroundContinuationDelivery,
-} from './background-continuation-runtime.js';
-import {
   buildTurnCorrelation as buildTurnCorrelationForTurn,
   buildTurnStageTelemetry as buildTurnStageTelemetryForTurn,
   resolveTurnCallType as resolveTurnCallTypeForTurn,
@@ -38,7 +28,6 @@ import {
   recordToolObservations as recordToolObservationsForTurn,
   recordUserMessage as recordUserMessageForTurn,
 } from './turn-records.js';
-import { BackgroundCompletionDeliveryQueue } from '../background-completion-delivery-queue.js';
 import {
   inferPostTurnActions as inferPostTurnActionsForTurn,
   runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,
@@ -133,11 +122,6 @@ export class TurnSupportRuntime {
   private activeTurnTaskKind: string | null = null;
   private activeTurnIntent: string | null = null;
 
-  private readonly pendingBackgroundContinuationDeliveries = new BackgroundCompletionDeliveryQueue<
-    PendingBackgroundContinuationDelivery
-  >();
-
-  private readonly backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
   private readonly intentionalNoReplyDecisions = new Map<TurnID, IntentionalNoReplyMetadata>();
@@ -236,12 +220,6 @@ export class TurnSupportRuntime {
       this.intentionalNoReplyDecisions.delete(turnId);
     }
     return decision;
-  }
-
-  getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
-    return [...this.backgroundContinuationTasks.values()]
-      .sort((left, right) => left.completedAt - right.completedAt)
-      .map(entry => ({ ...entry }));
   }
 
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
@@ -437,56 +415,14 @@ export class TurnSupportRuntime {
     });
   }
 
-  pinDeferredContinuationSessionContext(
-    deferredContinuationId: string | null,
-    channelId: string,
-  ): () => void {
-    return pinDeferredContinuationSessionContextForTurn(
-      deferredContinuationId,
-      channelId,
-      this.sessionManager,
-    );
-  }
-
   resolveSessionChannelId(channelId: string): string {
-    return resolveSessionChannelIdForTurn(this.sessionManager, channelId);
-  }
-
-  queueBackgroundContinuationCompletion(
-    deferredContinuationId: string,
-    message: SubstrateMessage,
-    response: AgentResponse,
-    taskKind: string | null,
-    intent: string | null,
-  ): BackgroundContinuationCompletionSignal {
-    return queueBackgroundContinuationCompletionForTurn({
-      deferredContinuationId,
-      message,
-      response,
-      taskKind,
-      intent,
-      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
-      backgroundContinuationTasks: this.backgroundContinuationTasks,
-      pendingBackgroundContinuationDeliveries: this.pendingBackgroundContinuationDeliveries,
-    });
-  }
-
-  dequeueBackgroundContinuationDeliveries(
-    deliverySessionId: string,
-    limit?: number,
-  ): PendingBackgroundContinuationDelivery[] {
-    return dequeueBackgroundContinuationDeliveriesForTurn(
-      this.pendingBackgroundContinuationDeliveries,
-      deliverySessionId,
-      limit,
-    );
-  }
-
-  async emitBackgroundContinuationEvent(
-    eventName: 'agent.background.continuation.completed' | 'agent.background.continuation.post_turn_delivery',
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    await emitBackgroundContinuationEventForTurn(this.eventBus, eventName, payload);
+    const resolver = this.sessionManager.resolveSessionChannelId;
+    if (typeof resolver !== 'function') {
+      return channelId;
+    }
+    const resolved = resolver.call(this.sessionManager, channelId);
+    const trimmed = resolved.trim();
+    return trimmed.length > 0 ? trimmed : channelId;
   }
 
   emitTurnStage(

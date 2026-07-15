@@ -20,7 +20,7 @@ export const selectedTurnTabs = [
   { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks with volatility, cache regions, static-hash timeline, and provider cache telemetry' },
   { id: 'prompt', label: 'Prompt Assembly', description: 'Prompt-soil layers, runtime additions, assembled prompt, model context, and provider wire' },
   { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, capture, and metadata' },
-  { id: 'tools', label: 'Tools', description: 'Shipped tool definitions (plan-backed) and adaptive activation state' },
+  { id: 'tools', label: 'Tools', description: 'Shipped tool definitions (plan-backed), ordering, and turn-policy state' },
   { id: 'diff', label: 'Turn Diff', description: 'Block-level plan diff between this turn and a baseline turn' },
   { id: 'timeline', label: 'Timeline', description: 'Stage order, elapsed time, and stage payloads' },
   { id: 'raw', label: 'Raw Events', description: 'Record, snapshot, stage telemetry, and live bus envelopes' },

@@ -5,10 +5,6 @@ import type { CapabilityTier, SubstrateConfig } from '../../../system/config/run
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js';
-import {
-  createDefaultExtendedToolAutoloadPolicy,
-  type ExtendedToolAutoloadPolicy,
-} from '../../../core/agent/extended-tool-autoload-policy.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
@@ -76,18 +72,7 @@ export function buildCharacterPromptVariablesProvider(
   return () => buildCharacterPromptTemplateVariables(cardStore.getCurrent().card);
 }
 
-export interface ExtendedToolAutoloadRuntimeTarget {
-  setExtendedToolAutoloadPolicy: (policy: ExtendedToolAutoloadPolicy | null) => void;
-}
-
 export type FilesystemToolRuntimeTarget = ToolRegistrarTarget & FilesystemRuntimeTarget;
-
-export function wireExtendedToolAutoloadPolicy(
-  target: ExtendedToolAutoloadRuntimeTarget,
-  policy: ExtendedToolAutoloadPolicy = createDefaultExtendedToolAutoloadPolicy(),
-): void {
-  target.setExtendedToolAutoloadPolicy(policy);
-}
 
 /**
  * Wire prompt stack storage, composition, and tools.

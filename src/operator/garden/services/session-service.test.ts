@@ -786,13 +786,10 @@ describe('AdminSessionDataService', () => {
               callType: 'chat',
               purpose: 'agent.tools.adaptive.snapshot',
               tools: [{ toolName: 'contact_lookup', source: 'core' }],
-              skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
+              skipped: [{ toolName: 'notify', source: 'extended', reason: 'capability_denied' }],
               counts: {
                 core: 1,
-                promoted: 0,
-                extendedLoaded: 0,
-                autoload: 0,
-                deferred: 0,
+                extended: 0,
                 total: 1,
               },
               taskKind: null,
@@ -928,7 +925,7 @@ describe('AdminSessionDataService', () => {
         ],
         adaptiveSnapshot: {
           tools: [{ toolName: 'contact_lookup', source: 'core' }],
-          skipped: [{ toolName: 'notify', reason: 'not_needed_for_turn' }],
+          skipped: [{ toolName: 'notify', reason: 'capability_denied' }],
         },
       },
       sessionContext: {

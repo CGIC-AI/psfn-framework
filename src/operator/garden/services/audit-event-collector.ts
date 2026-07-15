@@ -117,33 +117,18 @@ export function registerAuditTimelineSources(options: {
   });
 
   eventBus.on('agent.tools.adaptive.decision', (event) => {
-    const denied = event.decision === 'failed' || event.decision === 'skipped';
+    const denied = event.decision === 'skipped';
     appendAuditTimelineEntry(
       'tool_activation',
       denied ? 'denied' : 'allowed',
       denied
-        ? `Adaptive tool "${event.toolName}" was not activated.`
-        : `Adaptive tool "${event.toolName}" was ${event.decision}.`,
+        ? `Catalog tool "${event.toolName}" was unavailable for this turn.`
+        : `Catalog tool "${event.toolName}" was active for this turn.`,
       [
         `source=${event.source}`,
         event.reason ? `reason=${event.reason}` : null,
         event.missingTokens?.length ? `missingTokens=${event.missingTokens.join(',')}` : null,
         event.channelId ? `channelId=${event.channelId}` : null,
-      ],
-      'companion',
-    );
-  });
-
-  eventBus.on('agent.tools.autoload.skipped', (event) => {
-    appendAuditTimelineEntry(
-      'tool_activation',
-      'denied',
-      `Autoload skipped tool "${event.toolName}".`,
-      [
-        `reason=${event.reason}`,
-        event.missingTokens?.length ? `missingTokens=${event.missingTokens.join(',')}` : null,
-        event.tier ? `tier=${event.tier}` : null,
-        `channelId=${event.channelId}`,
       ],
       'companion',
     );

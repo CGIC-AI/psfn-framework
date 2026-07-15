@@ -1,9 +1,6 @@
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
-import type { AdaptiveToolSnapshotSkip } from '../adaptive-tools-telemetry.js';
-
-export interface AutoloadTurnOutcome {
+export interface ToolTurnOutcome {
   intent: string | null;
-  skipped: AdaptiveToolSnapshotSkip[];
 }
 
 export interface PromotedToolMutationResult {
@@ -16,7 +13,6 @@ export interface PromotedToolMutationResult {
     | 'tool_not_extended'
     | 'duplicate'
     | 'max_slots'
-    | 'background_only'
     | 'capability_denied'
     | 'not_found'
     | 'invalid_slot'

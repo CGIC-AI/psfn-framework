@@ -13,11 +13,7 @@ import type {
 } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
-import type {
-  ExtendedToolActivationOptions,
-  ExtendedToolActivationResult,
-  PostTurnActionInferer,
-} from '../agent/substrate-agent.js';
+import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthesis.js';
@@ -75,10 +71,6 @@ export interface HeartbeatAgent {
   }>;
   followUp?(message: SubstrateMessage): void;
   memoryExtractor?: MemoryExtractor | null;
-  activateExtendedTools?(
-    toolNames: readonly string[],
-    options?: ExtendedToolActivationOptions,
-  ): ExtendedToolActivationResult;
   waitForIdle?(): Promise<void>;
   registerPostTurnActionInferer?(inferer: PostTurnActionInferer): () => void;
   getCurrentInternalState?(): InternalState | null;
@@ -218,7 +210,7 @@ export interface HeartbeatRuntimeOptions {
   sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
   /**
-   * Shared outbound-reply dedupe guard. When present, the deferred-tool-handoff
+   * Shared outbound-reply dedupe guard. When present, an internal continuation
    * continuation consults it before delivering its reply and suppresses (with a
    * loud WARN) a message identical to one already delivered to the channel by
    * the primary turn — preventing the double-reply loop (psfn-framework-mdxu).

@@ -11,18 +11,12 @@ import {
   isBoundedSubagentLaunchToolName,
 } from './bounded-subagent-contract.js';
 import type {
-  AdaptiveLoadedExtendedToolState,
-  AdaptiveToolActivationSource,
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotSkip,
   AdaptiveToolSnapshotTelemetry,
   AdaptiveToolSnapshotTool,
 } from '../adaptive-tools-telemetry.js';
-import {
-  classifyExtendedToolForTurn as classifyDefaultExtendedToolForTurn,
-  type ExtendedToolTurnClass,
-} from '../extended-tool-autoload-policy.js';
 import { resolveToolPresentationRank } from '../tool-surface/registry.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
@@ -32,10 +26,7 @@ import type {
   ToolInterruptibility,
   WirableTool,
 } from '../tool-wiring-validator.js';
-import type {
-  AutoloadTurnOutcome,
-  PromotedToolMutationResult,
-} from './tool-runtime-contracts.js';
+import type { PromotedToolMutationResult, ToolTurnOutcome } from './tool-runtime-contracts.js';
 export type { PromotedToolMutationResult } from './tool-runtime-contracts.js';
 
 export type PromotedToolMutationErrorCode =
@@ -43,7 +34,6 @@ export type PromotedToolMutationErrorCode =
   | 'tool_not_extended'
   | 'duplicate'
   | 'max_slots'
-  | 'background_only'
   | 'capability_denied'
   | 'not_found'
   | 'invalid_slot'
@@ -58,16 +48,9 @@ export interface ActiveToolResolution {
 
 export interface PromotedToolResolution {
   activeNames: Set<string>;
+  orderedNames: string[];
   skipped: AdaptiveToolSnapshotSkip[];
 }
-
-type LoadedToolSource = Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>;
-
-const LOADED_TOOL_SOURCE_PRIORITY: Record<LoadedToolSource, number> = {
-  autoload: 1,
-  extended_loaded: 2,
-  deferred: 3,
-};
 
 export const DEFAULT_PARALLEL_READ_MAX = 3;
 
@@ -102,15 +85,9 @@ export function inferToolInterruptibility(
 }
 
 export function inferToolEligibility(
-  toolName: string,
-  category: ToolCategory,
+  _toolName: string,
+  _category: ToolCategory,
 ): ToolExecutionEligibility {
-  if (category === 'extended' && classifyDefaultExtendedToolForTurn(toolName) === 'background') {
-    return {
-      foreground: false,
-      background: true,
-    };
-  }
   return {
     foreground: true,
     background: true,
@@ -242,21 +219,10 @@ export function getExtendedToolByName(
   return extendedTools.find(tool => tool.name === name) ?? null;
 }
 
-export function classifyExtendedToolForTurn(
-  toolName: string,
-  classifier: ((toolName: string) => ExtendedToolTurnClass) | null | undefined,
-): ExtendedToolTurnClass {
-  if (!classifier) {
-    return classifyDefaultExtendedToolForTurn(toolName);
-  }
-  return classifier(toolName);
-}
-
 interface ResolvePromotedToolActivationParams {
   promotedTools: readonly string[];
   extendedTools: readonly AgentTool<any>[];
   resolveCapabilityAccess: () => CapabilityAccess;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
 }
 
 export function resolvePromotedToolActivation(
@@ -264,22 +230,15 @@ export function resolvePromotedToolActivation(
 ): PromotedToolResolution {
   const access = params.resolveCapabilityAccess();
   const activeNames = new Set<string>();
+  const orderedNames: string[] = [];
   const skipped: AdaptiveToolSnapshotSkip[] = [];
   for (const toolName of params.promotedTools) {
     const tool = getExtendedToolByName(params.extendedTools, toolName);
     if (!tool) {
       skipped.push({
         toolName,
-        source: 'promoted',
+        source: 'extended',
         reason: 'not_registered',
-      });
-      continue;
-    }
-    if (params.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-      skipped.push({
-        toolName: tool.name,
-        source: 'promoted',
-        reason: 'background_only',
       });
       continue;
     }
@@ -287,44 +246,20 @@ export function resolvePromotedToolActivation(
     if (!eligibility.allowed) {
       skipped.push({
         toolName: tool.name,
-        source: 'promoted',
+        source: 'extended',
         reason: 'capability_denied',
         ...(eligibility.missingTokens.length > 0 ? { missingTokens: eligibility.missingTokens } : {}),
       });
       continue;
     }
     activeNames.add(tool.name);
+    orderedNames.push(tool.name);
   }
   return {
     activeNames,
+    orderedNames,
     skipped,
   };
-}
-
-export function trackLoadedExtendedTool(
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>,
-  toolName: string,
-  source: LoadedToolSource,
-): 'activated' | 'already_active' {
-  const now = Date.now();
-  const existing = loadedExtended.get(toolName);
-  if (!existing) {
-    loadedExtended.set(toolName, {
-      toolName,
-      source,
-      activatedAt: now,
-      lastActivatedAt: now,
-    });
-    return 'activated';
-  }
-
-  const shouldPromoteSource = LOADED_TOOL_SOURCE_PRIORITY[source] > LOADED_TOOL_SOURCE_PRIORITY[existing.source];
-  loadedExtended.set(toolName, {
-    ...existing,
-    source: shouldPromoteSource ? source : existing.source,
-    lastActivatedAt: now,
-  });
-  return 'already_active';
 }
 
 export function mergeAdaptiveSkips(
@@ -348,16 +283,14 @@ export function mergeAdaptiveSkips(
 interface ResolveActiveToolsParams {
   coreTools: readonly AgentTool<any>[];
   extendedTools: readonly AgentTool<any>[];
-  loadedExtended: ReadonlyMap<string, AdaptiveLoadedExtendedToolState>;
   promotedResolution: PromotedToolResolution;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   additionalSkipped?: AdaptiveToolSnapshotSkip[];
 }
 
 export function resolveActiveTools(
   params: ResolveActiveToolsParams,
 ): ActiveToolResolution {
-  const activeByName = new Map<string, { tool: AgentTool<any>; source: AdaptiveToolActivationSource }>();
+  const activeByName = new Map<string, { tool: AgentTool<any>; source: 'core' | 'extended' }>();
   for (const tool of params.coreTools) {
     if (!activeByName.has(tool.name)) {
       activeByName.set(tool.name, {
@@ -368,29 +301,29 @@ export function resolveActiveTools(
   }
 
   for (const tool of params.extendedTools) {
-    if (params.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-      continue;
-    }
-    const loaded = params.loadedExtended.get(tool.name);
-    const source: AdaptiveToolActivationSource | null = params.promotedResolution.activeNames.has(tool.name)
-      ? 'promoted'
-      : (loaded?.source ?? null);
-    if (!source) {
-      continue;
-    }
     if (!activeByName.has(tool.name)) {
       activeByName.set(tool.name, {
         tool,
-        source,
+        source: 'extended',
       });
     }
   }
 
-  // Present social/expressive tools first and admin/boundary/system last so
-  // the model reads for-the-user surfaces (selfie_create, generate_image,
-  // notify, contact) before dev/ops machinery; names break ties.
+  const pinnedIndex = new Map(
+    params.promotedResolution.orderedNames.map((toolName, index) => [toolName, index] as const),
+  );
+
+  // Persisted pin preferences only affect presentation order. Every registered
+  // extended tool remains present and callable whether pinned or not.
   const orderedActiveEntries = [...activeByName.values()]
     .sort((left, right) => {
+      const leftPinned = pinnedIndex.get(left.tool.name);
+      const rightPinned = pinnedIndex.get(right.tool.name);
+      if (leftPinned !== undefined || rightPinned !== undefined) {
+        if (leftPinned === undefined) return 1;
+        if (rightPinned === undefined) return -1;
+        if (leftPinned !== rightPinned) return leftPinned - rightPinned;
+      }
       const rankDelta = resolveToolPresentationRank(left.tool.name)
         - resolveToolPresentationRank(right.tool.name);
       if (rankDelta !== 0) return rankDelta;
@@ -405,18 +338,12 @@ export function resolveActiveTools(
 
   const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
     core: 0,
-    promoted: 0,
-    extendedLoaded: 0,
-    autoload: 0,
-    deferred: 0,
+    extended: 0,
     total: snapshotTools.length,
   };
   for (const entry of snapshotTools) {
     if (entry.source === 'core') counts.core += 1;
-    else if (entry.source === 'promoted') counts.promoted += 1;
-    else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-    else if (entry.source === 'autoload') counts.autoload += 1;
-    else counts.deferred += 1;
+    else counts.extended += 1;
   }
 
   return {
@@ -444,7 +371,7 @@ interface BuildAdaptiveToolSnapshotParams {
   taskKind: string | undefined;
   callType: ObservabilityCallType;
   correlation: CorrelationMetadata;
-  autoloadOutcome: AutoloadTurnOutcome;
+  toolTurnOutcome: ToolTurnOutcome;
   resolution: ActiveToolResolution;
   withAdaptiveCorrelation: (
     correlation: CorrelationMetadata | undefined,
@@ -469,7 +396,7 @@ export function buildAdaptiveToolSnapshot(
     })),
     counts: { ...params.resolution.counts },
     taskKind: params.taskKind ?? null,
-    intent: params.autoloadOutcome.intent,
+    intent: params.toolTurnOutcome.intent,
   };
 }
 
@@ -499,7 +426,6 @@ export function emitAdaptiveToolSnapshotDecisions(
   }
 
   for (const skip of params.snapshot.skipped) {
-    if (skip.source !== 'promoted') continue;
     params.emitAdaptiveToolDecision({
       ...params.withAdaptiveCorrelation(params.correlation, 'agent.tools.adaptive.decision'),
       toolName: skip.toolName,
@@ -531,7 +457,6 @@ export function cloneAdaptiveToolSnapshot(
 interface BuildAdaptiveToolRuntimeStateParams {
   coreTools: readonly AgentTool<any>[];
   extendedTools: readonly AgentTool<any>[];
-  loadedExtended: ReadonlyMap<string, AdaptiveLoadedExtendedToolState>;
   promotedToolsConfigured: readonly string[];
   promotedResolution: PromotedToolResolution;
   activeResolution: ActiveToolResolution;
@@ -551,9 +476,6 @@ export function buildAdaptiveToolRuntimeState(
       ...entry,
       ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
     })),
-    loadedExtendedTools: [...params.loadedExtended.values()].map(entry => ({
-      ...entry,
-    })),
     activeTools: params.activeResolution.snapshotTools.map(entry => ({
       ...entry,
     })),
@@ -570,7 +492,6 @@ interface PromotedToolMutationRuntime {
   setPromotedExtendedToolNames: (next: readonly string[]) => string[];
   persistPromotedExtendedToolNames: (next: readonly string[]) => string | null;
   getExtendedToolByName: (toolName: string) => AgentTool<any> | null;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   resolveCapabilityAccess: () => CapabilityAccess;
   applyActiveToolsToAgent: () => void;
 }
@@ -596,7 +517,7 @@ export function addPromotedExtendedTool(
       ok: true,
       changed: false,
       promotedTools: current,
-      message: `Tool "${normalizedName}" is already promoted.`,
+      message: `Tool "${normalizedName}" is already pinned for presentation ordering.`,
       errorCode: 'duplicate',
     };
   }
@@ -606,7 +527,7 @@ export function addPromotedExtendedTool(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Promoted tool slots are full (max ${PROMOTED_EXTENDED_TOOL_SLOTS_MAX}).`,
+      message: `Pinned tool-order slots are full (max ${PROMOTED_EXTENDED_TOOL_SLOTS_MAX}).`,
       errorCode: 'max_slots',
     };
   }
@@ -621,16 +542,6 @@ export function addPromotedExtendedTool(
       errorCode: 'tool_not_extended',
     };
   }
-  if (runtime.classifyExtendedToolForTurn(tool.name) !== 'overlay') {
-    return {
-      ok: false,
-      changed: false,
-      promotedTools: current,
-      message: `Tool "${normalizedName}" is background-only and cannot be promoted.`,
-      errorCode: 'background_only',
-    };
-  }
-
   const access = runtime.resolveCapabilityAccess();
   const eligibility = evaluateToolCapabilityEligibility(tool, {}, access);
   if (!eligibility.allowed) {
@@ -652,7 +563,7 @@ export function addPromotedExtendedTool(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Failed to persist promoted tools: ${persistError}`,
+      message: `Failed to persist pinned tool ordering: ${persistError}`,
       errorCode: 'persist_failed',
     };
   }
@@ -663,7 +574,7 @@ export function addPromotedExtendedTool(
     ok: true,
     changed: true,
     promotedTools,
-    message: `Promoted tool "${normalizedName}".`,
+    message: `Pinned "${normalizedName}" as a tool presentation-order preference.`,
   };
 }
 
@@ -688,7 +599,7 @@ export function removePromotedExtendedTool(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Tool "${normalizedName}" is not currently promoted.`,
+      message: `Tool "${normalizedName}" is not currently pinned for presentation ordering.`,
       errorCode: 'not_found',
     };
   }
@@ -700,7 +611,7 @@ export function removePromotedExtendedTool(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Failed to persist promoted tools: ${persistError}`,
+      message: `Failed to persist pinned tool ordering: ${persistError}`,
       errorCode: 'persist_failed',
     };
   }
@@ -711,7 +622,7 @@ export function removePromotedExtendedTool(
     ok: true,
     changed: true,
     promotedTools,
-    message: `Removed promoted tool "${normalizedName}".`,
+    message: `Removed the presentation-order pin for "${normalizedName}".`,
   };
 }
 
@@ -770,7 +681,7 @@ export function swapPromotedExtendedTools(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Failed to persist promoted tools: ${persistError}`,
+      message: `Failed to persist pinned tool ordering: ${persistError}`,
       errorCode: 'persist_failed',
     };
   }
@@ -781,6 +692,6 @@ export function swapPromotedExtendedTools(
     ok: true,
     changed: true,
     promotedTools,
-    message: `Swapped promoted tool slots ${fromSlot} and ${toSlot}.`,
+    message: `Swapped pinned tool-order slots ${fromSlot} and ${toSlot}.`,
   };
 }

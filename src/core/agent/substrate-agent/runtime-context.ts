@@ -1,7 +1,6 @@
 import { isRecord } from '../../../shared/utils/types.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
-  GeneratedMessageProvenanceMetadata,
   RequesterProvenance,
   SubstrateMessage,
   ResponseStyle,
@@ -46,9 +45,6 @@ import {
 } from '../../self-model/metacognition.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { InternalStateContinuityGap } from '../../self-model/internal-state-persistence.js';
-import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
-import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
-import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import { applyObservedMachineIntelligence } from '../../contacts/observed-machine-intelligence.js';
@@ -56,7 +52,6 @@ import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
-import { trimNonEmptyString } from './runtime-context-sections/section-format.js';
 import {
   buildCurrentDatetimePromptVariables,
   buildLastMessagePromptVariables,
@@ -127,27 +122,6 @@ export interface CompanionSubstrateHealthContext {
   apiHealth?: ApiHealthResponse | null;
   unavailableReason?: string;
   warnings?: readonly CompanionSubstrateHealthWarning[];
-}
-
-function normalizeGeneratedMessageProvenance(
-  value: unknown,
-): GeneratedMessageProvenanceMetadata | null {
-  if (!isRecord(value)) return null;
-  if (value.kind !== 'deferred_tool_handoff') return null;
-  const sourceMessageId = trimNonEmptyString(value.sourceMessageId);
-  const sourceChannelId = trimNonEmptyString(value.sourceChannelId);
-  const sourceAuthorId = trimNonEmptyString(value.sourceAuthorId);
-  const sourceAuthorName = trimNonEmptyString(value.sourceAuthorName);
-  if (!sourceMessageId || !sourceChannelId || !sourceAuthorId || !sourceAuthorName) {
-    return null;
-  }
-  return {
-    kind: 'deferred_tool_handoff',
-    sourceMessageId,
-    sourceChannelId,
-    sourceAuthorId,
-    sourceAuthorName,
-  };
 }
 
 export interface ResolvedAuthorContext {
@@ -300,9 +274,6 @@ export interface DynamicPromptTemplateVariablesInput {
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
   coreToolNames: ReadonlySet<string>;
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
-  promotedExtendedToolNames: Set<string>;
   skillsContext?: string;
   activeConcerns?: ActiveConcernRuntimeData | null;
   behavioralNotesBlock?: string;
@@ -341,9 +312,6 @@ export function buildDynamicPromptTemplateVariables(
   const extendedToolGuide = buildExtendedToolGuide({
     capabilityTier: input.capabilityTier,
     extendedTools: input.extendedTools,
-    loadedExtended: input.loadedExtended,
-    classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
-    promotedExtendedToolNames: input.promotedExtendedToolNames,
   });
 
   return {
@@ -418,8 +386,7 @@ export function buildDynamicPromptTemplateVariables(
       templateVariables: input.templateVariables,
       skillsContext: input.skillsContext,
       coreToolNames: input.coreToolNames,
-      loadedExtended: input.loadedExtended,
-      promotedExtendedToolNames: input.promotedExtendedToolNames,
+      extendedToolNames: new Set(input.extendedTools.map(tool => tool.name)),
     }),
   } satisfies Record<string, string>;
 }
@@ -450,9 +417,6 @@ export function buildRuntimeContext(input: {
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
   coreToolNames: ReadonlySet<string>;
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
-  promotedExtendedToolNames: Set<string>;
   skillsContext?: string;
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
@@ -733,77 +697,6 @@ export function resolveUnverifiedSpeakerName(message: SubstrateMessage): string 
   return 'an unrecognized person';
 }
 
-async function resolveGeneratedMessageSourceContext(input: {
-  message: SubstrateMessage;
-  contactStore: ContactStorePort | null | undefined;
-  logger: RuntimeContextLogger;
-  provenance: GeneratedMessageProvenanceMetadata;
-}): Promise<Omit<ResolvedAuthorContext, 'speakerRole' | 'resolvedUserName'> | null> {
-  const generatedSourceMessage: SubstrateMessage = {
-    ...input.message,
-    id: input.provenance.sourceMessageId,
-    channelId: input.provenance.sourceChannelId,
-    authorId: input.provenance.sourceAuthorId,
-    authorName: input.provenance.sourceAuthorName,
-  };
-  const fallbackContinuitySubjectKey = resolveContinuitySubjectKey({
-    subjectIdentityKey: input.provenance.sourceAuthorId,
-    authorId: input.provenance.sourceAuthorId,
-  });
-
-  if (!input.contactStore) {
-    return {
-      trustLevel: 'regular',
-      actorKind: resolveUserActorKind(generatedSourceMessage),
-      continuitySubjectKey: fallbackContinuitySubjectKey,
-      continuityFallbackKeys: [],
-    };
-  }
-
-  try {
-    const channel = resolveIdentityChannel(generatedSourceMessage);
-    const canonicalHint = input.message.routing?.canonicalContactId?.trim();
-    const hintedContact = canonicalHint ? await input.contactStore.getById(canonicalHint) : undefined;
-    const contact = hintedContact
-      ?? await input.contactStore.getByChannelIdentity(channel, input.provenance.sourceAuthorId);
-    const canonicalContactKey = contact?.id ?? canonicalHint;
-    // E3.2: per-contact conversation-channel privacy is no longer consulted
-    // here — channel classification is owned by channels.json labels, operator
-    // overrides, and derived defaults (docs/context-envelope.md).
-
-    return {
-      trustLevel: contact?.trustLevel ?? 'regular',
-      actorKind: resolveUserActorKind(generatedSourceMessage, contact),
-      ...(resolveUserActorKind(generatedSourceMessage, contact) === 'machine_intelligence'
-        ? { speakingWithIsMachineIntelligence: true }
-        : {}),
-      ...(contact?.relationshipType ? { relationshipType: contact.relationshipType } : {}),
-      ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
-      ...(canonicalContactKey ? { canonicalContactKey } : {}),
-      continuitySubjectKey: resolveContinuitySubjectKey({
-        canonicalContactKey,
-        subjectIdentityKey: input.provenance.sourceAuthorId,
-        authorId: input.provenance.sourceAuthorId,
-      }),
-      continuityFallbackKeys: canonicalContactKey
-        ? collectContinuityFallbackKeys(input.provenance.sourceAuthorId, canonicalContactKey, contact)
-        : [],
-    };
-  } catch (error) {
-    input.logger.warn('Failed to resolve generated message source identity for trust/context routing', {
-      authorId: input.provenance.sourceAuthorId,
-      channelId: input.provenance.sourceChannelId,
-      error: toErrorMessage(error),
-    });
-    return {
-      trustLevel: 'regular',
-      actorKind: resolveUserActorKind(generatedSourceMessage),
-      continuitySubjectKey: fallbackContinuitySubjectKey,
-      continuityFallbackKeys: [],
-    };
-  }
-}
-
 export async function resolveAuthorContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStorePort | null | undefined;
@@ -912,29 +805,6 @@ export async function resolveAuthorContext(input: {
         contact.id,
         contact,
       ),
-    };
-  }
-
-  const generatedProvenance = normalizeGeneratedMessageProvenance(input.message.routing?.generated);
-  if (input.message.authorId.startsWith('system:') && generatedProvenance) {
-    const generatedSourceContext = await resolveGeneratedMessageSourceContext({
-      message: input.message,
-      contactStore: input.contactStore,
-      logger: input.logger,
-      provenance: generatedProvenance,
-    });
-    const canonicalContactKey = generatedSourceContext?.canonicalContactKey;
-
-    return {
-      trustLevel: generatedSourceContext?.trustLevel ?? 'regular',
-      speakerRole: 'system',
-      actorKind: 'system',
-      resolvedUserName: resolvePromptUserName(input.message),
-      ...(generatedSourceContext?.speakingWithIsMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
-      ...(generatedSourceContext?.relationshipType ? { relationshipType: generatedSourceContext.relationshipType } : {}),
-      ...(canonicalContactKey ? { canonicalContactKey } : {}),
-      continuitySubjectKey: generatedSourceContext?.continuitySubjectKey ?? input.message.authorId,
-      continuityFallbackKeys: generatedSourceContext?.continuityFallbackKeys ?? [],
     };
   }
 
@@ -1122,9 +992,6 @@ export function resolveTaskKind(input: {
   message: SubstrateMessage;
   resolveChannelPromptDock: (message: SubstrateMessage) => { prompt?: { resolveTaskKind?: (message: SubstrateMessage) => string | undefined } } | undefined;
 }): string | undefined {
-  if (isDeferredToolHandoffMessageId(input.message.id)) {
-    return 'deferred_tool_handoff';
-  }
   const channelDock = input.resolveChannelPromptDock(input.message);
   const adapterTaskKind = channelDock?.prompt?.resolveTaskKind?.(input.message);
   if (adapterTaskKind) return adapterTaskKind;

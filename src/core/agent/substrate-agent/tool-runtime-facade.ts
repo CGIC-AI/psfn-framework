@@ -14,8 +14,6 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import { textResultWithError } from '../../tools/results.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
-  AdaptiveLoadedExtendedToolState,
-  AdaptiveToolActivationSource,
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotSkip,
@@ -23,17 +21,8 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../adaptive-tools-telemetry.js';
 import {
-  createDefaultExtendedToolAutoloadPolicy,
-  type ExtendedToolAutoloadPolicy,
-} from '../extended-tool-autoload-policy.js';
-import {
-  activateExtendedToolsForTurn,
   createToolsetTool,
   createToolSearchTool,
-  preloadExtendedToolsForTurn,
-  type AutoloadTurnOutcome,
-  type ExtendedToolActivationOptions,
-  type ExtendedToolActivationResult,
 } from './adaptive-tools-runtime.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import {
@@ -41,7 +30,6 @@ import {
   applyActiveToolsToAgent,
   buildAdaptiveToolRuntimeState,
   buildAdaptiveToolSnapshot,
-  classifyExtendedToolForTurn,
   emitAdaptiveToolSnapshotDecisions,
   getExtendedToolByName,
   getPromotedExtendedToolNames,
@@ -52,13 +40,14 @@ import {
   resolvePromotedToolActivation,
   setPromotedExtendedToolNames,
   swapPromotedExtendedTools,
-  trackLoadedExtendedTool,
   withToolConcurrencyMetadata,
   type ActiveToolResolution,
   type PromotedToolMutationErrorCode,
   type PromotedToolMutationResult,
   type PromotedToolResolution,
 } from './tool-orchestration-runtime.js';
+import type { ToolTurnOutcome } from './tool-runtime-contracts.js';
+import { classifyTurnIntent } from '../tool-turn-intent.js';
 import {
   extractGatewayMethods,
   validateAndLogToolWiring,
@@ -90,10 +79,6 @@ interface ToolRuntimeFacadeOptions {
   agent: Agent;
   resolveCapabilityAccess: () => CapabilityAccess;
   withCapabilityGates: (tools: AgentTool<any>[]) => AgentTool<any>[];
-  withCorrelationPurpose: (
-    correlation: CorrelationMetadata,
-    purpose: string,
-  ) => CorrelationMetadata;
   withAdaptiveCorrelation: (
     correlation: CorrelationMetadata | undefined,
     purpose: string,
@@ -102,10 +87,8 @@ interface ToolRuntimeFacadeOptions {
     payload: Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>,
   ) => void;
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
-  resolveSessionChannelId: (channelId: string) => string;
   getActiveTurnCorrelation: () => CorrelationMetadata | null;
   getActiveTurnTaskKind: () => string | null;
-  getActiveTurnIntent: () => string | null;
 }
 
 interface MaintenanceCoreToolPolicy {
@@ -125,7 +108,6 @@ interface ToolTurnContext {
   readonly message: SubstrateMessage;
   readonly candidateOrigin?: IcpAutonomyCandidateOrigin;
   candidateScopeActive?: boolean;
-  readonly scopedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
   activeTools?: AgentTool<any>[];
   correlation?: CorrelationMetadata;
   taskKind?: string | null;
@@ -324,10 +306,6 @@ export class ToolRuntimeFacade {
   private readonly agent: Agent;
   private readonly resolveCapabilityAccess: () => CapabilityAccess;
   private readonly withCapabilityGates: (tools: AgentTool<any>[]) => AgentTool<any>[];
-  private readonly withCorrelationPurpose: (
-    correlation: CorrelationMetadata,
-    purpose: string,
-  ) => CorrelationMetadata;
   private readonly withAdaptiveCorrelation: (
     correlation: CorrelationMetadata | undefined,
     purpose: string,
@@ -336,17 +314,13 @@ export class ToolRuntimeFacade {
     payload: Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>,
   ) => void;
   private readonly emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
-  private readonly resolveSessionChannelId: (channelId: string) => string;
   private readonly getActiveTurnCorrelation: () => CorrelationMetadata | null;
   private readonly getActiveTurnTaskKind: () => string | null;
-  private readonly getActiveTurnIntent: () => string | null;
 
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
-  private loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
   private readonly toolTurnContext = new AsyncLocalStorage<ToolTurnContext>();
   private readonly candidateNotifyDelegateContext = new AsyncLocalStorage<ToolTurnContext>();
-  private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
   private toolHealthStatusByName = new Map<string, RuntimeServiceHealthStatus>();
@@ -356,14 +330,11 @@ export class ToolRuntimeFacade {
     this.agent = options.agent;
     this.resolveCapabilityAccess = options.resolveCapabilityAccess;
     this.withCapabilityGates = options.withCapabilityGates;
-    this.withCorrelationPurpose = options.withCorrelationPurpose;
     this.withAdaptiveCorrelation = options.withAdaptiveCorrelation;
     this.emitAdaptiveToolDecision = options.emitAdaptiveToolDecision;
     this.emitTelemetry = options.emitTelemetry;
-    this.resolveSessionChannelId = options.resolveSessionChannelId;
     this.getActiveTurnCorrelation = options.getActiveTurnCorrelation;
     this.getActiveTurnTaskKind = options.getActiveTurnTaskKind;
-    this.getActiveTurnIntent = options.getActiveTurnIntent;
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
@@ -398,7 +369,6 @@ export class ToolRuntimeFacade {
       setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
       persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
       getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
     });
@@ -411,7 +381,6 @@ export class ToolRuntimeFacade {
       setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
       persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
       getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
     });
@@ -424,7 +393,6 @@ export class ToolRuntimeFacade {
       setPromotedExtendedToolNames: (next) => this.setPromotedExtendedToolNamesInternal(next),
       persistPromotedExtendedToolNames: (next) => this.persistPromotedExtendedToolNames(next),
       getExtendedToolByName: (name) => this.getExtendedToolByName(name),
-      classifyExtendedToolForTurn: (name) => this.classifyExtendedToolForTurn(name),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
     });
@@ -459,21 +427,18 @@ export class ToolRuntimeFacade {
       return buildAdaptiveToolRuntimeState({
         coreTools: [],
         extendedTools: candidateTools,
-        loadedExtended: this.resolveActiveLoadedExtended(),
         promotedToolsConfigured: [],
-        promotedResolution: { activeNames: new Set(), skipped: [] },
+        promotedResolution: { activeNames: new Set(), orderedNames: [], skipped: [] },
         activeResolution: this.resolveCandidateActiveTools(candidateContext),
         lastSnapshot: candidateContext.adaptiveSnapshot ?? null,
       });
     }
     const promotedResolution = this.resolvePromotedToolActivation();
     const activeResolution = this.resolveActiveTools();
-    const activeLoadedExtended = this.resolveActiveLoadedExtended();
 
     return buildAdaptiveToolRuntimeState({
       coreTools: this.coreTools,
       extendedTools: this.extendedTools,
-      loadedExtended: activeLoadedExtended,
       promotedToolsConfigured: this.getPromotedExtendedToolNamesInternal(),
       promotedResolution,
       activeResolution,
@@ -495,32 +460,6 @@ export class ToolRuntimeFacade {
     this.toolHealthStatusByName = new Map(next);
   }
 
-  activateExtendedTools(
-    toolNames: readonly string[],
-    options: ExtendedToolActivationOptions = {},
-  ): ExtendedToolActivationResult {
-    if (this.isCandidateTurn()) {
-      const requestedTools = [...new Set(toolNames
-        .map(toolName => toolName.trim())
-        .filter(toolName => toolName.length > 0))];
-      return {
-        requestedTools,
-        activatedTools: [],
-        alreadyActiveTools: [],
-        missingTools: requestedTools,
-      };
-    }
-    return activateExtendedToolsForTurn({
-      toolNames,
-      options,
-      extendedTools: this.extendedTools,
-      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
-      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-    });
-  }
-
   async runWithTurnToolContext<T>(
     message: SubstrateMessage,
     run: () => Promise<T>,
@@ -534,7 +473,6 @@ export class ToolRuntimeFacade {
     }
     return this.toolTurnContext.run({
       message,
-      scopedExtended: new Map(),
     }, run);
   }
 
@@ -558,17 +496,10 @@ export class ToolRuntimeFacade {
     if (!tool) {
       throw new Error('Trusted ICP candidate notify tool is not registered as extended');
     }
-    if (this.classifyExtendedToolForTurn(toolName) !== 'overlay') {
-      throw new Error('Trusted ICP candidate notify tool is not overlay eligible');
-    }
-
-    const scopedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
-    trackLoadedExtendedTool(scopedExtended, toolName, 'autoload');
     const context: ToolTurnContext = {
       message,
       candidateOrigin,
       candidateScopeActive: true,
-      scopedExtended,
       taskKind: candidateOrigin.continuationTaskKind ?? null,
       intent: 'ops',
     };
@@ -577,7 +508,6 @@ export class ToolRuntimeFacade {
         return await run();
       } finally {
         context.candidateScopeActive = false;
-        context.scopedExtended.clear();
         context.activeTools = [];
         context.correlation = undefined;
         context.adaptiveSnapshot = undefined;
@@ -595,10 +525,6 @@ export class ToolRuntimeFacade {
     return this.resolveOwnedTurnTools() ?? [...this.agent.state.tools];
   }
 
-  setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
-    this.extendedToolAutoloadPolicy = policy;
-  }
-
   setToolsetMemoryWriter(getMemoryWriter: () => Pick<MemoryWriter, 'write'> | undefined): void {
     this.getToolsetMemoryWriter = getMemoryWriter;
   }
@@ -607,12 +533,8 @@ export class ToolRuntimeFacade {
     const toolset = createToolsetTool({
       getCoreTools: () => this.getCoreToolsForCurrentTurn(),
       getExtendedTools: () => this.getExtendedToolsForCurrentTurn(),
-      getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      getActiveTurnCorrelation: () => this.getActiveTurnCorrelation(),
-      getActiveTurnTaskKind: () => this.getActiveTurnTaskKind(),
-      getActiveTurnIntent: () => this.getActiveTurnIntent(),
       getPromotedExtendedToolsLimit: () => this.getPromotedExtendedToolsLimit(),
       getPromotedExtendedTools: () => this.getPromotedExtendedTools(),
       setPromotedExtendedTools: (next) => this.setPromotedExtendedToolNamesInternal(next),
@@ -621,11 +543,6 @@ export class ToolRuntimeFacade {
       removePromotedExtendedTool: (toolName) => this.removePromotedExtendedTool(toolName),
       getMemoryWriter: () => this.getToolsetMemoryWriter?.(),
       applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
-      activateExtendedTools: (toolNames, options) => this.activateExtendedTools(toolNames, options),
-      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
-      withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
     });
     return {
       ...toolset,
@@ -640,37 +557,22 @@ export class ToolRuntimeFacade {
 
   createToolSearchTool(): AgentTool<any> {
     return createToolSearchTool({
+      getCoreTools: () => this.getCoreToolsForCurrentTurn(),
       getExtendedTools: () => this.getExtendedToolsForCurrentTurn(),
-      getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
       getToolHealthStatusByName: () => this.getToolHealthStatusByName(),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
     });
   }
 
-  preloadExtendedToolsForTurn(
+  resolveToolTurnOutcome(
     message: SubstrateMessage,
     taskKind: string | undefined,
-    correlation: CorrelationMetadata,
-  ): AutoloadTurnOutcome {
+  ): ToolTurnOutcome {
     if (this.isCandidateTurn()) {
-      return { intent: 'ops', skipped: [] };
+      return { intent: 'ops' };
     }
-    return preloadExtendedToolsForTurn({
-      message,
-      taskKind,
-      correlation,
-      policy: this.extendedToolAutoloadPolicy,
-      extendedTools: this.extendedTools,
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
-      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      trackLoadedExtendedTool: (toolName, source) => this.trackLoadedExtendedTool(toolName, source),
-      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
-      emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
-      withCorrelationPurpose: (contextCorrelation, purpose) => this.withCorrelationPurpose(contextCorrelation, purpose),
-      withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
-    });
+    return { intent: classifyTurnIntent(message, taskKind) };
   }
 
   applyActiveToolsToAgentForTurn(
@@ -678,35 +580,15 @@ export class ToolRuntimeFacade {
     taskKind: string | undefined,
     callType: ObservabilityCallType,
     correlation: CorrelationMetadata,
-    autoloadOutcome: AutoloadTurnOutcome,
+    toolTurnOutcome: ToolTurnOutcome,
   ): void {
-    this.bindToolTurnContext(message, taskKind, correlation, autoloadOutcome.intent);
+    this.bindToolTurnContext(message, taskKind, correlation, toolTurnOutcome.intent);
     const candidateContext = this.getCandidateTurnContext();
-    const satelliteResolution = candidateContext
+    const policyResolution = candidateContext
       ? this.resolveCandidateActiveTools(candidateContext)
-      : this.applySatelliteCapabilityToolPolicy(
-          this.applyAnalysisWorkbenchWorkerContextPolicy(
-            this.applyRoutineIntentCoreToolPolicy(
-              this.applyMaintenanceCoreToolPolicy(
-                this.resolveActiveTools(autoloadOutcome.skipped),
-                taskKind,
-                correlation,
-              ),
-              message,
-              taskKind,
-              autoloadOutcome.intent,
-              correlation,
-            ),
-            message,
-            taskKind,
-            autoloadOutcome.intent,
-            correlation,
-          ),
-          message,
-          correlation,
-        );
+      : this.resolvePolicyConstrainedTools(message, taskKind, toolTurnOutcome.intent, correlation);
     applyActiveToolsToAgent({
-      resolution: satelliteResolution,
+      resolution: policyResolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
       setAgentTools: tools => this.setActiveTools(tools),
     });
@@ -716,8 +598,8 @@ export class ToolRuntimeFacade {
       taskKind,
       callType,
       correlation,
-      autoloadOutcome,
-      resolution: satelliteResolution,
+      toolTurnOutcome,
+      resolution: policyResolution,
       withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
     });
     const turnContext = this.toolTurnContext.getStore();
@@ -760,9 +642,6 @@ export class ToolRuntimeFacade {
       const disabledSet = new Set(disabledNames);
       this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
       this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
-      for (const disabledName of disabledSet) {
-        this.loadedExtended.delete(disabledName);
-      }
       const filteredPromoted = this
         .getPromotedExtendedToolNamesInternal()
         .filter(name => !disabledSet.has(name));
@@ -784,19 +663,19 @@ export class ToolRuntimeFacade {
       if (retired) {
         log.warn(
           `Stored promoted tool "${name}" is retired; "${retired.canonicalName}" replaces it. `
-          + 'The stale entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          + 'The stale ordering preference is ignored — unpin it via toolset action="unpin".',
           { toolName: name, canonicalName: retired.canonicalName },
         );
       } else if (coreNames.has(name)) {
         log.warn(
           `Stored promoted tool "${name}" is now a core tool and always active. `
-          + 'The promotion entry is redundant and ignored — unpin it via toolset action="unpin".',
+          + 'The ordering preference is redundant and ignored — unpin it via toolset action="unpin".',
           { toolName: name },
         );
       } else {
         log.warn(
           `Stored promoted tool "${name}" is not a registered extended tool in this runtime. `
-          + 'The entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          + 'The ordering preference is ignored — unpin it via toolset action="unpin".',
           { toolName: name },
         );
       }
@@ -807,19 +686,8 @@ export class ToolRuntimeFacade {
     return this.getExtendedToolsForCurrentTurn();
   }
 
-  getLoadedExtendedTools(): ReadonlyMap<string, AdaptiveLoadedExtendedToolState> {
-    return this.resolveActiveLoadedExtended();
-  }
-
   getCapabilityEligiblePromotedToolNames(): Set<string> {
     return this.resolvePromotedToolActivation().activeNames;
-  }
-
-  classifyExtendedToolForTurn(toolName: string) {
-    return classifyExtendedToolForTurn(
-      toolName,
-      this.extendedToolAutoloadPolicy?.classifyToolForTurn ?? null,
-    );
   }
 
   resolveActiveToolCounts(): AdaptiveToolSnapshotTelemetry['counts'] {
@@ -878,24 +746,18 @@ export class ToolRuntimeFacade {
         promotedSkipped: [],
         counts: {
           core: 0,
-          promoted: 0,
-          extendedLoaded: 0,
-          autoload: 0,
-          deferred: 0,
+          extended: 0,
           total: 0,
         },
       };
     }
     return {
       tools: [this.getCandidateNotifyTool(context)],
-      snapshotTools: [{ toolName: 'notify', source: 'autoload' }],
+      snapshotTools: [{ toolName: 'notify', source: 'extended' }],
       promotedSkipped: [],
       counts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 1,
-        deferred: 0,
+        extended: 1,
         total: 1,
       },
     };
@@ -924,27 +786,12 @@ export class ToolRuntimeFacade {
   }
 
   private resolvePromotedToolActivation(): PromotedToolResolution {
-    if (this.isCandidateTurn()) return { activeNames: new Set(), skipped: [] };
+    if (this.isCandidateTurn()) return { activeNames: new Set(), orderedNames: [], skipped: [] };
     return resolvePromotedToolActivation({
       promotedTools: this.getPromotedExtendedToolNamesInternal(),
       extendedTools: this.extendedTools,
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
     });
-  }
-
-  private trackLoadedExtendedTool(
-    toolName: string,
-    source: Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>,
-  ): 'activated' | 'already_active' {
-    const candidateContext = this.getCandidateTurnContext();
-    if (candidateContext) {
-      if (toolName !== 'notify') {
-        throw new Error(CANDIDATE_TOOL_MUTATION_DENIAL);
-      }
-      return trackLoadedExtendedTool(candidateContext.scopedExtended, toolName, source);
-    }
-    return trackLoadedExtendedTool(this.loadedExtended, toolName, source);
   }
 
   private resolveActiveTools(
@@ -955,19 +802,10 @@ export class ToolRuntimeFacade {
     const resolution = resolveActiveTools({
       coreTools: this.coreTools,
       extendedTools: this.extendedTools,
-      loadedExtended: this.resolveActiveLoadedExtended(),
       promotedResolution: this.resolvePromotedToolActivation(),
-      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       additionalSkipped,
     });
     return resolution;
-  }
-
-  private resolveActiveLoadedExtended(): Map<string, AdaptiveLoadedExtendedToolState> {
-    const context = this.getCandidateTurnContext();
-    if (!context) return new Map(this.loadedExtended);
-    const notify = context.scopedExtended.get('notify');
-    return notify ? new Map([['notify', notify]]) : new Map();
   }
 
   private getExtendedToolsForCurrentTurn(): AgentTool<any>[] {
@@ -1031,8 +869,7 @@ export class ToolRuntimeFacade {
       return false;
     }
     return this.resolveCapabilityAccess().has('external.companion')
-      && this.extendedTools.some(tool => tool.name === 'notify')
-      && this.classifyExtendedToolForTurn('notify') === 'overlay';
+      && this.extendedTools.some(tool => tool.name === 'notify');
   }
 
   private bindToolTurnContext(
@@ -1072,16 +909,45 @@ export class ToolRuntimeFacade {
 
   private applyActiveToolsToAgent(): void {
     const context = this.toolTurnContext.getStore();
-    const resolution = this.applyMaintenanceCoreToolPolicy(
-      this.resolveActiveTools(),
-      context?.taskKind ?? this.getActiveTurnTaskKind(),
-      context?.correlation ?? this.getActiveTurnCorrelation(),
-    );
+    const correlation = context?.correlation ?? this.getActiveTurnCorrelation();
+    const taskKind = context?.taskKind ?? this.getActiveTurnTaskKind();
+    const resolution = context
+      ? this.resolvePolicyConstrainedTools(context.message, taskKind, context.intent, correlation)
+      : this.resolveActiveTools();
     applyActiveToolsToAgent({
       resolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
       setAgentTools: tools => this.setActiveTools(tools),
     });
+  }
+
+  private resolvePolicyConstrainedTools(
+    message: SubstrateMessage,
+    taskKind: string | null | undefined,
+    intent: string | null | undefined,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    return this.applySatelliteCapabilityToolPolicy(
+      this.applyAnalysisWorkbenchWorkerContextPolicy(
+        this.applyRoutineIntentCoreToolPolicy(
+          this.applyMaintenanceCoreToolPolicy(
+            this.resolveActiveTools(),
+            taskKind,
+            correlation,
+          ),
+          message,
+          taskKind,
+          intent,
+          correlation,
+        ),
+        message,
+        taskKind,
+        intent,
+        correlation,
+      ),
+      message,
+      correlation,
+    );
   }
 
   private applyMaintenanceCoreToolPolicy(
@@ -1126,18 +992,12 @@ export class ToolRuntimeFacade {
 
     const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
       core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
+      extended: 0,
       total: filteredSnapshotTools.length,
     };
     for (const entry of filteredSnapshotTools) {
       if (entry.source === 'core') counts.core += 1;
-      else if (entry.source === 'promoted') counts.promoted += 1;
-      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-      else if (entry.source === 'autoload') counts.autoload += 1;
-      else counts.deferred += 1;
+      else counts.extended += 1;
     }
 
     return {
@@ -1195,18 +1055,12 @@ export class ToolRuntimeFacade {
 
     const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
       core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
+      extended: 0,
       total: filteredSnapshotTools.length,
     };
     for (const entry of filteredSnapshotTools) {
       if (entry.source === 'core') counts.core += 1;
-      else if (entry.source === 'promoted') counts.promoted += 1;
-      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-      else if (entry.source === 'autoload') counts.autoload += 1;
-      else counts.deferred += 1;
+      else counts.extended += 1;
     }
 
     return {
@@ -1266,18 +1120,12 @@ export class ToolRuntimeFacade {
 
     const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
       core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
+      extended: 0,
       total: filteredSnapshotTools.length,
     };
     for (const entry of filteredSnapshotTools) {
       if (entry.source === 'core') counts.core += 1;
-      else if (entry.source === 'promoted') counts.promoted += 1;
-      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-      else if (entry.source === 'autoload') counts.autoload += 1;
-      else counts.deferred += 1;
+      else counts.extended += 1;
     }
 
     return {
@@ -1339,18 +1187,12 @@ export class ToolRuntimeFacade {
 
     const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
       core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
+      extended: 0,
       total: filteredSnapshotTools.length,
     };
     for (const entry of filteredSnapshotTools) {
       if (entry.source === 'core') counts.core += 1;
-      else if (entry.source === 'promoted') counts.promoted += 1;
-      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
-      else if (entry.source === 'autoload') counts.autoload += 1;
-      else counts.deferred += 1;
+      else counts.extended += 1;
     }
 
     return {

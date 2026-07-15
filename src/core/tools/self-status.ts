@@ -170,18 +170,11 @@ function resolveTools(runtime: SelfStatusToolRuntime): MaybeAvailable<{
   promotedToolsConfigured: string[];
   promotedToolsActive: string[];
   promotedToolsSkipped: AdaptiveToolRuntimeState['promotedToolsSkipped'];
-  loadedExtendedTools: Array<{
-    toolName: string;
-    source: string;
-    activatedAt: number;
-    lastActivatedAt: number;
-  }>;
   counts: {
     core: number;
     extended: number;
     active: number;
-    promotedActive: number;
-    loadedExtended: number;
+    pinnedOrderApplied: number;
   };
   catalog: ToolCatalogSection;
   health: ReturnType<typeof resolveToolHealth>;
@@ -225,13 +218,11 @@ function resolveTools(runtime: SelfStatusToolRuntime): MaybeAvailable<{
       ...skip,
       ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
     })),
-    loadedExtendedTools: state.loadedExtendedTools.map(tool => ({ ...tool })),
     counts: {
       core: state.coreTools.length,
       extended: state.extendedTools.length,
       active: state.activeTools.length,
-      promotedActive: state.promotedToolsActive.length,
-      loadedExtended: state.loadedExtendedTools.length,
+      pinnedOrderApplied: state.promotedToolsActive.length,
     },
     catalog,
     health: resolveToolHealth(runtime),

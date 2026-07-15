@@ -2,7 +2,7 @@
 
 This is the operator reference for runtime prompt macros (template variables) and the rules that keep companion prompts operator-tunable.
 
-GENERATED FILE: the macro tables below are regenerated from the live manifest with `npm run docs:prompt-macros` (source: `scripts/generate-prompt-macros-doc.ts`, manifest: `PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts`). Edit the generator, not the tables. Registered macro names: 183.
+GENERATED FILE: the macro tables below are regenerated from the live manifest with `npm run docs:prompt-macros` (source: `scripts/generate-prompt-macros-doc.ts`, manifest: `PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts`). Edit the generator, not the tables. Registered macro names: 189.
 
 ## The macro manifest (single source of truth)
 
@@ -182,6 +182,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{runtime_response_style_name}}` | turn | `trust-policy:buildResponseStylePromptState` | Human-readable response style name for the current turn. |
 | `{{runtime_response_style_is_concise}}` | turn | `trust-policy:buildResponseStylePromptState` | Whether the current turn should use the concise delivery profile. |
 | `{{runtime_response_style_is_expressive}}` | turn | `trust-policy:buildResponseStylePromptState` | Whether the current turn should use the expressive delivery profile. |
+| `{{runtime_response_style_is_concise_voice}}` | turn | `trust-policy:buildResponseStylePromptState` | Whether the current turn uses the concise voice-delivery profile. |
 
 ### Affect
 
@@ -283,15 +284,12 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{runtime_analysis_workbench_available}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Whether analysis_workbench is active and callable for the current turn. |
 | `{{runtime_tooling_active_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of currently active tools. |
 | `{{runtime_tooling_core_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of active core tools. |
-| `{{runtime_tooling_promoted_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of promoted extended tools that are always active. |
-| `{{runtime_tooling_loaded_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of explicitly loaded extended tools active for the turn. |
-| `{{runtime_tooling_autoload_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of autoloaded extended tools active for the turn. |
-| `{{runtime_tooling_deferred_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of deferred tools still active for this turn. |
-| `{{runtime_tooling_available_extended_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of additional extended tools available for loading. |
+| `{{runtime_tooling_extended_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of active extended tools. |
+| `{{runtime_tooling_registered_extended_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of extended tools registered for the turn before policy filters. |
 | `{{runtime_appearance_context_body}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Appearance-context body that tool prompts can splice into self-image requests. |
 | `{{runtime_self_image_tool_active}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Whether a self-image generation tool is currently active. |
 | `{{runtime_extended_tools_total}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Total number of extended tools registered for the current turn. |
-| `{{runtime_extended_tools_activatable_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of extended tools that can be activated immediately. |
+| `{{runtime_extended_tools_callable_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of extended tools callable under the current capability tier. |
 | `{{runtime_extended_tools_blocked_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of extended tools blocked by the current capability tier. |
 | `{{runtime_extended_tool_names}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Comma-joined extended tool names in registered order. |
 | `{{runtime_extended_tool_directory_lines}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Extended tool directory lines without any extra prose preface. |

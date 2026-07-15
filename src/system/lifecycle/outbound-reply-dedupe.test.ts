@@ -110,11 +110,11 @@ describe('OutboundReplyDeduper', () => {
       channelId: 'discord:general',
       content: 'echo',
       sourceTurnId: 'turn-new',
-      senderKind: 'deferred_tool_handoff',
+      senderKind: 'background_follow_up',
     });
 
     const decision = deduper.evaluate({ channelId: 'discord:general', content: 'echo' });
     expect(decision?.priorSourceTurnId).toBe('turn-new');
-    expect(decision?.priorSenderKind).toBe('deferred_tool_handoff');
+    expect(decision?.priorSenderKind).toBe('background_follow_up');
   });
 });

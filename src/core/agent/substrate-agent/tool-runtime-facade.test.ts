@@ -10,7 +10,6 @@ import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-
 import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
-import { createDefaultExtendedToolAutoloadPolicy } from '../extended-tool-autoload-policy.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
@@ -62,7 +61,6 @@ function createFacade(
       has: (token: string) => grantedTokens.includes(token),
     }) as never,
     withCapabilityGates: tools => tools,
-    withCorrelationPurpose: (correlation, purpose) => ({ ...correlation, purpose }),
     withAdaptiveCorrelation: (correlation, purpose) => ({
       ...(correlation ? {
         turnId: correlation.turnId,
@@ -73,10 +71,8 @@ function createFacade(
     }),
     emitAdaptiveToolDecision: vi.fn(),
     emitTelemetry,
-    resolveSessionChannelId: channelId => channelId,
     getActiveTurnCorrelation: () => activeTurnCorrelation,
     getActiveTurnTaskKind: () => taskKind,
-    getActiveTurnIntent: () => null,
   });
 
   return {
@@ -123,6 +119,47 @@ function makeCandidateMessage() {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('makes an unpinned extended tool callable on the first ordinary turn', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'extended result' }],
+      details: {},
+    }));
+    const { facade, correlation } = createFacade();
+    facade.registerTool(makeTool('ordinary_core'), 'core');
+    facade.registerTool(makeTool('extended_probe', execute), 'extended');
+    const message = {
+      id: 'first-turn-extended',
+      channelId: 'api:first-turn',
+      channelType: 'api',
+      authorId: 'primary-user',
+      authorName: 'Primary User',
+      content: 'run the extended probe',
+      timestamp: new Date('2026-07-15T10:00:00Z'),
+    } as never;
+    const turnCorrelation = {
+      ...correlation,
+      requestId: message.id,
+      channelId: message.channelId,
+      callType: 'chat' as const,
+    };
+
+    await facade.runWithTurnToolContext(message, async () => {
+      facade.applyActiveToolsToAgentForTurn(
+        message,
+        undefined,
+        'chat',
+        turnCorrelation,
+        { intent: null },
+      );
+      const tool = facade.getActiveTurnTools().find(candidate => candidate.name === 'extended_probe');
+      expect(tool).toBeDefined();
+      await tool!.execute('first-turn-call', {});
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(facade.getPromotedExtendedTools()).toEqual([]);
+  });
+
   it('isolates candidate notify from an overlapping ordinary turn without an agent-global grant', async () => {
     const { facade, agent } = createFacade();
     facade.registerTool(withCapabilityRequirement(
@@ -157,7 +194,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
           callType: 'background',
           purpose: 'agent.turn',
         },
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
       expect(facade.getActiveTurnTools().map(tool => tool.name)).toContain('notify');
       candidateEntered();
@@ -178,19 +215,19 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
           callType: 'chat',
           purpose: 'agent.turn',
         },
-        { intent: null, skipped: [] },
+        { intent: null },
       );
-      expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
-      expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-        expect.objectContaining({ toolName: 'notify' }),
-      );
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).toEqual([
+        'notify',
+        'ordinary_core',
+      ]);
     });
 
     expect(agent.setTools).not.toHaveBeenCalled();
     releaseCandidate();
     await candidateRun;
-    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-      expect.objectContaining({ toolName: 'notify' }),
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).toContainEqual(
+      expect.objectContaining({ toolName: 'notify', source: 'extended' }),
     );
   });
 
@@ -216,7 +253,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'research',
         'background',
         correlation,
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
       const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
       const params = {
@@ -276,7 +313,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'research',
         'background',
         correlation,
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
 
       const catalogNotify = facade.getToolCatalog().extended.find(tool => tool.name === 'notify')!;
@@ -333,7 +370,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     });
   });
 
-  it('exposes exactly candidate notify and blocks loaded, promoted, builtin, and toolset escape paths', async () => {
+  it('exposes exactly candidate notify and blocks pinned, builtin, and toolset escape paths', async () => {
     const notifyDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'notify sent' }], details: {} }));
     const webDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'web sent' }], details: {} }));
     const discordDispatch = vi.fn(async () => ({ content: [{ type: 'text', text: 'discord sent' }], details: {} }));
@@ -362,15 +399,12 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     facade.registerTool(externalWeb, 'extended');
     facade.registerTool(discord, 'extended');
     facade.registerTool(email, 'extended');
-    facade.activateExtendedTools(['external_web']);
-
     const captured = Object.fromEntries([
       ...facade.getToolCatalog().core,
       ...facade.getToolCatalog().extended,
     ].map(tool => [tool.name, tool] as const));
     const before = {
       promoted: [...facade.getPromotedExtendedTools()],
-      loaded: [...facade.getLoadedExtendedTools().entries()],
       agentTools: (agent.state.tools as Array<{ name: string }>).map(tool => tool.name),
       lastSnapshot: facade.getAdaptiveToolRuntimeState().lastSnapshot,
     };
@@ -389,7 +423,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'research',
         'background',
         correlation,
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
 
       expect(facade.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
@@ -403,8 +437,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         extendedTools: ['notify'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
-        loadedExtendedTools: [expect.objectContaining({ toolName: 'notify', source: 'autoload' })],
-        activeTools: [{ toolName: 'notify', source: 'autoload' }],
+        activeTools: [{ toolName: 'notify', source: 'extended' }],
       });
 
       const search = await facade.createToolSearchTool().execute('candidate-search', { query: 'external notify' });
@@ -423,23 +456,18 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
       const manipulatedToolset = facade.createToolsetTool();
       for (const params of [
-        { action: 'activate', tools: ['external_web'] },
-        { action: 'activate', tools: ['notify'] },
+        { action: 'list' },
+        { action: 'suggest', intent: 'use external web' },
         { action: 'pin', tool: 'email_send' },
         { action: 'unpin', tool: 'discord_send' },
-        { action: 'deactivate', tool: 'external_web' },
       ]) {
         const result = await manipulatedToolset.execute('candidate-toolset-escape', params);
         expect(result).toMatchObject({ details: { isError: true } });
       }
       await expect(captured.toolset!.execute(
         'candidate-captured-toolset-escape',
-        { action: 'activate', tools: ['external_web'] },
+        { action: 'pin', tool: 'external_web' },
       )).resolves.toMatchObject({ details: { isError: true } });
-      expect(facade.activateExtendedTools(['external_web'])).toMatchObject({
-        activatedTools: [],
-        missingTools: ['external_web'],
-      });
       expect(facade.addPromotedExtendedTool('email_send')).toMatchObject({
         ok: false,
         changed: false,
@@ -477,15 +505,13 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(persistPromotedExtendedTools).not.toHaveBeenCalled();
     expect({
       promoted: [...facade.getPromotedExtendedTools()],
-      loaded: [...facade.getLoadedExtendedTools().entries()],
       agentTools: (agent.state.tools as Array<{ name: string }>).map(tool => tool.name),
       lastSnapshot: facade.getAdaptiveToolRuntimeState().lastSnapshot,
     }).toEqual(before);
-    expect(facade.getLoadedExtendedTools().has('notify')).toBe(false);
     expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
   });
 
-  it('refuses trusted turn-scoped activation when live capability policy revokes the tool', async () => {
+  it('refuses trusted candidate scope when live capability policy denies the tool', async () => {
     const { facade } = createFacade(null, []);
     facade.registerTool(withCapabilityRequirement(
       makeTool('notify'),
@@ -496,12 +522,10 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       makeCandidateMessage(),
       async () => undefined,
     )).rejects.toThrow('not capability authorized');
-    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-      expect.objectContaining({ toolName: 'notify' }),
-    );
+    expect(facade.getActiveTurnTools()).toEqual([]);
   });
 
-  it('revalidates live overlay policy at execution and clears cancelled scopes', async () => {
+  it('clears cancelled candidate scopes without leaving an exact-surface grant behind', async () => {
     const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'queued' }], details: {} }));
     const { facade } = createFacade();
     facade.registerTool(withCapabilityRequirement(
@@ -523,33 +547,16 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'research',
         'background',
         correlation,
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
-      const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
-      const defaultPolicy = createDefaultExtendedToolAutoloadPolicy();
-      facade.setExtendedToolAutoloadPolicy({
-        ...defaultPolicy,
-        classifyToolForTurn: toolName => toolName === 'notify'
-          ? 'background'
-          : defaultPolicy.classifyToolForTurn(toolName),
-      });
-      const result = await runWithRequestContext(correlation, () => notify.execute(
-        'call-overlay-revoked',
-        {
-          action: 'send',
-          target_kind: 'companion',
-          contact_id: 'peer-contact-b',
-          initiation_permit: '44444444-4444-4444-8444-444444444444',
-        },
-      ));
-      expect(result).toMatchObject({ details: { isError: true } });
+      expect(facade.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
       expect(execute).not.toHaveBeenCalled();
       throw new DOMException('candidate cancelled', 'AbortError');
     })).rejects.toThrow('candidate cancelled');
 
     expect(facade.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
-    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-      expect.objectContaining({ toolName: 'notify' }),
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).toContainEqual(
+      expect.objectContaining({ toolName: 'notify', source: 'extended' }),
     );
   });
 
@@ -580,7 +587,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'research',
         'background',
         correlation,
-        { intent: 'ops', skipped: [] },
+        { intent: 'ops' },
       );
       const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
       detachedResult = (async () => {
@@ -663,7 +670,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Primary User',
       content: 'hey there',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    } as never, undefined, 'chat', correlation, { intent: null, skipped: [] });
+    } as never, undefined, 'chat', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual([
@@ -724,7 +731,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Runtime',
       content: 'reflect',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
+    }, 'reflection', 'background', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'self_status', 'system']);
@@ -751,7 +758,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Runtime',
       content: 'heartbeat',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, 'heartbeat', 'background', correlation, { intent: null, skipped: [] });
+    }, 'heartbeat', 'background', correlation, { intent: null });
 
     const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
     // Expressive tools survive the heartbeat self-directed turn; non-allowlisted
@@ -775,7 +782,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Runtime',
       content: 'reflect',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
+    }, 'reflection', 'background', correlation, { intent: null });
 
     const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
     // Reflection is silent introspection; no outward image expression.
@@ -801,7 +808,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'User',
       content: 'hello',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'chat', correlation, { intent: null, skipped: [] });
+    }, undefined, 'chat', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'subagent', 'system']);
@@ -829,7 +836,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'User',
       content: 'Use orient to create_concern, list_concerns, resolve_concern, and list_concerns again.',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
+    }, undefined, 'chat', correlation, { intent: 'memory' });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['memory', 'orient']);
@@ -858,7 +865,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Maintenance',
       content: 'routine maintenance',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, 'maintenance', 'background', correlation, { intent: null, skipped: [] });
+    }, 'maintenance', 'background', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['session', 'identity', 'system']);
@@ -885,7 +892,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'User',
       content: 'Analyze this large transcript and evidence set.',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
+    }, undefined, 'chat', correlation, { intent: 'memory' });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['session']);
@@ -915,7 +922,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         workerExecution: createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE),
       },
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'background', correlation, { intent: 'memory', skipped: [] });
+    }, undefined, 'background', correlation, { intent: 'memory' });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
@@ -968,7 +975,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         },
       },
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'chat', correlation, { intent: null, skipped: [] });
+    }, undefined, 'chat', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['session']);
@@ -1006,7 +1013,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'Heartbeat',
       content: 'tick',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, 'heartbeat', 'background', correlation, { intent: null, skipped: [] });
+    }, 'heartbeat', 'background', correlation, { intent: null });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as AgentTool<any>[];
     const identityTool = tools.find(tool => tool.name === 'identity');

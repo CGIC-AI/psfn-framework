@@ -39,6 +39,10 @@ import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.
 import {
   resetConcernSofteningConfigCacheForTests,
 } from '../../intention/concern-softening.js';
+import {
+  NO_CAPABILITY_REQUIREMENT,
+  withCapabilityRequirement,
+} from '../../../system/capabilities/requirements.js';
 
 const originalConfigDir = process.env.CONFIG_DIR;
 const tempConfigDirs: string[] = [];
@@ -67,6 +71,15 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
     timestamp: new Date('2026-03-17T12:00:00Z'),
     ...overrides,
   };
+}
+
+function makeUnrestrictedTestTool(name: string, description: string) {
+  return withCapabilityRequirement({
+    name,
+    description,
+    parameters: {} as any,
+    execute: () => { throw new Error('not used'); },
+  } as any, NO_CAPABILITY_REQUIREMENT);
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
@@ -374,10 +387,7 @@ function buildMinimalRuntimeContextInput() {
     capabilityTier: 'nursery' as const,
     activeToolCounts: {
       core: 0,
-      promoted: 0,
-      extendedLoaded: 0,
-      autoload: 0,
-      deferred: 0,
+      extended: 0,
       total: 0,
     },
     extendedTools: [],
@@ -684,10 +694,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
@@ -724,10 +731,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
@@ -788,70 +792,6 @@ describe('runtime subject identity', () => {
     });
   });
 
-  it('resolves generated handoff trust from source provenance without treating it as user speech', async () => {
-    const getByChannelIdentity = vi.fn(() => ({
-      id: 'contact-v',
-      discordUserId: undefined,
-      displayName: 'V',
-      trustLevel: 'trusted',
-      relationshipType: 'partner',
-      firstSeen: '2026-03-17T12:00:00Z',
-      lastSeen: '2026-03-17T12:00:00Z',
-      channelIdentities: [{ channel: 'api', userId: 'api-user-1' }],
-    }));
-    const getConversationChannelPrivacy = vi.fn(() => 'private');
-    const updateLastSeen = vi.fn();
-    const recordChannelActivity = vi.fn();
-
-    const authorContext = await resolveAuthorContext({
-      message: makeMessage({
-        id: 'deferred-tool-handoff:action-1',
-        channelId: 'api:session-1',
-        channelType: 'api',
-        authorId: 'system:tool_handoff',
-        authorName: 'Tool Handoff',
-        routing: {
-          generated: {
-            kind: 'deferred_tool_handoff',
-            sourceMessageId: 'source-turn-1',
-            sourceChannelId: 'api:session-1',
-            sourceAuthorId: 'api-user-1',
-            sourceAuthorName: 'V',
-          },
-        },
-      }),
-      contactStore: {
-        getById: () => undefined,
-        getByChannelIdentity,
-        getConversationChannelPrivacy,
-        updateLastSeen,
-        recordChannelActivity,
-      } as never,
-      logger: {
-        warn: () => undefined,
-        debug: () => undefined,
-      },
-      companionIdentityKey: DEFAULT_COMPANION_ID,
-      companionDisplayName: 'Companion',
-    });
-
-    expect(authorContext).toMatchObject({
-      trustLevel: 'trusted',
-      speakerRole: 'system',
-      resolvedUserName: 'Tool Handoff',
-      canonicalContactKey: 'contact-v',
-      continuitySubjectKey: 'contact-v',
-      continuityFallbackKeys: ['api-user-1'],
-    });
-    // E3.2: per-contact conversation-channel privacy is demoted to provenance
-    // evidence — author resolution must not read it or surface it for gating.
-    expect(authorContext).not.toHaveProperty('channelPrivacyLevel');
-    expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'api-user-1');
-    expect(getConversationChannelPrivacy).not.toHaveBeenCalled();
-    expect(updateLastSeen).not.toHaveBeenCalled();
-    expect(recordChannelActivity).not.toHaveBeenCalled();
-  });
-
   it('renders charge budget guidance outside the static prompt prefix', () => {
     const message = makeMessage({
       channelId: 'api:general',
@@ -874,10 +814,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 6,
       },
       extendedTools: [],
@@ -923,10 +860,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 6,
       },
       extendedTools: [],
@@ -991,10 +925,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 6,
       },
       extendedTools: [],
@@ -1059,10 +990,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 6,
       },
       extendedTools: [],
@@ -1311,10 +1239,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
@@ -1375,24 +1300,14 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 2,
-        autoload: 2,
-        deferred: 0,
+        extended: 2,
         total: 2,
       },
-      extendedTools: [],
+      extendedTools: [
+        makeUnrestrictedTestTool('media', 'Generate, edit, or analyze media.'),
+        makeUnrestrictedTestTool('web', 'Fetch a web resource.'),
+      ],
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map([
-        ['media', {
-          toolName: 'media',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-      ]),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(),
       skillsContext: '',
       behavioralNotesBlock: '',
       config: {},
@@ -1445,24 +1360,13 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 1,
         total: 1,
       },
-      extendedTools: [],
+      extendedTools: [
+        makeUnrestrictedTestTool('media', 'Generate, edit, or analyze media.'),
+      ],
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map([
-        ['media', {
-          toolName: 'media',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-      ]),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(),
       skillsContext: '',
       behavioralNotesBlock: '',
       config: {},
@@ -1476,7 +1380,7 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('activates selfie guidance while appearance stays in static foundation context', () => {
+  it('shows selfie guidance while the registered tool is present and appearance stays in static foundation context', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -1515,24 +1419,16 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 2,
-        autoload: 2,
-        deferred: 0,
-        total: 2,
+        extended: 1,
+        total: 1,
       },
-      extendedTools: [],
+      extendedTools: [{
+        name: 'selfie_create',
+        description: 'Create a new selfie or self-portrait.',
+        parameters: {} as any,
+        execute: () => { throw new Error('not used'); },
+      } as any],
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map([
-        ['selfie_create', {
-          toolName: 'selfie_create',
-          source: 'autoload',
-          activatedAt: 1,
-          lastActivatedAt: 1,
-        }],
-      ]),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(),
       skillsContext: '',
       behavioralNotesBlock: '',
       config: {},
@@ -1627,10 +1523,7 @@ describe('runtime subject identity', () => {
       },
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
@@ -1711,10 +1604,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
@@ -1828,17 +1718,11 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map([['generate_image', { source: 'autoload' }]]),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
@@ -1875,7 +1759,7 @@ describe('runtime subject identity', () => {
     expect('runtime_response_style_delivery_guidance' in variables).toBe(false);
     expect('runtime_response_style_expansion_guidance' in variables).toBe(false);
     expect(variables.runtime_tooling_active_count).toBe('5');
-    expect(variables.runtime_tooling_available_extended_count).toBe('1');
+    expect(variables.runtime_tooling_registered_extended_count).toBe('1');
   });
 
   it('renders group conversation_state with five recent active participants newest-first', () => {
@@ -1900,10 +1784,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 2,
       },
       extendedTools: [],
@@ -1996,10 +1877,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 2,
       },
       extendedTools: [],
@@ -2049,10 +1927,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous' as const,
       activeToolCounts: {
         core: 2,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 2,
       },
       extendedTools: [],
@@ -2100,10 +1975,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [],
@@ -2155,10 +2027,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [],
@@ -2215,10 +2084,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 1,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 1,
       },
       extendedTools: [
@@ -2234,12 +2100,7 @@ describe('runtime subject identity', () => {
           parameters: {} as any,
           execute: () => { throw new Error('not used'); },
         } as any,
-        {
-          name: 'background_probe',
-          description: 'Observe long-running background state.',
-          parameters: {} as any,
-          execute: () => { throw new Error('not used'); },
-        } as any,
+        makeUnrestrictedTestTool('background_probe', 'Observe long-running background state.'),
       ],
       coreToolNames: new Set<string>(),
       loadedExtended: new Map(),
@@ -2290,17 +2151,17 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_behavioral_notes_count).toBe('2');
     expect(variables.runtime_skills_count).toBe('2');
     expect(variables.runtime_extended_tools_total).toBe('3');
-    expect(variables.runtime_extended_tools_activatable_count).toBe('1');
+    expect(variables.runtime_extended_tools_callable_count).toBe('2');
     expect(variables.runtime_extended_tools_blocked_count).toBe('1');
     expect(variables.runtime_extended_tool_names).toBe('web, notify, background_probe');
     expect(variables.runtime_extended_tool_directory_lines).toContain(
-      '- web: Fetch a web page (use toolset action="activate")',
+      '- web: Fetch a web page (call directly; no activation step)',
     );
     expect(variables.runtime_extended_tool_directory_lines).toContain(
-      '- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)',
+      '- notify: Notify the operator (present but blocked by current tier: external.web, external.discord, external.email)',
     );
     expect(variables.runtime_extended_tool_directory_lines).toContain(
-      '- background_probe: Observe long-running background state (background-only; not callable in-turn)',
+      '- background_probe: Observe long-running background state (call directly; no activation step)',
     );
     expect(variables.runtime_emotion_appraisal_length).toBe(String(emotionAppraisalChain.length));
     expect(variables.runtime_emotion_appraisal_latest_trigger).toBe(
@@ -2338,10 +2199,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [],
@@ -2436,24 +2294,15 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [
         { name: 'generate_image', description: 'Generate an image.' } as any,
         { name: 'web', description: 'Fetch a web page.' } as any,
-        { name: 'background_probe', description: 'Observe long-running background state.' } as any,
+        makeUnrestrictedTestTool('background_probe', 'Observe long-running background state.'),
       ],
-      coreToolNames: new Set<string>(),
-      loadedExtended: new Map([
-        ['generate_image', { source: 'autoload' }],
-        ['selfie_create', { source: 'autoload' }],
-      ]),
-      classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
-      promotedExtendedToolNames: new Set(['selfie_create']),
+      coreToolNames: new Set(['selfie_create']),
       skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
       activeConcerns: buildActiveConcernsRuntimeData([
         {
@@ -2551,7 +2400,7 @@ describe('runtime subject identity', () => {
     );
     expect(variables.runtime_extended_tools_total).toBe('3');
     expect(variables.runtime_tooling_active_count).toBe('5');
-    expect(variables.runtime_tooling_available_extended_count).toBe('3');
+    expect(variables.runtime_tooling_registered_extended_count).toBe('3');
     expect(variables.runtime_self_image_tool_active).toBe('true');
     expect(variables.runtime_appearance_context_body).toBe(
       characterPromptVariables['character.visual_description'],
@@ -2576,12 +2425,12 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('<analysis_workbench_guidance>');
     expect(rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
     expect(rendered).toContain('<self_image_tool_guidance>');
-    expect(rendered).toContain('<extended_tools>');
+    expect(rendered).toContain('<extended_tool_directory>');
     expect(rendered).not.toContain('{{');
   });
 
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
-    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+    const { variables, rendered } = buildRuntimePromptOutputs({
       message: makeMessage(),
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -2596,22 +2445,16 @@ describe('runtime subject identity', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 0,
       },
       extendedTools: [],
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map(),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(),
       skillsContext: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: null,
       config: {},
-    }));
+    });
 
     expect(variables.runtime_affect_snapshot_present).toBe('false');
     expect(variables.runtime_affect_mode).toBe('');
@@ -2658,10 +2501,12 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_behavioral_notes_body).toBe('');
     expect(variables.runtime_skills_count).toBe('0');
     expect(variables.runtime_extended_tools_total).toBe('0');
-    expect(variables.runtime_extended_tools_activatable_count).toBe('0');
+    expect(variables.runtime_extended_tools_callable_count).toBe('0');
     expect(variables.runtime_extended_tools_blocked_count).toBe('0');
     expect(variables.runtime_extended_tool_names).toBe('');
     expect(variables.runtime_extended_tool_directory_lines).toBe('');
+    expect(rendered).not.toContain('<extended_tool_directory>');
+    expect(rendered).not.toContain('<extended_tools>');
     expect(variables.runtime_self_image_tool_active).toBe('false');
     for (const flagName of METACOGNITIVE_FLAG_NAMES) {
       expect(variables[`runtime_flag_${flagName}_present`]).toBe('false');
@@ -2769,10 +2614,7 @@ describe('runtime subject identity', () => {
       capabilityTier: 'nursery',
       activeToolCounts: {
         core: 1,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
+        extended: 0,
         total: 1,
       },
       extendedTools: [
@@ -2949,17 +2791,11 @@ describe('turn prompt variable namespace conformance', () => {
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 2,
-        promoted: 1,
-        extendedLoaded: 1,
-        autoload: 1,
-        deferred: 0,
+        extended: 3,
         total: 5,
       },
       extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
       coreToolNames: new Set<string>(),
-      loadedExtended: new Map([['generate_image', { source: 'autoload' } as any]]),
-      classifyExtendedToolForTurn: () => 'overlay',
-      promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '<skills_index><skill id="memory.write">Persist.</skill></skills_index>',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),

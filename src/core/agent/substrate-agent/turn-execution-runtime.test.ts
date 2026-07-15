@@ -722,7 +722,7 @@ function createRuntime(params: {
     hashPromptText: vi.fn(() => 'prompt-hash'),
     getPersonaAdaptation: vi.fn(() => null),
     resolveContextWindow: vi.fn(() => 4096),
-    preloadExtendedToolsForTurn: vi.fn(() => ({ intent: null })),
+    resolveToolTurnOutcome: vi.fn(() => ({ intent: null })),
     getAdaptiveToolRuntimeState: vi.fn(() => ({
       generatedAt: Date.now(),
       coreTools: [],
@@ -730,7 +730,6 @@ function createRuntime(params: {
       promotedToolsConfigured: [],
       promotedToolsActive: [],
       promotedToolsSkipped: [],
-      loadedExtendedTools: [],
       activeTools: [],
       lastSnapshot: null,
     })),
@@ -3884,11 +3883,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
     (runtime.getAdaptiveToolRuntimeState as ReturnType<typeof vi.fn>).mockReturnValue({
       generatedAt: 1_700_000_000_000,
       coreTools: ['contact'],
-      extendedTools: ['notify'],
+      extendedTools: [],
       promotedToolsConfigured: [],
       promotedToolsActive: [],
       promotedToolsSkipped: [],
-      loadedExtendedTools: [],
       activeTools: [{ toolName: 'contact', source: 'core' }],
       lastSnapshot: {
         timestamp: 1_700_000_000_001,
@@ -3898,13 +3896,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
         callType: 'chat',
         purpose: 'agent.tools.adaptive.snapshot',
         tools: [{ toolName: 'contact', source: 'core' }],
-        skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
+        skipped: [],
         counts: {
           core: 1,
-          promoted: 0,
-          extendedLoaded: 0,
-          autoload: 0,
-          deferred: 0,
+          extended: 0,
           total: 1,
         },
         taskKind: null,
@@ -3987,7 +3982,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       ],
       adaptiveSnapshot: {
         tools: [{ toolName: 'contact', source: 'core' }],
-        skipped: [{ toolName: 'notify', reason: 'not_needed_for_turn' }],
+        skipped: [],
       },
     });
 
@@ -5583,7 +5578,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
   });
 
-  it('applies same-turn selfie autoload before rendering dynamic prompt variables', async () => {
+  it('resolves the complete tool catalog before rendering dynamic prompt variables', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -5600,9 +5595,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordAssistantMessage: vi.fn(() => 2),
     });
     const callOrder: string[] = [];
-    runtime.preloadExtendedToolsForTurn = vi.fn(() => ({
+    runtime.resolveToolTurnOutcome = vi.fn(() => ({
       intent: 'social',
-      skipped: [],
     }));
     runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
       callOrder.push('apply-tools');
@@ -5622,19 +5616,16 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       };
     });
 
-    await handleMessageForTurn(runtime, createMessage('msg-selfie-autoload-prompt', {
+    await handleMessageForTurn(runtime, createMessage('msg-selfie-catalog-prompt', {
       channelType: 'discord',
       content: 'take a selfie',
     }));
 
-    expect(runtime.preloadExtendedToolsForTurn).toHaveBeenCalledWith(
+    expect(runtime.resolveToolTurnOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         content: 'take a selfie',
       }),
       undefined,
-      expect.objectContaining({
-        requestId: 'msg-selfie-autoload-prompt',
-      }),
     );
     expect(callOrder).toEqual(['apply-tools', 'dynamic-prompt']);
   });

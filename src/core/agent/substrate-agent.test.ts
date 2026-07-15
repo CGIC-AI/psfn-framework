@@ -23,7 +23,6 @@ import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
-import { buildDeferredToolHandoffMessage } from './deferred-tool-handoff.js';
 import {
   notePendingPaidDeliverable,
   runWithPaidDeliverableTracking,
@@ -782,7 +781,7 @@ describe('SubstrateAgent construction', () => {
 });
 
 describe('production ICP candidate control-plane reachability', () => {
-  it('activates notify only for the validated candidate turn and rechecks live policy for deferred execution', async () => {
+  it('uses the exact notify surface for candidates while ordinary turns retain the full catalog', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-control-plane-'));
     let controlPlane: ReturnType<typeof buildAgentControlPlane> | null = null;
     try {
@@ -808,7 +807,6 @@ describe('production ICP candidate control-plane reachability', () => {
       agent.setCapabilityRuntime(capabilityRuntime);
       const capabilityHas = vi.spyOn(capabilityRuntime, 'has');
       const getToolCatalog = vi.spyOn(agent, 'getToolCatalog');
-      const getExtendedToolTurnClass = vi.spyOn(agent, 'getExtendedToolTurnClass');
 
       const nowMs = Date.now();
       const candidate: IcpInitiationCandidate = {
@@ -1061,14 +1059,14 @@ describe('production ICP candidate control-plane reachability', () => {
       await expect(candidateDispatch).resolves.toMatchObject({ content: 'Candidate handoff queued.' });
       await expect(ordinaryTurn).resolves.toBeDefined();
       expect(ordinaryTurnToolNames).toHaveLength(1);
-      expect(ordinaryTurnToolNames[0]).not.toContain('notify');
+      expect(ordinaryTurnToolNames[0]).toContain('notify');
 
       expect(notifyActivationDuringTurn).toEqual({
         toolName: 'notify',
-        source: 'autoload',
+        source: 'extended',
       });
-      expect(agent.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-        expect.objectContaining({ toolName: 'notify' }),
+      expect(agent.getAdaptiveToolRuntimeState().activeTools).toContainEqual(
+        expect.objectContaining({ toolName: 'notify', source: 'extended' }),
       );
       expect(prepareInitiationHandoff).toHaveBeenCalledWith({
         permitId: permit.permitId,
@@ -1094,7 +1092,6 @@ describe('production ICP candidate control-plane reachability', () => {
       const policyChecksBeforeExecution = {
         capability: capabilityHas.mock.calls.length,
         registration: getToolCatalog.mock.calls.length,
-        overlay: getExtendedToolTurnClass.mock.calls.length,
       };
 
       await scheduler.tick();
@@ -1104,9 +1101,6 @@ describe('production ICP candidate control-plane reachability', () => {
       );
       expect(getToolCatalog.mock.calls.length).toBeGreaterThan(
         policyChecksBeforeExecution.registration,
-      );
-      expect(getExtendedToolTurnClass.mock.calls.length).toBeGreaterThan(
-        policyChecksBeforeExecution.overlay,
       );
       expect(targetCommand.execute).toHaveBeenCalledWith({
         permit,
@@ -1123,8 +1117,8 @@ describe('production ICP candidate control-plane reachability', () => {
         candidate,
         permit,
       })).rejects.toThrow('scripted model boundary failure');
-      expect(agent.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
-        expect.objectContaining({ toolName: 'notify' }),
+      expect(agent.getAdaptiveToolRuntimeState().activeTools).toContainEqual(
+        expect.objectContaining({ toolName: 'notify', source: 'extended' }),
       );
     } finally {
       await controlPlane?.stopFn();
@@ -1823,601 +1817,6 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(isTurnId(successfulHook.mock.calls[0]?.[0]?.turnId)).toBe(true);
   });
 
-  it('emits explicit background continuation completion and delivers queued results after a foreground turn ends', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const order: string[] = [];
-    const completed: any[] = [];
-    const deliveries: any[] = [];
-    eventBus.on('agent.turn.end', ({ requestId }) => { order.push(`end:${requestId}`); });
-    eventBus.on('agent.turn.usage', ({ requestId }) => { order.push(`usage:${requestId}`); });
-    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
-      order.push(`completed:${payload.requestId}`);
-      completed.push(payload);
-    });
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      order.push(`delivery:${payload.requestId}`);
-      deliveries.push(payload);
-    });
-
-    const promptCallsBefore = promptSpy.mock.calls.length;
-    mockAssistantResponse('Deferred continuation output');
-    await agent.handleMessage(buildDeferredToolHandoffMessage('action-42', {
-      toolNames: ['generate_image'],
-      intendedAction: 'continue with deferred tools',
-      turn: {
-        turnId: 'source-turn-42',
-        requestId: 'source-turn-42',
-        channelId: 'terminal:session-a',
-        channelType: 'terminal',
-        authorId: 'user-1',
-        authorName: 'TestUser',
-        callType: 'chat',
-      },
-    }));
-
-    mockAssistantResponse('Foreground response');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-1',
-      channelId: 'terminal:session-a',
-      channelType: 'terminal',
-      content: 'normal foreground request',
-    }));
-
-    expect(order).toEqual([
-      'end:deferred-tool-handoff:action-42',
-      'completed:deferred-tool-handoff:action-42',
-      'usage:deferred-tool-handoff:action-42',
-      'end:foreground-turn-1',
-      'delivery:foreground-turn-1',
-      'usage:foreground-turn-1',
-    ]);
-
-    expect(completed).toHaveLength(1);
-    expect(completed[0]).toMatchObject({
-      continuationId: 'action-42',
-      sourceMessageId: 'deferred-tool-handoff:action-42',
-      deliverySessionId: 'terminal:session-a',
-      queuedForPostTurnDelivery: true,
-      hasDeliverableContent: true,
-      notifyUser: true,
-      notificationReason: 'notify_deferred_user_task',
-      origin: 'user_delegated',
-      urgency: 'normal',
-      channelContext: 'session',
-      stale: false,
-      taskKind: 'deferred_tool_handoff',
-      callType: 'background',
-      purpose: 'agent.background.continuation.completed',
-    });
-
-    expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]).toMatchObject({
-      deliverySessionId: 'terminal:session-a',
-      callType: 'chat',
-      purpose: 'agent.background.continuation.post_turn_delivery',
-      deliveries: [
-        expect.objectContaining({
-          continuationId: 'action-42',
-          deliverySessionId: 'terminal:session-a',
-          content: 'Deferred continuation output',
-          origin: 'user_delegated',
-          urgency: 'normal',
-          channelContext: 'session',
-          stale: false,
-          taskKind: 'deferred_tool_handoff',
-          notificationReason: 'notify_deferred_user_task',
-        }),
-      ],
-    });
-
-    expect(sessionManager.recordUserMessage).toHaveBeenCalledTimes(1);
-    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
-      'terminal:session-a',
-      'normal foreground request',
-      'user-1',
-      'TestUser',
-      undefined,
-      'user-1',
-      expect.objectContaining({
-        requestId: 'foreground-turn-1',
-        sourceMessageId: 'foreground-turn-1',
-      }),
-    );
-    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
-      'terminal:session-a',
-      '[SYSTEM: Tool Handoff] continue with deferred tools',
-      'system:tool_handoff',
-      'Tool Handoff',
-      undefined,
-      'user-1',
-      expect.objectContaining({
-        requestId: 'deferred-tool-handoff:action-42',
-        sourceMessageId: 'deferred-tool-handoff:action-42',
-      }),
-    );
-    expect(promptSpy.mock.calls[promptCallsBefore]?.[0]).toMatchObject({
-      role: 'custom',
-      type: 'systemNote',
-      messageClass: MESSAGE_CLASSES.systemNote,
-      content: '[SYSTEM: Tool Handoff] continue with deferred tools',
-    });
-    expect(promptSpy.mock.calls[promptCallsBefore + 1]?.[0]).toMatchObject({
-      role: 'user',
-      content: 'normal foreground request',
-    });
-
-    expect(agent.getBackgroundContinuationTasks()).toEqual([
-      expect.objectContaining({
-        continuationId: 'action-42',
-        sourceMessageId: 'deferred-tool-handoff:action-42',
-        deliverySessionId: 'terminal:session-a',
-        origin: 'user_delegated',
-        urgency: 'normal',
-        channelContext: 'session',
-        stale: false,
-        taskKind: 'deferred_tool_handoff',
-        notifyUser: true,
-        notificationReason: 'notify_deferred_user_task',
-      }),
-    ]);
-  });
-
-  it('tracks internal-session background completions and suppresses user notification by policy', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const completed: any[] = [];
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
-      completed.push(payload);
-    });
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('Internal maintenance completed.');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-internal',
-      channelId: 'internal:maintenance',
-      channelType: 'terminal',
-      content: 'internal background continuation',
-    }));
-
-    mockAssistantResponse('Foreground reply');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-after-internal',
-      channelId: 'terminal:session-user',
-      channelType: 'terminal',
-      content: 'foreground check',
-    }));
-
-    expect(completed).toHaveLength(1);
-    expect(completed[0]).toMatchObject({
-      continuationId: 'action-internal',
-      deliverySessionId: 'internal:maintenance',
-      queuedForPostTurnDelivery: false,
-      hasDeliverableContent: true,
-      notifyUser: false,
-      notificationReason: 'suppress_internal_session',
-      origin: 'internal',
-      urgency: 'normal',
-      channelContext: 'internal',
-      taskKind: 'deferred_tool_handoff',
-    });
-    expect(deliveries).toHaveLength(0);
-
-    expect(agent.getBackgroundContinuationTasks()).toEqual([
-      expect.objectContaining({
-        continuationId: 'action-internal',
-        deliverySessionId: 'internal:maintenance',
-        origin: 'internal',
-        urgency: 'normal',
-        channelContext: 'internal',
-        notifyUser: false,
-        notificationReason: 'suppress_internal_session',
-      }),
-    ]);
-  });
-
-  it('suppresses stale deferred completion deliveries while still tracking completion metadata', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const completed: any[] = [];
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
-      completed.push(payload);
-    });
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('Stale deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-stale',
-      channelId: 'terminal:stale-session',
-      channelType: 'terminal',
-      content: 'continue stale deferred task',
-      timestamp: new Date(Date.now() - (16 * 60 * 1000)),
-    }));
-
-    mockAssistantResponse('Foreground reply after stale completion');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-after-stale',
-      channelId: 'terminal:stale-session',
-      channelType: 'terminal',
-      content: 'foreground request',
-    }));
-
-    expect(completed).toHaveLength(1);
-    expect(completed[0]).toMatchObject({
-      continuationId: 'action-stale',
-      queuedForPostTurnDelivery: false,
-      notifyUser: false,
-      notificationReason: 'suppress_stale_completion',
-      origin: 'user_delegated',
-      stale: true,
-    });
-    expect(deliveries).toHaveLength(0);
-
-    expect(agent.getBackgroundContinuationTasks()).toEqual([
-      expect.objectContaining({
-        continuationId: 'action-stale',
-        notifyUser: false,
-        notificationReason: 'suppress_stale_completion',
-        origin: 'user_delegated',
-        stale: true,
-      }),
-    ]);
-  });
-
-  it('deduplicates queued background completion deliveries for repeated continuation ids', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const completed: any[] = [];
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
-      completed.push(payload);
-    });
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('First deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-dedupe',
-      channelId: 'terminal:dedupe-session',
-      channelType: 'terminal',
-      content: 'first deferred completion',
-    }));
-
-    mockAssistantResponse('Replacement deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-dedupe',
-      channelId: 'terminal:dedupe-session',
-      channelType: 'terminal',
-      content: 'replacement deferred completion',
-    }));
-
-    mockAssistantResponse('Foreground flush');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-dedupe',
-      channelId: 'terminal:dedupe-session',
-      channelType: 'terminal',
-      content: 'flush queued background completion',
-    }));
-
-    expect(completed).toHaveLength(2);
-    expect(completed[0]).toMatchObject({
-      continuationId: 'action-dedupe',
-      queuedForPostTurnDelivery: true,
-      queueDepth: 1,
-    });
-    expect(completed[1]).toMatchObject({
-      continuationId: 'action-dedupe',
-      queuedForPostTurnDelivery: true,
-      queueDepth: 1,
-    });
-    expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]).toMatchObject({
-      deliverySessionId: 'terminal:dedupe-session',
-      deliveries: [
-        expect.objectContaining({
-          continuationId: 'action-dedupe',
-          content: 'Replacement deferred continuation output',
-        }),
-      ],
-    });
-    expect(deliveries[0].deliveries).toHaveLength(1);
-  });
-
-  it('delivers queued background completions one at a time across foreground turns', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('First deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-budget-a',
-      channelId: 'terminal:budget-session',
-      channelType: 'terminal',
-      content: 'first deferred completion',
-    }));
-
-    mockAssistantResponse('Second deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-budget-b',
-      channelId: 'terminal:budget-session',
-      channelType: 'terminal',
-      content: 'second deferred completion',
-    }));
-
-    mockAssistantResponse('Foreground flush one');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-budget-1',
-      channelId: 'terminal:budget-session',
-      channelType: 'terminal',
-      content: 'first foreground turn',
-    }));
-
-    mockAssistantResponse('Foreground flush two');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-budget-2',
-      channelId: 'terminal:budget-session',
-      channelType: 'terminal',
-      content: 'second foreground turn',
-    }));
-
-    expect(deliveries).toHaveLength(2);
-    expect(deliveries[0]).toMatchObject({
-      runtimeClass: 'background_continuation',
-      deliveries: [
-        expect.objectContaining({
-          continuationId: 'action-budget-a',
-          runtimeClass: 'background_continuation',
-          content: 'First deferred continuation output',
-        }),
-      ],
-    });
-    expect(deliveries[0].deliveries).toHaveLength(1);
-    expect(deliveries[1]).toMatchObject({
-      runtimeClass: 'background_continuation',
-      deliveries: [
-        expect.objectContaining({
-          continuationId: 'action-budget-b',
-          runtimeClass: 'background_continuation',
-          content: 'Second deferred continuation output',
-        }),
-      ],
-    });
-    expect(deliveries[1].deliveries).toHaveLength(1);
-  });
-
-  it('cancels queued background completion delivery when a later completion is suppressed', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const completed: any[] = [];
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.completed', (payload: any) => {
-      completed.push(payload);
-    });
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('Notify-worthy deferred continuation');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-cancel',
-      channelId: 'terminal:cancel-session',
-      channelType: 'terminal',
-      content: 'first deferred completion',
-    }));
-
-    mockAssistantResponse('   ');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-cancel',
-      channelId: 'terminal:cancel-session',
-      channelType: 'terminal',
-      content: 'interrupted deferred completion',
-    }));
-
-    mockAssistantResponse('Foreground response after suppression');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-cancel',
-      channelId: 'terminal:cancel-session',
-      channelType: 'terminal',
-      content: 'foreground follow-up',
-    }));
-
-    expect(completed).toHaveLength(2);
-    expect(completed[0]).toMatchObject({
-      continuationId: 'action-cancel',
-      queuedForPostTurnDelivery: true,
-      notifyUser: true,
-      queueDepth: 1,
-    });
-    expect(completed[1]).toMatchObject({
-      continuationId: 'action-cancel',
-      queuedForPostTurnDelivery: false,
-      notifyUser: false,
-      notificationReason: 'suppress_empty_response',
-      queueDepth: 0,
-    });
-    expect(deliveries).toHaveLength(0);
-    expect(agent.getBackgroundContinuationTasks()).toEqual([
-      expect.objectContaining({
-        continuationId: 'action-cancel',
-        notifyUser: false,
-        notificationReason: 'suppress_empty_response',
-      }),
-    ]);
-  });
-
-  it('keeps normal chat replies responsive while a long-running background continuation is still in flight', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    let releaseBackgroundTurn: (() => void) | null = null;
-    let backgroundPromptStarted = false;
-    promptSpy.mockImplementationOnce(async function (this: Agent) {
-      backgroundPromptStarted = true;
-      await new Promise<void>((resolve) => {
-        releaseBackgroundTurn = resolve;
-      });
-      this.state.messages.push({
-        role: 'assistant',
-        content: [{ type: 'text' as const, text: 'background done' }],
-        api: '' as any,
-        provider: '' as any,
-        model: '',
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: 'stop' as any,
-        timestamp: Date.now(),
-      });
-    });
-    mockAssistantResponse('foreground done');
-
-    const endOrder: string[] = [];
-    eventBus.on('agent.turn.end', ({ requestId }) => {
-      endOrder.push(requestId);
-    });
-
-    const backgroundTurn = agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-700',
-      channelId: 'terminal:shared-session',
-      channelType: 'terminal',
-      content: 'continue deferred task',
-    }));
-
-    await vi.waitFor(() => {
-      expect(backgroundPromptStarted).toBe(true);
-    });
-
-    const foregroundResponse = await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-700',
-      channelId: 'terminal:shared-session',
-      channelType: 'terminal',
-      content: 'quick foreground check',
-    }));
-    expect(foregroundResponse.content).toBe('foreground done');
-
-    let backgroundSettled = false;
-    void backgroundTurn.finally(() => {
-      backgroundSettled = true;
-    });
-    await Promise.resolve();
-    expect(backgroundSettled).toBe(false);
-
-    releaseBackgroundTurn?.();
-    const backgroundResponse = await backgroundTurn;
-    expect(backgroundResponse.content).toBe('background done');
-    expect(endOrder).toEqual([
-      'foreground-turn-700',
-      'deferred-tool-handoff:action-700',
-    ]);
-  });
-
-  it('keeps deferred background completions isolated from an unrelated active foreground session', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const setActive = (sessionManager.setActiveContextSession as any) as (sessionId: string | null) => void;
-    const getActive = (sessionManager.getActiveContextSession as any) as () => string | null;
-    setActive('terminal:foreground-active');
-
-    const agent = new SubstrateAgent(
-      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
-    );
-
-    const deliveries: any[] = [];
-    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
-      deliveries.push(payload);
-    });
-
-    mockAssistantResponse('Background continuation payload');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-99',
-      channelId: 'terminal:background-session',
-      channelType: 'terminal',
-      content: 'deferred continuation',
-    }));
-
-    expect(getActive()).toBe('terminal:foreground-active');
-
-    mockAssistantResponse('Foreground reply');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-active',
-      channelId: 'terminal:transient-request',
-      channelType: 'terminal',
-      content: 'foreground in active session',
-    }));
-
-    expect(deliveries).toHaveLength(0);
-
-    setActive('terminal:background-session');
-    mockAssistantResponse('Foreground reply on resumed session');
-    await agent.handleMessage(makeMessage({
-      id: 'foreground-turn-resumed',
-      channelId: 'terminal:transient-request',
-      channelType: 'terminal',
-      content: 'foreground after resume',
-    }));
-
-    expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]).toMatchObject({
-      deliverySessionId: 'terminal:background-session',
-      deliveries: [
-        expect.objectContaining({
-          continuationId: 'action-99',
-          deliverySessionId: 'terminal:background-session',
-          content: 'Background continuation payload',
-        }),
-      ],
-    });
-  });
 
   it('does not fabricate first-token telemetry for a terminal-only completion', async () => {
     const config = makeConfig();
@@ -4606,73 +4005,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(firstPrompt).not.toContain('Address discord-user by name.');
     expect(secondPrompt).not.toContain('Address 5635268079 by name.');
   });
-
-  it('keeps explicitly loaded extended tools active across turns', async () => {
-    const config = makeConfig();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      new EventBus(),
-      makeMockLLMProvider(),
-      sessionManager,
-      'Base prompt',
-      config,
-    );
-    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
-    agent.registerTool(extendedProbeTool, 'extended');
-
-    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
-    expect(toolset).toBeDefined();
-    await (toolset as any).execute('load-1', { action: 'activate', tools: ['extended_probe_tool'] });
-
-    const activeToolNamesByTurn: string[][] = [];
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-    await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-    await agent.handleMessage(makeMessage({ id: 'msg-load-persist-2' }));
-
-    expect(activeToolNamesByTurn).toHaveLength(2);
-    expect(activeToolNamesByTurn[0]).toContain('extended_probe_tool');
-    expect(activeToolNamesByTurn[1]).toContain('extended_probe_tool');
-  });
-
-  it('captures deferred tool-handoff intent details from toolset activate', async () => {
-    const config = makeConfig();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      new EventBus(),
-      makeMockLLMProvider(),
-      sessionManager,
-      'Base prompt',
-      config,
-    );
-    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
-    agent.registerTool(extendedProbeTool, 'extended');
-
-    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
-    expect(toolset).toBeDefined();
-
-    const result = await (toolset as any).execute('load-intent-1', {
-      action: 'activate',
-      tools: ['extended_probe_tool'],
-      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
-      deferUntilTurnBoundary: true,
-      maxRetries: 1,
-    });
-    const details = result.details as {
-      deferredToolHandoff?: {
-        toolNames: string[];
-        intendedAction: string;
-        maxRetries?: number;
-      };
-    };
-    expect(details.deferredToolHandoff).toEqual({
-      toolNames: ['extended_probe_tool'],
-      intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
-      maxRetries: 1,
-    });
-  });
-
-  it('activates canonical extended tools through toolset now that no extended tools default to background-only', async () => {
+  it('makes registered extended tools callable on the first turn without catalog mutation', async () => {
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
       eventBus,
@@ -4681,298 +4014,53 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       makeConfig(),
     );
+    agent.registerTool(makeExtendedProbeTool('extended_alpha'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('extended_beta'), 'extended');
 
-    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('north_star'), 'extended');
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
+    await agent.handleMessage(makeMessage({ id: 'msg-first-turn-extended' }));
 
-    const sameTurnEvents: any[] = [];
-    const adaptiveDecisions: any[] = [];
-    (eventBus as any).on('agent.tools.same_turn_activation', (payload: any) => { sameTurnEvents.push(payload); });
-    (eventBus as any).on('agent.tools.adaptive.decision', (payload: any) => { adaptiveDecisions.push(payload); });
-
-    (agent as any).activeTurnCorrelation = {
-      turnId: 'turn-1',
-      requestId: 'request-1',
-      channelId: 'test-channel',
-      callType: 'chat',
-      purpose: 'agent.turn.prompt',
-    };
-    (agent as any).activeTurnTaskKind = 'chat';
-    (agent as any).activeTurnIntent = 'ops';
-
-    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
-    expect(toolset).toBeDefined();
-    const result = await (toolset as any).execute('load-background-skip', {
-      action: 'activate',
-      tools: ['beads', 'north_star'],
-    });
-
-    const payload = JSON.parse(result.content[0]?.text as string) as {
-      backgroundOnlyTools?: string[];
-      activatedTools?: string[];
-    };
-    expect(payload.backgroundOnlyTools ?? []).toEqual([]);
-    expect(payload.activatedTools).toEqual(['beads', 'north_star']);
-    const runtimeState = agent.getAdaptiveToolRuntimeState();
-    const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
-    expect(activeToolNames).toContain('beads');
-    expect(activeToolNames).toContain('north_star');
-
-    expect(sameTurnEvents.at(-1)).toMatchObject({
-      requestedTools: ['beads', 'north_star'],
-      overlayEligible: ['beads', 'north_star'],
-      activatedTools: ['beads', 'north_star'],
-      skippedBackgroundOnly: [],
-      intent: 'ops',
-      taskKind: 'chat',
-    });
-    expect(adaptiveDecisions).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        toolName: 'beads',
-        source: 'extended_loaded',
-        decision: 'activated',
-      }),
+    expect(activeToolNamesByTurn).toHaveLength(1);
+    expect(activeToolNamesByTurn[0]).toEqual(expect.arrayContaining([
+      'extended_alpha',
+      'extended_beta',
     ]));
-  });
-
-  it('activates promoted extended tools each turn without toolset activate calls', async () => {
-    const config = makeConfig({
-      promotedExtendedTools: ['extended_probe_tool'],
-    });
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      new EventBus(),
-      makeMockLLMProvider(),
-      sessionManager,
-      'Base prompt',
-      config,
-    );
-    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
-    agent.registerTool(extendedProbeTool, 'extended');
-
-    const activeToolNamesByTurn: string[][] = [];
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-    await agent.handleMessage(makeMessage({ id: 'msg-promoted-1' }));
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-    await agent.handleMessage(makeMessage({ id: 'msg-promoted-2' }));
-
-    expect(activeToolNamesByTurn).toHaveLength(2);
-    expect(activeToolNamesByTurn[0]).toContain('extended_probe_tool');
-    expect(activeToolNamesByTurn[1]).toContain('extended_probe_tool');
-  });
-
-  it('autoloads bounded dev tools before prompt in deterministic candidate order', async () => {
-    const config = makeConfig({ capabilityTier: 'autonomous' });
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      sessionManager,
-      'Base prompt',
-      config,
-    );
-
-    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
-
-    const activeToolNamesByTurn: string[][] = [];
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-
-    await agent.handleMessage(makeMessage({
-      id: 'msg-autoload-order',
-      channelType: 'terminal',
-      content: 'Please open and update an issue for this bug',
-    }));
-
-    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
-    expect(toolNames).toContain('beads');
-  });
-
-  it('falls back cleanly when autoload candidates are unavailable', async () => {
-    const config = makeConfig({ capabilityTier: 'autonomous' });
-    const eventBus = new EventBus();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      makeMockSessionManager(),
-      'Base prompt',
-      config,
-    );
-
-    const autoloadSummaries: any[] = [];
-    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
-
-    const activeToolNamesByTurn: string[][] = [];
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-
-    await agent.handleMessage(makeMessage({
-      id: 'msg-autoload-fallback',
-      channelType: 'terminal',
-      content: 'Please open and update the issue for this bug',
-    }));
-
-    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
-    expect(toolNames).toEqual(['tool_search', 'toolset', 'response_control']);
-
-    expect(autoloadSummaries).toEqual([]);
-  });
-
-  it('loads all overlay candidates in foreground turns now that no extended tools default to background-only', async () => {
-    const config = makeConfig({ capabilityTier: 'autonomous' });
-    const eventBus = new EventBus();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      makeMockSessionManager(),
-      'Base prompt',
-      config,
-    );
-
-    agent.registerTool(makeExtendedProbeTool('heartbeat_update_policy'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('heartbeat_run_template'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
-
-    const autoloadSummaries: any[] = [];
-    const autoloadSkips: any[] = [];
-    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
-    (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
-    const activeToolNamesByTurn: string[][] = [];
-    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
-
-    await agent.handleMessage(makeMessage({
-      id: 'msg-autoload-ops-overlay',
-      channelId: 'internal:heartbeat',
-      channelType: 'terminal',
-      content: 'tick',
-    }));
-
-    const toolNames = activeToolNamesByTurn.at(-1) ?? [];
-    const registeredOverlayNames = ['heartbeat_update_policy', 'heartbeat_run_template', 'schedule_task', 'beads'];
-    expect(toolNames.some(name => registeredOverlayNames.includes(name))).toBe(true);
-
-    const summary = autoloadSummaries.at(-1);
-    expect(summary?.intent).toBe('ops');
-    expect(summary?.skippedBackgroundOnly ?? []).toEqual([]);
-    expect(autoloadSkips.filter(skip => skip.reason === 'background_only')).toEqual([]);
-  });
-
-  it('emits adaptive decision telemetry and per-turn active-set snapshots with source labels', async () => {
-    const config = makeConfig({
-      capabilityTier: 'nursery',
-      promotedExtendedTools: ['repo_status', 'repo_commit', 'ghost_tool'],
-    });
-    const eventBus = new EventBus();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      makeMockSessionManager(),
-      'Base prompt',
-      config,
-    );
-
-    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('manual_probe'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('deferred_probe'), 'extended');
-
-    const adaptiveDecisions: any[] = [];
-    const adaptiveSnapshots: any[] = [];
-    (eventBus as any).on('agent.tools.adaptive.decision', (payload: any) => { adaptiveDecisions.push(payload); });
-    (eventBus as any).on('agent.tools.adaptive.snapshot', (payload: any) => { adaptiveSnapshots.push(payload); });
-
-    agent.activateExtendedTools(['manual_probe']);
-    agent.activateExtendedTools(['deferred_probe'], {
-      source: 'deferred',
-      correlation: {
-        turnId: 'deferred-turn',
-        requestId: 'deferred-request',
-        channelId: 'test-channel',
-        callType: 'tool',
-        purpose: 'deferred_tool_handoff',
+    expect(agent.getAdaptiveToolRuntimeState().lastSnapshot).toMatchObject({
+      tools: expect.arrayContaining([
+        { toolName: 'extended_alpha', source: 'extended' },
+        { toolName: 'extended_beta', source: 'extended' },
+      ]),
+      counts: {
+        core: 3,
+        extended: 2,
+        total: 5,
       },
-      taskKind: 'deferred_tool_handoff',
-      intent: 'deferred_tool_handoff',
     });
-
-    await agent.handleMessage(makeMessage({
-      id: 'msg-adaptive-telemetry',
-      channelType: 'terminal',
-      content: 'Please inspect repo diff and apply patch',
-    }));
-
-    const snapshot = adaptiveSnapshots.at(-1);
-    expect(snapshot).toMatchObject({
-      requestId: 'msg-adaptive-telemetry',
-      channelId: 'test-channel',
-      callType: 'chat',
-      purpose: 'agent.tools.adaptive.snapshot',
-      taskKind: null,
-    });
-    expect(isTurnId(snapshot?.turnId)).toBe(true);
-    expect(snapshot?.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
-      expect.objectContaining({ toolName: 'toolset', source: 'core' }),
-      expect.objectContaining({ toolName: 'response_control', source: 'core' }),
-      expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
-      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
-      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
-    ]));
-    expect(snapshot?.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', reason: 'capability_denied' }),
-      expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
-    ]));
-    expect(snapshot?.counts).toMatchObject({
-      core: 3,
-      promoted: 1,
-      autoload: 0,
-      extendedLoaded: 1,
-      deferred: 1,
-      total: 6,
-    });
-
-    expect(adaptiveDecisions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
-      expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
-      expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
-      expect.objectContaining({ toolName: 'response_control', source: 'core', decision: 'active', reason: 'turn_active_set' }),
-      expect.objectContaining({ toolName: 'tool_search', source: 'core', decision: 'active', reason: 'turn_active_set' }),
-      expect.objectContaining({ toolName: 'toolset', source: 'core', decision: 'active', reason: 'turn_active_set' }),
-      expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
-    ]));
   });
 
-  it('deduplicates active tool registration when a promoted tool is also manually loaded', async () => {
-    const config = makeConfig({
-      promotedExtendedTools: ['extended_probe_tool'],
-    });
-    const sessionManager = makeMockSessionManager();
+  it('uses configured pins only to order tools while leaving unpinned tools callable', async () => {
     const agent = new SubstrateAgent(
       new EventBus(),
       makeMockLLMProvider(),
-      sessionManager,
+      makeMockSessionManager(),
       'Base prompt',
-      config,
+      makeConfig({ promotedExtendedTools: ['extended_beta'] }),
     );
-    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
-    agent.registerTool(extendedProbeTool, 'extended');
+    agent.registerTool(makeExtendedProbeTool('extended_alpha'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('extended_beta'), 'extended');
 
-    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
-    expect(toolset).toBeDefined();
-    await (toolset as any).execute('load-promoted-dedupe', { action: 'activate', tools: ['extended_probe_tool'] });
+    const activeToolNamesByTurn: string[][] = [];
+    captureActiveTurnToolsOnNextPrompt(agent, activeToolNamesByTurn);
+    await agent.handleMessage(makeMessage({ id: 'msg-pinned-order' }));
 
-    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
-    await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));
-
-    for (const call of setToolsSpy.mock.calls) {
-      const toolNames = (call[0] as Array<{ name: string }>).map((tool) => tool.name);
-      expect(toolNames.filter(name => name === 'extended_probe_tool')).toHaveLength(1);
-    }
+    const toolNames = activeToolNamesByTurn[0] ?? [];
+    expect(toolNames).toContain('extended_alpha');
+    expect(toolNames).toContain('extended_beta');
+    expect(toolNames.indexOf('extended_beta')).toBeLessThan(toolNames.indexOf('extended_alpha'));
   });
 
-  it('supports promoted-tool add/remove/swap mutations with bounds and persistence hooks', () => {
+  it('supports pin add/remove/swap mutations with bounds and persistence hooks', () => {
     const persistPromotedExtendedTools = vi.fn();
     const config = makeConfig({
       runtimeHooks: {
@@ -5012,7 +4100,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(persistPromotedExtendedTools).toHaveBeenCalled();
   });
 
-  it('rejects invalid or capability-denied promoted tools', () => {
+  it('rejects invalid or capability-denied pins', () => {
     const config = makeConfig({ capabilityTier: 'custom' });
     const agent = new SubstrateAgent(
       new EventBus(),
@@ -5043,13 +4131,13 @@ describe('SubstrateAgent.handleMessage', () => {
     const backgroundTool = makeExtendedProbeTool('schedule_task');
     agent.registerTool(backgroundTool, 'extended');
 
-    // schedule_task stopped being background-only with the scheduler
-    // consolidation; promotion is now a valid operation for it.
+    // Pins affect presentation only, so any capability-eligible extended tool
+    // can be pinned without changing whether it is callable.
     const scheduleTaskPromotion = agent.addPromotedExtendedTool('schedule_task');
     expect(scheduleTaskPromotion.ok).toBe(true);
   });
 
-  it('keeps runtime state unchanged when promoted-tool persistence fails', () => {
+  it('keeps runtime state unchanged when pin persistence fails', () => {
     const config = makeConfig({
       runtimeHooks: {
         persistPromotedExtendedTools: vi.fn(() => {
@@ -6669,8 +5757,10 @@ describe('SubstrateAgent steering + follow-up', () => {
       JSON.stringify(context.messages).includes(ordinaryMessage.content)
     ));
     expect(ordinaryProvider).toBeDefined();
-    expect(ordinaryProvider?.toolNames).not.toContain('notify');
-    const candidateProviders = providerContexts.filter(context => context.toolNames.includes('notify'));
+    expect(ordinaryProvider?.toolNames).toContain('notify');
+    const candidateProviders = providerContexts.filter(context => (
+      context.toolNames.length === 1 && context.toolNames[0] === 'notify'
+    ));
     expect(candidateProviders).toHaveLength(1);
     expect(JSON.stringify(candidateProviders)).not.toContain(ordinaryMessage.content);
     expect(notifyProbe.execute).not.toHaveBeenCalled();
@@ -6799,7 +5889,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(JSON.stringify(providerContexts[1]?.messages)).not.toContain(queuedMessage.content);
     expect(JSON.stringify(providerContexts[2]?.messages)).toContain(queuedMessage.content);
     for (const context of providerContexts) {
-      expect(context.toolNames).not.toContain('notify');
+      expect(context.toolNames).toContain('notify');
     }
     const queuedRecords = sessionManager.recordUserMessage.mock.calls.filter(call => (
       call[1] === queuedMessage.content
@@ -7081,7 +6171,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(JSON.stringify(ingressPromptCalls[3]?.[0])).toContain('foreign queued input');
     expect(providerOrdinaryToolSets).toHaveLength(3);
     for (const toolNames of providerOrdinaryToolSets) {
-      expect(toolNames).not.toContain('notify');
+      expect(toolNames).toContain('notify');
     }
     expect(notifyProbe.execute).not.toHaveBeenCalled();
     const foreignRecords = sessionManager.recordUserMessage.mock.calls.slice(recordsBeforeIngress);
@@ -7167,7 +6257,7 @@ describe('SubstrateAgent steering + follow-up', () => {
       expect(JSON.stringify(phasePromptCalls[2]?.[0])).toContain(messages.queued.content);
       expect(ordinaryToolSets).toHaveLength(3);
       for (const toolNames of ordinaryToolSets) {
-        expect(toolNames).not.toContain('notify');
+        expect(toolNames).toContain('notify');
       }
       const phaseRecords = sessionManager.recordUserMessage.mock.calls.slice(recordsBefore);
       expect(phaseRecords.map(call => call[1])).toEqual([
@@ -7346,7 +6436,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(JSON.stringify(cancellationPrompts[3]?.[0])).toContain('foreign cancellation queued input');
     expect(cancellationOrdinaryToolSets).toHaveLength(3);
     for (const toolNames of cancellationOrdinaryToolSets) {
-      expect(toolNames).not.toContain('notify');
+      expect(toolNames).toContain('notify');
     }
     expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
 
@@ -7391,7 +6481,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(errorIngressSettled).toBe(2);
     expect(errorOrdinaryToolSets).toHaveLength(2);
     for (const toolNames of errorOrdinaryToolSets) {
-      expect(toolNames).not.toContain('notify');
+      expect(toolNames).toContain('notify');
     }
     expect(agent.getActiveTurnTools().map(tool => tool.name)).not.toContain('notify');
   });

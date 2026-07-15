@@ -37,7 +37,7 @@
     {
       title: 'Telemetry Stream / Audit Trail',
       contextLabel: 'The Sap',
-      description: 'Raw runtime event flow plus persisted audit history for tool use, activation failures, settings changes, charges, confirmations, external actions, and gateway policy decisions.',
+      description: 'Raw runtime event flow plus persisted audit history for tool use, catalog-policy denials, settings changes, charges, confirmations, external actions, and gateway policy decisions.',
       source: 'Garden audit JSONL, gateway audit store, charge ledger, and live admin telemetry',
       operatorQuestion: 'What just happened, and was it allowed or denied?',
       retention: 'Persistent audit history plus live overlay',

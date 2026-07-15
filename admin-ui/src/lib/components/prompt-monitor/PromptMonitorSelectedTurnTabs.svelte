@@ -912,26 +912,15 @@
               <p class="mt-1 text-shadow-900">{turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.core ?? '—'}</p>
             </div>
             <div>
-              <p class="text-shadow-600">Promoted</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.promoted ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Extended Loaded</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.extendedLoaded ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Autoload / Deferred</p>
-              <p class="mt-1 text-shadow-900">
-                {turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.autoload ?? '—'} /
-                {turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.deferred ?? '—'}
-              </p>
+              <p class="text-shadow-600">Extended</p>
+              <p class="mt-1 text-shadow-900">{turn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.extended ?? '—'}</p>
             </div>
           </div>
           <div class="mt-4 space-y-3">
             <PromptMonitorTextBlock
-              title="Adaptive Active Tool Sources"
+              title="Active Catalog Tool Sources"
               value={formatJson(turn.snapshot?.toolContext?.adaptiveSnapshot?.tools)}
-              emptyText="No adaptive tool activation snapshot recorded."
+              emptyText="No catalog tool snapshot recorded."
               maxHeightClass="max-h-56"
             />
           </div>

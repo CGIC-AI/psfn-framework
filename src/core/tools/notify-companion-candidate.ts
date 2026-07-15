@@ -11,7 +11,7 @@ import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
 import { textResult, textResultWithError } from './results.js';
 import {
   parseDeferredCompanionOutreachAuthorizationEvidence,
-  type CompanionNotifyOverlayActivationSource,
+  type CompanionNotifyCatalogSource,
   type DeferredCompanionOutreachAuthorizationEvidence,
 } from './notify-companion-handoff.js';
 
@@ -137,9 +137,9 @@ function parseActionPayload(value: unknown): CandidateActionPayload | null {
 
 export function inferIcpInitiationCandidateActions(
   context: PostTurnInferenceContext,
-  originActivationSource: CompanionNotifyOverlayActivationSource | null = null,
+  originCatalogSource: CompanionNotifyCatalogSource | null = null,
 ): PostTurnActionCandidate[] {
-  if (!originActivationSource) return [];
+  if (!originCatalogSource) return [];
   const channelId = context.message.channelId;
   const source = channelId.startsWith('internal:free-time:')
     ? 'free_time' as const
@@ -179,10 +179,10 @@ export function inferIcpInitiationCandidateActions(
           : { kind: 'independent' },
       },
       authorization: {
-        version: 1,
+        version: 2,
         toolName: 'notify',
         toolScope: 'extended',
-        activationSource: originActivationSource,
+        catalogSource: originCatalogSource,
         requiredCapability: 'external.companion',
         originToolCallId: message.toolCallId,
         originTurnId: String(context.turnId),
@@ -206,11 +206,11 @@ export function registerIcpInitiationCandidatePostTurnRuntime(input: {
   };
   postTurnActions: PostTurnActionRuntime;
   runtime: IcpInitiationSourceRuntime;
-  resolveOriginActivationSource(): CompanionNotifyOverlayActivationSource | null;
+  resolveOriginCatalogSource(): CompanionNotifyCatalogSource | null;
   isExecutionAuthorized(evidence: DeferredCompanionOutreachAuthorizationEvidence): boolean;
 }): () => void {
   const unregisterInferer = input.agentLoop.registerPostTurnActionInferer((context) => (
-    inferIcpInitiationCandidateActions(context, input.resolveOriginActivationSource())
+    inferIcpInitiationCandidateActions(context, input.resolveOriginCatalogSource())
   ));
   const unregisterHandler = input.postTurnActions.registerHandler(
     ICP_INITIATION_CANDIDATE_ACTION_KIND,

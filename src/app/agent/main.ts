@@ -940,7 +940,7 @@ async function main(): Promise<void> {
   };
   // Shared outbound-reply dedupe guard (psfn-framework-mdxu): the inbound
   // Discord reply pump records every delivered reply here, and the
-  // deferred-tool-handoff continuation consults it to suppress a duplicate of a
+  // internal continuation consults it to suppress a duplicate of a
   // reply the operator already received one turn earlier.
   const outboundReplyGuard = new OutboundReplyDeduper();
   // First proactive-outreach slice: only the configured primary heartbeat DM

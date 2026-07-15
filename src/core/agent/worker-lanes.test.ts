@@ -70,8 +70,8 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneClassForPostTurnActionKind('intention.follow_up')).toBe(
       POST_TURN_APPRAISAL_RUNTIME_CLASS,
     );
-    expect(resolveRuntimeLaneClassForPostTurnActionKind('tool_handoff.continue')).toBe(
-      BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+    expect(resolveRuntimeLaneClassForPostTurnActionKind('custom.follow_up')).toBe(
+      POST_TURN_APPRAISAL_RUNTIME_CLASS,
     );
     expect(resolveRuntimeLaneClassForPostTurnActionKind('heartbeat.run_template')).toBe(
       MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -97,7 +97,7 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneClassForModelCall({
       purpose: 'background',
       callType: 'background',
-      originStage: 'tool_handoff.continue',
+      originStage: 'subagent.spawn',
     })).toBe(BACKGROUND_CONTINUATION_RUNTIME_CLASS);
     expect(resolveRuntimeLaneClassForModelCall({
       purpose: 'memory',

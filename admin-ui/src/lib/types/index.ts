@@ -571,10 +571,7 @@ export interface AdminAdaptiveToolSnapshotSkip {
 
 export interface AdminAdaptiveToolSnapshotCounts {
   core: number;
-  promoted: number;
-  extendedLoaded: number;
-  autoload: number;
-  deferred: number;
+  extended: number;
   total: number;
 }
 

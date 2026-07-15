@@ -24,10 +24,10 @@ import {
 
 const COMPANION_OUTREACH_PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const COMPANION_OUTREACH_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
-  version: 1,
+  version: 2,
   toolName: 'notify',
   toolScope: 'extended',
-  activationSource: 'extended_loaded',
+  catalogSource: 'extended',
   requiredCapability: 'external.companion',
   originToolCallId: 'call-outreach-before-restart',
   originTurnId: 'turn-before-restart',
@@ -454,7 +454,7 @@ describe('wirePostTurnActionRuntime', () => {
       }), {
         executionMode: 'background',
       });
-      runtime.registerHandler('tool_handoff.continue', vi.fn(async (action) => {
+      runtime.registerHandler(POST_TURN_SUBAGENT_SPAWN_ACTION_KIND, vi.fn(async (action) => {
         callOrder.push(`continuation:${action.id}`);
       }), {
         executionMode: 'background',
@@ -476,12 +476,12 @@ describe('wirePostTurnActionRuntime', () => {
           }),
           makeAction({
             id: 'continuation-1',
-            kind: 'tool_handoff.continue',
+            kind: POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
             dedupeKey: 'continuation:one',
           }),
           makeAction({
             id: 'continuation-2',
-            kind: 'tool_handoff.continue',
+            kind: POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
             dedupeKey: 'continuation:two',
           }),
           makeAction({
@@ -1036,17 +1036,12 @@ describe('wirePostTurnActionRuntime', () => {
       const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
         hasExternalCompanionCapability: () => true,
         isNotifyToolRegistered: () => true,
-        isNotifyOverlayEligible: () => true,
-        getNotifyActivationSource: () => {
-          const active = restartedAdaptiveState.activeTools.find(tool => tool.toolName === 'notify');
-          return active ? 'extended_loaded' : null;
-        },
       };
       const dispose = registerDeferredCompanionOutreachRuntime({
         agentLoop: {},
         postTurnActions: restartedRuntime,
         runtime: { executeCompanionOutreach } as never,
-        resolveOriginActivationSource: () => null,
+        resolveOriginCatalogSource: () => null,
         isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
           evidence,
           authorizationRuntime,

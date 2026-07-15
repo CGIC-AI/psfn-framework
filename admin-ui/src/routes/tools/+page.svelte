@@ -121,7 +121,7 @@
   let summary = $derived.by(() => ({
     registeredTools: data?.catalog?.tools.length ?? 0,
     activeTools: data?.state?.activeTools.length ?? 0,
-    promotedActive: data?.state?.promotedToolsActive.length ?? 0,
+    pinnedOrderApplied: data?.state?.promotedToolsActive.length ?? 0,
     recentInvocations: data?.recentInvocations.length ?? 0,
     recentFailures: data?.recentFailures.length ?? 0,
   }));
@@ -193,7 +193,7 @@
   <GardenPageHeader
     eyebrow="The Shed"
     title="Tools"
-    description="Direct runtime tool availability for registered tools, service health, adaptive activation, and audit signals."
+    description="Direct runtime tool availability for registered tools, service health, turn policy, and audit signals."
   >
     {#snippet actions()}
       <button
@@ -224,9 +224,9 @@
       <p class="mt-2 text-sm text-shadow-600">Tools active in the current adaptive runtime snapshot.</p>
     </div>
     <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Promoted Active</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.promotedActive}</p>
-      <p class="mt-2 text-sm text-shadow-600">Promoted extended tools currently in the active set.</p>
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Pinned Order</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.pinnedOrderApplied}</p>
+      <p class="mt-2 text-sm text-shadow-600">Extended-tool ordering preferences applied to the catalog.</p>
     </div>
     <div class="card-garden overflow-hidden p-5">
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Runs</p>
@@ -537,10 +537,10 @@
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Adaptive Runtime</p>
         <h2 id="tools-adaptive-runtime-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
-          Activation snapshot
+          Catalog snapshot
         </h2>
         <p class="mt-1 text-sm text-shadow-600">
-          What the adaptive tool selector currently made active, promoted, or skipped.
+          What the turn policy currently exposes, orders first, or skips.
         </p>
       </div>
 
@@ -580,9 +580,9 @@
         </div>
 
         <div class="card-garden p-5">
-          <h3 class="text-base font-serif font-semibold text-shadow-900">Promotion Notes</h3>
+          <h3 class="text-base font-serif font-semibold text-shadow-900">Pinned-order Notes</h3>
           {#if data?.state?.promotedToolsSkipped.length}
-            <BoundedList maxHeight="18rem" label="Skipped promoted tools" class="mt-4">
+            <BoundedList maxHeight="18rem" label="Ignored ordering pins" class="mt-4">
               <div class="space-y-3">
                 {#each data.state.promotedToolsSkipped as skip}
                   <div class="rounded-2xl border border-gold-200 bg-gold-50 px-4 py-3">
@@ -603,7 +603,7 @@
               </div>
             </BoundedList>
           {:else}
-            <p class="mt-4 text-sm text-shadow-500">No promoted tools are currently being skipped.</p>
+            <p class="mt-4 text-sm text-shadow-500">No ordering pins are currently being ignored.</p>
           {/if}
         </div>
       </div>

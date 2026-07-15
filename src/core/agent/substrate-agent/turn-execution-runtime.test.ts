@@ -27,6 +27,7 @@ import type {
   ObserverEvalSidecarRuntime,
 } from '../../eval/observer-sidecar/types.js';
 import { drainObserverEvalSidecarQueue } from '../../eval/observer-sidecar/runtime.js';
+import { sanitizeObserverEvalInput } from '../../eval/observer-sidecar/privacy.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -48,6 +49,7 @@ import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
+import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1500,7 +1502,10 @@ function cloneTestEmotionSnapshot(): EmotionStateSnapshot {
   };
 }
 
-async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarRuntime | null) {
+async function runObserverSidecarTurn(
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null,
+  messageOverrides: Partial<SubstrateMessage> = {},
+) {
   const eventBus = new EventBus();
   const emotionSnapshot = cloneTestEmotionSnapshot();
   const observeEmotionState = vi.fn(async () => emotionSnapshot);
@@ -1536,6 +1541,7 @@ async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarR
       source: 'api',
       channelPrivacy: 'private',
     },
+    ...messageOverrides,
   }));
 
   return {
@@ -1556,7 +1562,137 @@ function expectProductionEmotionSnapshotUnchanged(result: Awaited<ReturnType<typ
   expect(result.recordAssistantMessage.mock.calls[0]?.[6]).toEqual(TEST_EMOTION_SNAPSHOT);
 }
 
+async function captureObserverSidecarInput(
+  messageOverrides: Partial<SubstrateMessage>,
+): Promise<ObserverEvalInput> {
+  const receivedInputs: ObserverEvalInput[] = [];
+  const sidecarRuntime: ObserverEvalSidecarRuntime = {
+    config: { enabled: true, sidecarId: 'observer-source-metadata-test' },
+    observer: {
+      observeTurn: vi.fn((input: ObserverEvalInput) => {
+        receivedInputs.push(input);
+      }),
+    },
+  };
+
+  await runObserverSidecarTurn(sidecarRuntime, messageOverrides);
+  await drainObserverEvalSidecarQueue(sidecarRuntime);
+
+  expect(receivedInputs).toHaveLength(1);
+  return receivedInputs[0]!;
+}
+
 describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('keeps internal scheduler terminal turns fail-closed and redacts their emotion snapshot', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'internal:reflection:temporal-wakeup',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Temporal Wakeup',
+      isDirectMessage: false,
+      routing: undefined,
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'terminal',
+      isDirectMessage: false,
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'fail_closed',
+        channelVisibility: null,
+        derivedTelemetryPermitted: false,
+        redactionReason: 'missing_channel_privacy_metadata',
+      },
+      emotion: {
+        snapshot: null,
+        snapshotRedacted: true,
+      },
+    });
+  });
+
+  it('classifies genuine interactive console turns as private observations', async () => {
+    const consoleMessage = createInteractiveTerminalMessage({
+      id: 'cli-observer-test',
+      content: OBSERVER_TEST_MESSAGE_CONTENT,
+      timestamp: new Date('2026-03-08T12:00:00Z'),
+    });
+    const receivedInput = await captureObserverSidecarInput(consoleMessage);
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'terminal',
+      isDirectMessage: false,
+      channelPrivacy: 'private',
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'private',
+        channelVisibility: 'private',
+        derivedTelemetryPermitted: true,
+      },
+      emotion: {
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        snapshotRedacted: false,
+      },
+    });
+  });
+
+  it('preserves a classified API session privacy level without defaulting it to private', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'api:shared-session',
+      channelType: 'api',
+      isDirectMessage: false,
+      routing: {
+        source: 'api',
+        channelPrivacy: 'invite_only',
+      },
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'api',
+      isDirectMessage: false,
+      channelPrivacy: 'invite_only',
+    });
+  });
+
+  it('leaves Discord observer source metadata unchanged', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'discord:guild-room',
+      channelType: 'discord',
+      isDirectMessage: false,
+      routing: {
+        source: 'discord',
+        channelPrivacy: 'public',
+      },
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'discord',
+      isDirectMessage: false,
+      channelPrivacy: 'public',
+    });
+  });
+
+  it('keeps an unclassified API session fail-closed instead of guessing privacy', async () => {
+    const receivedInput = await captureObserverSidecarInput({
+      channelId: 'api:unclassified-session',
+      channelType: 'api',
+      isDirectMessage: false,
+      routing: undefined,
+    });
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'api',
+      isDirectMessage: false,
+    });
+    expect(sanitizeObserverEvalInput(receivedInput).privacy).toMatchObject({
+      privacyClass: 'fail_closed',
+      channelVisibility: null,
+      derivedTelemetryPermitted: false,
+      redactionReason: 'missing_channel_privacy_metadata',
+    });
+  });
+
   it('leaves the production emotion snapshot unchanged when the sidecar is absent', async () => {
     const result = await runObserverSidecarTurn();
 

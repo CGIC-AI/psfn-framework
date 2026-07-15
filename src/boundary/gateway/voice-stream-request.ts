@@ -36,12 +36,17 @@ interface ReverseVoiceRpcMethods {
   cancel: string;
 }
 
+// mmo9.8.6: the sender emits the transcript-oriented names. The gateway
+// registers both the legacy voice.stream.* and the new voice.transcript.*
+// names on the same handlers (see reverse-methods.ts), and the
+// method-not-found -> voice.handleMessage fallback below still covers a
+// gateway that predates the transcript names during version skew.
 const PRIMARY_REVERSE_VOICE_RPC_METHODS: ReverseVoiceRpcMethods = {
   handleMessage: 'voice.handleMessage',
-  start: 'voice.stream.start',
-  chunk: 'voice.stream.chunk',
-  end: 'voice.stream.end',
-  cancel: 'voice.stream.cancel',
+  start: 'voice.transcript.begin',
+  chunk: 'voice.transcript.chunk',
+  end: 'voice.transcript.end',
+  cancel: 'voice.transcript.cancel',
 };
 
 

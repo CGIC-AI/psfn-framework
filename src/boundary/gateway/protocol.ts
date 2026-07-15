@@ -1020,10 +1020,17 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
 
 export interface AgentMethods {
   'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
+  // mmo9.8.6: inbound transcript-chunking family renamed voice.stream.* ->
+  // voice.transcript.*. Both names are registered on the same handlers and kept
+  // typed here so version skew stays type-safe; do not remove the legacy names.
   'voice.stream.start': [VoiceStreamStartParams, VoiceStreamAckResult];
   'voice.stream.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
   'voice.stream.end': [VoiceStreamEndParams, VoiceStreamEndResult];
   'voice.stream.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
+  'voice.transcript.begin': [VoiceStreamStartParams, VoiceStreamAckResult];
+  'voice.transcript.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
+  'voice.transcript.end': [VoiceStreamEndParams, VoiceStreamEndResult];
+  'voice.transcript.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
   'api.chat.completion': [ApiChatCompletionRpcParams, ApiChatCompletionRpcResult];
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
   'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];

@@ -6,7 +6,7 @@ const PRIMARY_CONTACT_ID = 'contact-primary';
 const PRIMARY_DM_ID = 'discord:dm:primary';
 
 function memory(
-  overrides: Partial<Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef'>> = {},
+  overrides: Partial<Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>> = {},
 ): Pick<
   PurrMemory,
   | 'sensitivity'
@@ -39,11 +39,15 @@ function primaryDmOptions() {
 }
 
 describe('evaluateRetrievalAccessDecision participant-aware DM access', () => {
-  it('allows the primary partner to recall their memory from an unlisted origin channel', () => {
+  it.each([
+    ['voice', 'voice:retired-session'],
+    ['telegram', 'telegram:retired-session'],
+    ['satellite', 'satellite:retired-session'],
+  ])('allows the primary partner to recall their memory from an unlisted %s channel', (_kind, channelId) => {
     const decision = evaluateRetrievalAccessDecision(
       memory({
         contactId: PRIMARY_CONTACT_ID,
-        provenance: { channelId: 'voice:retired-session' },
+        provenance: { channelId },
       }),
       primaryDmOptions(),
     );
@@ -51,16 +55,47 @@ describe('evaluateRetrievalAccessDecision participant-aware DM access', () => {
     expect(decision).toEqual({ allowed: true });
   });
 
-  it('treats an unbound intimate self-memory as belonging to the primary partner', () => {
+  it('allows a true unbound non-intimate self-memory in the primary partner DM', () => {
     const decision = evaluateRetrievalAccessDecision(
-      memory({
-        sensitivity: 'intimate',
-        provenance: { channelId: PRIMARY_DM_ID },
-      }),
+      memory(),
       primaryDmOptions(),
     );
 
     expect(decision).toEqual({ allowed: true });
+  });
+
+  it('blocks an unbound intimate group-room memory in the primary partner DM', () => {
+    const decision = evaluateRetrievalAccessDecision(
+      memory({
+        sensitivity: 'intimate',
+        provenance: { channelId: 'discord:guild:shared-room' },
+        scopeRef: { kind: 'conversation', id: 'discord:guild:shared-room' },
+      }),
+      primaryDmOptions(),
+    );
+
+    expect(decision).toEqual({
+      allowed: false,
+      rejectionKind: 'room_visibility',
+      withheldReason: 'room_visibility.blocked',
+    });
+  });
+
+  it('fails closed on conflicting room provenance before the primary DM exemption', () => {
+    const decision = evaluateRetrievalAccessDecision(
+      memory({
+        contactId: PRIMARY_CONTACT_ID,
+        provenance: { channelId: 'discord:guild:source-room' },
+        scopeRef: { kind: 'conversation', id: 'discord:guild:conflicting-room' },
+      }),
+      primaryDmOptions(),
+    );
+
+    expect(decision).toEqual({
+      allowed: false,
+      rejectionKind: 'room_visibility',
+      withheldReason: 'room_visibility.blocked',
+    });
   });
 
   it('never exposes a DM-origin memory in a group room', () => {

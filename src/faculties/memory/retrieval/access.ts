@@ -93,32 +93,6 @@ function hasOnlyCanonicalParticipantAttribution(
   return participantContactIds.every(contactId => contactId === canonicalContactId);
 }
 
-function isPrimaryPrivateDmSubject(
-  memory: Pick<PurrMemory, 'contactId' | 'provenance'>,
-  options: RetrievalParticipantAccessContext,
-): boolean {
-  const canonicalContactId = normalizeContactId(options.canonicalContactId);
-  const subjectContactId = resolveMemorySubjectContactId(memory);
-  return options.trustLevel === 'primary'
-    && options.channelPrivacy === 'private'
-    && options.broadcast === false
-    && options.roomVisibility?.currentIsDirectMessage === true
-    && canonicalContactId !== undefined
-    && (subjectContactId === undefined || subjectContactId === canonicalContactId)
-    && hasOnlyCanonicalParticipantAttribution(memory, canonicalContactId);
-}
-
-function violatesHighIntimacyContactScope(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance'>,
-  options: RetrievalParticipantAccessContext,
-): boolean {
-  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
-  const canonicalContactId = normalizeContactId(options.canonicalContactId);
-  if (!canonicalContactId) return false;
-  if (isPrimaryPrivateDmSubject(memory, options)) return false;
-  return resolveMemorySubjectContactId(memory) !== canonicalContactId;
-}
-
 function normalizeRoomId(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -148,6 +122,45 @@ function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeR
   };
 }
 
+function isPrimaryPrivateDmSubject(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  options: RetrievalParticipantAccessContext,
+): boolean {
+  const canonicalContactId = normalizeContactId(options.canonicalContactId);
+  const subjectContactId = resolveMemorySubjectContactId(memory);
+  if (!(options.trustLevel === 'primary'
+    && options.channelPrivacy === 'private'
+    && options.broadcast === false
+    && options.roomVisibility?.currentIsDirectMessage === true
+    && canonicalContactId !== undefined
+    && (subjectContactId === undefined || subjectContactId === canonicalContactId)
+    && hasOnlyCanonicalParticipantAttribution(memory, canonicalContactId))) {
+    return false;
+  }
+
+  const source = resolveMemorySourceRoom(memory);
+  if (source.inconsistent) return false;
+  if (subjectContactId === canonicalContactId) return true;
+  if (source.roomId && options.roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {
+    return true;
+  }
+
+  return memory.scopeRef?.kind !== 'conversation'
+    && !hasRoomContextScopeTag(memory)
+    && !isHighIntimacySensitivityLevel(memory.sensitivity);
+}
+
+function violatesHighIntimacyContactScope(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  options: RetrievalParticipantAccessContext,
+): boolean {
+  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
+  const canonicalContactId = normalizeContactId(options.canonicalContactId);
+  if (!canonicalContactId) return false;
+  if (isPrimaryPrivateDmSubject(memory, options)) return false;
+  return resolveMemorySubjectContactId(memory) !== canonicalContactId;
+}
+
 function requiresRoomProofWhenSourceMissing(
   memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
   roomVisibility: RetrievalRoomVisibilityContext,
@@ -164,7 +177,6 @@ function evaluateRoomVisibilityDecision(
   const roomVisibility = options.roomVisibility;
   const currentRoomId = normalizeRoomId(roomVisibility?.currentChannelId);
   if (!roomVisibility || !currentRoomId) return undefined;
-  if (isPrimaryPrivateDmSubject(memory, options)) return undefined;
 
   const source = resolveMemorySourceRoom(memory);
   if (source.inconsistent) {
@@ -174,6 +186,7 @@ function evaluateRoomVisibilityDecision(
       withheldReason: 'room_visibility.blocked',
     };
   }
+  if (isPrimaryPrivateDmSubject(memory, options)) return undefined;
   if (!source.roomId) {
     if (requiresRoomProofWhenSourceMissing(memory, roomVisibility)) {
       return {

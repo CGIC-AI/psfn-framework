@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createSqliteTranscriptProjection } from './transcript-projection.js';
+import { createInMemoryTranscriptProjection } from '../../test-support/in-memory-transcript-projection.js';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -738,7 +738,7 @@ describe('SessionStore', () => {
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {
-    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     searchStore.append({
       channelId: 'api:alpha',
       role: 'user',
@@ -762,7 +762,7 @@ describe('SessionStore', () => {
   });
 
   it('scopes FTS keyword search to a single channel when requested', async () => {
-    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     searchStore.append({
       channelId: 'api:alpha',
       role: 'user',
@@ -786,7 +786,7 @@ describe('SessionStore', () => {
   });
 
   it('ranks denser FTS matches above sparse matches', async () => {
-    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     searchStore.append({
       channelId: 'rank:strong',
       role: 'assistant',
@@ -804,7 +804,7 @@ describe('SessionStore', () => {
     expect(hits).toHaveLength(2);
     expect(hits[0].channelId).toBe('rank:strong');
     expect(hits[1].channelId).toBe('rank:weak');
-    expect(hits[0].score).toBeLessThanOrEqual(hits[1].score);
+    expect(hits[0].score).toBeGreaterThanOrEqual(hits[1].score);
   });
 
   it('backfills existing JSONL transcripts into FTS index on startup', async () => {
@@ -816,7 +816,7 @@ describe('SessionStore', () => {
       timestamp: 1_000,
     });
 
-    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const reloaded = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     const hits = await reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
@@ -838,7 +838,7 @@ describe('SessionStore', () => {
       safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
     });
 
-    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     const dirtyId = searchStore.append({
       channelId: 'api:cogsec-l0',
       role: 'user',
@@ -910,7 +910,7 @@ describe('SessionStore', () => {
     expect(updatedEvent?.sealedForensicPayloadRefs).toEqual([result.sealedForensicPayloadRef]);
     expect(updatedEvent?.actions).toEqual(['seal', 'tombstone']);
 
-    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const reloaded = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     expect(reloaded.getRecent('api:cogsec-l0', 10).map(entry => entry.content)).toEqual([
       '[CogSec redaction: cogsec_20260701T000000Z_l0]',
       'clean reply stays visible',

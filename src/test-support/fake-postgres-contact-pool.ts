@@ -185,7 +185,8 @@ export class FakePostgresPool {
     if (normalized.startsWith("select actor from contact_mutation_audit where contact_id = $1 and field = 'is_machine_intelligence'")) {
       const row = this.contactMutationAudit
         .filter(entry => entry.contact_id === String(values[0] ?? '') && entry.field === 'is_machine_intelligence')
-        .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.id - left.id)[0];
+        .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.id - left.id)
+        .at(0);
       return result(row ? [{ actor: row.actor }] : []);
     }
 
@@ -282,6 +283,12 @@ export class FakePostgresPool {
     if (normalized.startsWith('update contacts set display_name = $1 where id = $2')) {
       const row = this.contacts.get(String(values[1] ?? ''));
       if (row) row.display_name = String(values[0] ?? row.display_name);
+      return result();
+    }
+
+    if (normalized.startsWith('update contacts set notes = $1 where id = $2')) {
+      const row = this.contacts.get(String(values[1] ?? ''));
+      if (row) row.notes = values[0] == null ? null : String(values[0]);
       return result();
     }
 
@@ -560,7 +567,8 @@ export class FakePostgresPool {
 
     if (normalized.startsWith('delete from contact_channel_activity where contact_id = $1 and channel = $2 and channel_id = $3')) {
       const key = this.contactKey(String(values[0] ?? ''), `${String(values[1] ?? '')}:${String(values[2] ?? '')}`);
-      return this.contactChannelActivity.delete(key) ? result([]) : result([]);
+      const existed = this.contactChannelActivity.delete(key);
+      return { ...result(), rowCount: existed ? 1 : 0 };
     }
 
     if (normalized.startsWith('select * from contact_identity_link_verifications where contact_id = $1 and source_channel = $2 and source_user_id = $3 and target_channel = $4 and target_user_id = $5 and status = \'pending\' order by created_at desc limit 1')) {
@@ -599,6 +607,21 @@ export class FakePostgresPool {
     if (normalized.startsWith('select * from contact_identity_link_verifications where id = $1 limit 1')) {
       const row = this.contactIdentityLinkVerifications.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
+    }
+
+    if (normalized.startsWith('select * from contact_identity_link_verifications order by created_at desc limit $1')) {
+      const limit = Number(values[0] ?? this.contactIdentityLinkVerifications.size);
+      return result([...this.contactIdentityLinkVerifications.values()]
+        .sort((left, right) => right.created_at.localeCompare(left.created_at))
+        .slice(0, limit));
+    }
+
+    if (normalized.startsWith("select count(*) as count from contact_identity_link_verifications where contact_id = $1 and status = 'verified'")) {
+      const contactId = String(values[0] ?? '');
+      const count = [...this.contactIdentityLinkVerifications.values()]
+        .filter(row => row.contact_id === contactId && row.status === 'verified')
+        .length;
+      return result([{ count }]);
     }
 
     if (normalized.startsWith('update contact_identity_link_verifications set status = $1, updated_at = $2, verified_at = coalesce($3, verified_at), failure_reason = $4 where id = $5')) {
@@ -685,6 +708,13 @@ export class FakePostgresPool {
     if (normalized.startsWith('select id, entity_kind, display_name, contact_id, sensitivity, provenance_refs, confidence, source, created_at, updated_at from social_graph_entities where id = $1 limit 1')) {
       const row = this.socialGraphEntities.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
+    }
+
+    if (normalized.startsWith('select id, entity_kind, display_name, contact_id, sensitivity, provenance_refs, confidence, source, created_at, updated_at from social_graph_entities order by updated_at desc limit $1')) {
+      const limit = Number(values[0] ?? this.socialGraphEntities.size);
+      return result([...this.socialGraphEntities.values()]
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(0, limit));
     }
 
     if (normalized.startsWith('select id, source_entity_id, target_entity_id, relationship_type, directional, sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at, source.sensitivity as source_sensitivity, target.sensitivity as target_sensitivity from social_relationship_edges e inner join social_graph_entities source on source.id = e.source_entity_id inner join social_graph_entities target on target.id = e.target_entity_id')) {

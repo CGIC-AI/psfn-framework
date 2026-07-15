@@ -5,13 +5,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -195,7 +193,6 @@ const testCard: CharacterCardV2 = {
 
 interface ServerHarness {
   tempDir: string;
-  db: Database.Database;
   eventBus: EventBus;
   server: AdminServer;
   port: number;
@@ -297,10 +294,8 @@ async function createHarness(options: {
     defaultContextWindow: config.defaultContextWindow,
   });
 
-  const db = new Database(':memory:');
-  sqliteVec.load(db);
   const eventBus = new EventBus();
-  const memoryStore = new MemoryStore(db, 3);
+  const memoryStore = new InMemoryMemoryStore().asPort();
   const sessionStore = new SessionStore(sessionsDir);
   const sessionManager = new SessionManager(sessionStore, config, eventBus);
   const scheduler = new Scheduler(eventBus);
@@ -364,18 +359,16 @@ async function createHarness(options: {
     await server.init();
     await server.start();
   } catch (error) {
-    db.close();
     rmSync(tempDir, { recursive: true, force: true });
     resetRuntimeTrustPolicy();
     throw error;
   }
 
-  return { tempDir, db, eventBus, server, port };
+  return { tempDir, eventBus, server, port };
 }
 
 async function destroyHarness(harness: ServerHarness): Promise<void> {
   await harness.server.stop();
-  harness.db.close();
   rmSync(harness.tempDir, { recursive: true, force: true });
   resetRuntimeTrustPolicy();
 }

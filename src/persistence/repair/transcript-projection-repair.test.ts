@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Pool, PoolClient, QueryResult } from 'pg';
-import { createDefaultSQLiteSessionAdapters } from '../sessions/sqlite-adapters.js';
 import { createDefaultPostgresSessionAdapters } from '../sessions/postgres-adapters.js';
 import { runTranscriptProjectionRepair } from './transcript-projection-repair.js';
 
@@ -148,38 +147,6 @@ describe('runTranscriptProjectionRepair', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     dirs.length = 0;
-  });
-
-  it('rebuilds sqlite transcript projection state from authoritative JSONL sessions', async () => {
-    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-sqlite-'));
-    dirs.push(sessionsDir);
-    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
-
-    adapters.sessionArchivePort.writeImportedSession({
-      sessionsDir,
-      channelId: 'api:sqlite-repair',
-      seedTimestamp: 1_000,
-      messages: [{
-        role: 'assistant',
-        content: 'sqlite projection repair needle',
-        timestamp: 1_000,
-      }],
-    });
-
-    const report = runTranscriptProjectionRepair({
-      sessionsDir,
-      transcriptProjection: adapters.transcriptProjection!,
-    });
-
-    expect(report).toMatchObject({
-      scannedFiles: 1,
-      rebuiltChannels: 1,
-      driftBefore: 0,
-      driftAfter: 0,
-    });
-    const hits = await adapters.transcriptSearch!.searchByKeywords('repair needle');
-    expect(hits).toHaveLength(1);
-    expect(hits[0]?.channelId).toBe('api:sqlite-repair');
   });
 
   it('rebuilds postgres projection state and clears drift from authoritative JSONL sessions', async () => {

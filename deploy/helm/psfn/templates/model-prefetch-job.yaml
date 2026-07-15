@@ -16,6 +16,7 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "model-prefetch") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}

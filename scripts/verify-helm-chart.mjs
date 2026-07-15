@@ -213,6 +213,106 @@ assertIncludes(
 assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data\n              readOnly: true', 'gateway read-only companion-data root');
 assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data/state', 'gateway writable CogSec state submount');
 assertIncludes(gatewayDeployment, 'subPath: state', 'gateway CogSec state PVC subPath');
+assertIncludes(gatewayDeployment, 'automountServiceAccountToken: false', 'default gateway ServiceAccount token disabled');
+assertNotIncludes(gatewayDeployment, 'PSFN_KUBE_SELF_MANAGEMENT_ENABLED', 'default kube self-management runtime disabled');
+assertNotIncludes(rendered, 'name: psfn-kube-self-management', 'default kube self-management RBAC disabled');
+
+const kubeSelfManagementRendered = render([
+  '--set',
+  'kubeSelfManagement.enabled=true',
+  '--set-string',
+  'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+  '--set-string',
+  `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+]);
+if (findDocumentsByKind(kubeSelfManagementRendered, 'ClusterRole').length > 0
+  || findDocumentsByKind(kubeSelfManagementRendered, 'ClusterRoleBinding').length > 0) {
+  throw new Error('kube self-management RBAC must never render cluster-scoped roles');
+}
+const kubeServiceAccount = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'ServiceAccount',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeServiceAccount, 'automountServiceAccountToken: true', 'dedicated kube ServiceAccount token');
+const kubeRole = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'Role',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeRole, 'resources: ["pods"]\n    verbs: ["list"]', 'pod diagnostics least-privilege rule');
+assertIncludes(kubeRole, 'resources: ["deployments"]', 'deployment lifecycle rule');
+assertIncludes(kubeRole, '- psfn-agent\n      - psfn-gateway\n      - psfn-garden', 'release deployment resourceNames');
+assertIncludes(kubeRole, 'verbs: ["get", "patch"]', 'deployment lifecycle exact verbs');
+for (const forbidden of ['ClusterRole', 'resources: ["secrets"]', 'resources: ["jobs"]', 'pods/exec', 'verbs: ["*"]']) {
+  assertNotIncludes(kubeRole, forbidden, 'kube self-management forbidden RBAC authority');
+}
+const kubeRoleBinding = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'RoleBinding',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeRoleBinding, 'kind: Role\n  name: psfn-kube-self-management', 'namespaced kube RoleBinding');
+assertIncludes(kubeRoleBinding, 'name: psfn-kube-self-management\n    namespace: psfn-test', 'dedicated kube RoleBinding subject');
+const kubeGatewayDeployment = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+assertIncludes(kubeGatewayDeployment, 'serviceAccountName: psfn-kube-self-management', 'gateway dedicated kube ServiceAccount');
+assertIncludes(kubeGatewayDeployment, 'automountServiceAccountToken: true', 'gateway kube token mount');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED\n              value: "true"', 'gateway kube runtime opt-in');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_CURRENT_IMAGE\n              value: "localhost/psfn-framework:0.1.0-kube"', 'gateway exact current image binding');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_RESOURCE_PREFIX\n              value: "psfn"', 'gateway exact Helm resource prefix binding');
+const kubeGatewayPolicy = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'NetworkPolicy',
+  'psfn-gateway',
+);
+assertIncludes(kubeGatewayPolicy, 'cidr: "10.43.0.1/32"', 'single-host Kubernetes API egress');
+assertIncludes(kubeGatewayPolicy, 'port: 443\n          protocol: TCP', 'Kubernetes API HTTPS-only egress');
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.apiServerCIDRs must contain the Kubernetes API Service host CIDR',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+  ],
+  'psfnAppImage.gitCommit must be an exact 40-character Git revision',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=0.0.0.0/0',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.apiServerCIDRs entries must be single-host',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.serviceAccountName=psfn',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.serviceAccountName must be dedicated to the gateway',
+);
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');

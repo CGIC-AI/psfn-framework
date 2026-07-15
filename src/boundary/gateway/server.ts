@@ -99,6 +99,7 @@ import {
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
+import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -230,6 +231,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
+  kubeSelfManagement?: KubeSelfManagementController;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
@@ -519,6 +521,9 @@ export class GatewayServer {
       personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
+      ...(this.options.kubeSelfManagement
+        ? { kubeSelfManagement: this.options.kubeSelfManagement }
+        : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),

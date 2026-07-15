@@ -26,9 +26,11 @@ import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-p
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
+import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
+  env: NodeJS.ProcessEnv;
   bootstrap: GatewayBootstrapInput;
   startupHydration: StartupConfigHydrationResult;
   logger: {
@@ -115,6 +117,10 @@ export async function buildGatewayPrivilegedCore(
     throw new Error('Gateway postgres audit persistence requires config.postgresDatabaseUrl');
   }
   const auditStore = await createPostgresGatewayAuditStore(databaseUrl);
+  const kubeSelfManagement = resolveKubeSelfManagementController({
+    env: input.env,
+    audit: entry => auditStore.recordSummary(entry),
+  });
 
   // Cognition intake firewall (htm9.2): composed once for the gateway process
   // and threaded into the RPC runtime and channel surfaces. Mode 'off' yields
@@ -187,6 +193,7 @@ export async function buildGatewayPrivilegedCore(
       confirmation: input.bootstrap.server.confirmation,
       capabilityTierProvider: () => capabilityRuntime.getTier(),
       auditStore,
+      ...(kubeSelfManagement ? { kubeSelfManagement } : {}),
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,
       wyomingShardRouting: input.bootstrap.server.wyomingShardRouting,
       multiCompanion: input.bootstrap.server.multiCompanion,

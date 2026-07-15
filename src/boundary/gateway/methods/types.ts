@@ -26,6 +26,7 @@ import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.j
 import type { CredentialVaultPort } from '../../custody/credential-vault.js';
 import type { GatewayInlineImageRetention } from '../inline-image-retention.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import type { KubeSelfManagementController } from '../../../system/lifecycle/kube-self-management.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -58,6 +59,8 @@ export interface GatewayMethodRuntime {
   personalWorkspaceIsolation?: boolean;
   sessionHmacKeyring: SessionHmacKeyring;
   approvalBoundary: ApprovalBoundaryService;
+  /** Gateway-owned, namespace-scoped Kubernetes lifecycle safety boundary. */
+  kubeSelfManagement?: KubeSelfManagementController;
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**

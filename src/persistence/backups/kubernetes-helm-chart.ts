@@ -154,6 +154,19 @@ function isSafeHelmSecretExpression(rawValue: string): boolean {
     || valuePath === 'redis.auth.password';
 }
 
+function isSafeServiceAccountTokenAutomount(
+  key: string,
+  rawValue: string,
+  allowHelmExpressions: boolean,
+): boolean {
+  if (!/^automountserviceaccounttoken$/.test(normalizeSensitiveKey(key))) return false;
+  if (allowHelmExpressions
+    && /^{{-?\s*\.Values\.kubeSelfManagement\.enabled\s*-?}}$/.test(rawValue)) {
+    return true;
+  }
+  return typeof parseAssignmentScalar(rawValue) === 'boolean';
+}
+
 function assertSecretAssignmentValueIsSafe(path: string, key: string, rawValue: string): void {
   const value = rawValue.replace(/\s+#.*$/, '').trim();
   if (isSafeHelmSecretExpression(value)) return;
@@ -287,6 +300,10 @@ function assertCredentialAssignmentsAreSafe(
     }
     if (!isSensitiveValueKey(key)) continue;
     const rawValue = match[4].replace(/\s+#.*$/, '').trim();
+    // This Kubernetes API field is a boolean policy switch, not credential
+    // material. Keep the exception schema-specific and reject every non-boolean
+    // value, including arbitrary Helm expressions.
+    if (isSafeServiceAccountTokenAutomount(key, rawValue, allowHelmExpressions)) continue;
     if (allowHelmExpressions && isSafeHelmSecretExpression(rawValue)) continue;
     if (allowHelmExpressions && /^{{-?[\s\S]*-?}}$/.test(rawValue)) {
       throw new Error(

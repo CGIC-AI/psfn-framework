@@ -5,6 +5,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
+  ConfirmationQueueRequest,
 } from '../../system/capabilities/confirmation-queue.js';
 import {
   ConfirmationQueue,
@@ -79,6 +80,14 @@ export interface ApprovalBoundaryService {
     message: string;
     executed: boolean;
   }>;
+  requestExplicitApproval(input: {
+    authenticatedCompanionId: string | undefined;
+    request: ConfirmationQueueRequest;
+    execute: (
+      params: Record<string, unknown>,
+      entry: ConfirmationQueueEntry,
+    ) => Promise<unknown>;
+  }): Promise<ConfirmationQueueEntry>;
   gate<P, R>(options: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R>;
 }
 
@@ -143,10 +152,41 @@ export function createGatewayApprovalBoundaryService(
     ntfyTopic: options.confirmation?.ntfyTopic?.trim() || undefined,
   };
 
+  const requestExplicitApproval = async (input: {
+    authenticatedCompanionId: string | undefined;
+    request: ConfirmationQueueRequest;
+    execute: (
+      params: Record<string, unknown>,
+      entry: ConfirmationQueueEntry,
+    ) => Promise<unknown>;
+  }): Promise<ConfirmationQueueEntry> => {
+    if (!input.authenticatedCompanionId) {
+      throw new Error(
+        `Cannot queue ${input.request.method}: requesting connection has no authenticated companion owner`,
+      );
+    }
+    let queueEntry: ConfirmationQueueEntry;
+    enqueueOwner = input.authenticatedCompanionId;
+    try {
+      queueEntry = confirmationQueue.enqueue(input.request, input.execute);
+    } finally {
+      enqueueOwner = undefined;
+    }
+    await notifyOperatorForPendingAction({
+      entry: queueEntry,
+      discordAdapter: options.discordAdapter,
+      operatorDiscordChannelId: confirmationConfig.operatorDiscordChannelId,
+      ntfyTopic: confirmationConfig.ntfyTopic,
+      ntfyNotifier: options.ntfyNotifier,
+    });
+    return queueEntry;
+  };
+
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
     resolveConfirmation: (params) => confirmationQueue.resolve(params),
+    requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
       return async (rawParams: P) => {
         // htm9.18 egress tripwire: hold the action if the session canary leaked
@@ -178,52 +218,35 @@ export function createGatewayApprovalBoundaryService(
 
           if (decision === 'NEEDS_APPROVAL' && options.capabilityTierProvider() !== 'autonomous') {
             const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
-            if (!authenticatedCompanionId) {
-              throw new Error(
-                `Cannot queue ${gateOptions.method}: requesting connection has no authenticated companion owner`,
-              );
-            }
             const paramsRecord = params as unknown as Record<string, unknown>;
-            let queueEntry: ConfirmationQueueEntry;
-            enqueueOwner = authenticatedCompanionId;
-            try {
-              queueEntry = confirmationQueue.enqueue(
-                {
-                  method: gateOptions.method,
-                  action: gateOptions.approvalAction,
-                  scope: gateOptions.approvalScope(params),
-                  params: paramsRecord,
-                  companionReason: resolveCompanionReason(
-                    paramsRecord,
-                    gateOptions.approvalReason?.(params) ?? 'Outside workspace',
-                  ),
-                  expiresInMs: confirmationConfig.expiryMs,
-                },
-                async (approvedParams, entry) => executeQueuedAction({
-                  method: gateOptions.method,
-                  handler: gateOptions.handler,
-                  paramsSummary: gateOptions.paramsSummary,
-                  params: approvedParams as P,
-                  entry,
-                  audit: options.audit,
-                  auditComplete: options.auditComplete,
-                }).then((result) => {
-                  options.recordMethodSuccess(gateOptions.method);
-                  return result;
-                }).catch((error) => {
-                  options.recordMethodFailure(gateOptions.method, error);
-                  throw error;
-                }),
-              );
-            } finally {
-              enqueueOwner = undefined;
-            }
-            await notifyOperatorForPendingAction({
-              entry: queueEntry,
-              discordAdapter: options.discordAdapter,
-              operatorDiscordChannelId: confirmationConfig.operatorDiscordChannelId,
-              ntfyTopic: confirmationConfig.ntfyTopic,
-              ntfyNotifier: options.ntfyNotifier,
+            const queueEntry = await requestExplicitApproval({
+              authenticatedCompanionId,
+              request: {
+                method: gateOptions.method,
+                action: gateOptions.approvalAction,
+                scope: gateOptions.approvalScope(params),
+                params: paramsRecord,
+                companionReason: resolveCompanionReason(
+                  paramsRecord,
+                  gateOptions.approvalReason?.(params) ?? 'Outside workspace',
+                ),
+                expiresInMs: confirmationConfig.expiryMs,
+              },
+              execute: async (approvedParams, entry) => executeQueuedAction({
+                method: gateOptions.method,
+                handler: gateOptions.handler,
+                paramsSummary: gateOptions.paramsSummary,
+                params: approvedParams as P,
+                entry,
+                audit: options.audit,
+                auditComplete: options.auditComplete,
+              }).then((result) => {
+                options.recordMethodSuccess(gateOptions.method);
+                return result;
+              }).catch((error) => {
+                options.recordMethodFailure(gateOptions.method, error);
+                throw error;
+              }),
             });
             throw new JSONRPCErrorException(
               `Your action is pending operator approval (id: ${queueEntry.id}).`,

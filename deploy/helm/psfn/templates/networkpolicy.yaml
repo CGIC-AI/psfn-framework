@@ -97,6 +97,16 @@ spec:
         - port: {{ .Values.ports.satelliteHubControl }}
           protocol: TCP
     {{- end }}
+    {{- if .Values.kubeSelfManagement.enabled }}
+    - to:
+        {{- range .Values.kubeSelfManagement.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.gateway.allowExternalEgress }}
     - to:
         - ipBlock:

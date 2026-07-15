@@ -98,6 +98,15 @@ const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
+// Mirrors DEFAULT_REPL_CONFIG.{executionTimeoutMs,outputTruncation} in
+// src/core/tools/analysis-workbench/types.ts — keep in lockstep.
+const DEFAULT_THINK_EXECUTION_TIMEOUT_MS = 5_000;
+const DEFAULT_THINK_OUTPUT_TRUNCATION = 8_192;
+// Mirrors the DEFAULT_* constants in
+// src/primitives/voice/transports/websocket/server.ts — keep in lockstep.
+const DEFAULT_VOICE_SESSION_TIMEOUT_MS = 30_000;
+const DEFAULT_VOICE_MAX_FRAME_BYTES = 256 * 1024;
+const DEFAULT_VOICE_MAX_PENDING_FRAMES = 32;
 const POSTGRES_DATABASE_URL_ENV = 'POSTGRES_DATABASE_URL';
 const POSTGRES_DATABASE_URL_FILE_ENV = 'POSTGRES_DATABASE_URL_FILE';
 const POSTGRES_DATABASE_URL_FD_ENV = 'POSTGRES_DATABASE_URL_FD';
@@ -425,6 +434,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     analysisWorkbenchMaxTokens: DEFAULT_THINK_MAX_TOKENS,
     analysisWorkbenchMaxWallTimeMs: DEFAULT_THINK_MAX_WALL_TIME_MS,
     analysisWorkbenchMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
+    analysisWorkbenchExecutionTimeoutMs: DEFAULT_THINK_EXECUTION_TIMEOUT_MS,
+    analysisWorkbenchOutputTruncation: DEFAULT_THINK_OUTPUT_TRUNCATION,
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,
@@ -447,6 +458,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     voiceReadyCueText: '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
+    voiceSessionTimeoutMs: DEFAULT_VOICE_SESSION_TIMEOUT_MS,
+    voiceMaxFrameBytes: DEFAULT_VOICE_MAX_FRAME_BYTES,
+    voiceMaxPendingFrames: DEFAULT_VOICE_MAX_PENDING_FRAMES,
     ...(materializeEnvBackedSecrets
       ? { deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY', env) }
       : {}),

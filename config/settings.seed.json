@@ -212,6 +212,8 @@
   "analysisWorkbenchMaxTokens": 76000,
   "analysisWorkbenchMaxWallTimeMs": 300000,
   "analysisWorkbenchMaxSubQueries": 24,
+  "analysisWorkbenchExecutionTimeoutMs": 5000,
+  "analysisWorkbenchOutputTruncation": 8192,
   "observerEvalSidecar": {
     "enabled": false,
     "sidecarId": "observer-eval-sidecar",
@@ -279,6 +281,9 @@
   "deepgramListenEndpoint": "https://api.deepgram.com/v1/listen",
   "elevenLabsModelId": "eleven_turbo_v2_5",
   "elevenLabsEndpointBase": "https://api.elevenlabs.io/v1",
+  "voiceSessionTimeoutMs": 30000,
+  "voiceMaxFrameBytes": 262144,
+  "voiceMaxPendingFrames": 32,
   "wyomingShardRouting": {
     "enabled": false
   },

@@ -278,6 +278,12 @@ export interface SubstrateConfig {
   voiceReadyCueText?: string;
   voiceDaveEncryption?: boolean;
   voiceDecryptionFailureTolerance?: number;
+  /** Idle-connection timeout for the voice websocket session before force-close. */
+  voiceSessionTimeoutMs?: number;
+  /** Maximum inbound voice websocket frame size (bytes) before rejection. */
+  voiceMaxFrameBytes?: number;
+  /** Backpressure cap on queued inbound voice frames before overflow close. */
+  voiceMaxPendingFrames?: number;
   sttProvider?: StreamingSttProvider | 'disabled';
   ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
@@ -298,6 +304,10 @@ export interface SubstrateConfig {
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  /** Per-code-block sandbox execution timeout (ms) for the analysis workbench. */
+  analysisWorkbenchExecutionTimeoutMs?: number;
+  /** Character cap on a single analysis-workbench code execution's output. */
+  analysisWorkbenchOutputTruncation?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];

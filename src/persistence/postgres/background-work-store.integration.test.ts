@@ -366,6 +366,121 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('fails producer-impossible persisted compaction payloads without running their handler', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'payload-shape-validation-worker',
+      now: () => 1_000,
+      executor,
+    });
+    const malformedPayloads: Array<[
+      string,
+      (payload: AutoCompactionBackgroundPayload) => void,
+    ]> = [
+      ['fractional session percentage', (payload) => {
+        payload.adaptiveProfile.sessionHistoryBudgetPct = 6.5;
+      }],
+      ['fractional memory percentage', (payload) => {
+        payload.adaptiveProfile.memoryRetrievalBudgetPct = 2.5;
+      }],
+      ['enabled disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'disabled',
+          category: 'default',
+        };
+      }],
+      ['categorized disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'disabled',
+          category: 'task',
+        };
+      }],
+      ['disabled default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'default',
+          category: 'default',
+        };
+      }],
+      ['categorized default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'default',
+          category: 'task',
+        };
+      }],
+      ['disabled adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'adaptive',
+          category: 'task',
+        };
+      }],
+      ['default-category adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'adaptive',
+          category: 'default',
+        };
+      }],
+      ['unsupported model purpose', (payload) => {
+        payload.turnBudgetCharacteristics.modelSelection = {
+          purpose: 'summary',
+          slotKey: 'summary-primary',
+          provider: 'test-provider',
+          model: 'test-model',
+          contextWindow: 16_384,
+        };
+      }],
+    ];
+
+    try {
+      for (const [index, [label, mutate]] of malformedPayloads.entries()) {
+        const input = makeCompactionInput(`session-${String(index)}`, `turn-${String(index)}`, 100);
+        await store.enqueue(input);
+
+        const malformedPayload = structuredClone(input.payload);
+        mutate(malformedPayload);
+        await inspectionPool.query(`
+          UPDATE agent_background_work_jobs
+          SET payload = $2::jsonb
+          WHERE job_id = $1
+        `, [input.jobId, JSON.stringify(malformedPayload)]);
+
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+
+        expect(executor, label).not.toHaveBeenCalled();
+        expect(await store.get(input.jobId), label).toMatchObject({
+          state: 'failed',
+          reasonCode: 'malformed_payload',
+        });
+      }
+    } finally {
+      await supervisor.stop();
+      await inspectionPool.end();
+      await store.close();
+    }
+  });
+
   it('allows only one of two store instances to claim a durable job', async () => {
     const database = await harness.createDatabase();
     const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {

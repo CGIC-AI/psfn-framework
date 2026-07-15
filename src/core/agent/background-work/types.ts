@@ -11,6 +11,7 @@ import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-a
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type {
+  ModelPurpose,
   TurnRecord,
   TurnRecordBackgroundWorkHandoff,
 } from '../../../shared/contracts/runtime.js';
@@ -29,6 +30,17 @@ export const BACKGROUND_WORK_KINDS = [
   'emotion_appraisal',
   'auto_compaction',
 ] as const;
+
+const MODEL_PURPOSES: Readonly<Record<ModelPurpose, true>> = {
+  chat: true,
+  background: true,
+  memory: true,
+  context: true,
+  reasoning: true,
+  longContext: true,
+  vision: true,
+  moa: true,
+};
 
 export type BackgroundWorkKind = typeof BACKGROUND_WORK_KINDS[number];
 
@@ -248,13 +260,12 @@ function requirePercentageInRange(
   field: string,
   range: { min: number; max: number },
 ): number {
-  if (typeof value !== 'number'
-    || !Number.isFinite(value)
-    || value < range.min
-    || value > range.max) {
-    throw new Error(`${field} must be a finite number from ${String(range.min)} to ${String(range.max)}`);
+  if (!Number.isSafeInteger(value)
+    || (value as number) < range.min
+    || (value as number) > range.max) {
+    throw new Error(`${field} must be a safe integer from ${String(range.min)} to ${String(range.max)}`);
   }
-  return value;
+  return value as number;
 }
 
 function parseSourceRef(value: unknown): BackgroundWorkSourceRef {
@@ -346,6 +357,14 @@ function parseAdaptiveProfile(value: unknown): AdaptiveContextBudgetProfile {
   if (typeof value.enabled !== 'boolean') {
     throw new Error('compaction adaptiveProfile.enabled must be boolean');
   }
+  const hasValidProducerShape = source === 'disabled'
+    ? value.enabled === false && category === 'default'
+    : source === 'default'
+      ? value.enabled === true && category === 'default'
+      : value.enabled === true && category !== 'default';
+  if (!hasValidProducerShape) {
+    throw new Error('compaction adaptiveProfile enabled/source/category combination is invalid');
+  }
   const sessionHistoryBudgetPct = requirePercentageInRange(
     value.sessionHistoryBudgetPct,
     'compaction adaptiveProfile.sessionHistoryBudgetPct',
@@ -377,7 +396,13 @@ function parseModelSelection(value: unknown): ContextBudgetModelSelectionLike {
     'contextWindow',
   ], 'compaction turnBudgetCharacteristics.modelSelection');
   const result: ContextBudgetModelSelectionLike = {};
-  for (const field of ['purpose', 'slotKey', 'provider', 'model'] as const) {
+  if (value.purpose !== undefined) {
+    if (typeof value.purpose !== 'string' || !Object.hasOwn(MODEL_PURPOSES, value.purpose)) {
+      throw new Error('compaction turnBudgetCharacteristics.modelSelection.purpose is invalid');
+    }
+    result.purpose = value.purpose;
+  }
+  for (const field of ['slotKey', 'provider', 'model'] as const) {
     const normalized = optionalString(
       value[field],
       `compaction turnBudgetCharacteristics.modelSelection.${field}`,

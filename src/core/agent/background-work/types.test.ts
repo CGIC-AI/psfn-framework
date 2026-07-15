@@ -126,6 +126,26 @@ describe('auto-compaction background payload contract', () => {
   });
 
   it.each([
+    'chat',
+    'background',
+    'memory',
+    'context',
+    'reasoning',
+    'longContext',
+    'vision',
+    'moa',
+  ])('accepts current model purpose %s', (purpose) => {
+    const payload = withPayloadMutation((candidate) => {
+      const turn = candidate.turnBudgetCharacteristics as Record<string, unknown>;
+      (turn.modelSelection as Record<string, unknown>).purpose = purpose;
+    });
+
+    expect(parseBackgroundWorkPayload('auto_compaction', payload)).toMatchObject({
+      turnBudgetCharacteristics: { modelSelection: { purpose } },
+    });
+  });
+
+  it.each([
     ['unknown model-selection key', (payload: Record<string, unknown>) => {
       const turn = payload.turnBudgetCharacteristics as Record<string, unknown>;
       (turn.modelSelection as Record<string, unknown>).unknown = true;
@@ -141,6 +161,10 @@ describe('auto-compaction background payload contract', () => {
     ['wrong model-selection string type', (payload: Record<string, unknown>) => {
       const turn = payload.turnBudgetCharacteristics as Record<string, unknown>;
       (turn.modelSelection as Record<string, unknown>).purpose = 42;
+    }],
+    ['unsupported model-selection purpose', (payload: Record<string, unknown>) => {
+      const turn = payload.turnBudgetCharacteristics as Record<string, unknown>;
+      (turn.modelSelection as Record<string, unknown>).purpose = 'summary';
     }],
     ['wrong context-window type', (payload: Record<string, unknown>) => {
       const turn = payload.turnBudgetCharacteristics as Record<string, unknown>;
@@ -170,6 +194,9 @@ describe('auto-compaction background payload contract', () => {
     ['nonfinite session percentage', (payload: Record<string, unknown>) => {
       (payload.adaptiveProfile as Record<string, unknown>).sessionHistoryBudgetPct = Number.NaN;
     }],
+    ['fractional session percentage', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).sessionHistoryBudgetPct = 6.5;
+    }],
     ['session percentage below range', (payload: Record<string, unknown>) => {
       (payload.adaptiveProfile as Record<string, unknown>).sessionHistoryBudgetPct =
         SESSION_HISTORY_BUDGET_PCT_RANGE.min - 1;
@@ -182,6 +209,9 @@ describe('auto-compaction background payload contract', () => {
       (payload.adaptiveProfile as Record<string, unknown>).memoryRetrievalBudgetPct =
         Number.POSITIVE_INFINITY;
     }],
+    ['fractional memory percentage', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).memoryRetrievalBudgetPct = 2.5;
+    }],
     ['memory percentage below range', (payload: Record<string, unknown>) => {
       (payload.adaptiveProfile as Record<string, unknown>).memoryRetrievalBudgetPct =
         MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min - 1;
@@ -189,6 +219,36 @@ describe('auto-compaction background payload contract', () => {
     ['memory percentage above range', (payload: Record<string, unknown>) => {
       (payload.adaptiveProfile as Record<string, unknown>).memoryRetrievalBudgetPct =
         MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max + 1;
+    }],
+    ['enabled disabled-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = true;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'disabled';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'default';
+    }],
+    ['categorized disabled-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = false;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'disabled';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'task';
+    }],
+    ['disabled default-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = false;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'default';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'default';
+    }],
+    ['categorized default-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = true;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'default';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'task';
+    }],
+    ['disabled adaptive-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = false;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'adaptive';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'task';
+    }],
+    ['default-category adaptive-source profile', (payload: Record<string, unknown>) => {
+      (payload.adaptiveProfile as Record<string, unknown>).enabled = true;
+      (payload.adaptiveProfile as Record<string, unknown>).source = 'adaptive';
+      (payload.adaptiveProfile as Record<string, unknown>).category = 'default';
     }],
   ] satisfies Array<[string, (payload: Record<string, unknown>) => void]>)('rejects %s', (_name, mutate) => {
     const payload = withPayloadMutation(mutate);

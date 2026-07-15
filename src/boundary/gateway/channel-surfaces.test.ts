@@ -46,7 +46,7 @@ function createInput(): {
 }
 
 describe('wireGatewayChannelMessages', () => {
-  it('forwards discord inbound messages to agent notifications and returns a placeholder reply', async () => {
+  it('forwards Discord inbound messages and returns an explicit non-delivery acknowledgement', async () => {
     const setup = createInput();
 
     wireGatewayChannelMessages(setup.input);
@@ -71,6 +71,11 @@ describe('wireGatewayChannelMessages', () => {
         inputTokens: 0,
         outputTokens: 0,
         durationMs: 0,
+        notificationAck: {
+          schemaVersion: 1,
+          disposition: 'notification_ack',
+          outcome: 'forwarded_to_agent',
+        },
       },
     });
   });

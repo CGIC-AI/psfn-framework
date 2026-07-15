@@ -8,7 +8,11 @@ import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type {
+  AgentResponse,
+  NotificationAckMetadata,
+  SubstrateMessage,
+} from '../../shared/contracts/runtime.js';
 import type { ContactBlockGate } from './contact-block-gate.js';
 import { assertDiscordAccountTokensConfigured } from '../../channels/backplane/config.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
@@ -215,7 +219,10 @@ export interface WireGatewayChannelMessagesInput {
 }
 
 export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInput): void {
-  const emptyAck = (channelId: string) => ({
+  const notificationAck = (
+    channelId: string,
+    outcome: NotificationAckMetadata['outcome'],
+  ): AgentResponse => ({
     content: '',
     channelId,
     metadata: {
@@ -223,6 +230,11 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
       inputTokens: 0,
       outputTokens: 0,
       durationMs: 0,
+      notificationAck: {
+        schemaVersion: 1,
+        disposition: 'notification_ack',
+        outcome,
+      },
     },
   });
 
@@ -240,7 +252,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
           // Blocked DM: soft blocks emit an operator-visible cogsec event, hard
           // blocks stay silent. Either way the agent never sees the message.
           input.blockGate.recordSoftBlockEnforcement(message, decision);
-          return emptyAck(message.channelId);
+          return notificationAck(message.channelId, 'blocked_by_policy');
         }
         if (decision.action === 'observe') {
           // Blocked group message: the companion ignores it (observe-only)
@@ -262,7 +274,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
       } else {
         input.gateway.notifyChannelMessage('discord', 'discord.message', payload);
       }
-      return emptyAck(message.channelId);
+      return notificationAck(message.channelId, 'forwarded_to_agent');
     });
   };
 
@@ -289,7 +301,7 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
       const decision = input.blockGate.evaluate(message);
       if (decision.action === 'drop') {
         input.blockGate.recordSoftBlockEnforcement(message, decision);
-        return emptyAck(message.channelId);
+        return notificationAck(message.channelId, 'blocked_by_policy');
       }
     }
     const result = await input.gateway.requestAgentVoiceStream(message);

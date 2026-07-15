@@ -726,6 +726,12 @@ export interface ResponseMetadata {
   icpCorrelation?: IcpConversationCorrelation;
   runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   noReply?: IntentionalNoReplyMetadata;
+  /**
+   * Transport receipt for an inbound notification handled on an asynchronous
+   * channel surface. This response is never companion-authored channel output;
+   * any later reply travels through the gateway's outbound send RPC.
+   */
+  notificationAck?: NotificationAckMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
   metacognitiveFlags?: import('../../core/self-model/metacognition.js').MetacognitiveFlag[];
@@ -760,6 +766,12 @@ export interface ResponseMetadata {
   };
   fatigue?: FatigueEnforcementMetadata;
   fatiguePendingSpend?: FatiguePendingSpendMetadata;
+}
+
+export interface NotificationAckMetadata {
+  schemaVersion: 1;
+  disposition: 'notification_ack';
+  outcome: 'forwarded_to_agent' | 'blocked_by_policy';
 }
 
 export interface IntentionalNoReplyMetadata {

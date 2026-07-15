@@ -15,6 +15,7 @@ import type { IdleGapTexture } from '../scheduler/time-texture.js';
 import type {
   ContextMessage,
   FatigueEnforcementMetadata,
+  LLMCapturedProviderWirePayload,
   LLMProviderObservability,
   PromptSectionTelemetry,
   ToolSchema,
@@ -257,6 +258,22 @@ export function cloneProviderObservability(
     // Garden read path derives it from the plan; [] would mean "captured empty".
     ...(observability.providerWireMessages
       ? { providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })) }
+      : {}),
+    // Deep-clone the captured wire body (bead hgw3-80f6) so a persist-time diet
+    // slim mutates the record copy, never the live event-bus snapshot.
+    ...(observability.capturedWirePayload
+      ? { capturedWirePayload: cloneCapturedWirePayload(observability.capturedWirePayload) }
+      : {}),
+  };
+}
+
+export function cloneCapturedWirePayload(
+  payload: LLMCapturedProviderWirePayload,
+): LLMCapturedProviderWirePayload {
+  return {
+    ...payload,
+    ...(payload.body !== undefined
+      ? { body: structuredClone(payload.body) }
       : {}),
   };
 }

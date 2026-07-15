@@ -504,6 +504,21 @@ export interface AdminTurnPromptCachingObservabilityData {
   reason?: string;
 }
 
+/**
+ * True provider wire body captured as-sent (bead hgw3-80f6). The Loom renders
+ * `body` as the byte-identical raw-wire view; `body` is absent when a persisted
+ * record's sidecar body could not be resolved.
+ */
+export interface AdminTurnCapturedWirePayloadData {
+  api: string;
+  model: string;
+  capturedAtMs: number;
+  byteLength: number;
+  toolCount: number;
+  body?: unknown;
+  bodyRef?: string;
+}
+
 export interface AdminTurnProviderObservabilityData {
   routeKind: string;
   requestedProvider: string;
@@ -515,6 +530,7 @@ export interface AdminTurnProviderObservabilityData {
   systemRole: AdminTurnProviderSystemRoleData;
   promptCaching?: AdminTurnPromptCachingObservabilityData;
   providerWireMessages: AdminTurnProviderWireMessage[];
+  capturedWirePayload?: AdminTurnCapturedWirePayloadData;
 }
 
 export interface AdminTurnPromptResponseSnapshotData {

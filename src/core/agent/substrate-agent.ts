@@ -509,6 +509,7 @@ export class SubstrateAgent {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
     const configuredProviderFirstOutput = options?.streamRuntimeOptions?.onProviderFirstOutput;
+    const configuredProviderPayloadCaptured = options?.streamRuntimeOptions?.onProviderPayloadCaptured;
 
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
@@ -516,6 +517,10 @@ export class SubstrateAgent {
         onProviderFirstOutput: async (event) => {
           await this.eventBus.emit('agent.provider.first_output', event);
           await configuredProviderFirstOutput?.(event);
+        },
+        onProviderPayloadCaptured: async (event) => {
+          await this.eventBus.emit('agent.provider.payload_captured', event);
+          await configuredProviderPayloadCaptured?.(event);
         },
         transport: defaultStreamTransport,
       }),

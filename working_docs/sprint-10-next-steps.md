@@ -42,7 +42,7 @@ The headline fact governing everything below: the multi-companion substrate is *
 - Final integrated gate for `2z12.8`: memory/guideline/restart 51/51 plus merged
   projection/repair 15/15, lint, ESM+DTS build, and worktree plus branch-range
   diff checks passed. The known full-suite dependency on the untracked
-  `purrsephone/satellites.json` owner file remains report-only; no rerun was
+  `<companion>/satellites.json` owner file remains report-only; no rerun was
   needed for this bounded closeout.
 - `psfn-framework-2z12.7` is closed on integration merge `05ec2557`
   (implementations `d311f9e0`, `a8561fe7`, `5d73270b`, and `ad0c37cc`; bounded

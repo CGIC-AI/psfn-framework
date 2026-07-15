@@ -39,7 +39,12 @@ function sha256(path: string): string {
 export interface FleetAuthConsistentBackupCycleOptions {
   backupRestoreDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
-  schemas: ReadonlyArray<{ kind: 'companion' | 'shared'; schema: string }>;
+  schemas: ReadonlyArray<{
+    kind: 'companion' | 'shared';
+    schema: string;
+    ownerRole: string;
+    runtimeRoles: readonly string[];
+  }>;
   systemDataDir: string;
   backupRootDir: string;
   config: BackupRuntimeConfig;

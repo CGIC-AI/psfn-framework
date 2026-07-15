@@ -67,7 +67,9 @@ import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kub
 import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
+import { resolveFleetAuthSchemaAccessContracts } from '../../persistence/backups/fleet-auth-schema-access.js';
 import {
+  DEFAULT_SHARED_WORLD_SCHEMA,
   registerScheduledFleetAuthBackupTask,
   SCHEDULED_BACKUP_TASK_ID,
   SCHEDULED_BACKUP_TASK_NAME,
@@ -191,6 +193,9 @@ async function main(): Promise<void> {
     if (!config.companionFleet || !fleetAuthPersistence || !config.credentialVault) {
       throw new Error('Fleet auth backup startup invariants are incomplete');
     }
+    if (!config.postgresDatabaseUrl) {
+      throw new Error('Fleet auth backup requires the companion PostgreSQL credential');
+    }
     const backupConfig = resolveBackupRuntimeConfig({
       dataDir: startupHydration.pathSnapshot.systemDataDir,
       env,
@@ -222,12 +227,19 @@ async function main(): Promise<void> {
       });
     }
     const kubernetesHelm = resolveKubernetesHelmBackupConfig(env);
+    const schemaAccessContracts = await resolveFleetAuthSchemaAccessContracts({
+      databaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      companionSchemas: config.companionFleet.companions.map(companion => companion.postgresSchema),
+      sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
+      roles: config.fleetAuth.databaseRoles,
+    });
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
       roles: config.fleetAuth.databaseRoles,
       authorityFloors: fleetAuthPersistence.authorityFloors,
+      schemaAccessContracts,
       backupConfig,
       ...(kubernetesHelm ? { kubernetesHelm } : {}),
     });

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   cpSync,
@@ -57,12 +58,16 @@ import {
   prepareFleetRestoreDatabaseMarker,
   removeFleetRestoreDatabaseMarker,
   rollbackFleetRestoreDatabaseSchemas,
+  withFleetRestoreDatabaseLock,
 } from './fleet-restore-database-marker.js';
 import {
   FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME,
   FleetAuthAuthorityFloorStore,
 } from '../postgres/fleet-auth/authority-floor.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import {
+  assertFleetAuthBackupRestorePrivileges,
+  type FleetAuthDatabaseRoles,
+} from '../postgres/fleet-auth/schema.js';
 import {
   restoreFleetAuthSnapshot,
   verifyFleetAuthSnapshotRestore,
@@ -70,6 +75,13 @@ import {
 } from './fleet-auth-coordinator.js';
 import type { FleetAuthRestoreResult } from './fleet-auth-restore.js';
 import { resolvePostgresUrlDatabaseName } from './postgres-restore.js';
+import {
+  applyFleetAuthSchemaAccessContracts,
+  assertFleetAuthSchemaAccessIsolation,
+  assertFleetAuthSchemaAccessTargets,
+  type FleetAuthSchemaAccessContract,
+  validateFleetAuthSchemaAccessContracts,
+} from './fleet-auth-schema-access.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -298,6 +310,45 @@ async function restorePostgresDump(
   }
 }
 
+async function dropOwnedPostgresSchema(
+  schemaName: string,
+  databaseUrl: string,
+  psqlBinary?: string,
+): Promise<void> {
+  const schema = assertValidPostgresSchemaName(schemaName);
+  const binary = psqlBinary?.trim() || 'psql';
+  const { connectionArg, password } = sanitizePostgresConnection(databaseUrl, 'Fleet restore');
+  try {
+    await execFileAsync(binary, [
+      '--no-password',
+      '--no-psqlrc',
+      '--set=ON_ERROR_STOP=1',
+      '--dbname',
+      connectionArg,
+      '--command',
+      `DROP SCHEMA IF EXISTS "${schema}" CASCADE`,
+    ], { env: createSanitizedPostgresChildEnv(password) });
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = redactPostgresCredential(rawMessage, password);
+    throw new Error(`Fleet restore could not roll back owned schema ${schema}: ${message}`);
+  }
+}
+
+async function rollbackFleetAuthOwnedSchemas(options: {
+  postgres: FleetRestorePostgresOptions;
+  contracts: readonly FleetAuthSchemaAccessContract[];
+  ownerDatabaseUrls: Readonly<Record<string, string>>;
+}): Promise<void> {
+  for (const contract of options.contracts) {
+    await dropOwnedPostgresSchema(
+      contract.schema,
+      options.ownerDatabaseUrls[contract.schema],
+      options.postgres.psqlBinary,
+    );
+  }
+}
+
 function expectedUnitSchemas(unit: FleetBackupUnitOutcome): string[] {
   const rawSchemas = unit.kind === 'group'
     ? unit.postgresSchemas
@@ -397,7 +448,12 @@ export async function restoreFleetAuthConsistentFamily(options: {
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   restoredAt?: string;
+  schemaOwnerDatabaseUrls: Readonly<Record<string, string>>;
   pgRestoreBinary?: string;
+  psqlBinary?: string;
+  faultInjection?: (
+    stage: 'after_database_preflight' | 'after_fleet_auth_restore',
+  ) => void | Promise<void>;
 }): Promise<FleetAuthConsistentFamilyRestoreResult> {
   const manifest = verifyFleetAuthBackupManifest(options.manifestPath);
   const familyDir = dirname(resolve(options.manifestPath));
@@ -419,24 +475,138 @@ export async function restoreFleetAuthConsistentFamily(options: {
     );
   }
 
-  const restoredSchemas: string[] = [];
-  for (const { artifact, dumpPath } of verifiedSchemaDumps) {
-    await restorePostgresDump(dumpPath, {
-      databaseUrl: options.backupRestoreDatabaseUrl,
-      ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
-    });
-    restoredSchemas.push(artifact.postgresSchema);
-  }
-
-  const fleetAuth = await restoreFleetAuthSnapshot({
-    manifestPath: options.manifestPath,
+  const expectedSchemas = verifiedSchemaDumps.map(({ artifact }) => artifact.postgresSchema);
+  const accessContracts = validateFleetAuthSchemaAccessContracts(
+    verifiedSchemaDumps.map(({ artifact }) => ({
+      kind: artifact.kind,
+      schema: artifact.postgresSchema,
+      ownerRole: artifact.ownerRole ?? '',
+      runtimeRoles: artifact.runtimeRoles ?? [],
+    })),
+    expectedSchemas,
+    options.roles,
+  );
+  const postgres = {
     databaseUrl: options.backupRestoreDatabaseUrl,
-    roles: options.roles,
-    authorityFloors: options.authorityFloors,
-    activationGeneration: options.activationGeneration,
-    ...(options.restoredAt ? { restoredAt: options.restoredAt } : {}),
+    ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
+  };
+  const databaseTarget = sanitizePostgresConnection(
+    options.backupRestoreDatabaseUrl,
+    'Fleet auth family restore',
+  ).connectionArg;
+  const operationIdentity = createHash('sha256').update(JSON.stringify({
+    kind: 'fleet-auth-consistent-family',
+    capturedAt: manifest.capturedAt,
+    postgresSnapshot: manifest.postgresSnapshot,
+    authorityLineageId: manifest.authorityLineageId,
+    databaseTarget,
+    expectedSchemas: [...expectedSchemas].sort(),
+    accessContracts,
+  })).digest('hex');
+  const operation = {
+    operationId: operationIdentity.slice(0, 32),
+    operationIdentity,
+  };
+  return await withFleetRestoreDatabaseLock(postgres, async () => {
+    await assertFleetAuthBackupRestorePrivileges(options.backupRestoreDatabaseUrl, options.roles);
+    await assertFleetAuthSchemaAccessTargets({
+      databaseUrl: options.backupRestoreDatabaseUrl,
+      contracts: accessContracts,
+      ownerRole: options.roles.backupRestore,
+      ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+    });
+    const markerState = await inspectFleetRestoreDatabaseMarker(postgres, operation);
+    if (markerState === 'foreign') {
+      throw new Error('Fleet auth family restore found a foreign database restore marker');
+    }
+    let schemaState = await expectedSchemaPresence(expectedSchemas, postgres);
+    if (markerState === 'prepared') {
+      await rollbackFleetAuthOwnedSchemas({
+        postgres,
+        contracts: accessContracts,
+        ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+      });
+      await removeFleetRestoreDatabaseMarker(postgres, operation);
+      schemaState = 'none';
+    } else if (markerState === 'committed') {
+      if (schemaState !== 'all') {
+        throw new Error('Fleet auth family restore committed marker has incomplete schema state');
+      }
+      await assertFleetAuthSchemaAccessIsolation({
+        databaseUrl: options.backupRestoreDatabaseUrl,
+        contracts: accessContracts,
+        ownerRole: options.roles.backupRestore,
+      });
+      await removeFleetRestoreDatabaseMarker(postgres, operation);
+      const floor = options.authorityFloors.read();
+      return {
+        restoredSchemas: expectedSchemas,
+        fleetAuth: {
+          importedRows: 0,
+          authorityGeneration: floor.trustedHost.authorityGeneration,
+          restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
+        },
+      };
+    }
+    if (schemaState !== 'none') {
+      throw new Error('Fleet auth family restore requires absent target schemas before mutation');
+    }
+    await options.faultInjection?.('after_database_preflight');
+
+    const restoredSchemas: string[] = [];
+    let markerPrepared = false;
+    try {
+      await prepareFleetRestoreDatabaseMarker(postgres, operation);
+      markerPrepared = true;
+      for (const { artifact, dumpPath } of verifiedSchemaDumps) {
+        await restorePostgresDump(dumpPath, {
+          databaseUrl: options.schemaOwnerDatabaseUrls[artifact.postgresSchema],
+          ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+        });
+        restoredSchemas.push(artifact.postgresSchema);
+      }
+      await applyFleetAuthSchemaAccessContracts({
+        contracts: accessContracts,
+        ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+        backupRole: options.roles.backupRestore,
+      });
+      await assertFleetAuthSchemaAccessIsolation({
+        databaseUrl: options.backupRestoreDatabaseUrl,
+        contracts: accessContracts,
+        ownerRole: options.roles.backupRestore,
+      });
+
+      const fleetAuth = await restoreFleetAuthSnapshot({
+        manifestPath: options.manifestPath,
+        databaseUrl: options.backupRestoreDatabaseUrl,
+        roles: options.roles,
+        authorityFloors: options.authorityFloors,
+        activationGeneration: options.activationGeneration,
+        ...(options.restoredAt ? { restoredAt: options.restoredAt } : {}),
+      });
+      await options.faultInjection?.('after_fleet_auth_restore');
+      await commitFleetRestoreDatabaseMarker(postgres, operation);
+      await removeFleetRestoreDatabaseMarker(postgres, operation);
+      return { restoredSchemas, fleetAuth };
+    } catch (error) {
+      if (markerPrepared) {
+        try {
+          await rollbackFleetAuthOwnedSchemas({
+            postgres,
+            contracts: accessContracts,
+            ownerDatabaseUrls: options.schemaOwnerDatabaseUrls,
+          });
+          await removeFleetRestoreDatabaseMarker(postgres, operation);
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Fleet auth family restore failed and durable schema rollback remains pending',
+          );
+        }
+      }
+      throw error;
+    }
   });
-  return { restoredSchemas, fleetAuth };
 }
 
 function assertDedicatedRestoreVerificationDatabase(databaseUrl: string): string {

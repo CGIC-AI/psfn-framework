@@ -743,6 +743,10 @@ export function resolveGatewayFleetAuthSecrets(options: {
     )) {
       throw new Error('Companion POSTGRES_DATABASE_URL must not authenticate as a fleet auth role');
     }
+    if (companionCredential.searchParams.has('user')
+      || companionCredential.searchParams.has('service')) {
+      throw new Error('Companion POSTGRES_DATABASE_URL must not use a PostgreSQL role-routing override');
+    }
   }
   if (new Set([runtime.username, migration.username, backup.username]).size !== 3) {
     throw new Error('Fleet auth requires three distinct PostgreSQL credential roles');

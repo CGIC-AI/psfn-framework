@@ -13,6 +13,10 @@ import type { BackupRuntimeConfig } from './config.js';
 import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
+import {
+  validateFleetAuthSchemaAccessContracts,
+  type FleetAuthSchemaAccessContract,
+} from './fleet-auth-schema-access.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import { verifyFleetAuthConsistentFamilyRestore } from './fleet-restore.js';
 import {
@@ -237,6 +241,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
   backupRestoreDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
+  schemaAccessContracts: readonly FleetAuthSchemaAccessContract[];
   backupConfig: BackupRuntimeConfig;
   kubernetesHelm?: KubernetesHelmBackupConfig;
   pgDumpBinary?: string;
@@ -283,16 +288,19 @@ export function buildFleetAuthBackupCycleOptions(params: {
     verifyRestore: params.backupConfig.verifyRestore,
     encryption: params.backupConfig.encryption,
   };
+  const expectedSchemas = [
+    ...params.fleet.companions.map(companion => companion.postgresSchema),
+    DEFAULT_SHARED_WORLD_SCHEMA,
+  ];
+  const schemaAccessContracts = validateFleetAuthSchemaAccessContracts(
+    params.schemaAccessContracts,
+    expectedSchemas,
+    params.roles,
+  );
   return {
     backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
     roles: params.roles,
-    schemas: [
-      ...params.fleet.companions.map(companion => ({
-        kind: 'companion' as const,
-        schema: companion.postgresSchema,
-      })),
-      { kind: 'shared', schema: DEFAULT_SHARED_WORLD_SCHEMA },
-    ],
+    schemas: schemaAccessContracts,
     systemDataDir: params.systemDataDir,
     backupRootDir: params.backupConfig.rootDir,
     config: params.backupConfig,

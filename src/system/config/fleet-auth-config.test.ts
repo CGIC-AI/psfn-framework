@@ -282,7 +282,6 @@ describe('fleet-auth owner-file configuration', () => {
       protectedRestoreRoots: [],
       companionDatabaseUrl: 'postgres://fleet_auth_runtime:different@db.example.test/psfn',
     })).toThrow(/must not authenticate as a fleet auth role/);
-
     for (const query of [
       'host=alternate.example.test',
       'hostaddr=192.0.2.10',
@@ -306,6 +305,21 @@ describe('fleet-auth owner-file configuration', () => {
         protectedRestoreRoots: [],
       })).toThrow(/must not use PostgreSQL routing or authentication query override/);
     }
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [],
+      companionDatabaseUrl: 'postgres://companion_runtime:secret@db.example.test/psfn?user=fleet_auth_runtime',
+    })).toThrow(/routing or authentication query override|role-routing override/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_RUNTIME_DATABASE_URL:
+          'postgres://fleet_auth_runtime:runtime@db.example.test/psfn?user=fleet_auth_backup',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/routing or authentication query override/);
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {

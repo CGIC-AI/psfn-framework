@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../agent/contracts.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
@@ -738,7 +738,7 @@ describe('REPLSandbox', () => {
         { text: 'memory text', type: 'semantic', importance: 0.8, similarity: 0.9 },
       ]),
       getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStore;
+    } as unknown as MemoryStorePort;
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
@@ -764,7 +764,7 @@ describe('REPLSandbox', () => {
   it('memory_count uses countActiveMemories when available', async () => {
     const memoryStore = {
       countActiveMemories: vi.fn(async () => 7),
-    } as unknown as MemoryStore;
+    } as unknown as MemoryStorePort;
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
@@ -1044,7 +1044,7 @@ describe('evidence collection', () => {
         { text: 'found memory', type: 'semantic', importance: 0.8, similarity: 0.9 },
       ]),
       getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStore;
+    } as unknown as MemoryStorePort;
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
@@ -1116,7 +1116,7 @@ describe('evidence collection', () => {
       })),
       searchByEmbedding: vi.fn(() => []),
       getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStore;
+    } as unknown as MemoryStorePort;
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
@@ -1139,7 +1139,7 @@ describe('evidence collection', () => {
       getById: vi.fn(() => null),
       searchByEmbedding: vi.fn(() => []),
       getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStore;
+    } as unknown as MemoryStorePort;
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),

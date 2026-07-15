@@ -4,10 +4,6 @@ import {
   type EditableSettings,
   type SettingsDomainSplit,
 } from '../../../system/settings.js';
-import {
-  createEmbeddingDimensionMismatchWarning,
-  type EmbeddingDimensionValidationResult,
-} from '../../../persistence/backups/startup-checks.js';
 import type { RuntimeChannelsConfigOverrides } from '../../../channels/backplane/config.js';
 import {
   createCredentialVaultFromEnvironment,
@@ -78,6 +74,12 @@ export interface StartupConfigHydrationOptions {
   configStore?: ConfigStorePort;
 }
 
+export interface EmbeddingDimensionValidationResult {
+  status: 'match' | 'mismatch' | 'unknown';
+  configuredDims: number;
+  storedDims: number | null;
+}
+
 export function buildRuntimeChannelsConfigOverrides(
   config: SubstrateConfig,
   settings: EditableSettings,
@@ -105,9 +107,12 @@ export function buildRuntimeChannelsConfigOverrides(
 export function createEmbeddingDimensionMismatchFatalMessage(
   result: EmbeddingDimensionValidationResult,
 ): string | null {
-  const mismatchWarning = createEmbeddingDimensionMismatchWarning(result);
-  if (!mismatchWarning) return null;
-  return `${mismatchWarning.message}: configured=${mismatchWarning.configuredDims}, stored=${mismatchWarning.storedDims}. ${mismatchWarning.recommendation}`;
+  if (result.status !== 'mismatch' || result.storedDims === null) {
+    return null;
+  }
+  return 'Embedding dimension mismatch detected at startup'
+    + `: configured=${result.configuredDims}, stored=${result.storedDims}. `
+    + 'Run memory embedding migration to re-embed l2_memories with the configured model before relying on retrieval quality.';
 }
 
 function createDefaultConfigStore(options: {

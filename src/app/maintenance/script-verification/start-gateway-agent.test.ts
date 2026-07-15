@@ -863,7 +863,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
         [
           `source ${JSON.stringify(runtimeEnvPath)}`,
           `export DATA_DIR=/explicit/data`,
-          `export DATABASE_PATH=/explicit/db.sqlite`,
+          `export DATABASE_PATH=/explicit/companion.db`,
           `export WORKSPACE_PATH=/explicit/workspace`,
           `export CHARACTER_CARD_PATH=/explicit/card.json`,
           `psfn_source_dotenv_preserving_existing_env ${JSON.stringify(dotenvPath)}`,
@@ -875,7 +875,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
 
     expect(output).toEqual([
       '/explicit/data',
-      '/explicit/db.sqlite',
+      '/explicit/companion.db',
       '/explicit/workspace',
       '/explicit/card.json',
       'loaded',

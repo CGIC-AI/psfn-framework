@@ -1,12 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { MemoryStore } from './store.js';
 import { calculateEffectiveMemorySalience, SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { computeRetrievalScore } from './retrieval/scoring.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
@@ -44,20 +42,16 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('SalienceDecay', () => {
-  let db: Database.Database;
-  let store: MemoryStore;
+  let store: InMemoryMemoryStore;
   let decay: SalienceDecay;
 
   beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    store = new MemoryStore(db);
-    decay = new SalienceDecay(store);
+    store = new InMemoryMemoryStore();
+    decay = new SalienceDecay(store.asPort());
   });
 
   afterEach(() => {
     decay.stop();
-    db.close();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -429,7 +423,7 @@ describe('SalienceDecay', () => {
   it('processes salience decay across multiple pages of active memories', async () => {
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const baseExtractedAt = Date.now();
-    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const pagedDecay = new SalienceDecay(store.asPort(), { batchSize: 2 });
     const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
 
     for (let i = 0; i < 5; i += 1) {
@@ -459,7 +453,7 @@ describe('SalienceDecay', () => {
   });
 
   it('uses paginated reads while decaying active memories', async () => {
-    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const pagedDecay = new SalienceDecay(store.asPort(), { batchSize: 2 });
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (let i = 0; i < 5; i += 1) {
       store.insertMemory(makeMemory({
@@ -479,7 +473,7 @@ describe('SalienceDecay', () => {
   });
 
   it('propagates salience batch write failures without reading later pages', async () => {
-    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const pagedDecay = new SalienceDecay(store.asPort(), { batchSize: 2 });
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (let i = 0; i < 4; i += 1) {
       store.insertMemory(makeMemory({
@@ -503,7 +497,7 @@ describe('SalienceDecay', () => {
   });
 
   it('yields to the event loop between salience decay pages', async () => {
-    const pagedDecay = new SalienceDecay(store, { batchSize: 1 });
+    const pagedDecay = new SalienceDecay(store.asPort(), { batchSize: 1 });
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const baseExtractedAt = Date.now();
     for (let i = 0; i < 2; i += 1) {

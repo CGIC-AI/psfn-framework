@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createSqliteTranscriptProjection } from '../../persistence/sessions/transcript-projection.js';
+import { createInMemoryTranscriptProjection } from '../../test-support/in-memory-transcript-projection.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import Database from 'better-sqlite3';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { UserContinuityStore } from './continuity.js';
 import { SessionManager } from './manager.js';
@@ -22,7 +21,7 @@ import {
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../identity/prompt-runtime.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 import { createTurnId } from '../turns/id.js';
@@ -851,7 +850,7 @@ describe('SessionManager', () => {
 
   it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
     const config = makeConfig();
-    const searchableStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const searchableStore = new SessionStore(dir, { transcriptProjection: createInMemoryTranscriptProjection() });
     const mgr = new SessionManager(searchableStore, config);
     const hiddenBody = 'forensic body that must never enter normal history';
     mgr.recordUserMessage(
@@ -2864,41 +2863,35 @@ describe('SessionManager', () => {
       dims: 8,
     } as any;
 
-    const dbPath = join(dir, 'compaction-memory.sqlite');
-    const db = new Database(dbPath);
-    try {
-      const memoryStore = new MemoryStore(db, 8);
-      const extractor = new MemoryExtractor(
-        extractionLLM,
-        mgr,
-        memoryStore,
-        embeddingService,
-        eventBus,
-        { extractionInterval: 5 },
-      );
+    const memoryStore = new InMemoryMemoryStore().asPort();
+    const extractor = new MemoryExtractor(
+      extractionLLM,
+      mgr,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
 
-      mgr.setPreCompactionExtractionHandler(async ({ channelId, entries, canonicalContactId }) => {
-        await extractor.queueCompactionExtraction(channelId, entries, canonicalContactId);
-        flushCompleted = true;
-        callOrder.push('flush-complete');
-      });
+    mgr.setPreCompactionExtractionHandler(async ({ channelId, entries, canonicalContactId }) => {
+      await extractor.queueCompactionExtraction(channelId, entries, canonicalContactId);
+      flushCompleted = true;
+      callOrder.push('flush-complete');
+    });
 
-      mgr.recordUserMessage('ch1', 'I am planning a Kyoto trip in April.', 'u1', 'User');
-      mgr.recordAssistantMessage('ch1', 'That sounds exciting.');
-      for (let i = 0; i < 9; i++) {
-        mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
-        mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
-      }
-
-      await runScheduledCompaction(mgr, compactionLLM, { userId: 'contact-canonical-1' });
-
-      expect(callOrder).toEqual(['flush-complete', 'compaction-summary']);
-      expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
-      expect(extractionComplete).toHaveBeenCalled();
-      expect(compactionComplete).toHaveBeenCalledTimes(1);
-    } finally {
-      db.close();
+    mgr.recordUserMessage('ch1', 'I am planning a Kyoto trip in April.', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'That sounds exciting.');
+    for (let i = 0; i < 9; i++) {
+      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
     }
+
+    await runScheduledCompaction(mgr, compactionLLM, { userId: 'contact-canonical-1' });
+
+    expect(callOrder).toEqual(['flush-complete', 'compaction-summary']);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
+    expect(extractionComplete).toHaveBeenCalled();
+    expect(compactionComplete).toHaveBeenCalledTimes(1);
   });
 
   it('uses framed message token counting for compaction thresholds', async () => {

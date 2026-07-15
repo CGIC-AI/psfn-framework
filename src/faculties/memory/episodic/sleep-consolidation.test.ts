@@ -1,7 +1,8 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Pool } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
-import { EpisodicStore } from './store.js';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
@@ -13,16 +14,8 @@ import {
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
 describe('SleepCycleEpisodeConsolidator', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
-
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, { now: () => NOW });
+  function makeStore(): PostgresEpisodicStore {
+    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
   }
 
   function episodeInput(
@@ -391,18 +384,13 @@ describe('SleepCycleEpisodeConsolidator', () => {
 });
 
 describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
+  let pool: FakeEpisodicPool;
 
   const RUN_AT = new Date('2026-06-12T03:00:00.000Z');
 
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, { now: () => RUN_AT });
+  function makeStore(): PostgresEpisodicStore {
+    pool = new FakeEpisodicPool();
+    return new PostgresEpisodicStore(pool as unknown as Pool, { now: () => RUN_AT });
   }
 
   function candidateInput(
@@ -432,7 +420,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
   }
 
   async function seedClaimedCandidate(
-    store: EpisodicStore,
+    store: PostgresEpisodicStore,
     input: EpisodeCreateInput,
     claimKeys: readonly string[],
   ): Promise<void> {
@@ -449,14 +437,14 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
   }
 
   function activeClaimKeyDuplicates(): string[] {
-    const rows = db!.prepare(`
-      SELECT claim_key, COUNT(*) AS n
-      FROM l01_episode_message_claims
-      WHERE status = 'active'
-      GROUP BY claim_key
-      HAVING n > 1
-    `).all() as Array<{ claim_key: string }>;
-    return rows.map(row => row.claim_key);
+    const counts = new Map<string, number>();
+    for (const claim of pool.messageClaims.values()) {
+      if (claim.status !== 'active') continue;
+      counts.set(claim.claim_key, (counts.get(claim.claim_key) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([claimKey]) => claimKey);
   }
 
   function complete(handler: (systemPrompt: string, content: string) => { content: string }) {

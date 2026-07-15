@@ -103,6 +103,18 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-postgres-only.mjs",
+      "contains": "deploy/helm/psfn/README.md",
+      "reason": "The Postgres-only repository gate scans the project-owned Helm README for retired backend claims.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-postgres-only.mjs",
+      "contains": "scripts/recovery/psfn-ext4-recovery.sh",
+      "reason": "The Postgres-only repository gate classifies the project-owned recovery script's legacy artifact signature.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-agent-docker-isolation.mjs",
       "contains": "psfn",
       "reason": "Docker isolation verification references project-owned service and network names.",
@@ -874,12 +886,6 @@
       "path": "src/core/intention/postgres-adapters/connection.ts",
       "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
       "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/core/intention/sqlite-stores/pending-follow-up-store.ts",
-      "contains": "psfn-amica",
-      "reason": "Legacy pending follow-up store preserves the psfn-amica external channel type in its schema contract.",
       "pattern": "identity-legacy-slug"
     },
     {

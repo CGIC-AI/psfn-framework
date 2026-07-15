@@ -5,17 +5,17 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
+import type { Pool } from 'pg';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
-import { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import { PostgresEpisodicStore } from '../../faculties/memory/episodic/postgres-store.js';
 import {
   type EpisodeCreateInput,
+  type EpisodicStorePort,
 } from '../../faculties/memory/episodic/store-port.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
@@ -25,7 +25,7 @@ import { ShardFoldReviewController } from '../../faculties/shards/fold-review.js
 import { createArtifactReturnPort } from '../../faculties/shards/artifact-return-port.js';
 import { resolveStagedShardMemoryOutputs } from '../../faculties/shards/output-review.js';
 import { buildShardLineageEnvelope } from '../../faculties/shards/result-lineage.js';
-import { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -36,11 +36,16 @@ import {
 } from '../../core/identity/prompt-registry.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
-import { ActiveConcernStore } from '../../core/intention/sqlite-stores/active-concern-store.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
+import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
+import { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
-import { saveSchedulerConfig } from '../../system/config/scheduler-config.js';
+import { loadSchedulerConfig, saveSchedulerConfig } from '../../system/config/scheduler-config.js';
 import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -482,17 +487,17 @@ const testEmbeddingService: EmbeddingProviderPort = {
 
 describe('AdminServer JSON API routes', () => {
   let tempDir: string;
-  let db: Database.Database;
   let eventBus: EventBus;
-  let memoryStore: MemoryStore;
-  let episodicStore: EpisodicStore;
+  let memoryStore: InMemoryMemoryStore;
+  let memoryStorePort: MemoryStorePort;
+  let episodicStore: EpisodicStorePort;
   let sessionStore: SessionStore;
   let sessionManager: SessionManager;
   let scheduler: Scheduler;
   let shardManager: ShardManager;
   let foldReviewController: ShardFoldReviewController;
-  let contactStore: ContactStore;
-  let concernStore: ActiveConcernStore;
+  let contactStore: ContactStorePort;
+  let concernStore: ConcernStorePort;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
   let cardVersionStore: CharacterCardVersionStore;
@@ -535,18 +540,21 @@ describe('AdminServer JSON API routes', () => {
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
 
-    db = new Database(':memory:');
-    sqliteVec.load(db);
     eventBus = new EventBus();
-    memoryStore = new MemoryStore(db, 3);
-    episodicStore = new EpisodicStore(db);
+    memoryStore = new InMemoryMemoryStore();
+    memoryStorePort = memoryStore.asPort();
+    episodicStore = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => new Date('2026-06-29T12:00:00.000Z') },
+    );
     sessionStore = new SessionStore(sessionsDir);
     sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
-    contactStore = new ContactStore(db, 'primary-user');
-    concernStore = new ActiveConcernStore(db, {
-      now: () => new Date('2026-06-29T12:00:00.000Z'),
-    });
+    ({ store: contactStore } = await createTestPostgresContactStore('primary-user'));
+    concernStore = createPostgresIntentionPortsFromPool(
+      new FakeIntentionPool() as unknown as Pool,
+      { now: () => new Date('2026-06-29T12:00:00.000Z') },
+    ).concernStore;
     promptStore = new PromptLayerStore(
       join(tempDir, 'prompt-layers.json'),
       join(tempDir, 'prompt-history.jsonl'),
@@ -605,7 +613,7 @@ describe('AdminServer JSON API routes', () => {
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
     foldReviewController = new ShardFoldReviewController(
       join(tempDir, 'state', 'shard-fold-reviews.json'),
-      new MemoryWriter(memoryStore as any, testEmbeddingService),
+      new MemoryWriter(memoryStorePort, testEmbeddingService),
     );
     shardManager = new ShardManager({
       eventBus,
@@ -722,7 +730,7 @@ describe('AdminServer JSON API routes', () => {
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
       env: { GATEWAY_SESSION_HMAC_KEY: 'garden-api-routes-test-session-hmac-key' },
-      memoryStore,
+      memoryStore: memoryStorePort,
       episodicStore,
       sessionStore,
       sessionManager,
@@ -761,7 +769,6 @@ describe('AdminServer JSON API routes', () => {
 
   afterEach(async () => {
     await server.stop();
-    db.close();
     rmSync(tempDir, { recursive: true, force: true });
     testConfig.runtimeHooks = undefined;
     testConfig.capabilityTier = undefined;
@@ -778,12 +785,12 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('exposes Garden concern management actions', async () => {
-    const active = concernStore.create({
+    const active = await concernStore.create({
       text: 'Inspect medication reminder pressure',
       priority: 'high',
       expiresAt: '2026-06-29T18:00:00.000Z',
     });
-    concernStore.create({
+    await concernStore.create({
       text: 'Resolve stale hydration reminder',
       status: 'watching',
       createdAt: '2026-06-29T08:00:00.000Z',
@@ -1921,8 +1928,8 @@ describe('AdminServer JSON API routes', () => {
       ...overrides,
     });
 
-    episodicStore.createEpisode(baseEpisode({ id: 'episode-alpha-1' }));
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({ id: 'episode-alpha-1' }));
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-alpha-2',
       title: 'Operator followed a related arc',
       startedAt: '2026-03-11T11:00:00.000Z',
@@ -1936,7 +1943,7 @@ describe('AdminServer JSON API routes', () => {
       }],
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-alpha-2' }],
     }));
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-beta-1',
       title: 'Unrelated thread remains filterable',
       threadId: 'thread-beta',
@@ -1949,7 +1956,7 @@ describe('AdminServer JSON API routes', () => {
       }],
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-beta-1' }],
     }));
-    episodicStore.writeEpisodeArc({
+    await episodicStore.writeEpisodeArc({
       id: 'arc-alpha-1',
       sourceEpisodeId: 'episode-alpha-1',
       targetEpisodeId: 'episode-alpha-2',
@@ -2101,7 +2108,7 @@ describe('AdminServer JSON API routes', () => {
       ...overrides,
     });
 
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-wedding-venue',
       title: 'Wedding venue walkthrough',
       landmark: 'The venue walkthrough stayed separate from later cake and music decisions.',
@@ -2111,7 +2118,7 @@ describe('AdminServer JSON API routes', () => {
       spanRefs: [{ spanId: 'span-wedding-venue', threadId: 'thread-wedding', channelId: 'api:test' }],
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-wedding-venue' }],
     }));
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-wedding-cake',
       title: 'Wedding cake tasting shortlist',
       landmark: 'The cake tasting narrowed flavors and preserved the bakery shortlist.',
@@ -2125,7 +2132,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
       ],
     }));
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-wedding-bakery',
       title: 'Bakery deposit follow-up',
       landmark: 'The bakery follow-up captured deposit timing without replacing the cake tasting episode.',
@@ -2139,7 +2146,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
       ],
     }));
-    episodicStore.createEpisode(baseEpisode({
+    await episodicStore.createEpisode(baseEpisode({
       id: 'episode-wedding-song',
       title: 'Our song first-dance idea',
       landmark: 'A music subtopic about using their anniversary song for the first dance.',
@@ -2153,7 +2160,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-song-list' },
       ],
     }));
-    episodicStore.writeEpisodeArc({
+    await episodicStore.writeEpisodeArc({
       id: 'arc-wedding-venue-cake',
       sourceEpisodeId: 'episode-wedding-venue',
       targetEpisodeId: 'episode-wedding-cake',
@@ -2168,7 +2175,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
       ],
     });
-    episodicStore.writeEpisodeArc({
+    await episodicStore.writeEpisodeArc({
       id: 'arc-wedding-cake-bakery',
       sourceEpisodeId: 'episode-wedding-cake',
       targetEpisodeId: 'episode-wedding-bakery',
@@ -2183,7 +2190,7 @@ describe('AdminServer JSON API routes', () => {
         { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
       ],
     });
-    episodicStore.writeEpisodeArc({
+    await episodicStore.writeEpisodeArc({
       id: 'arc-wedding-venue-song',
       sourceEpisodeId: 'episode-wedding-venue',
       targetEpisodeId: 'episode-wedding-song',
@@ -3173,23 +3180,26 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('supports contact list/detail/update endpoints', async () => {
-    const contact = contactStore.upsert({
+    const contact = await contactStore.upsert({
       displayName: 'Api Contact',
-      trustLevel: 'acquainted',
+      trustLevel: 'public',
       relationshipType: 'friend',
       notes: 'before',
     });
-    const mentioned = contactStore.upsert({
+    const mentioned = await contactStore.upsert({
       displayName: 'Mentioned Friend',
       relationshipType: 'friend',
     });
-    contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
+    await contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
       privacyLevel: 'invite_only',
     });
-    contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
-    const contactEntity = contactStore.getSocialGraphEntityByContactId(contact.id)!;
-    const mentionedEntity = contactStore.getSocialGraphEntityByContactId(mentioned.id)!;
-    contactStore.upsertSocialRelationshipEdge({
+    await contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
+    const contactEntity = await contactStore.getSocialGraphEntityByContactId(contact.id);
+    const mentionedEntity = await contactStore.getSocialGraphEntityByContactId(mentioned.id);
+    if (!contactEntity || !mentionedEntity) {
+      throw new Error('Postgres contact fixture did not create social graph entities');
+    }
+    await contactStore.upsertSocialRelationshipEdge({
       sourceEntityId: contactEntity.id,
       targetEntityId: mentionedEntity.id,
       relationshipType: 'friend',
@@ -3201,7 +3211,7 @@ describe('AdminServer JSON API routes', () => {
     });
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
-    expect(listRes.status).toBe(200);
+    expect(listRes.status, listRes.body).toBe(200);
     expect(listRes.headers['cache-control']).toBe('no-store');
     const listPayload = JSON.parse(listRes.body) as {
       contacts: Array<{ id: string }>;
@@ -3219,7 +3229,7 @@ describe('AdminServer JSON API routes', () => {
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
     expect(listPayload.relationshipScoreMap).toEqual(expect.objectContaining({
       [contact.id]: expect.objectContaining({
-        resolvedTier: 'acquainted',
+        resolvedTier: 'public',
         nextTier: 'regular',
         progressToNextTier: 0.5,
       }),
@@ -3265,12 +3275,12 @@ describe('AdminServer JSON API routes', () => {
       }),
       authHeaders,
     );
-    expect(putRes.status).toBe(200);
-    expect(contactStore.getById(contact.id)?.trustLevel).toBe('trusted');
-    expect(contactStore.getById(contact.id)?.nickname).toBe('Api Nick');
-    expect(contactStore.getById(contact.id)?.notes).toBe('after put');
-    expect(contactStore.getById(contact.id)?.channels?.find(channel => channel.channel === 'discord')?.privacyLevel).toBe('private');
-    expect(contactStore.getById(contact.id)?.conversationChannels?.find(channel => channel.channelId === '1313001762793197678')?.privacyLevel)
+    expect(putRes.status, putRes.body).toBe(200);
+    expect((await contactStore.getById(contact.id))?.trustLevel).toBe('trusted');
+    expect((await contactStore.getById(contact.id))?.nickname).toBe('Api Nick');
+    expect((await contactStore.getById(contact.id))?.notes).toBe('after put');
+    expect((await contactStore.getById(contact.id))?.channels?.find(channel => channel.channel === 'discord')?.privacyLevel).toBe('private');
+    expect((await contactStore.getById(contact.id))?.conversationChannels?.find(channel => channel.channelId === '1313001762793197678')?.privacyLevel)
       .toBeUndefined();
 
     const directChannelRes = await request(
@@ -3289,7 +3299,7 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(directChannelRes.status).toBe(200);
-    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
+    expect(await contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
 
     const patchRes = await request(
       port,
@@ -3299,7 +3309,7 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(patchRes.status).toBe(200);
-    expect(contactStore.getById(contact.id)?.notes).toBe('after patch');
+    expect((await contactStore.getById(contact.id))?.notes).toBe('after patch');
 
     const auditRes = await request(
       port,
@@ -3367,7 +3377,9 @@ describe('AdminServer JSON API routes', () => {
     const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
     expect(typeof persistedPrimaryModel).toBe('string');
     expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
-    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.salienceDecayIntervalMs);
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(
+      loadSchedulerConfig(tempDir).salienceDecayIntervalMs,
+    );
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -4362,6 +4374,7 @@ describe('AdminServer JSON API routes', () => {
         maxArcsPerRun: 12,
         maxEpisodesPerRun: 60,
       },
+      icpAutonomy: loadSchedulerConfig(tempDir).icpAutonomy,
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

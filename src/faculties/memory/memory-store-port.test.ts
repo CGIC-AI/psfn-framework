@@ -479,7 +479,7 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
 }
 
 describe('MemoryStorePort', () => {
-  it('supports writer and retriever flow against a non-SQLite implementation', async () => {
+  it('supports writer and retriever flow against a port-backed implementation', async () => {
     const store = new InMemoryMemoryStorePort();
     const embeddings = makeEmbeddingProvider();
     const writer = new MemoryWriter(store, embeddings);

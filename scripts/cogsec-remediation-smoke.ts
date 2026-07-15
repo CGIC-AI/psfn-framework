@@ -1,12 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import { MemoryRetriever } from '../src/faculties/memory/retrieval.js';
-import { MemoryStore } from '../src/faculties/memory/store.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../src/faculties/memory/embedding.js';
-import type { MemoryStorePort } from '../src/faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../src/faculties/memory/types.js';
 import type { EmbeddingProviderPort } from '../src/core/agent/contracts.js';
 import { CogSecEventStore } from '../src/core/cogsec/events.js';
@@ -21,6 +17,8 @@ import {
   resolveCogSecForensicArchiveDir,
 } from '../src/persistence/layout.js';
 import { SessionStore } from '../src/persistence/sessions/store.js';
+import { InMemoryMemoryStore } from '../src/test-support/in-memory-memory-store.js';
+import { createInMemoryTranscriptProjection } from '../src/test-support/in-memory-transcript-projection.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 const CASE_ID = 'cogsec_20260701T000000Z_smoke';
@@ -111,7 +109,9 @@ async function main(): Promise<void> {
   try {
     const companionRoot = join(root, 'companion-data');
     const sessionsRoot = join(root, 'sessions');
-    const sessionStore = new SessionStore(sessionsRoot, { enableSearchIndex: true });
+    const sessionStore = new SessionStore(sessionsRoot, {
+      transcriptProjection: createInMemoryTranscriptProjection(),
+    });
     const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot), {
       now: () => new Date('2026-07-01T00:00:00.000Z'),
     });
@@ -143,9 +143,8 @@ async function main(): Promise<void> {
     });
     sessionStore.insertCompaction(CHANNEL_ID, DIRTY_SUMMARY_TEXT, cleanMessageId);
 
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const memoryStore = new MemoryStore(db);
+    const memoryStore = new InMemoryMemoryStore();
+    const memoryStorePort = memoryStore.asPort();
     const dirtyEmbedding = makeEmbedding(4);
     const cleanEmbedding = makeEmbedding(40);
     memoryStore.insertMemory(makeMemory('smoke-memory-dirty', DIRTY_MEMORY_TEXT, dirtyMessageId), dirtyEmbedding);
@@ -160,12 +159,12 @@ async function main(): Promise<void> {
     }, cleanEmbedding);
 
     const retriever = new MemoryRetriever(
-      memoryStore as unknown as MemoryStorePort,
+      memoryStorePort,
       makeEmbeddingProvider(dirtyEmbedding),
       { retrievalBudgetPct: 0.1 },
     );
     const cleanRetriever = new MemoryRetriever(
-      memoryStore as unknown as MemoryStorePort,
+      memoryStorePort,
       makeEmbeddingProvider(cleanEmbedding),
       { retrievalBudgetPct: 0.1 },
     );
@@ -197,7 +196,7 @@ async function main(): Promise<void> {
     const preview = await buildCogSecLineagePreview({
       event,
       sessionReader: sessionStore,
-      memoryStore: memoryStore as unknown as Pick<MemoryStorePort, 'listMemories'>,
+      memoryStore: memoryStorePort,
     });
     assert(preview.memories.some(memory => memory.id === 'smoke-memory-dirty'), 'lineage preview missed dirty memory');
     assert(preview.compactionSummaries.length > 0, 'lineage preview missed compaction summary');
@@ -205,7 +204,7 @@ async function main(): Promise<void> {
     const revocation = await applyCogSecRevocation({
       preview,
       eventStore,
-      memoryStore: memoryStore as unknown as Pick<MemoryStorePort, 'softDeleteMemory'>,
+      memoryStore: memoryStorePort,
       activeMemoryInvalidator: {
         invalidateActiveMemoryContexts: input => retriever.invalidateActiveMemoryContexts({
           memoryIds: input.memoryIds,

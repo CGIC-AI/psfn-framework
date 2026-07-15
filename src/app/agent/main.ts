@@ -234,7 +234,7 @@ async function main(): Promise<void> {
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
-  log.info('PostgreSQL persistence backend selected; skipping SQLite startup checks', {
+  log.info('PostgreSQL persistence backend selected', {
     persistenceBackend,
   });
 

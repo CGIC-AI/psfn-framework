@@ -3,9 +3,8 @@ import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import WebSocket from 'ws';
-import Database from 'better-sqlite3';
 import { EventBus } from '../../shared/event-bus.js';
-import { ContactStore } from '../../core/contacts/store.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -987,9 +986,8 @@ describe('ApiServer', () => {
     });
 
     it('returns explicit verification challenge and does not link unverified identity claims', async () => {
-      const db = new Database(':memory:');
-      const contactStore = new ContactStore(db);
-      const contact = contactStore.upsert({
+      const { store: contactStore } = await createTestPostgresContactStore();
+      const contact = await contactStore.upsert({
         displayName: 'PrimaryUser',
         channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
@@ -1022,15 +1020,13 @@ describe('ApiServer', () => {
       expect(body.error.details?.verification?.expiresAt).toBeTruthy();
       expect(body.error.details?.verification?.signature).toBeTruthy();
       expect(body.error.details?.verification?.targetUserId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
-      expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)).toBeUndefined();
-
-      db.close();
+      await expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID))
+        .resolves.toBeUndefined();
     });
 
     it('links claimed identity after challenge verification and rejects replayed proof', async () => {
-      const db = new Database(':memory:');
-      const contactStore = new ContactStore(db);
-      const contact = contactStore.upsert({
+      const { store: contactStore } = await createTestPostgresContactStore();
+      const contact = await contactStore.upsert({
         displayName: 'PrimaryUser',
         channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
@@ -1075,7 +1071,8 @@ describe('ApiServer', () => {
       });
 
       expect(verified.status).toBe(200);
-      expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)?.id).toBe(contact.id);
+      expect((await contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID))?.id)
+        .toBe(contact.id);
 
       const replay = await request(port, 'POST', '/v1/chat/completions', {
         model: DEFAULT_COMPANION_ID,
@@ -1092,13 +1089,11 @@ describe('ApiServer', () => {
       expect(replay.status).toBe(409);
       expect(JSON.parse(replay.body).error.type).toBe('identity_verification_replayed');
 
-      db.close();
     });
 
     it('rejects expired and spoofed identity claim verification attempts', async () => {
-      const db = new Database(':memory:');
-      const contactStore = new ContactStore(db);
-      const contact = contactStore.upsert({
+      const { pool, store: contactStore } = await createTestPostgresContactStore();
+      const contact = await contactStore.upsert({
         displayName: 'PrimaryUser',
         channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
@@ -1142,11 +1137,12 @@ describe('ApiServer', () => {
       };
 
       const expiredAt = new Date(Date.now() - 60_000).toISOString();
-      db.prepare(`
-        UPDATE contact_identity_link_verifications
-        SET expires_at = ?
-        WHERE nonce = ?
-      `).run(expiredAt, verification.nonce);
+      const verificationRow = [...pool.contactIdentityLinkVerifications.values()]
+        .find(row => row.nonce === verification.nonce);
+      if (!verificationRow) {
+        throw new Error('Postgres contact fixture did not persist the identity verification challenge');
+      }
+      verificationRow.expires_at = expiredAt;
 
       const expired = await request(port, 'POST', '/v1/chat/completions', {
         model: DEFAULT_COMPANION_ID,
@@ -1163,7 +1159,6 @@ describe('ApiServer', () => {
       expect(expired.status).toBe(410);
       expect(JSON.parse(expired.body).error.type).toBe('identity_verification_expired');
 
-      db.close();
     });
 
     it('returns 400 for missing messages', async () => {
@@ -2655,9 +2650,8 @@ describe('ApiServer with auth', () => {
   });
 
   it('binds identity claims to the authenticated principal and prevents X-User-ID spoofing', async () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db);
-    const contact = contactStore.upsert({
+    const { store: contactStore } = await createTestPostgresContactStore();
+    const contact = await contactStore.upsert({
       displayName: 'PrimaryUser',
       channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
     });
@@ -2708,11 +2702,9 @@ describe('ApiServer with auth', () => {
       'X-Identity-Claim-Signature': verification.signature,
     });
     expect(verified.status).toBe(200);
-    expect(contactStore.getByChannelIdentity('api', principalId)?.id).toBe(contact.id);
-    expect(contactStore.getByChannelIdentity('api', 'spoofed-a')).toBeUndefined();
-    expect(contactStore.getByChannelIdentity('api', 'spoofed-b')).toBeUndefined();
-
-    db.close();
+    expect((await contactStore.getByChannelIdentity('api', principalId))?.id).toBe(contact.id);
+    await expect(contactStore.getByChannelIdentity('api', 'spoofed-a')).resolves.toBeUndefined();
+    await expect(contactStore.getByChannelIdentity('api', 'spoofed-b')).resolves.toBeUndefined();
   });
 
   it('allows OPTIONS without auth (CORS preflight)', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Pool, QueryResult } from 'pg';
+import type { Pool } from 'pg';
 import {
   EPISODIC_CONTRACT_VERSION,
   parseEpisode,
@@ -7,6 +7,7 @@ import {
   serializeEpisodeArc,
   type Episode,
 } from '../../../shared/contracts/episodic-memory.js';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
 import type {
   EpisodeArcWriteInput,

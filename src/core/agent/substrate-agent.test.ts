@@ -15,7 +15,7 @@ import {
   setRuntimeChannelEnvelopeLabels,
 } from '../../system/trust/runtime-channel-labels.js';
 import type { ContextManifest } from '../session/context-manifest.js';
-import type { ContactStore } from '../contacts/store.js';
+import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ChannelPromptDock } from '../../channels/backplane/types.js';
 import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
@@ -683,7 +683,7 @@ describe('SubstrateAgent construction', () => {
     };
     const mockContactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     agent.memoryProvider = mockMemory;
     agent.memoryExtractor = mockExtractor;
@@ -3035,7 +3035,7 @@ describe('SubstrateAgent.handleMessage', () => {
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
@@ -4306,7 +4306,7 @@ describe('SubstrateAgent.handleMessage', () => {
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
@@ -4561,7 +4561,7 @@ describe('SubstrateAgent.handleMessage', () => {
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const agent = new SubstrateAgent(
       new EventBus(),
       makeMockLLMProvider(),
@@ -5482,7 +5482,7 @@ describe('SubstrateAgent.handleMessage', () => {
         moodSamples: 7,
       }),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     const response = await agent.handleMessage(makeMessage({
       id: 'msg-internal-state',
@@ -5701,7 +5701,7 @@ describe('SubstrateAgent.handleMessage', () => {
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     const publicSessionManager = makeMockSessionManager();
     const publicAgent = new SubstrateAgent(
@@ -5732,7 +5732,7 @@ describe('SubstrateAgent.handleMessage', () => {
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
       getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));
     await publicAgent.handleMessage(makeMessage({ id: 'affect-public-turn' }));

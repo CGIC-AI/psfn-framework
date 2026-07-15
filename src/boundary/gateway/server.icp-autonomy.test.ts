@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 
 import type {
   IcpAutonomyInvalidationFence,
@@ -18,8 +17,8 @@ import {
   IcpPermitRevocationConflictError,
 } from '../../core/icp/autonomy-store-ports.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
-import { ContactStore } from '../../core/contacts/store.js';
 import { createContactTool } from '../../core/contacts/tools.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   deriveIcpTransportMessageId,
   type IcpAutonomyReasonCode,
@@ -1240,13 +1239,13 @@ describe('GatewayServer ICP autonomy RPC', () => {
       await consumeGate.reached;
 
       const dir = mkdtempSync(join(tmpdir(), 'psfn-icp-block-race-'));
-      const db = new Database(':memory:');
       const blockList = new ContactBlockListStore(join(dir, 'contact-block-list.json'));
+      const { store: contactStore } = await createTestPostgresContactStore(blockerId);
       const blockerConnection = blockerId === A ? a : b;
       const peerId = blockerId === A ? B : A;
       let invalidationCall = 0;
       let racedPermitId: string | undefined;
-      const tool = createContactTool(new ContactStore(db, blockerId), {
+      const tool = createContactTool(contactStore, {
         blockList,
         permitInvalidation: {
           invalidatePendingInitiationPermitsForBlock: async () => {
@@ -1298,7 +1297,6 @@ describe('GatewayServer ICP autonomy RPC', () => {
         });
       } finally {
         consumeGate.release();
-        db.close();
         rmSync(dir, { recursive: true, force: true });
       }
     },

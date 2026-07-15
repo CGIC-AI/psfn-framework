@@ -218,7 +218,7 @@ for history; column removal is a later cleanup bead.
 ## One-time migration (`npm run migrate:channel-envelope`)
 
 Enumerates known channels from contact conversation-channel rows
-(`contact_channel_activity`, Postgres or SQLite) and the JSONL session journals, then
+(`contact_channel_activity` in Postgres) and the JSONL session journals, then
 seeds `contextEnvelope.channels` labels. Dry-run report is the **default**; `--apply`
 writes through the validated owner-file path. Derivation is deterministic: prefix
 heuristics seed verbatim; otherwise unanimous persisted evidence (stored visibility

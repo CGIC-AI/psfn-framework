@@ -26,9 +26,9 @@ export const MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES = 2;
  *  - provider_emitted_empty: the model called the tool with no arguments at all
  *    (no argument fragments arrived anywhere in the stream).
  *  - stream_parse_dropped: argument fragments DID arrive but a tool call still
- *    ended empty — the accumulator lost them (the pre-patch failure mode). This
- *    should not fire once the pi-ai index-routing patch is applied; keeping the
- *    classifier lets us confirm the fix holds and catch any regression.
+ *    ended empty — the accumulator lost them (the pre-upstream-fix failure
+ *    mode). This should not fire with pi-ai's index-keyed accumulator; keeping
+ *    the classifier lets us confirm the fix holds and catch any regression.
  */
 export function logEmptyToolArgumentProvenance(
   toolCalls: readonly ToolCall[],

@@ -626,11 +626,11 @@ kubectl -n psfn-test exec "$AGENT_POD" -- \
   node -e "const c=new AbortController(); setTimeout(()=>c.abort(),8000); fetch('https://example.com',{signal:c.signal}).then(r=>{console.log('UNEXPECTED:'+r.status); process.exit(2)}).catch(e=>console.log(e.name+':'+e.message))"
 ```
 
-Agent logs should show the production Postgres path, not SQLite:
+Agent logs should confirm the production Postgres path:
 
 ```bash
 kubectl -n psfn-test logs deploy/psfn-agent --since=10m | \
-  grep -E 'PostgreSQL persistence backend selected|skipping SQLite startup checks|Ready'
+  grep -E 'PostgreSQL persistence backend selected|Ready'
 ```
 
 ## Backup And Pi Cutover

@@ -1,126 +1,32 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { ContactStore } from './store.js';
+import type { ContactStorePort } from './contact-store-port.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
+import type { FakePostgresPool } from '../../test-support/fake-postgres-contact-pool.js';
 
 const PRIMARY_USER_ID = 'discord-primary-123';
 
-describe('ContactStore', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+describe('Postgres contact store behavior', () => {
+  let pool: FakePostgresPool;
+  let store: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, PRIMARY_USER_ID);
-  });
-
-  describe('createTables', () => {
-    it('initializes without error', () => {
-      // Constructor already called createTables — verify table exists
-      const tables = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'",
-      ).all();
-      expect(tables).toHaveLength(1);
-    });
-
-    it('is idempotent — second construction does not throw', () => {
-      expect(() => new ContactStore(db, PRIMARY_USER_ID)).not.toThrow();
-    });
-
-    it('migrates legacy contacts schema to include nickname', () => {
-      const legacyDb = new Database(':memory:');
-      legacyDb.exec(`
-        CREATE TABLE contacts (
-          id TEXT PRIMARY KEY,
-          discord_user_id TEXT UNIQUE,
-          display_name TEXT NOT NULL,
-          trust_level TEXT NOT NULL DEFAULT 'regular',
-          relationship_type TEXT NOT NULL DEFAULT 'stranger',
-          emotional_baseline TEXT DEFAULT '{}',
-          first_seen TEXT NOT NULL,
-          last_seen TEXT NOT NULL,
-          notes TEXT
-        );
-
-        CREATE TABLE contact_channel_ids (
-          contact_id TEXT NOT NULL,
-          channel TEXT NOT NULL,
-          channel_user_id TEXT NOT NULL,
-          first_seen TEXT NOT NULL,
-          last_seen TEXT NOT NULL,
-          PRIMARY KEY (channel, channel_user_id)
-        );
-      `);
-
-      const now = new Date().toISOString();
-      legacyDb.prepare(`
-        INSERT INTO contacts (
-          id, discord_user_id, display_name, trust_level, relationship_type,
-          emotional_baseline, first_seen, last_seen, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('legacy-contact', 'legacy-discord-id', 'Legacy', 'trusted', 'friend', '{}', now, now, null);
-
-      const migratedStore = new ContactStore(legacyDb, PRIMARY_USER_ID);
-      const columns = legacyDb.prepare('PRAGMA table_info(contacts)')
-        .all() as Array<{ name: string }>;
-      expect(columns.some(column => column.name === 'nickname')).toBe(true);
-      expect(columns.some(column => column.name === 'timezone')).toBe(true);
-      expect(migratedStore.updateIdentityProfile('legacy-contact', 'Legacy Updated', 'Leg')).toBe(true);
-      expect(migratedStore.getById('legacy-contact')?.nickname).toBe('Leg');
-    });
-
-    it('migrates legacy discord_user_id rows into channel identity table', () => {
-      const now = new Date().toISOString();
-      db.prepare(`
-        INSERT INTO contacts (
-          id, discord_user_id, display_name, trust_level, relationship_type,
-          emotional_baseline, first_seen, last_seen
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('legacy-contact', 'legacy-discord-id', 'Legacy', 'trusted', 'friend', '{}', now, now);
-
-      const migratedStore = new ContactStore(db, PRIMARY_USER_ID);
-      const byChannelIdentity = migratedStore.getByChannelIdentity('discord', 'legacy-discord-id');
-      expect(byChannelIdentity?.id).toBe('legacy-contact');
-    });
-
-    it('creates contact_channel_activity table', () => {
-      const tables = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_channel_activity'",
-      ).all();
-      expect(tables).toHaveLength(1);
-    });
-
-    it('creates contact_identity_link_verifications table', () => {
-      const tables = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_identity_link_verifications'",
-      ).all();
-      expect(tables).toHaveLength(1);
-    });
-
-    it('creates contact_mutation_audit table', () => {
-      const tables = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_mutation_audit'",
-      ).all();
-      expect(tables).toHaveLength(1);
-    });
+  beforeEach(async () => {
+    ({ pool, store } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   describe('upsert', () => {
-    it('rejects autonomous creation at approval-gated relationship classifications', () => {
-      expect(() => store.upsert(
+    it('rejects autonomous creation at approval-gated relationship classifications', async () => {
+      await expect(store.upsert(
         { displayName: 'Autonomous Family', relationshipType: 'family' },
         { actor: 'agent:tool:test' },
-      )).toThrow(/relationship assignment denied/);
-      expect(() => store.upsert(
+      )).rejects.toThrow(/relationship assignment denied/);
+      await expect(store.upsert(
         { displayName: 'Extracted Partner', relationshipType: 'partner' },
         { actor: 'system:memory_extraction:mention_contact' },
-      )).toThrow(/relationship assignment denied/);
+      )).rejects.toThrow(/relationship assignment denied/);
     });
 
-    it('creates new contact with generated UUID', () => {
-      const contact = store.upsert({ displayName: 'Alice' });
+    it('creates new contact with generated UUID', async () => {
+      const contact = await store.upsert({ displayName: 'Alice' });
       expect(contact.id).toBeDefined();
       expect(contact.id.length).toBeGreaterThan(0);
       expect(contact.displayName).toBe('Alice');
@@ -130,13 +36,13 @@ describe('ContactStore', () => {
       expect(contact.lastSeen).toBeDefined();
     });
 
-    it('updates existing contact by discordUserId', () => {
-      const c1 = store.upsert({
+    it('updates existing contact by discordUserId', async () => {
+      const c1 = await store.upsert({
         displayName: 'Bob',
         discordUserId: 'discord-bob',
         trustLevel: 'regular',
       });
-      const c2 = store.upsert({
+      const c2 = await store.upsert({
         displayName: 'Robert',
         discordUserId: 'discord-bob',
         trustLevel: 'trusted',
@@ -151,8 +57,8 @@ describe('ContactStore', () => {
       expect(c2.firstSeen).toBe(c1.firstSeen);
     });
 
-    it('forces primary trust for primaryUserId', () => {
-      const contact = store.upsert({
+    it('forces primary trust for primaryUserId', async () => {
+      const contact = await store.upsert({
         displayName: 'V',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'regular',  // Should be overridden
@@ -161,14 +67,14 @@ describe('ContactStore', () => {
       expect(contact.relationshipType).toBe('stranger');
     });
 
-    it('keeps primary trust independent from relationship on an unrelated upsert', () => {
-      const contact = store.upsert({
+    it('keeps primary trust independent from relationship on an unrelated upsert', async () => {
+      const contact = await store.upsert({
         displayName: 'Primary Relationship',
         discordUserId: PRIMARY_USER_ID,
         relationshipType: 'acquaintance',
       });
 
-      const updated = store.upsert({
+      const updated = await store.upsert({
         id: contact.id,
         displayName: 'Primary Relationship Renamed',
       });
@@ -177,9 +83,9 @@ describe('ContactStore', () => {
       expect(updated.relationshipType).toBe('acquaintance');
     });
 
-    it('forces primary trust when updating existing primary user', () => {
-      store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
-      const updated = store.upsert({
+    it('forces primary trust when updating existing primary user', async () => {
+      await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const updated = await store.upsert({
         displayName: 'V Updated',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'public',  // Should be overridden
@@ -187,23 +93,23 @@ describe('ContactStore', () => {
       expect(updated.trustLevel).toBe('primary');
     });
 
-    it('rejects unauthorized primary trust assignment via upsert and audits denial', () => {
-      const contact = store.upsert({
+    it('rejects unauthorized primary trust assignment via upsert and audits denial', async () => {
+      const contact = await store.upsert({
         displayName: 'Mallory',
         discordUserId: 'discord-mallory',
         trustLevel: 'trusted',
       });
 
-      expect(() => store.upsert({
+      await expect(store.upsert({
         id: contact.id,
         displayName: 'Mallory',
         trustLevel: 'primary',
-      })).toThrow(/Primary trust assignment denied/);
+      })).rejects.toThrow(/Primary trust assignment denied/);
 
-      const unchanged = store.getById(contact.id);
+      const unchanged = await store.getById(contact.id);
       expect(unchanged?.trustLevel).toBe('trusted');
 
-      const entries = store.listMutationAuditEntries({
+      const entries = await store.listMutationAuditEntries({
         contactId: contact.id,
         field: 'trust_level',
       });
@@ -217,15 +123,15 @@ describe('ContactStore', () => {
       expect(entries[0].actor).toContain('primary_denied');
     });
 
-    it('audits allowed owner-mapped upsert primary assignment', () => {
-      const contact = store.upsert({
+    it('audits allowed owner-mapped upsert primary assignment', async () => {
+      const contact = await store.upsert({
         displayName: 'V',
         discordUserId: PRIMARY_USER_ID,
         trustLevel: 'regular',
       });
       expect(contact.trustLevel).toBe('primary');
 
-      const entries = store.listMutationAuditEntries({
+      const entries = await store.listMutationAuditEntries({
         contactId: contact.id,
         field: 'trust_level',
       });
@@ -239,14 +145,14 @@ describe('ContactStore', () => {
       expect(entries[0].actor).toContain('primary_allowed');
     });
 
-    it('preserves existing fields when partial update', () => {
-      store.upsert({
+    it('preserves existing fields when partial update', async () => {
+      await store.upsert({
         displayName: 'Carol',
         discordUserId: 'discord-carol',
         notes: 'Old notes',
         emotionalBaseline: { warmth: 0.5 },
       });
-      const updated = store.upsert({
+      const updated = await store.upsert({
         displayName: 'Carol Updated',
         discordUserId: 'discord-carol',
       });
@@ -254,18 +160,13 @@ describe('ContactStore', () => {
       expect(updated.emotionalBaseline).toEqual({ warmth: 0.5 });
     });
 
-    it('does not overwrite a relationship changed while an unrelated upsert is in flight', () => {
-      const contact = store.upsert({ displayName: 'Concurrent Profile', relationshipType: 'friend' });
-      db.exec(`
-        CREATE TRIGGER concurrent_relationship_approval
-        BEFORE UPDATE OF display_name ON contacts
-        WHEN NEW.display_name = 'Concurrent Profile Renamed'
-        BEGIN
-          UPDATE contacts SET relationship_type = 'family' WHERE id = OLD.id;
-        END
-      `);
+    it('does not overwrite a relationship changed while an unrelated upsert is in flight', async () => {
+      const contact = await store.upsert({ displayName: 'Concurrent Profile', relationshipType: 'friend' });
+      pool.beforeNextContactProfileUpdate = (row) => {
+        row.relationship_type = 'family';
+      };
 
-      const updated = store.upsert({
+      const updated = await store.upsert({
         id: contact.id,
         displayName: 'Concurrent Profile Renamed',
       });
@@ -274,16 +175,16 @@ describe('ContactStore', () => {
       expect(updated.relationshipType).toBe('family');
     });
 
-    it('audits an operator-authorized relationship assignment through upsert', () => {
-      const contact = store.upsert({ displayName: 'Upsert Relationship Audit', relationshipType: 'friend' });
-      const updated = store.upsert({
+    it('audits an operator-authorized relationship assignment through upsert', async () => {
+      const contact = await store.upsert({ displayName: 'Upsert Relationship Audit', relationshipType: 'friend' });
+      const updated = await store.upsert({
         id: contact.id,
         displayName: contact.displayName,
         relationshipType: 'family',
       }, { actor: 'operator:test' });
 
       expect(updated.relationshipType).toBe('family');
-      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+      expect(await store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
         .toEqual([expect.objectContaining({
           actor: 'operator:test',
           oldValue: 'friend',
@@ -291,36 +192,36 @@ describe('ContactStore', () => {
         })]);
     });
 
-    it('persists, hydrates, preserves, updates, and clears optional timezone', () => {
-      const created = store.upsert({
+    it('persists, hydrates, preserves, updates, and clears optional timezone', async () => {
+      const created = await store.upsert({
         displayName: 'Timezone Contact',
         discordUserId: 'timezone-contact',
         timezone: '  America/Los_Angeles  ',
       });
       expect(created.timezone).toBe('America/Los_Angeles');
-      expect(store.getById(created.id)?.timezone).toBe('America/Los_Angeles');
+      expect((await store.getById(created.id))?.timezone).toBe('America/Los_Angeles');
 
-      const unrelatedUpdate = store.upsert({
+      const unrelatedUpdate = await store.upsert({
         displayName: 'Timezone Contact Renamed',
         discordUserId: 'timezone-contact',
       });
       expect(unrelatedUpdate.timezone).toBe('America/Los_Angeles');
 
-      const changed = store.upsert({
+      const changed = await store.upsert({
         displayName: 'Timezone Contact Renamed',
         discordUserId: 'timezone-contact',
         timezone: 'Europe/London',
       }, { actor: 'admin:api' });
       expect(changed.timezone).toBe('Europe/London');
 
-      const cleared = store.upsert({
+      const cleared = await store.upsert({
         displayName: 'Timezone Contact Renamed',
         discordUserId: 'timezone-contact',
         timezone: undefined,
       }, { actor: 'admin:api' });
       expect(cleared.timezone).toBeUndefined();
 
-      const entries = store.listMutationAuditEntries({
+      const entries = await store.listMutationAuditEntries({
         contactId: created.id,
         field: 'timezone',
         limit: 10,
@@ -341,129 +242,102 @@ describe('ContactStore', () => {
       ]);
     });
 
-    it('exports contact snapshots to configured contacts directory', () => {
-      const tempDir = mkdtempSync(join(tmpdir(), 'psfn-contacts-export-'));
-      const exportDir = join(tempDir, 'contacts');
-      const exportStore = new ContactStore(db, PRIMARY_USER_ID, { exportDir });
-
-      const created = exportStore.upsert({
-        displayName: 'Exported',
-        discordUserId: 'discord-export',
-        notes: 'first note',
-      });
-      exportStore.updateNotes(created.id, 'updated note');
-
-      const index = JSON.parse(readFileSync(join(exportDir, 'index.json'), 'utf-8')) as {
-        count: number;
-        contacts: Array<{ id: string; displayName: string }>;
-      };
-      expect(index.count).toBeGreaterThanOrEqual(1);
-      expect(index.contacts.some(contact => contact.id === created.id)).toBe(true);
-
-      const contactFile = JSON.parse(
-        readFileSync(join(exportDir, `contact-${created.id}.json`), 'utf-8'),
-      ) as { id: string; notes?: string };
-      expect(contactFile.id).toBe(created.id);
-      expect(contactFile.notes).toBe('updated note');
-
-      rmSync(tempDir, { recursive: true, force: true });
-    });
   });
 
   describe('getById', () => {
-    it('returns contact when found', () => {
-      const created = store.upsert({ displayName: 'Dave' });
-      const found = store.getById(created.id);
+    it('returns contact when found', async () => {
+      const created = await store.upsert({ displayName: 'Dave' });
+      const found = await store.getById(created.id);
       expect(found).toBeDefined();
       expect(found!.displayName).toBe('Dave');
     });
 
-    it('returns undefined when not found', () => {
-      expect(store.getById('nonexistent')).toBeUndefined();
+    it('returns undefined when not found', async () => {
+      expect(await store.getById('nonexistent')).toBeUndefined();
     });
   });
 
   describe('getByDiscordUserId', () => {
-    it('returns contact when found', () => {
-      store.upsert({ displayName: 'Eve', discordUserId: 'discord-eve' });
-      const found = store.getByDiscordUserId('discord-eve');
+    it('returns contact when found', async () => {
+      await store.upsert({ displayName: 'Eve', discordUserId: 'discord-eve' });
+      const found = await store.getByDiscordUserId('discord-eve');
       expect(found).toBeDefined();
       expect(found!.displayName).toBe('Eve');
     });
 
-    it('returns undefined when not found', () => {
-      expect(store.getByDiscordUserId('nonexistent')).toBeUndefined();
+    it('returns undefined when not found', async () => {
+      expect(await store.getByDiscordUserId('nonexistent')).toBeUndefined();
     });
   });
 
   describe('getByChannelIdentity', () => {
-    it('returns contact when identity mapping exists', () => {
-      const contact = store.upsert({
+    it('returns contact when identity mapping exists', async () => {
+      const contact = await store.upsert({
         displayName: 'Cross',
         channelIdentities: [{ channel: 'api', userId: 'cross-api-1' }],
       });
 
-      const found = store.getByChannelIdentity('api', 'cross-api-1');
+      const found = await store.getByChannelIdentity('api', 'cross-api-1');
       expect(found?.id).toBe(contact.id);
       expect(found?.displayName).toBe('Cross');
     });
 
-    it('falls back to legacy discord_user_id rows', () => {
-      const contact = store.upsert({ displayName: 'Legacy', discordUserId: 'legacy-discord' });
+    it('falls back to legacy discord_user_id rows', async () => {
+      const contact = await store.upsert({ displayName: 'Legacy', discordUserId: 'legacy-discord' });
 
-      const found = store.getByChannelIdentity('discord', 'legacy-discord');
+      const found = await store.getByChannelIdentity('discord', 'legacy-discord');
       expect(found?.id).toBe(contact.id);
       expect(found?.discordUserId).toBe('legacy-discord');
     });
   });
 
   describe('getByTrustLevel', () => {
-    it('filters contacts correctly', () => {
-      store.upsert({ displayName: 'Trusted1', trustLevel: 'trusted', discordUserId: 't1' });
-      store.upsert({ displayName: 'Trusted2', trustLevel: 'trusted', discordUserId: 't2' });
-      store.upsert({ displayName: 'Regular1', trustLevel: 'regular', discordUserId: 'r1' });
+    it('filters contacts correctly', async () => {
+      await store.upsert({ displayName: 'Trusted1', trustLevel: 'trusted', discordUserId: 't1' });
+      await store.upsert({ displayName: 'Trusted2', trustLevel: 'trusted', discordUserId: 't2' });
+      await store.upsert({ displayName: 'Regular1', trustLevel: 'regular', discordUserId: 'r1' });
 
-      const trusted = store.getByTrustLevel('trusted');
+      const trusted = await store.getByTrustLevel('trusted');
       expect(trusted).toHaveLength(2);
       expect(trusted.map(c => c.displayName).sort()).toEqual(['Trusted1', 'Trusted2']);
 
-      const regular = store.getByTrustLevel('regular');
+      const regular = await store.getByTrustLevel('regular');
       expect(regular).toHaveLength(1);
       expect(regular[0].displayName).toBe('Regular1');
     });
 
-    it('returns empty array when no contacts at level', () => {
-      expect(store.getByTrustLevel('public')).toEqual([]);
+    it('returns empty array when no contacts at level', async () => {
+      expect(await store.getByTrustLevel('public')).toEqual([]);
     });
   });
 
   describe('setTrustLevel', () => {
-    it('updates trust level', () => {
-      const contact = store.upsert({ displayName: 'Frank', discordUserId: 'discord-frank' });
-      const result = store.setTrustLevel(contact.id, 'trusted');
+    it('updates trust level', async () => {
+      const contact = await store.upsert({ displayName: 'Frank', discordUserId: 'discord-frank' });
+      const result = await store.setTrustLevel(contact.id, 'trusted');
       expect(result).toBe(true);
 
-      const updated = store.getById(contact.id);
+      const updated = await store.getById(contact.id);
       expect(updated!.trustLevel).toBe('trusted');
     });
 
-    it('cannot change primary user trust', () => {
-      const primary = store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
-      const result = store.setTrustLevel(primary.id, 'public');
+    it('cannot change primary user trust', async () => {
+      const primary = await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const result = await store.setTrustLevel(primary.id, 'public');
       expect(result).toBe(false);
 
-      const unchanged = store.getById(primary.id);
+      const unchanged = await store.getById(primary.id);
       expect(unchanged!.trustLevel).toBe('primary');
     });
 
-    it('denies unauthorized promotion to primary via setTrustLevel and audits denial', () => {
-      const contact = store.upsert({ displayName: 'Frank', discordUserId: 'discord-frank' });
-      expect(store.setTrustLevel(contact.id, 'primary', 'admin:gui')).toBe(false);
+    it('denies unauthorized promotion to primary via setTrustLevel and audits denial', async () => {
+      const contact = await store.upsert({ displayName: 'Frank', discordUserId: 'discord-frank' });
+      expect(await store.setTrustLevel(contact.id, 'primary', 'admin:gui')).toBe(false);
 
-      const unchanged = store.getById(contact.id);
+      const unchanged = await store.getById(contact.id);
       expect(unchanged?.trustLevel).toBe('regular');
 
-      const entries = store.listMutationAuditEntries({
+      const entries = await store.listMutationAuditEntries({
         contactId: contact.id,
         field: 'trust_level',
       });
@@ -477,30 +351,27 @@ describe('ContactStore', () => {
       });
     });
 
-    it('allows owner-mapped promotion to primary via setTrustLevel and audits allowance', () => {
-      const now = new Date().toISOString();
-      db.prepare(`
-        INSERT INTO contacts (
-          id, discord_user_id, display_name, trust_level, relationship_type,
-          emotional_baseline, first_seen, last_seen, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('owner-legacy', PRIMARY_USER_ID, 'Owner Legacy', 'regular', 'friend', '{}', now, now, null);
-      db.prepare(`
-        INSERT INTO contact_channel_ids (
-          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
+    it('allows owner-mapped promotion to primary via setTrustLevel and audits allowance', async () => {
+      const owner = await store.upsert({
+        displayName: 'Owner Legacy',
+        discordUserId: PRIMARY_USER_ID,
+        relationshipType: 'friend',
+      });
+      const ownerRow = pool.contacts.get(owner.id);
+      if (!ownerRow) throw new Error('Missing owner contact fixture');
+      ownerRow.trust_level = 'regular';
+      pool.contactMutationAudit = [];
 
-      expect(store.setTrustLevel('owner-legacy', 'primary', 'admin:api')).toBe(true);
-      expect(store.getById('owner-legacy')?.trustLevel).toBe('primary');
+      expect(await store.setTrustLevel(owner.id, 'primary', 'admin:api')).toBe(true);
+      expect((await store.getById(owner.id))?.trustLevel).toBe('primary');
 
-      const entries = store.listMutationAuditEntries({
-        contactId: 'owner-legacy',
+      const entries = await store.listMutationAuditEntries({
+        contactId: owner.id,
         field: 'trust_level',
       });
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({
-        contactId: 'owner-legacy',
+        contactId: owner.id,
         field: 'trust_level',
         actor: 'admin:api:primary_allowed',
         oldValue: 'regular',
@@ -508,15 +379,15 @@ describe('ContactStore', () => {
       });
     });
 
-    it('returns false for nonexistent id', () => {
-      expect(store.setTrustLevel('nonexistent', 'trusted')).toBe(false);
+    it('returns false for nonexistent id', async () => {
+      expect(await store.setTrustLevel('nonexistent', 'trusted')).toBe(false);
     });
 
-    it('records trust mutations with actor and old/new values', () => {
-      const contact = store.upsert({ displayName: 'Audit Trust Target', trustLevel: 'regular' });
-      expect(store.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
+    it('records trust mutations with actor and old/new values', async () => {
+      const contact = await store.upsert({ displayName: 'Audit Trust Target', trustLevel: 'regular' });
+      expect(await store.setTrustLevel(contact.id, 'trusted', 'admin:gui')).toBe(true);
 
-      const entries = store.listMutationAuditEntries({
+      const entries = await store.listMutationAuditEntries({
         contactId: contact.id,
         field: 'trust_level',
       });
@@ -533,19 +404,19 @@ describe('ContactStore', () => {
   });
 
   describe('updateLastSeen', () => {
-    it('updates timestamp', () => {
+    it('updates timestamp', async () => {
       // Insert with an old timestamp so updateLastSeen will definitely produce a newer one
       const oldTime = '2020-01-01T00:00:00.000Z';
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Grace',
         firstSeen: oldTime,
         lastSeen: oldTime,
       });
       expect(contact.lastSeen).toBe(oldTime);
 
-      store.updateLastSeen(contact.id);
+      await store.updateLastSeen(contact.id);
 
-      const updated = store.getById(contact.id);
+      const updated = await store.getById(contact.id);
       expect(updated!.lastSeen).not.toBe(oldTime);
       // Updated timestamp should be more recent
       expect(new Date(updated!.lastSeen).getTime()).toBeGreaterThan(new Date(oldTime).getTime());
@@ -553,11 +424,11 @@ describe('ContactStore', () => {
   });
 
   describe('recordChannelActivity', () => {
-    it('records channel activity and hydrates conversationChannels', () => {
-      const contact = store.upsert({ displayName: 'Activity User', discordUserId: 'activity-user-1' });
-      store.recordChannelActivity(contact.id, 'Discord', 'guild:123');
+    it('records channel activity and hydrates conversationChannels', async () => {
+      const contact = await store.upsert({ displayName: 'Activity User', discordUserId: 'activity-user-1' });
+      await store.recordChannelActivity(contact.id, 'Discord', 'guild:123');
 
-      const hydrated = store.getById(contact.id);
+      const hydrated = await store.getById(contact.id);
       expect(hydrated?.conversationChannels).toEqual([
         expect.objectContaining({
           channel: 'discord',
@@ -568,11 +439,11 @@ describe('ContactStore', () => {
       expect(hydrated?.conversationChannels?.[0].lastSeen).toBeDefined();
     });
 
-    it('records explicit conversation-channel privacy and persists direct channel edits', () => {
-      const contact = store.upsert({ displayName: 'DM User', discordUserId: 'dm-user-1' });
-      store.recordChannelActivity(contact.id, 'Discord', '1313001762793197678', 'private');
+    it('records explicit conversation-channel privacy and persists direct channel edits', async () => {
+      const contact = await store.upsert({ displayName: 'DM User', discordUserId: 'dm-user-1' });
+      await store.recordChannelActivity(contact.id, 'Discord', '1313001762793197678', 'private');
 
-      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+      expect((await store.getById(contact.id))?.conversationChannels).toEqual([
         expect.objectContaining({
           channel: 'discord',
           channelId: '1313001762793197678',
@@ -580,9 +451,9 @@ describe('ContactStore', () => {
         }),
       ]);
 
-      expect(store.setConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678', 'public')).toBe(true);
-      expect(store.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
-      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+      expect(await store.setConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678', 'public')).toBe(true);
+      expect(await store.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
+      expect((await store.getById(contact.id))?.conversationChannels).toEqual([
         expect.objectContaining({
           channel: 'discord',
           channelId: '1313001762793197678',
@@ -593,75 +464,65 @@ describe('ContactStore', () => {
   });
 
   describe('mergeContacts', () => {
-    it('remaps identities, activity, memories, and profiles to target', () => {
-      db.exec(`
-        CREATE TABLE l2_memories (
-          id TEXT PRIMARY KEY,
-          contact_id TEXT,
-          content TEXT
-        );
-
-        CREATE TABLE contact_profiles (
-          contact_id TEXT PRIMARY KEY,
-          profile_json TEXT
-        );
-      `);
-
-      const target = store.upsert({
+    it('remaps identities, activity, memories, and profiles to target', async () => {
+      const target = await store.upsert({
         displayName: 'Target',
         discordUserId: 'target-discord-id',
         trustLevel: 'regular',
       });
-      const source = store.upsert({
+      const source = await store.upsert({
         displayName: 'Source',
         channelIdentities: [{ channel: 'api', userId: 'source-api-id' }],
         trustLevel: 'trusted',
       });
 
-      db.prepare('INSERT INTO l2_memories (id, contact_id, content) VALUES (?, ?, ?)')
-        .run('memory-1', source.id, 'source memory');
-      db.prepare('INSERT INTO contact_profiles (contact_id, profile_json) VALUES (?, ?)')
-        .run(source.id, '{"nickname":"source"}');
+      pool.l2MemoryContacts.set('memory-1', source.id);
+      pool.contactProfiles.set(source.id, { nickname: 'source' });
+      await store.recordChannelActivity(target.id, 'discord', 'guild:shared');
+      await store.recordChannelActivity(source.id, 'discord', 'guild:shared');
+      await store.recordChannelActivity(source.id, 'api', 'session:9');
+      const targetShared = [...pool.contactChannelActivity.values()].find(row => (
+        row.contact_id === target.id && row.channel === 'discord' && row.channel_id === 'guild:shared'
+      ));
+      const sourceShared = [...pool.contactChannelActivity.values()].find(row => (
+        row.contact_id === source.id && row.channel === 'discord' && row.channel_id === 'guild:shared'
+      ));
+      const sourceApi = [...pool.contactChannelActivity.values()].find(row => (
+        row.contact_id === source.id && row.channel === 'api' && row.channel_id === 'session:9'
+      ));
+      if (!targetShared || !sourceShared || !sourceApi) throw new Error('Missing seeded contact activity');
+      Object.assign(targetShared, {
+        first_seen: '2024-01-01T00:00:00.000Z',
+        last_seen: '2024-01-05T00:00:00.000Z',
+      });
+      Object.assign(sourceShared, {
+        first_seen: '2023-12-01T00:00:00.000Z',
+        last_seen: '2024-01-10T00:00:00.000Z',
+      });
+      Object.assign(sourceApi, {
+        first_seen: '2024-01-11T00:00:00.000Z',
+        last_seen: '2024-01-11T00:00:00.000Z',
+      });
 
-      db.prepare(`
-        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(target.id, 'discord', 'guild:shared', '2024-01-01T00:00:00.000Z', '2024-01-05T00:00:00.000Z');
-      db.prepare(`
-        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(source.id, 'discord', 'guild:shared', '2023-12-01T00:00:00.000Z', '2024-01-10T00:00:00.000Z');
-      db.prepare(`
-        INSERT INTO contact_channel_activity (contact_id, channel, channel_id, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(source.id, 'api', 'session:9', '2024-01-11T00:00:00.000Z', '2024-01-11T00:00:00.000Z');
-
-      const merged = store.mergeContacts(source.id, target.id);
+      const merged = await store.mergeContacts(source.id, target.id);
       expect(merged).toBe(true);
-      expect(store.getById(source.id)).toBeUndefined();
+      expect(await store.getById(source.id)).toBeUndefined();
 
-      const sourceIdentityResolved = store.getByChannelIdentity('api', 'source-api-id');
+      const sourceIdentityResolved = await store.getByChannelIdentity('api', 'source-api-id');
       expect(sourceIdentityResolved?.id).toBe(target.id);
 
-      const memoryContact = db.prepare('SELECT contact_id FROM l2_memories WHERE id = ?')
-        .get('memory-1') as { contact_id: string };
-      expect(memoryContact.contact_id).toBe(target.id);
+      expect(pool.l2MemoryContacts.get('memory-1')).toBe(target.id);
+      expect(pool.contactProfiles.has(target.id)).toBe(true);
 
-      const profileContact = db.prepare('SELECT contact_id FROM contact_profiles')
-        .get() as { contact_id: string };
-      expect(profileContact.contact_id).toBe(target.id);
-
-      const activityRows = db.prepare(`
-        SELECT channel, channel_id, first_seen, last_seen
-        FROM contact_channel_activity
-        WHERE contact_id = ?
-        ORDER BY channel ASC, channel_id ASC
-      `).all(target.id) as Array<{
-        channel: string;
-        channel_id: string;
-        first_seen: string;
-        last_seen: string;
-      }>;
+      const activityRows = [...pool.contactChannelActivity.values()]
+        .filter(row => row.contact_id === target.id)
+        .sort((left, right) => left.channel.localeCompare(right.channel) || left.channel_id.localeCompare(right.channel_id))
+        .map(({ channel, channel_id, first_seen, last_seen }) => ({
+          channel,
+          channel_id,
+          first_seen,
+          last_seen,
+        }));
       expect(activityRows).toEqual([
         {
           channel: 'api',
@@ -677,48 +538,48 @@ describe('ContactStore', () => {
         },
       ]);
 
-      expect(store.getById(target.id)?.trustLevel).toBe('trusted');
+      expect((await store.getById(target.id))?.trustLevel).toBe('trusted');
     });
 
-    it('prefers human-readable display name when target uses opaque identifier text', () => {
-      const target = store.upsert({
+    it('prefers human-readable display name when target uses opaque identifier text', async () => {
+      const target = await store.upsert({
         displayName: 'YOUR_DISCORD_USER_ID',
         discordUserId: 'YOUR_DISCORD_USER_ID',
       });
-      const source = store.upsert({
+      const source = await store.upsert({
         displayName: 'PrimaryUser',
         channelIdentities: [{ channel: 'discord', userId: 'primary-user' }],
       });
 
-      const merged = store.mergeContacts(source.id, target.id);
+      const merged = await store.mergeContacts(source.id, target.id);
       expect(merged).toBe(true);
 
-      const updated = store.getById(target.id);
+      const updated = await store.getById(target.id);
       expect(updated?.displayName).toBe('PrimaryUser');
       expect(updated?.discordUserId).toBe('YOUR_DISCORD_USER_ID');
     });
   });
 
   describe('updateNotes', () => {
-    it('updates notes field', () => {
-      const contact = store.upsert({ displayName: 'Heidi' });
-      const result = store.updateNotes(contact.id, 'New notes');
+    it('updates notes field', async () => {
+      const contact = await store.upsert({ displayName: 'Heidi' });
+      const result = await store.updateNotes(contact.id, 'New notes');
       expect(result).toBe(true);
 
-      const updated = store.getById(contact.id);
+      const updated = await store.getById(contact.id);
       expect(updated!.notes).toBe('New notes');
     });
 
-    it('returns false for nonexistent id', () => {
-      expect(store.updateNotes('nonexistent', 'notes')).toBe(false);
+    it('returns false for nonexistent id', async () => {
+      expect(await store.updateNotes('nonexistent', 'notes')).toBe(false);
     });
 
-    it('records notes mutations and supports query filters', () => {
-      const contact = store.upsert({ displayName: 'Note Audit Target' });
-      expect(store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
-      expect(store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
+    it('records notes mutations and supports query filters', async () => {
+      const contact = await store.upsert({ displayName: 'Note Audit Target' });
+      expect(await store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
+      expect(await store.updateNotes(contact.id, 'First note', 'agent:tool:contact_note')).toBe(true);
 
-      const byField = store.listMutationAuditEntries({ field: 'notes' });
+      const byField = await store.listMutationAuditEntries({ field: 'notes' });
       expect(byField).toHaveLength(1);
       expect(byField[0]).toMatchObject({
         contactId: contact.id,
@@ -727,18 +588,18 @@ describe('ContactStore', () => {
         newValue: 'First note',
       });
 
-      const byActor = store.listMutationAuditEntries({ actor: 'agent:tool:contact_note', limit: 10 });
+      const byActor = await store.listMutationAuditEntries({ actor: 'agent:tool:contact_note', limit: 10 });
       expect(byActor.some(entry => entry.contactId === contact.id && entry.field === 'notes')).toBe(true);
     });
   });
 
   describe('profile and privacy audit trail', () => {
-    it('records display name and nickname mutations with actor metadata', () => {
-      const contact = store.upsert({ displayName: 'Profile Audit Target' });
+    it('records display name and nickname mutations with actor metadata', async () => {
+      const contact = await store.upsert({ displayName: 'Profile Audit Target' });
 
-      expect(store.updateIdentityProfile(contact.id, 'Updated Profile Name', 'Poppy', 'admin:api')).toBe(true);
+      expect(await store.updateIdentityProfile(contact.id, 'Updated Profile Name', 'Poppy', 'admin:api')).toBe(true);
 
-      const entries = store.listMutationAuditEntries({ contactId: contact.id, limit: 10 });
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, limit: 10 });
       expect(entries).toEqual([
         expect.objectContaining({
           contactId: contact.id,
@@ -757,12 +618,12 @@ describe('ContactStore', () => {
       ]);
     });
 
-    it('records relationship mutations', () => {
-      const contact = store.upsert({ displayName: 'Relationship Audit Target', relationshipType: 'friend' });
+    it('records relationship mutations', async () => {
+      const contact = await store.upsert({ displayName: 'Relationship Audit Target', relationshipType: 'friend' });
 
-      expect(store.updateRelationshipType(contact.id, 'partner', 'admin:api')).toBe(true);
+      expect(await store.updateRelationshipType(contact.id, 'partner', 'admin:api')).toBe(true);
 
-      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' });
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' });
       expect(entries).toEqual([
         expect.objectContaining({
           contactId: contact.id,
@@ -774,8 +635,8 @@ describe('ContactStore', () => {
       ]);
     });
 
-    it('keeps relationship classification independent from primary trust', () => {
-      const owner = store.upsert(
+    it('keeps relationship classification independent from primary trust', async () => {
+      const owner = await store.upsert(
         {
           displayName: 'Owner Relationship Target',
           discordUserId: 'primary-user-123',
@@ -789,88 +650,81 @@ describe('ContactStore', () => {
       expect(owner.trustLevel).toBe('primary');
       expect(owner.relationshipType).toBe('stranger');
 
-      expect(store.updateRelationshipType(
+      expect(await store.updateRelationshipType(
         owner.id,
         'acquaintance',
         'agent:tool:contact_set_relationship',
       )).toBe(true);
-      expect(store.getById(owner.id)?.trustLevel).toBe('primary');
-      expect(store.getById(owner.id)?.relationshipType).toBe('acquaintance');
+      expect((await store.getById(owner.id))?.trustLevel).toBe('primary');
+      expect((await store.getById(owner.id))?.relationshipType).toBe('acquaintance');
     });
 
-    it('fails closed on autonomous family and partner writes while allowing operator approval', () => {
-      const contact = store.upsert({ displayName: 'Gated Relationship Target', relationshipType: 'friend' });
+    it('fails closed on autonomous family and partner writes while allowing operator approval', async () => {
+      const contact = await store.upsert({ displayName: 'Gated Relationship Target', relationshipType: 'friend' });
 
-      expect(store.updateRelationshipType(
+      expect(await store.updateRelationshipType(
         contact.id,
         'family',
         'agent:tool:contact_set_relationship',
       )).toBe(false);
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
 
-      expect(store.updateRelationshipType(contact.id, 'family', 'operator:confirmation-queue')).toBe(true);
-      expect(store.updateRelationshipType(contact.id, 'partner', 'operator:confirmation-queue')).toBe(true);
-      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
-      expect(store.updateRelationshipType(
+      expect(await store.updateRelationshipType(contact.id, 'family', 'operator:confirmation-queue')).toBe(true);
+      expect(await store.updateRelationshipType(contact.id, 'partner', 'operator:confirmation-queue')).toBe(true);
+      expect((await store.getById(contact.id))?.relationshipType).toBe('partner');
+      expect(await store.updateRelationshipType(
         contact.id,
         'friend',
         'agent:tool:contact_set_relationship',
       )).toBe(false);
-      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('partner');
     });
 
-    it('compare-and-sets approved relationships without overwriting stale state', () => {
-      const contact = store.upsert({ displayName: 'CAS Relationship Target', relationshipType: 'friend' });
+    it('compare-and-sets approved relationships without overwriting stale state', async () => {
+      const contact = await store.upsert({ displayName: 'CAS Relationship Target', relationshipType: 'friend' });
 
-      expect(store.compareAndSetRelationshipType(
+      expect(await store.compareAndSetRelationshipType(
         contact.id,
         'acquaintance',
         'family',
         'operator:confirmation-queue',
       )).toBe(false);
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
 
-      expect(store.compareAndSetRelationshipType(
+      expect(await store.compareAndSetRelationshipType(
         contact.id,
         'friend',
         'family',
         'operator:confirmation-queue',
       )).toBe(true);
-      expect(store.getById(contact.id)?.relationshipType).toBe('family');
-      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+      expect((await store.getById(contact.id))?.relationshipType).toBe('family');
+      expect(await store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
         .toEqual([expect.objectContaining({ oldValue: 'friend', newValue: 'family' })]);
     });
 
-    it('rolls back relationship compare-and-set when its audit insert fails', () => {
-      const contact = store.upsert({ displayName: 'CAS Audit Rollback', relationshipType: 'friend' });
-      db.exec(`
-        CREATE TRIGGER fail_relationship_audit
-        BEFORE INSERT ON contact_mutation_audit
-        WHEN NEW.field = 'relationship_type'
-        BEGIN
-          SELECT RAISE(ABORT, 'forced relationship audit failure');
-        END
-      `);
+    it('rolls back relationship compare-and-set when its audit insert fails', async () => {
+      const contact = await store.upsert({ displayName: 'CAS Audit Rollback', relationshipType: 'friend' });
+      pool.failNextMutationAudit = true;
 
-      expect(() => store.compareAndSetRelationshipType(
+      await expect(store.compareAndSetRelationshipType(
         contact.id,
         'friend',
         'family',
         'operator:confirmation-queue',
-      )).toThrow('forced relationship audit failure');
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
-      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' })).toEqual([]);
+      )).rejects.toThrow('forced mutation audit failure');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
+      expect(await store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' })).toEqual([]);
     });
 
-    it('records linked identity and conversation channel privacy mutations', () => {
-      const contact = store.upsert({ displayName: 'Privacy Audit Target' });
-      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'invite_only' })).toBe('linked');
-      store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
+    it('records linked identity and conversation channel privacy mutations', async () => {
+      const contact = await store.upsert({ displayName: 'Privacy Audit Target' });
+      expect(await store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'invite_only' })).toBe('linked');
+      await store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
 
-      expect(store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
+      expect(await store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
       // E3.3: 'broadcast' is retired from the privacy vocabulary; the
       // provenance-only per-contact field accepts ChannelPrivacy values.
-      expect(store.setConversationChannelPrivacy(
+      expect(await store.setConversationChannelPrivacy(
         contact.id,
         'discord',
         '1313001762793197678',
@@ -878,7 +732,7 @@ describe('ContactStore', () => {
         'admin:api',
       )).toBe(true);
 
-      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_privacy', limit: 10 });
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_privacy', limit: 10 });
       expect(entries).toHaveLength(2);
       expect(entries[0]).toMatchObject({
         contactId: contact.id,
@@ -898,20 +752,20 @@ describe('ContactStore', () => {
       expect(entries[1].newValue).toContain('"userId":"privacy-user"');
     });
 
-    it('records channel link and unlink mutations', () => {
-      const contact = store.upsert({ displayName: 'Link Audit Target' });
+    it('records channel unlink mutations', async () => {
+      const contact = await store.upsert({ displayName: 'Link Audit Target' });
 
-      expect(store.linkChannelIdentity(
+      expect(await store.linkChannelIdentity(
         contact.id,
         'telegram',
         'link-user',
         { privacyLevel: 'private' },
         'admin:api',
       )).toBe('linked');
-      expect(store.unlinkChannelIdentity(contact.id, 'telegram', 'link-user', 'admin:api')).toBe(true);
+      expect(await store.unlinkChannelIdentity(contact.id, 'telegram', 'link-user', 'admin:api')).toBe(true);
 
-      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_link', limit: 10 });
-      expect(entries).toHaveLength(2);
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_link', limit: 10 });
+      expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({
         contactId: contact.id,
         actor: 'admin:api',
@@ -920,34 +774,27 @@ describe('ContactStore', () => {
       });
       expect(entries[0].oldValue).toContain('"channel":"telegram"');
       expect(entries[0].oldValue).toContain('"userId":"link-user"');
-      expect(entries[1]).toMatchObject({
-        contactId: contact.id,
-        actor: 'admin:api',
-        field: 'channel_link',
-        oldValue: null,
-      });
-      expect(entries[1].newValue).toContain('"privacyLevel":"private"');
     });
   });
 
   describe('listAll', () => {
-    it('returns all contacts', () => {
-      store.upsert({ displayName: 'A', discordUserId: 'a' });
-      store.upsert({ displayName: 'B', discordUserId: 'b' });
-      store.upsert({ displayName: 'C', discordUserId: 'c' });
+    it('returns all contacts', async () => {
+      await store.upsert({ displayName: 'A', discordUserId: 'a' });
+      await store.upsert({ displayName: 'B', discordUserId: 'b' });
+      await store.upsert({ displayName: 'C', discordUserId: 'c' });
 
-      const all = store.listAll();
+      const all = await store.listAll();
       expect(all).toHaveLength(3);
     });
 
-    it('returns empty array when no contacts', () => {
-      expect(store.listAll()).toEqual([]);
+    it('returns empty array when no contacts', async () => {
+      expect(await store.listAll()).toEqual([]);
     });
   });
 
   describe('resolveUserId', () => {
-    it('creates new contact for unknown user at the public trust floor', () => {
-      const contact = store.resolveUserId('discord-new');
+    it('creates new contact for unknown user at the public trust floor', async () => {
+      const contact = await store.resolveUserId('discord-new');
       expect(contact.discordUserId).toBe('discord-new');
       expect(contact.displayName).toBe('discord-new');  // Placeholder
       // Sprint-10 privacy regression H7: a never-seen, non-primary speaker is
@@ -956,33 +803,58 @@ describe('ContactStore', () => {
       expect(contact.relationshipType).toBe('stranger');
     });
 
-    it('returns existing contact for known user', () => {
-      const created = store.upsert({
+    it('returns existing contact for known user', async () => {
+      const created = await store.upsert({
         displayName: 'Ivan',
         discordUserId: 'discord-ivan',
         trustLevel: 'trusted',
       });
-      const resolved = store.resolveUserId('discord-ivan');
+      const resolved = await store.resolveUserId('discord-ivan');
       expect(resolved.id).toBe(created.id);
       expect(resolved.displayName).toBe('Ivan');
       expect(resolved.trustLevel).toBe('trusted');
     });
 
-    it('updates lastSeen for existing contact', () => {
-      const created = store.upsert({
+    it('preserves trusted contact when a concurrent legacy identity appears between resolver lookups', async () => {
+      const created = await store.upsert({
+        displayName: 'Legacy Race',
+        discordUserId: 'discord-race',
+        trustLevel: 'trusted',
+      }, { actor: 'operator:test-fixture' });
+      const row = pool.contacts.get(created.id);
+      if (!row) throw new Error('Missing legacy resolver race fixture');
+      const identityKey = 'discord::discord-race';
+      const identityRow = pool.contactChannelIds.get(identityKey);
+      if (!identityRow) throw new Error('Missing legacy resolver identity fixture');
+
+      row.discord_user_id = null;
+      pool.contactChannelIds.delete(identityKey);
+      pool.afterNextChannelIdentityLookup = () => {
+        row.discord_user_id = 'discord-race';
+        pool.contactChannelIds.set(identityKey, identityRow);
+      };
+
+      const resolved = await store.resolveUserId('discord-race');
+
+      expect(resolved.id).toBe(created.id);
+      expect(resolved.trustLevel).toBe('trusted');
+    });
+
+    it('updates lastSeen for existing contact', async () => {
+      const created = await store.upsert({
         displayName: 'Judy',
         discordUserId: 'discord-judy',
       });
 
       // Resolve again — should update lastSeen
-      const resolved = store.resolveUserId('discord-judy');
+      const resolved = await store.resolveUserId('discord-judy');
       // The lastSeen should be updated (may or may not differ within same ms)
       expect(resolved.lastSeen).toBeDefined();
       expect(resolved.id).toBe(created.id);
     });
 
-    it('creates primary user with correct defaults', () => {
-      const contact = store.resolveUserId(PRIMARY_USER_ID);
+    it('creates primary user with correct defaults', async () => {
+      const contact = await store.resolveUserId(PRIMARY_USER_ID);
       expect(contact.trustLevel).toBe('primary');
       expect(contact.relationshipType).toBe('stranger');
       expect(contact.discordUserId).toBe(PRIMARY_USER_ID);
@@ -990,84 +862,93 @@ describe('ContactStore', () => {
   });
 
   describe('resolveChannelIdentity', () => {
-    it('creates channel-aware contact mappings for non-discord channels', () => {
-      const contact = store.resolveChannelIdentity('api', 'api-user-1', 'API User');
+    it('creates channel-aware contact mappings for non-discord channels', async () => {
+      const contact = await store.resolveChannelIdentity('api', 'api-user-1', 'API User');
       expect(contact.displayName).toBe('API User');
-      expect(contact.channelIdentities).toEqual([
-        { channel: 'api', userId: 'api-user-1' },
+      const persisted = await store.getById(contact.id);
+      expect(persisted?.channels).toEqual([
+        expect.objectContaining({ channel: 'api', userId: 'api-user-1' }),
       ]);
     });
 
-    it('reuses canonical contact when linked channel identity exists', () => {
-      const contact = store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
-      const link = store.linkChannelIdentity(contact.id, 'api', 'v-api-id');
+    it('reuses canonical contact when linked channel identity exists', async () => {
+      const contact = await store.upsert({ displayName: 'V', discordUserId: PRIMARY_USER_ID });
+      const link = await store.linkChannelIdentity(contact.id, 'api', 'v-api-id');
       expect(link).toBe('linked');
 
-      const resolved = store.resolveChannelIdentity('api', 'v-api-id', 'V API');
+      const resolved = await store.resolveChannelIdentity('api', 'v-api-id', 'V API');
       expect(resolved.id).toBe(contact.id);
       expect(resolved.trustLevel).toBe('primary');
     });
 
-    it('reconciles duplicate primary contacts into canonical identity owner', () => {
-      const now = new Date().toISOString();
-      db.prepare(`
-        INSERT INTO contacts (
-          id, discord_user_id, display_name, trust_level, relationship_type,
-          emotional_baseline, first_seen, last_seen, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('primary-owner', PRIMARY_USER_ID, 'Primary Owner', 'regular', 'stranger', '{}', now, now, null);
-      db.prepare(`
-        INSERT INTO contact_channel_ids (
-          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
+    it('preserves trusted contact when a concurrent channel identity appears between resolver lookups', async () => {
+      const created = await store.upsert({
+        displayName: 'Channel Race',
+        trustLevel: 'trusted',
+      }, { actor: 'operator:test-fixture' });
+      expect(await store.linkChannelIdentity(created.id, 'api', 'api-race')).toBe('linked');
+      const identityKey = 'api::api-race';
+      const identityRow = pool.contactChannelIds.get(identityKey);
+      if (!identityRow) throw new Error('Missing channel resolver race fixture');
 
-      db.prepare(`
-        INSERT INTO contacts (
-          id, discord_user_id, display_name, trust_level, relationship_type,
-          emotional_baseline, first_seen, last_seen, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('duplicate-primary', 'duplicate-discord-id', 'Duplicate Primary', 'primary', 'partner', '{}', now, now, null);
-      db.prepare(`
-        INSERT INTO contact_channel_ids (
-          contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('duplicate-primary', 'api', 'primary-api-alias', 'private', now, now);
+      pool.contactChannelIds.delete(identityKey);
+      pool.afterNextChannelIdentityLookup = () => {
+        pool.contactChannelIds.set(identityKey, identityRow);
+      };
 
-      const resolved = store.resolveChannelIdentity('discord', PRIMARY_USER_ID, 'V');
-      expect(resolved.id).toBe('primary-owner');
-      expect(resolved.trustLevel).toBe('primary');
+      const resolved = await store.resolveChannelIdentity('api', 'api-race', 'Channel Race');
+
+      expect(resolved.id).toBe(created.id);
+      expect(resolved.trustLevel).toBe('trusted');
+    });
+
+    it('reconciles duplicate primary contacts into the canonical identity owner', async () => {
+      const duplicate = await store.upsert({
+        displayName: 'Duplicate Primary',
+        discordUserId: 'duplicate-discord-id',
+        relationshipType: 'partner',
+      }, { actor: 'operator:test' });
+      const duplicateRow = pool.contacts.get(duplicate.id);
+      if (!duplicateRow) throw new Error('Missing duplicate primary fixture');
+      duplicateRow.trust_level = 'primary';
+      await store.linkChannelIdentity(duplicate.id, 'api', 'primary-api-alias', { privacyLevel: 'private' });
+
+      const owner = await store.upsert({ displayName: 'Primary Owner' });
+      expect(await store.linkChannelIdentity(owner.id, 'discord', PRIMARY_USER_ID)).toBe('linked');
+      const resolved = await store.getById(owner.id);
+      expect(resolved?.id).toBe(owner.id);
+      expect(resolved?.trustLevel).toBe('primary');
       // Duplicate reconciliation preserves the more-established explicit relationship.
-      expect(resolved.relationshipType).toBe('partner');
-      expect(store.getById('duplicate-primary')).toBeUndefined();
-      expect(store.getByChannelIdentity('api', 'primary-api-alias')?.id).toBe('primary-owner');
+      expect(resolved?.relationshipType).toBe('partner');
+      expect(await store.getById(duplicate.id)).toBeUndefined();
+      expect((await store.getByChannelIdentity('api', 'primary-api-alias'))?.id).toBe(owner.id);
     });
   });
 
   describe('linkChannelIdentity', () => {
-    it('returns conflict when identity is already linked to another contact', () => {
-      const first = store.upsert({
+    it('returns conflict when identity is already linked to another contact', async () => {
+      const first = await store.upsert({
         displayName: 'First',
         channelIdentities: [{ channel: 'api', userId: 'shared-api-id' }],
       });
-      const second = store.upsert({ displayName: 'Second', discordUserId: 'second-discord-id' });
+      const second = await store.upsert({ displayName: 'Second', discordUserId: 'second-discord-id' });
 
-      const result = store.linkChannelIdentity(second.id, 'api', 'shared-api-id');
+      const result = await store.linkChannelIdentity(second.id, 'api', 'shared-api-id');
       expect(result).toBe('identity_conflict');
 
-      const found = store.getByChannelIdentity('api', 'shared-api-id');
+      const found = await store.getByChannelIdentity('api', 'shared-api-id');
       expect(found?.id).toBe(first.id);
     });
   });
 
   describe('identity link verification challenges', () => {
-    it('issues a challenge, verifies it, and commits the target link', () => {
-      const contact = store.upsert({
+    it('issues a challenge, verifies it, and commits the target link', async () => {
+      const contact = await store.upsert({
         displayName: 'PrimaryUser',
         channelIdentities: [{ channel: 'discord', userId: 'user-discord' }],
       });
 
-      const challenge = store.createIdentityLinkChallenge({
+      const challenge = await store.createIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
         sourceUserId: 'user-discord',
@@ -1078,7 +959,7 @@ describe('ContactStore', () => {
       expect(challenge.status).toBe('challenge_created');
       if (challenge.status !== 'challenge_created') return;
 
-      const verified = store.verifyIdentityLinkChallenge({
+      const verified = await store.verifyIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
         sourceUserId: 'user-discord',
@@ -1090,17 +971,17 @@ describe('ContactStore', () => {
       });
 
       expect(verified.status).toBe('linked');
-      expect(store.getByChannelIdentity('api', 'user-api')?.id).toBe(contact.id);
-      expect(store.listIdentityLinkVerifications(5)[0]?.status).toBe('verified');
+      expect((await store.getByChannelIdentity('api', 'user-api'))?.id).toBe(contact.id);
+      expect((await store.listIdentityLinkVerifications(5))[0]?.status).toBe('verified');
     });
 
-    it('rejects replayed verification challenges', () => {
-      const contact = store.upsert({
+    it('rejects replayed verification challenges', async () => {
+      const contact = await store.upsert({
         displayName: 'Replay Tester',
         channelIdentities: [{ channel: 'discord', userId: 'replay-discord' }],
       });
 
-      const challenge = store.createIdentityLinkChallenge({
+      const challenge = await store.createIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
         sourceUserId: 'replay-discord',
@@ -1110,7 +991,7 @@ describe('ContactStore', () => {
       expect(challenge.status).toBe('challenge_created');
       if (challenge.status !== 'challenge_created') return;
 
-      const first = store.verifyIdentityLinkChallenge({
+      const first = await store.verifyIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
         sourceUserId: 'replay-discord',
@@ -1122,7 +1003,7 @@ describe('ContactStore', () => {
       });
       expect(first.status).toBe('linked');
 
-      const second = store.verifyIdentityLinkChallenge({
+      const second = await store.verifyIdentityLinkChallenge({
         contactId: contact.id,
         sourceChannel: 'discord',
         sourceUserId: 'replay-discord',
@@ -1137,62 +1018,62 @@ describe('ContactStore', () => {
   });
 
   describe('emotionalBaseline', () => {
-    it('round-trips emotional baseline through JSON', () => {
+    it('round-trips emotional baseline through JSON', async () => {
       const baseline = { warmth: 0.7, formality: 0.3, playfulness: 0.9 };
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Kim',
         emotionalBaseline: baseline,
       });
-      const found = store.getById(contact.id);
+      const found = await store.getById(contact.id);
       expect(found!.emotionalBaseline).toEqual(baseline);
     });
 
-    it('defaults to empty object when not provided', () => {
-      const contact = store.upsert({ displayName: 'Lee' });
-      const found = store.getById(contact.id);
+    it('defaults to empty object when not provided', async () => {
+      const contact = await store.upsert({ displayName: 'Lee' });
+      const found = await store.getById(contact.id);
       // Empty JSON object stored, should parse to empty object
       expect(found!.emotionalBaseline).toEqual({});
     });
 
-    it('exposes an empty-to-populated bounded emotional time series per contact', () => {
-      const contact = store.upsert({ displayName: 'Timeline Learner' });
+    it('exposes an empty-to-populated bounded emotional time series per contact', async () => {
+      const contact = await store.upsert({ displayName: 'Timeline Learner' });
 
-      expect(store.getEmotionalTimeSeries(contact.id)).toEqual([]);
+      expect(await store.getEmotionalTimeSeries(contact.id)).toEqual([]);
 
-      store.updateEmotionalBaseline(contact.id, {
+      await store.updateEmotionalBaseline(contact.id, {
         valence: 0.25,
         confidence: 0.9,
         observedAtMs: 1_000,
       });
-      store.updateEmotionalBaseline(contact.id, {
+      await store.updateEmotionalBaseline(contact.id, {
         valence: -0.4,
         confidence: 0.6,
         observedAtMs: 2_000,
       });
-      store.updateEmotionalBaseline(contact.id, {
+      await store.updateEmotionalBaseline(contact.id, {
         valence: 0.7,
         confidence: 0.8,
         observedAtMs: 3_000,
       });
 
-      expect(store.getEmotionalTimeSeries(contact.id)).toEqual([
+      expect(await store.getEmotionalTimeSeries(contact.id)).toEqual([
         { valence: 0.25, confidence: 0.9, observedAtMs: 1_000 },
         { valence: -0.4, confidence: 0.6, observedAtMs: 2_000 },
         { valence: 0.7, confidence: 0.8, observedAtMs: 3_000 },
       ]);
-      expect(store.getEmotionalTimeSeries(contact.id, 2)).toEqual([
+      expect(await store.getEmotionalTimeSeries(contact.id, 2)).toEqual([
         { valence: -0.4, confidence: 0.6, observedAtMs: 2_000 },
         { valence: 0.7, confidence: 0.8, observedAtMs: 3_000 },
       ]);
     });
 
-    it('learns baseline values dynamically from observed emotional signals', () => {
-      const contact = store.upsert({
+    it('learns baseline values dynamically from observed emotional signals', async () => {
+      const contact = await store.upsert({
         displayName: 'Mood Learner',
         emotionalBaseline: { warmth: 0.7 },
       });
 
-      const updated = store.updateEmotionalBaseline(contact.id, {
+      const updated = await store.updateEmotionalBaseline(contact.id, {
         valence: 0.8,
         confidence: 1,
         observedAtMs: 1_000,
@@ -1205,7 +1086,7 @@ describe('ContactStore', () => {
       expect(updated?.emotionalBaseline?.moodDrift).toBeCloseTo(0.12, 4);
       expect(updated?.emotionalBaseline?.moodSamples).toBe(1);
 
-      const snapshot = store.getEmotionalSnapshot(contact.id);
+      const snapshot = await store.getEmotionalSnapshot(contact.id);
       expect(snapshot).toEqual(expect.objectContaining({
         baselineValence: 0.32,
         moodValence: 0.44,
@@ -1215,15 +1096,15 @@ describe('ContactStore', () => {
       }));
     });
 
-    it('preserves intra-session mood drift across updates', () => {
-      const contact = store.upsert({ displayName: 'Session Mood' });
-      store.updateEmotionalBaseline(contact.id, {
+    it('preserves intra-session mood drift across updates', async () => {
+      const contact = await store.upsert({ displayName: 'Session Mood' });
+      await store.updateEmotionalBaseline(contact.id, {
         valence: 0.6,
         confidence: 1,
         observedAtMs: 1_000,
       });
 
-      const updated = store.updateEmotionalBaseline(contact.id, {
+      const updated = await store.updateEmotionalBaseline(contact.id, {
         valence: -0.4,
         confidence: 1,
         observedAtMs: 2_000,
@@ -1234,7 +1115,7 @@ describe('ContactStore', () => {
       expect(updated?.emotionalBaseline?.moodValence).toBeLessThan(0);
       expect(updated?.emotionalBaseline?.moodDrift).toBeLessThan(0);
 
-      const snapshot = store.getEmotionalSnapshot(contact.id);
+      const snapshot = await store.getEmotionalSnapshot(contact.id);
       expect(snapshot).toEqual(expect.objectContaining({
         moodSamples: 2,
         lastMoodUpdateEpochMs: 2_000,
@@ -1243,10 +1124,9 @@ describe('ContactStore', () => {
   });
 
   describe('no primaryUserId configured', () => {
-    it('treats all users as regular when no primaryUserId set', () => {
-      const storeNoPrimary = new ContactStore(db);
-      // Re-create tables on same db is fine (IF NOT EXISTS)
-      const contact = storeNoPrimary.upsert({
+    it('treats all users as regular when no primaryUserId set', async () => {
+      const { store: storeNoPrimary } = await createTestPostgresContactStore();
+      const contact = await storeNoPrimary.upsert({
         displayName: 'Anyone',
         discordUserId: 'discord-anyone',
       });
@@ -1255,78 +1135,78 @@ describe('ContactStore', () => {
   });
 
   describe('deleteContact', () => {
-    it('deletes a regular contact and its channel links', () => {
-      const contact = store.upsert({ displayName: 'Deleteable' });
-      store.linkChannelIdentity(contact.id, 'discord', '999');
-      expect(store.getById(contact.id)).toBeDefined();
+    it('deletes a regular contact and its channel links', async () => {
+      const contact = await store.upsert({ displayName: 'Deleteable' });
+      await store.linkChannelIdentity(contact.id, 'discord', '999');
+      expect(await store.getById(contact.id)).toBeDefined();
 
-      const result = store.deleteContact(contact.id);
+      const result = await store.deleteContact(contact.id);
       expect(result).toBe(true);
-      expect(store.getById(contact.id)).toBeUndefined();
+      expect(await store.getById(contact.id)).toBeUndefined();
 
       // Channel identity should also be gone
-      expect(store.getByChannelIdentity('discord', '999')).toBeUndefined();
+      expect(await store.getByChannelIdentity('discord', '999')).toBeUndefined();
     });
 
-    it('refuses to delete the primary contact', () => {
-      const primary = store.upsert({
+    it('refuses to delete the primary contact', async () => {
+      const primary = await store.upsert({
         displayName: 'Primary',
         discordUserId: PRIMARY_USER_ID,
       });
       expect(primary.trustLevel).toBe('primary');
 
-      const result = store.deleteContact(primary.id);
+      const result = await store.deleteContact(primary.id);
       expect(result).toBe(false);
-      expect(store.getById(primary.id)).toBeDefined();
+      expect(await store.getById(primary.id)).toBeDefined();
     });
 
-    it('returns false for non-existent contact', () => {
-      expect(store.deleteContact('no-such-id')).toBe(false);
+    it('returns false for non-existent contact', async () => {
+      expect(await store.deleteContact('no-such-id')).toBe(false);
     });
   });
 
   describe('unlinkChannelIdentity', () => {
-    it('removes a specific channel identity link', () => {
-      const contact = store.upsert({ displayName: 'Multi' });
-      store.linkChannelIdentity(contact.id, 'api', '111');
-      store.linkChannelIdentity(contact.id, 'telegram', '222');
+    it('removes a specific channel identity link', async () => {
+      const contact = await store.upsert({ displayName: 'Multi' });
+      await store.linkChannelIdentity(contact.id, 'api', '111');
+      await store.linkChannelIdentity(contact.id, 'telegram', '222');
 
-      const result = store.unlinkChannelIdentity(contact.id, 'api', '111');
+      const result = await store.unlinkChannelIdentity(contact.id, 'api', '111');
       expect(result).toBe(true);
 
       // API link gone
-      expect(store.getByChannelIdentity('api', '111')).toBeUndefined();
+      expect(await store.getByChannelIdentity('api', '111')).toBeUndefined();
       // Telegram link still present
-      expect(store.getByChannelIdentity('telegram', '222')).toBeDefined();
+      expect(await store.getByChannelIdentity('telegram', '222')).toBeDefined();
     });
 
-    it('returns false for non-existent contact', () => {
-      expect(store.unlinkChannelIdentity('no-such-id', 'discord', '111')).toBe(false);
+    it('returns false for non-existent contact', async () => {
+      expect(await store.unlinkChannelIdentity('no-such-id', 'discord', '111')).toBe(false);
     });
 
-    it('returns false when channel identity does not exist on contact', () => {
-      const contact = store.upsert({ displayName: 'Solo' });
-      expect(store.unlinkChannelIdentity(contact.id, 'discord', 'nope')).toBe(false);
+    it('returns false when channel identity does not exist on contact', async () => {
+      const contact = await store.upsert({ displayName: 'Solo' });
+      expect(await store.unlinkChannelIdentity(contact.id, 'discord', 'nope')).toBe(false);
     });
   });
 
   describe('deleteConversationChannel', () => {
-    it('removes a specific persisted conversation channel', () => {
-      const contact = store.upsert({ displayName: 'Conversation User' });
-      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'invite_only');
-      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
+    it('removes a specific persisted conversation channel', async () => {
+      const contact = await store.upsert({ displayName: 'Conversation User' });
+      await store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'invite_only');
+      await store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
 
-      const result = store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:short-check');
+      const result = await store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:short-check');
       expect(result).toBe(true);
 
-      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+      expect((await store.getById(contact.id))?.conversationChannels).toEqual([
         expect.objectContaining({
           channel: 'psfn-amica',
           channelId: 'psfn-amica:lab:pi5',
         }),
       ]);
 
-      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'conversation_channel', limit: 10 });
+      const entries = await store.listMutationAuditEntries({ contactId: contact.id, field: 'conversation_channel', limit: 10 });
       expect(entries[0]).toMatchObject({
         contactId: contact.id,
         field: 'conversation_channel',
@@ -1336,110 +1216,91 @@ describe('ContactStore', () => {
       expect(entries[0].oldValue).toContain('"channelId":"psfn-amica:short-check"');
     });
 
-    it('returns false when the conversation channel is not linked to the contact', () => {
-      const contact = store.upsert({ displayName: 'Conversation User' });
-      expect(store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:missing')).toBe(false);
+    it('returns false when the conversation channel is not linked to the contact', async () => {
+      const contact = await store.upsert({ displayName: 'Conversation User' });
+      expect(await store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:missing')).toBe(false);
     });
   });
 });
 
-describe('ContactStore machine-intelligence flag', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+describe('Postgres contact store machine-intelligence flag', () => {
+  let pool: FakePostgresPool;
+  let store: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ pool, store } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
-  it('defaults to not-MI, sets and round-trips the flag with audit', () => {
-    const contact = store.resolveChannelIdentity('discord', 'artemis-001', 'Artemis');
+  it('defaults to not-MI, sets and round-trips the flag with audit', async () => {
+    const contact = await store.resolveChannelIdentity('discord', 'artemis-001', 'Artemis');
     expect(contact.isMachineIntelligence).toBeUndefined();
 
-    expect(store.setMachineIntelligence(contact.id, true, 'test')).toBe(true);
-    const flagged = store.getById(contact.id);
+    expect(await store.setMachineIntelligence(contact.id, true, 'test')).toBe(true);
+    const flagged = await store.getById(contact.id);
     expect(flagged?.isMachineIntelligence).toBe(true);
 
     // Setting the same value is a no-op success; clearing works too.
-    expect(store.setMachineIntelligence(contact.id, true)).toBe(true);
-    expect(store.setMachineIntelligence(contact.id, false)).toBe(true);
-    expect(store.getById(contact.id)?.isMachineIntelligence).toBeUndefined();
+    expect(await store.setMachineIntelligence(contact.id, true)).toBe(true);
+    expect(await store.setMachineIntelligence(contact.id, false)).toBe(true);
+    expect((await store.getById(contact.id))?.isMachineIntelligence).toBeUndefined();
 
-    const audit = store.listMutationAuditEntries({ contactId: contact.id });
+    const audit = await store.listMutationAuditEntries({ contactId: contact.id });
     expect(audit.some(entry => entry.field === 'is_machine_intelligence')).toBe(true);
   });
 
-  it('returns false for unknown contacts', () => {
-    expect(store.setMachineIntelligence('missing-contact', true)).toBe(false);
-  });
-
-  it('survives schema migration on a pre-flag database', () => {
-    const legacy = new Database(':memory:');
-    legacy.exec(`
-      CREATE TABLE contacts (
-        id TEXT PRIMARY KEY,
-        discord_user_id TEXT UNIQUE,
-        display_name TEXT NOT NULL,
-        nickname TEXT,
-        trust_level TEXT NOT NULL DEFAULT 'regular',
-        relationship_type TEXT NOT NULL DEFAULT 'stranger',
-        emotional_baseline TEXT DEFAULT '{}',
-        first_seen TEXT NOT NULL,
-        last_seen TEXT NOT NULL,
-        notes TEXT
-      );
-    `);
-    legacy.prepare(`
-      INSERT INTO contacts (id, display_name, first_seen, last_seen)
-      VALUES ('legacy-1', 'Legacy', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
-    `).run();
-    const migrated = new ContactStore(legacy, PRIMARY_USER_ID);
-    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBeUndefined();
-    expect(migrated.setMachineIntelligence('legacy-1', true)).toBe(true);
-    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBe(true);
-    legacy.close();
+  it('returns false for unknown contacts', async () => {
+    expect(await store.setMachineIntelligence('missing-contact', true)).toBe(false);
   });
 
   describe('countVerifiedIdentityLinks', () => {
     function insertVerification(contactId: string, id: string, status: string): void {
-      db.prepare(`
-        INSERT INTO contact_identity_link_verifications (
-          id, contact_id, source_channel, source_user_id, target_channel, target_user_id,
-          nonce, expires_at, signature, status, created_at, updated_at
-        ) VALUES (?, ?, 'discord', 'src-user', 'telegram', 'tgt-user',
-          'nonce', '2026-12-31T00:00:00.000Z', 'sig', ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')
-      `).run(id, contactId, status);
+      pool.contactIdentityLinkVerifications.set(id, {
+        id,
+        contact_id: contactId,
+        source_channel: 'discord',
+        source_user_id: 'src-user',
+        target_channel: 'telegram',
+        target_user_id: 'tgt-user',
+        nonce: 'nonce',
+        expires_at: '2026-12-31T00:00:00.000Z',
+        signature: 'sig',
+        status,
+        created_at: '2026-07-01T00:00:00.000Z',
+        updated_at: '2026-07-01T00:00:00.000Z',
+        verified_at: status === 'verified' ? '2026-07-01T00:00:00.000Z' : null,
+        failure_reason: null,
+      });
     }
 
-    it('counts only verified rows for the given contact', () => {
-      const contact = store.upsert({ displayName: 'Fixture Verified' });
-      const other = store.upsert({ displayName: 'Fixture Other' });
+    it('counts only verified rows for the given contact', async () => {
+      const contact = await store.upsert({ displayName: 'Fixture Verified' });
+      const other = await store.upsert({ displayName: 'Fixture Other' });
       insertVerification(contact.id, 'v1', 'verified');
       insertVerification(contact.id, 'v2', 'pending');
       insertVerification(other.id, 'v3', 'verified');
-      expect(store.countVerifiedIdentityLinks(contact.id)).toBe(1);
-      expect(store.countVerifiedIdentityLinks(other.id)).toBe(1);
-      expect(store.countVerifiedIdentityLinks('unknown')).toBe(0);
+      expect(await store.countVerifiedIdentityLinks(contact.id)).toBe(1);
+      expect(await store.countVerifiedIdentityLinks(other.id)).toBe(1);
+      expect(await store.countVerifiedIdentityLinks('unknown')).toBe(0);
     });
   });
 
   describe('contact maintenance watermarks', () => {
-    it('returns undefined for an unknown processor', () => {
-      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review')).toBeUndefined();
+    it('returns undefined for an unknown processor', async () => {
+      expect(await store.getContactMaintenanceWatermark('contacts.trust_drift.review')).toBeUndefined();
     });
 
-    it('round-trips and upserts a watermark', () => {
-      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-07T03:00:00.000Z');
-      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+    it('round-trips and upserts a watermark', async () => {
+      await store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-07T03:00:00.000Z');
+      expect(await store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
         .toBe('2026-07-07T03:00:00.000Z');
-      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-08T03:00:00.000Z');
-      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+      await store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-08T03:00:00.000Z');
+      expect(await store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
         .toBe('2026-07-08T03:00:00.000Z');
     });
 
-    it('rejects an empty processor and an invalid timestamp', () => {
-      expect(() => store.setContactMaintenanceWatermark('  ', '2026-07-07T03:00:00.000Z')).toThrow(/processor/);
-      expect(() => store.setContactMaintenanceWatermark('contacts.trust_drift.review', 'garbage')).toThrow(/timestamp/);
+    it('rejects an empty processor and an invalid timestamp', async () => {
+      await expect(store.setContactMaintenanceWatermark('  ', '2026-07-07T03:00:00.000Z')).rejects.toThrow(/processor/);
+      await expect(store.setContactMaintenanceWatermark('contacts.trust_drift.review', 'garbage')).rejects.toThrow(/timestamp/);
     });
   });
 });

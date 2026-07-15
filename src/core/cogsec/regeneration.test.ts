@@ -1,24 +1,99 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { createSqliteTranscriptProjection } from '../../persistence/sessions/transcript-projection.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EmbeddingProviderPort } from '../agent/contracts.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../../faculties/memory/embedding.js';
-import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
+import type { SessionEntry } from '../session/types.js';
+import type {
+  KeywordSearchableTranscriptProjection,
+  SessionSearchHit,
+  TranscriptProjectionDrift,
+  TranscriptSearchOptions,
+} from '../../persistence/sessions/transcript-projection-port.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { CogSecEventStore } from './events.js';
 import { CogSecForensicArchive } from './forensic-archive.js';
 import type { CogSecLineagePreview } from './lineage.js';
 import { applyCogSecRegeneration } from './regeneration.js';
+import { isCogSecTombstoneSessionEntry } from './tombstones.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 const SAFE_SUMMARY = 'Unsafe instruction-like content was sealed and removed from active cognition.';
+
+class InMemoryTranscriptProjection implements KeywordSearchableTranscriptProjection {
+  private readonly entriesByChannel = new Map<string, SessionEntry[]>();
+  private readonly driftByChannel = new Map<string, TranscriptProjectionDrift>();
+
+  upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): void {
+    const channelId = options.channelId ?? entry.channelId;
+    const entries = this.entriesByChannel.get(channelId) ?? [];
+    const next = entries.filter(existing => existing.id !== entry.id);
+    if (!isCogSecTombstoneSessionEntry(entry)) {
+      next.push({ ...entry, channelId });
+    }
+    next.sort((left, right) => left.id - right.id);
+    this.entriesByChannel.set(channelId, next);
+  }
+
+  replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void {
+    this.entriesByChannel.set(
+      channelId,
+      entries
+        .filter(entry => !isCogSecTombstoneSessionEntry(entry))
+        .map(entry => ({ ...entry, channelId })),
+    );
+  }
+
+  countProjectedMessages(channelId: string): number {
+    return this.entriesByChannel.get(channelId)?.length ?? 0;
+  }
+
+  markProjectionDrift(channelId: string, reason?: string): void {
+    this.driftByChannel.set(channelId, {
+      channelId,
+      ...(reason ? { reason } : {}),
+      markedAt: Date.now(),
+    });
+  }
+
+  clearProjectionDrift(channelId: string): void {
+    this.driftByChannel.delete(channelId);
+  }
+
+  listProjectionDrift(): TranscriptProjectionDrift[] {
+    return [...this.driftByChannel.values()];
+  }
+
+  async searchByKeywords(
+    query: string,
+    limit = 10,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
+    const normalizedQuery = query.trim().toLowerCase();
+    const entries = options.channelId
+      ? (this.entriesByChannel.get(options.channelId) ?? [])
+      : [...this.entriesByChannel.values()].flat();
+    return entries
+      .filter(entry => entry.content.toLowerCase().includes(normalizedQuery))
+      .slice(0, limit)
+      .map(entry => ({
+        channelId: entry.channelId,
+        messageId: entry.id,
+        role: entry.role,
+        ...(entry.authorId ? { authorId: entry.authorId } : {}),
+        ...(entry.authorName ? { authorName: entry.authorName } : {}),
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: 'private',
+        score: 1,
+        snippet: entry.content,
+      }));
+  }
+}
 
 let tempRoot: string | null = null;
 
@@ -80,7 +155,9 @@ describe('applyCogSecRegeneration', () => {
     const channelId = 'api:cogsec-regeneration';
     const dirtyText = 'DIRTY_REGENERATION_SOURCE_TEXT';
     const cleanText = 'clean recovery source text';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
+    const sessionStore = new SessionStore(join(root, 'sessions'), {
+      transcriptProjection: new InMemoryTranscriptProjection(),
+    });
     const eventStore = new CogSecEventStore(join(root, 'cogsec-events.json'), {
       now: () => new Date('2026-07-01T00:00:00.000Z'),
     });
@@ -135,9 +212,7 @@ describe('applyCogSecRegeneration', () => {
     await expect(sessionStore.searchByKeywords(dirtyText, 10)).resolves.toHaveLength(0);
     await expect(sessionStore.searchByKeywords('CogSec redaction', 10)).resolves.toHaveLength(0);
 
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const memoryStore = new MemoryStore(db);
+    const memoryStore = new InMemoryMemoryStore();
     const cleanEmbedding = makeEmbedding(3);
     memoryStore.insertMemory(makeMemory('revoked-memory', 'dirty memory already revoked', {
       deletedAt: Date.parse('2026-07-01T00:02:00.000Z'),
@@ -145,7 +220,7 @@ describe('applyCogSecRegeneration', () => {
       deleteReason: `CogSec revocation ${caseId}`,
     }), makeEmbedding(2));
     const retriever = new MemoryRetriever(
-      memoryStore as unknown as MemoryStorePort,
+      memoryStore.asPort(),
       makeEmbeddingProvider(cleanEmbedding),
       { retrievalBudgetPct: 0.1 },
     );
@@ -308,7 +383,9 @@ describe('applyCogSecRegeneration', () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_regen_conformance_fail';
     const channelId = 'api:cogsec-conformance-fail';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
+    const sessionStore = new SessionStore(join(root, 'sessions'), {
+      transcriptProjection: new InMemoryTranscriptProjection(),
+    });
     sessionStore.append({
       channelId,
       role: 'assistant',
@@ -380,7 +457,9 @@ describe('applyCogSecRegeneration', () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_regen_fail';
     const channelId = 'api:cogsec-regeneration-fail';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
+    const sessionStore = new SessionStore(join(root, 'sessions'), {
+      transcriptProjection: new InMemoryTranscriptProjection(),
+    });
     sessionStore.append({
       channelId,
       role: 'user',

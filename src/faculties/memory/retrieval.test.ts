@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 import {
   MemoryRetriever,
   RetrievalIntegrityError,
@@ -17,7 +16,8 @@ import {
   type Episode,
   type EpisodeArc,
 } from '../../shared/contracts/episodic-memory.js';
-import { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
 
@@ -1932,27 +1932,30 @@ describe('MemoryRetriever basic behavior', () => {
   });
 
   it('uses visible social graph context to separate related people from canonical memories', async () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-user');
-    const primary = contactStore.upsert({
+    const { store: contactStore } = await createTestPostgresContactStore('primary-user');
+    const primary = await contactStore.upsert({
       displayName: 'PrimaryUser',
       discordUserId: 'primary-user',
     });
-    const sibling = contactStore.upsert({
+    const sibling = await contactStore.upsert({
       displayName: 'Alice',
       discordUserId: 'alice-1',
       trustLevel: 'trusted',
       relationshipType: 'family',
     }, { actor: 'operator:test-setup' });
-    const unrelated = contactStore.upsert({
+    const unrelated = await contactStore.upsert({
       displayName: 'Mallory',
       discordUserId: 'mallory-1',
       trustLevel: 'regular',
       relationshipType: 'stranger',
     });
-    contactStore.upsertSocialRelationshipEdge({
-      sourceEntityId: contactStore.getSocialGraphEntityByContactId(primary.id)!.id,
-      targetEntityId: contactStore.getSocialGraphEntityByContactId(sibling.id)!.id,
+    const primaryEntity = await contactStore.getSocialGraphEntityByContactId(primary.id);
+    const siblingEntity = await contactStore.getSocialGraphEntityByContactId(sibling.id);
+    expect(primaryEntity).toBeDefined();
+    expect(siblingEntity).toBeDefined();
+    await contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: primaryEntity!.id,
+      targetEntityId: siblingEntity!.id,
       relationshipType: 'family',
       directional: false,
       sensitivity: 'personal',
@@ -2010,21 +2013,24 @@ describe('MemoryRetriever basic behavior', () => {
   });
 
   it('does not expose relationship framing when graph visibility is hidden at the current trust tier', async () => {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-user');
-    const primary = contactStore.upsert({
+    const { store: contactStore } = await createTestPostgresContactStore('primary-user');
+    const primary = await contactStore.upsert({
       displayName: 'PrimaryUser',
       discordUserId: 'primary-user',
     });
-    const sibling = contactStore.upsert({
+    const sibling = await contactStore.upsert({
       displayName: 'Alice',
       discordUserId: 'alice-1',
       trustLevel: 'trusted',
       relationshipType: 'family',
     }, { actor: 'operator:test-setup' });
-    contactStore.upsertSocialRelationshipEdge({
-      sourceEntityId: contactStore.getSocialGraphEntityByContactId(primary.id)!.id,
-      targetEntityId: contactStore.getSocialGraphEntityByContactId(sibling.id)!.id,
+    const primaryEntity = await contactStore.getSocialGraphEntityByContactId(primary.id);
+    const siblingEntity = await contactStore.getSocialGraphEntityByContactId(sibling.id);
+    expect(primaryEntity).toBeDefined();
+    expect(siblingEntity).toBeDefined();
+    await contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: primaryEntity!.id,
+      targetEntityId: siblingEntity!.id,
       relationshipType: 'family',
       directional: false,
       sensitivity: 'personal',
@@ -2888,23 +2894,25 @@ describe('MemoryRetriever room-scoped visibility', () => {
     return calls[0][1] as Record<string, unknown>;
   }
 
-  function makeRoomVisibilityContactStore(): { contactStore: ContactStore; vegaId: string } {
-    const db = new Database(':memory:');
-    const contactStore = new ContactStore(db, 'primary-user');
-    const vega = contactStore.upsert({
+  async function makeRoomVisibilityContactStore(): Promise<{
+    contactStore: ContactStorePort;
+    vegaId: string;
+  }> {
+    const { store: contactStore } = await createTestPostgresContactStore('primary-user');
+    const vega = await contactStore.upsert({
       displayName: 'Vega',
       discordUserId: 'vega-discord',
       trustLevel: 'trusted',
       relationshipType: 'friend',
     });
-    contactStore.recordChannelActivity(vega.id, 'discord', VEGA_DM, 'private');
+    await contactStore.recordChannelActivity(vega.id, 'discord', VEGA_DM, 'private');
     return { contactStore, vegaId: vega.id };
   }
 
   it('allows same-room group memories while blocking cross-room and DM memories in a group room', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X decided the deployment window is Friday.',
@@ -2959,8 +2967,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomPersonalMemory = makeMemory({
       id: 'group-x-personal-memory',
       text: 'Room X heard Vega prefers the quiet rollout plan.',
@@ -2998,8 +3006,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows participated group memories in the primary partner DM and blocks unparticipated rooms', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
       id: 'vega-dm-memory',
       text: 'Vega DM reminder: prefer short deployment summaries.',
@@ -3055,8 +3063,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows participated group personal memories in the participant DM for regular contacts', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const participatedGroupMemory = makeMemory({
       id: 'group-x-personal-memory',
       text: 'Room X knows Vega volunteered to own the risky checklist.',
@@ -3094,7 +3102,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('allows the primary partner subject memory when origin-channel proof is missing', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
     const blockedGroupMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X discussed a private server migration plan.',
@@ -3133,8 +3141,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const freshLogicalSessionId = `${GROUP_ROOM_X}:session:20260630T120000Z-fresh123`;
     const retiredMemory = makeMemory({
       id: 'retired-room-memory',
@@ -3190,8 +3198,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
   });
 
   it('carries room-visibility rejections into active context manifest seeds', async () => {
-    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const { contactStore, vegaId } = await makeRoomVisibilityContactStore();
+    await contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X selected the blue release train.',

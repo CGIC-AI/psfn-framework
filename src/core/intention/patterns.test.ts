@@ -1,45 +1,46 @@
-import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BehavioralPatternTracker } from './sqlite-stores/behavioral-pattern-tracker.js';
-import { createBehavioralPatternMemoryPromotionHook, type BehavioralPatternPromotionCandidate } from './patterns.js';
 import {
-  createBehavioralPatternStorePort,
-  type BehavioralPatternStorePort,
-} from './behavioral-pattern-store-port.js';
+  createBehavioralPatternMemoryPromotionHook,
+  type BehavioralPatternContextProvider,
+  type BehavioralPatternPromotionCandidate,
+} from './patterns.js';
+import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 
 describe('BehavioralPatternTracker', () => {
-  let db: Database.Database;
   let nowMs: number;
   let idCounter: number;
-  let tracker: BehavioralPatternTracker;
+  let tracker: BehavioralPatternStorePort;
+  let provider: BehavioralPatternContextProvider;
 
   beforeEach(() => {
-    db = new Database(':memory:');
     nowMs = Date.parse('2026-03-06T12:00:00.000Z');
     idCounter = 0;
-    tracker = new BehavioralPatternTracker(db, {
+    const { ports } = createTestPostgresIntentionPorts({
       now: () => new Date(nowMs),
       idFactory: () => `pattern-${++idCounter}`,
       minimumSamplesForPromotion: 2,
       minimumAverageOutcomeForPromotion: 0.2,
     });
+    tracker = ports.behavioralPatternTracker;
+    provider = ports.behavioralPatternProvider;
   });
 
-  it('keeps recorded samples isolated per contact', () => {
-    tracker.recordResponseStrategy({
+  it('keeps recorded samples isolated per contact', async () => {
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-1',
       responseContent: 'I hear you and that sounds difficult.',
       strategy: 'empathy',
     });
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-b',
       sourceMessageId: 'msg-b-1',
       responseContent: 'Let us break this into implementation steps.',
       strategy: 'technical',
     });
 
-    const contactASamples = tracker.listSamples({
+    const contactASamples = await tracker.listSamples({
       contactId: 'contact-a',
       includePending: true,
       limit: 10,
@@ -47,7 +48,7 @@ describe('BehavioralPatternTracker', () => {
     expect(contactASamples).toHaveLength(1);
     expect(contactASamples[0]?.contactId).toBe('contact-a');
 
-    const contactBSamples = tracker.listSamples({
+    const contactBSamples = await tracker.listSamples({
       contactId: 'contact-b',
       includePending: true,
       limit: 10,
@@ -57,7 +58,7 @@ describe('BehavioralPatternTracker', () => {
   });
 
   it('adapts the tracker behind the async behavioral pattern store port', async () => {
-    const port: BehavioralPatternStorePort = createBehavioralPatternStorePort(tracker);
+    const port: BehavioralPatternStorePort = tracker;
 
     const sample = await port.recordResponseStrategy({
       contactId: 'contact-a',
@@ -91,14 +92,14 @@ describe('BehavioralPatternTracker', () => {
   });
 
   it('records outcomes and surfaces behavioral notes only for resolved data', async () => {
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-1',
       responseContent: 'That makes sense and your reaction is valid.',
       strategy: 'validation',
     });
 
-    const pendingNotes = tracker.getBehavioralNotes('contact-a');
+    const pendingNotes = provider.getBehavioralNotes('contact-a');
     expect(pendingNotes).toBe('');
 
     const resolved = await tracker.tryRecordOutcomeForLatestPending({
@@ -110,22 +111,22 @@ describe('BehavioralPatternTracker', () => {
     expect(resolved?.outcomeScore).toBeCloseTo(0.45, 6);
     expect(resolved?.outcomeSourceMessageId).toBe('msg-a-2');
 
-    const notes = tracker.getBehavioralNotes('contact-a');
+    const notes = provider.getBehavioralNotes('contact-a');
     expect(notes).toContain('<behavioral_notes>');
     expect(notes).toContain('validation');
     expect(notes).toContain('avg +0.45');
     expect(notes).toContain('</behavioral_notes>');
-    expect(tracker.getBehavioralNotes('contact-b')).toBe('');
+    expect(provider.getBehavioralNotes('contact-b')).toBe('');
   });
 
   it('fails closed on ambiguous sourceMessage outcome updates', async () => {
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-1',
       responseContent: 'I hear you.',
       strategy: 'empathy',
     });
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-1',
       responseContent: 'Let us focus on next steps.',
@@ -143,7 +144,7 @@ describe('BehavioralPatternTracker', () => {
     const promotionHook = vi.fn().mockResolvedValue({ memoryId: 'mem-pattern-1' });
     tracker.setPromotionHook(promotionHook);
 
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-1',
       responseContent: 'That is valid and understandable.',
@@ -157,7 +158,7 @@ describe('BehavioralPatternTracker', () => {
     });
     expect(promotionHook).not.toHaveBeenCalled();
 
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-2',
       responseContent: 'Your reaction makes sense.',
@@ -180,7 +181,7 @@ describe('BehavioralPatternTracker', () => {
     expect(candidate.averageOutcome).toBeCloseTo(0.45, 6);
     expect(candidate.proceduralMemoryText).toContain('validation responses trend beneficial');
 
-    tracker.recordResponseStrategy({
+    await tracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-a-3',
       responseContent: 'I understand why that felt difficult.',
@@ -194,7 +195,7 @@ describe('BehavioralPatternTracker', () => {
     });
     expect(promotionHook).toHaveBeenCalledTimes(1);
 
-    const promotedRows = tracker.listSamples({
+    const promotedRows = await tracker.listSamples({
       contactId: 'contact-a',
       includePending: true,
       limit: 10,

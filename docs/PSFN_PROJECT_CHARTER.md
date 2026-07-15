@@ -936,7 +936,7 @@ The database mirror belongs behind `TranscriptProjectionPort` and `TranscriptSea
 PostgreSQL with pgvector is the required operational persistence for structured
 and derived runtime state: L0.1 episodic records, L2 memory, contacts,
 intentions, internal state, searchable projections, and related runtime stores.
-SQLite is migration and test tooling, not a supported runtime default.
+SQLite implementations, dependencies, readers, and adapter fixtures are removed. Explicit layout/recovery flows may preserve opaque pre-cutover files without opening them.
 
 This does not make PostgreSQL the canonical lived-history archive. Derived
 PostgreSQL records must retain provenance to L0 or another approved source, and

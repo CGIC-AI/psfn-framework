@@ -6,14 +6,12 @@ import type {
   ContactChannelIdentity,
   ContactChannelLink,
   ContactIdentityLinkOptions,
-  ContactIdentityLinkVerification,
   ContactIdentityLinkVerificationState,
   RelationshipType,
 } from '../types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
-import type { ContactIdentityVerificationRow } from './domain-types.js';
 
 export const LEGACY_DISCORD_CHANNEL = 'discord';
 export const DEFAULT_LINK_VERIFICATION_TTL_MS = 5 * 60_000;
@@ -96,27 +94,6 @@ export function normalizeVerificationState(value: string): ContactIdentityLinkVe
     default:
       return 'pending';
   }
-}
-
-export function toIdentityLinkVerification(
-  row: ContactIdentityVerificationRow,
-): ContactIdentityLinkVerification {
-  return {
-    id: row.id,
-    contactId: row.contact_id,
-    sourceChannel: row.source_channel,
-    sourceUserId: row.source_user_id,
-    targetChannel: row.target_channel,
-    targetUserId: row.target_user_id,
-    nonce: row.nonce,
-    expiresAt: row.expires_at,
-    signature: row.signature,
-    status: normalizeVerificationState(row.status),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    verifiedAt: row.verified_at ?? undefined,
-    failureReason: row.failure_reason ?? undefined,
-  };
 }
 
 export function getLegacyDiscordUserId(

@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EpisodicStore } from './store.js';
+import type { Pool } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
@@ -18,16 +19,8 @@ function meaningBlock(meanings: Record<string, string>, done = true): string {
 }
 
 describe('DreamMeaningPass', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
-
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, { now: () => NOW });
+  function makeStore(): PostgresEpisodicStore {
+    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
   }
 
   function episodeInput(id: string, startedAt: string, endedAt: string, overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreateInput {

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import { ContactStore } from './store.js';
+import type { ContactStorePort } from './contact-store-port.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import { createApprovalQueuePortFromConfirmationQueue } from '../../system/capabilities/approval-queue-port.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import {
   createContactTool,
   createContactLinkIdentityTool,
@@ -19,12 +19,10 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 }
 
 describe('contact tools', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+  let store: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, 'primary-user-123');
+  beforeEach(async () => {
+    ({ store } = await createTestPostgresContactStore('primary-user-123'));
   });
 
   describe('createContactTool', () => {
@@ -45,7 +43,7 @@ describe('contact tools', () => {
     });
 
     it('defaults to list when called without params', async () => {
-      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
+      await store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-list-default', {});
@@ -55,7 +53,7 @@ describe('contact tools', () => {
     });
 
     it('defaults to lookup when only contactId is provided', async () => {
-      const contact = store.upsert({ displayName: 'Dana', notes: 'Works in design' });
+      const contact = await store.upsert({ displayName: 'Dana', notes: 'Works in design' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-lookup-default', { contactId: contact.id });
@@ -65,7 +63,7 @@ describe('contact tools', () => {
     });
 
     it('enriches exact MI lookup with coarse broker availability without private candidate data', async () => {
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Peer Companion',
         isMachineIntelligence: true,
         channelIdentities: [{
@@ -109,7 +107,7 @@ describe('contact tools', () => {
     });
 
     it('updates trust through action=set_trust while preserving guardrails', async () => {
-      const contact = store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
+      const contact = await store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-set-trust', {
@@ -119,7 +117,7 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('set to public');
-      expect(store.getById(contact.id)!.trustLevel).toBe('public');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('public');
     });
 
     it('declares action-aware capability requirements for reads and mutations', () => {
@@ -141,7 +139,7 @@ describe('contact tools', () => {
     });
 
     it('rejects retired lookup action aliases inside the unified tool', async () => {
-      const contact = store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
+      const contact = await store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-legacy-alias', {
@@ -154,7 +152,7 @@ describe('contact tools', () => {
     });
 
     it('rejects retired list action aliases inside the unified tool', async () => {
-      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
+      await store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-legacy-list-alias', {
@@ -166,7 +164,7 @@ describe('contact tools', () => {
     });
 
     it('fails closed when mutation-shaped params are supplied without an action', async () => {
-      const contact = store.upsert({ displayName: 'Needs Action' });
+      const contact = await store.upsert({ displayName: 'Needs Action' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-missing-action', {
@@ -179,13 +177,13 @@ describe('contact tools', () => {
     });
 
     it('searches contacts separately from list and lookup and returns exact contactIds', async () => {
-      const grace = store.upsert({
+      const grace = await store.upsert({
         displayName: 'Grace Hopper',
         nickname: 'Amazing Grace',
         notes: 'Compiler history and navy stories',
         channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
       });
-      store.upsert({ displayName: 'Ada Lovelace', notes: 'Analytical engine notes' });
+      await store.upsert({ displayName: 'Ada Lovelace', notes: 'Analytical engine notes' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('contact-search', {
@@ -216,9 +214,9 @@ describe('contact tools', () => {
   });
 
   describe('contact relationship progression actions', () => {
-    function recordPositiveInteractions(contactId: string, count: number, start = 0): void {
+    async function recordPositiveInteractions(contactId: string, count: number, start = 0): Promise<void> {
       for (let index = 0; index < count; index += 1) {
-        store.updateEmotionalBaseline(contactId, {
+        await store.updateEmotionalBaseline(contactId, {
           valence: 0.5,
           confidence: 0.9,
           observedAtMs: 1_700_000_000_000 + start + index,
@@ -233,9 +231,9 @@ describe('contact tools', () => {
     }
 
     it('autonomously progresses stranger to acquaintance with low-friction evidence', async () => {
-      const contact = store.upsert({ displayName: 'Warm Stranger', relationshipType: 'stranger' });
+      const contact = await store.upsert({ displayName: 'Warm Stranger', relationshipType: 'stranger' });
       const tool = createContactTool(store);
-      recordPositiveInteractions(contact.id, 3);
+      await recordPositiveInteractions(contact.id, 3);
 
       const result = await tool.execute('relationship-acquaintance', {
         action: 'set_relationship',
@@ -251,12 +249,12 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBeUndefined();
       expect(resultText(result)).toContain('stranger -> acquaintance');
-      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
-      expect(store.getById(contact.id)?.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('acquaintance');
+      expect((await store.getById(contact.id))?.trustLevel).toBe('regular');
     });
 
     it('rejects model-supplied interaction counts when canonical history has no supporting evidence', async () => {
-      const contact = store.upsert({ displayName: 'Forged Evidence Target', relationshipType: 'stranger' });
+      const contact = await store.upsert({ displayName: 'Forged Evidence Target', relationshipType: 'stranger' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('relationship-forged-evidence', {
@@ -272,13 +270,13 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBe(true);
       expect(resultText(result).toLowerCase()).toContain('recorded behavior does not support');
-      expect(store.getById(contact.id)?.relationshipType).toBe('stranger');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('stranger');
     });
 
     it('requires stronger evidence for acquaintance to friend', async () => {
-      const contact = store.upsert({ displayName: 'Possible Friend', relationshipType: 'acquaintance' });
+      const contact = await store.upsert({ displayName: 'Possible Friend', relationshipType: 'acquaintance' });
       const tool = createContactTool(store);
-      recordPositiveInteractions(contact.id, 3);
+      await recordPositiveInteractions(contact.id, 3);
 
       const early = await tool.execute('relationship-friend-early', {
         action: 'set_relationship',
@@ -292,9 +290,9 @@ describe('contact tools', () => {
       });
       expect(early.details?.isError).toBe(true);
       expect(resultText(early)).toContain('does not support');
-      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('acquaintance');
 
-      recordPositiveInteractions(contact.id, 9, 3);
+      await recordPositiveInteractions(contact.id, 9, 3);
       const mature = await tool.execute('relationship-friend-mature', {
         action: 'set_relationship',
         contactId: contact.id,
@@ -307,11 +305,11 @@ describe('contact tools', () => {
       });
       expect(mature.details?.isError).toBeUndefined();
       expect(resultText(mature)).toContain('acquaintance -> friend');
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
     });
 
     it('rejects direct autonomous family and partner assignments', async () => {
-      const contact = store.upsert({ displayName: 'Close Friend', relationshipType: 'friend' });
+      const contact = await store.upsert({ displayName: 'Close Friend', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('relationship-family-direct', {
@@ -328,13 +326,13 @@ describe('contact tools', () => {
       expect(result.details?.isError).toBe(true);
       expect(resultText(result)).toContain('requires operator approval');
       expect(resultText(result)).toContain('propose_relationship');
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
     });
 
     it('queues and applies a family proposal only after operator approval', async () => {
-      const contact = store.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
+      const contact = await store.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
       const { queue, tool } = toolWithQueue();
-      recordPositiveInteractions(contact.id, 24);
+      await recordPositiveInteractions(contact.id, 24);
 
       const result = await tool.execute('relationship-family-proposal', {
         action: 'propose_relationship',
@@ -350,7 +348,7 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBeUndefined();
       expect(resultText(result)).toContain('Relationship proposal queued');
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
       expect(queue.listPending()).toEqual([
         expect.objectContaining({
           method: 'contact.relationship.promote',
@@ -371,17 +369,17 @@ describe('contact tools', () => {
 
       const resolved = await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
       expect(resolved).toMatchObject({ status: 'approved', executed: true });
-      expect(store.getById(contact.id)?.relationshipType).toBe('family');
-      expect(store.getById(contact.id)?.trustLevel).toBe('regular');
-      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+      expect((await store.getById(contact.id))?.relationshipType).toBe('family');
+      expect((await store.getById(contact.id))?.trustLevel).toBe('regular');
+      expect(await store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
         .toEqual([expect.objectContaining({ actor: 'operator:confirmation-queue' })]);
     });
 
     it('uses the same HITL boundary for family to partner progression', async () => {
-      const contact = store.upsert({ displayName: 'Family Partner Candidate', relationshipType: 'friend' });
-      store.updateRelationshipType(contact.id, 'family', 'operator:test-setup');
+      const contact = await store.upsert({ displayName: 'Family Partner Candidate', relationshipType: 'friend' });
+      await store.updateRelationshipType(contact.id, 'family', 'operator:test-setup');
       const { queue, tool } = toolWithQueue();
-      recordPositiveInteractions(contact.id, 48);
+      await recordPositiveInteractions(contact.id, 48);
 
       const result = await tool.execute('relationship-partner-proposal', {
         action: 'propose_relationship',
@@ -396,16 +394,16 @@ describe('contact tools', () => {
       });
 
       expect(result.details?.isError).toBeUndefined();
-      expect(store.getById(contact.id)?.relationshipType).toBe('family');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('family');
       await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
-      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('partner');
     });
 
     it('refuses modified approvals that change the proposal subject or evidence', async () => {
-      const contact = store.upsert({ displayName: 'Immutable Proposal', relationshipType: 'friend' });
-      const other = store.upsert({ displayName: 'Wrong Proposal Target', relationshipType: 'friend' });
+      const contact = await store.upsert({ displayName: 'Immutable Proposal', relationshipType: 'friend' });
+      const other = await store.upsert({ displayName: 'Wrong Proposal Target', relationshipType: 'friend' });
       const { queue, tool } = toolWithQueue();
-      recordPositiveInteractions(contact.id, 24);
+      await recordPositiveInteractions(contact.id, 24);
       await tool.execute('relationship-modified-proposal', {
         action: 'propose_relationship',
         contactId: contact.id,
@@ -424,14 +422,14 @@ describe('contact tools', () => {
       });
 
       expect(resolved).toMatchObject({ status: 'failed', executed: false });
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
-      expect(store.getById(other.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
+      expect((await store.getById(other.id))?.relationshipType).toBe('friend');
     });
 
     it('fails an approval atomically when the source relationship changed before its write', async () => {
-      const contact = store.upsert({ displayName: 'Stale Approval Target', relationshipType: 'friend' });
+      const contact = await store.upsert({ displayName: 'Stale Approval Target', relationshipType: 'friend' });
       const { queue, tool } = toolWithQueue();
-      recordPositiveInteractions(contact.id, 24);
+      await recordPositiveInteractions(contact.id, 24);
       await tool.execute('relationship-stale-proposal', {
         action: 'propose_relationship',
         contactId: contact.id,
@@ -444,15 +442,15 @@ describe('contact tools', () => {
         },
       });
 
-      store.updateRelationshipType(contact.id, 'acquaintance', 'operator:concurrent-change');
+      await store.updateRelationshipType(contact.id, 'acquaintance', 'operator:concurrent-change');
 
       const resolved = await queue.resolve({ id: 'relationship-proposal-1', decision: 'approve' });
       expect(resolved).toMatchObject({ status: 'failed', executed: false });
-      expect(store.getById(contact.id)?.relationshipType).toBe('acquaintance');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('acquaintance');
     });
 
     it('fails closed when a gated relationship proposal has no confirmation queue', async () => {
-      const contact = store.upsert({ displayName: 'No Queue Friend', relationshipType: 'friend' });
+      const contact = await store.upsert({ displayName: 'No Queue Friend', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
       const result = await tool.execute('relationship-no-queue', {
@@ -469,7 +467,7 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBe(true);
       expect(resultText(result)).toContain('require a confirmation queue');
-      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect((await store.getById(contact.id))?.relationshipType).toBe('friend');
     });
   });
 
@@ -484,7 +482,7 @@ describe('contact tools', () => {
     }
 
     it('enqueues a trusted-promotion proposal without mutating trust', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { queue, tool } = toolWithQueue();
 
       const result = await tool.execute('propose-1', {
@@ -500,7 +498,7 @@ describe('contact tools', () => {
       expect(text).toContain('proposal id: proposal-1');
 
       // Trust is unchanged until approval.
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
 
       const pending = queue.listPending();
       expect(pending).toHaveLength(1);
@@ -515,7 +513,7 @@ describe('contact tools', () => {
     });
 
     it('applies the trusted promotion with a manual actor when the operator approves', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { queue, tool } = toolWithQueue();
 
       await tool.execute('propose-2', {
@@ -528,11 +526,11 @@ describe('contact tools', () => {
       expect(resolved.status).toBe('approved');
       expect(resolved.executed).toBe(true);
 
-      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('trusted');
       expect(queue.listPending()).toHaveLength(0);
 
       // Audit record written under the manual confirmation-queue actor.
-      const auditEntries = store.listMutationAuditEntries({ contactId: contact.id });
+      const auditEntries = await store.listMutationAuditEntries({ contactId: contact.id });
       const trustAudit = auditEntries.find(entry => entry.field === 'trust_level');
       expect(trustAudit).toBeDefined();
       expect(trustAudit!.oldValue).toBe('regular');
@@ -541,7 +539,7 @@ describe('contact tools', () => {
     });
 
     it('leaves trust untouched when the operator denies', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { queue, tool } = toolWithQueue();
 
       await tool.execute('propose-3', {
@@ -554,16 +552,16 @@ describe('contact tools', () => {
       expect(resolved.status).toBe('denied');
       expect(resolved.executed).toBe(false);
 
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
       expect(queue.listPending()).toHaveLength(0);
-      const trustAudit = store
-        .listMutationAuditEntries({ contactId: contact.id })
+      const trustAudit = (await store
+        .listMutationAuditEntries({ contactId: contact.id }))
         .find(entry => entry.field === 'trust_level');
       expect(trustAudit).toBeUndefined();
     });
 
     it('still rejects direct agent high-tier set_trust (guard untouched)', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { tool } = toolWithQueue();
 
       const result = await tool.execute('direct-high-tier', {
@@ -574,11 +572,11 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBe(true);
       expect(resultText(result)).toContain('manual admin approval');
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
     });
 
     it('rejects primary proposals (primary stays owner-only)', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { queue, tool } = toolWithQueue();
 
       const result = await tool.execute('propose-primary', {
@@ -592,11 +590,11 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain("can only propose promotion to 'trusted'");
       expect(resultText(result)).toContain('owner-only');
       expect(queue.listPending()).toHaveLength(0);
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
     });
 
     it('fails closed when no confirmation queue is wired', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const tool = createContactTool(store); // no proposalQueue
 
       const result = await tool.execute('propose-no-queue', {
@@ -607,14 +605,14 @@ describe('contact tools', () => {
 
       expect(result.details?.isError).toBe(true);
       expect(resultText(result)).toContain('require a confirmation queue');
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
     });
 
     it('rejects proposals for contacts already at high-tier trust', async () => {
       // Promote to trusted via a manual operator actor first.
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
-      store.setTrustLevel(contact.id, 'trusted', 'operator:test-setup');
-      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      await store.setTrustLevel(contact.id, 'trusted', 'operator:test-setup');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('trusted');
       const { queue, tool } = toolWithQueue();
 
       const result = await tool.execute('propose-already-trusted', {
@@ -629,7 +627,7 @@ describe('contact tools', () => {
     });
 
     it('requires a rationale', async () => {
-      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const contact = await store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
       const { queue, tool } = toolWithQueue();
 
       const result = await tool.execute('propose-no-rationale', {
@@ -665,7 +663,7 @@ describe('contact tools', () => {
     });
 
     it('sets low-tier trust level for an existing contact', async () => {
-      const contact = store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
+      const contact = await store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
       const tool = createContactSetTrustTool(store);
 
       const result = await tool.execute('call-1', {
@@ -674,11 +672,11 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('set to public');
-      expect(store.getById(contact.id)!.trustLevel).toBe('public');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('public');
     });
 
     it('denies autonomous high-tier trust updates', async () => {
-      const contact = store.upsert({ displayName: 'High Tier Target', discordUserId: 'trusted-target' });
+      const contact = await store.upsert({ displayName: 'High Tier Target', discordUserId: 'trusted-target' });
       const tool = createContactSetTrustTool(store);
 
       const result = await tool.execute('call-1b', {
@@ -687,12 +685,12 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('manual admin approval');
-      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect((await store.getById(contact.id))!.trustLevel).toBe('regular');
       expect(result.details?.isError).toBe(true);
     });
 
     it('returns error for invalid trust level', async () => {
-      const contact = store.upsert({ displayName: 'Bob' });
+      const contact = await store.upsert({ displayName: 'Bob' });
       const tool = createContactSetTrustTool(store);
 
       const result = await tool.execute('call-2', {
@@ -719,8 +717,8 @@ describe('contact tools', () => {
 
     it('returns error when trying to change primary user trust level', async () => {
       // Create a primary user contact
-      store.upsert({ displayName: 'V', discordUserId: 'primary-user-123' });
-      const primary = store.getByDiscordUserId('primary-user-123')!;
+      await store.upsert({ displayName: 'V', discordUserId: 'primary-user-123' });
+      const primary = (await store.getByDiscordUserId('primary-user-123'))!;
       const tool = createContactSetTrustTool(store);
 
       const result = await tool.execute('call-4', {
@@ -731,12 +729,12 @@ describe('contact tools', () => {
       // setTrustLevel returns false for primary user
       expect(resultText(result)).toContain('not found or is the primary user');
       // Trust level should remain 'primary'
-      expect(store.getById(primary.id)!.trustLevel).toBe('primary');
+      expect((await store.getById(primary.id))!.trustLevel).toBe('primary');
       expect(result.details?.isError).toBe(true);
     });
 
     it('returns canonical error when setTrustLevel throws', async () => {
-      const contact = store.upsert({ displayName: 'Throwy' });
+      const contact = await store.upsert({ displayName: 'Throwy' });
       vi.spyOn(store, 'setTrustLevel').mockImplementation(() => {
         throw new Error('store unavailable');
       });
@@ -766,7 +764,7 @@ describe('contact tools', () => {
     });
 
     it('updates notes for an existing contact', async () => {
-      const contact = store.upsert({ displayName: 'Charlie' });
+      const contact = await store.upsert({ displayName: 'Charlie' });
       const tool = createContactNoteTool(store);
 
       const result = await tool.execute('call-5', {
@@ -775,7 +773,7 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('Notes updated');
-      expect(store.getById(contact.id)!.notes).toBe('Likes cats and programming');
+      expect((await store.getById(contact.id))!.notes).toBe('Likes cats and programming');
     });
 
     it('returns error for contact not found', async () => {
@@ -804,7 +802,7 @@ describe('contact tools', () => {
     });
 
     it('looks up a contact by internal ID', async () => {
-      const contact = store.upsert({ displayName: 'Dana', notes: 'Works in design' });
+      const contact = await store.upsert({ displayName: 'Dana', notes: 'Works in design' });
       const tool = createContactLookupTool(store);
 
       const result = await tool.execute('call-7', { contactId: contact.id });
@@ -817,7 +815,7 @@ describe('contact tools', () => {
     });
 
     it('prefers nickname over display name in lookup output', async () => {
-      const contact = store.upsert({ displayName: 'Alex Example', nickname: 'A' });
+      const contact = await store.upsert({ displayName: 'Alex Example', nickname: 'A' });
       const tool = createContactLookupTool(store);
 
       const result = await tool.execute('call-7b', { contactId: contact.id });
@@ -827,7 +825,7 @@ describe('contact tools', () => {
     });
 
     it('looks up a contact by Discord user ID', async () => {
-      store.upsert({ displayName: 'Eve', discordUserId: 'eve-discord-456' });
+      await store.upsert({ displayName: 'Eve', discordUserId: 'eve-discord-456' });
       const tool = createContactLookupTool(store);
 
       const result = await tool.execute('call-8', { contactId: 'eve-discord-456' });
@@ -837,7 +835,7 @@ describe('contact tools', () => {
     });
 
     it('looks up a contact by channel identity syntax', async () => {
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Sky',
         channelIdentities: [{ channel: 'api', userId: 'sky-api-1' }],
       });
@@ -860,7 +858,7 @@ describe('contact tools', () => {
     });
 
     it('gives a contactId recovery path when lookup guesses a display name', async () => {
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Grace',
         channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
       });
@@ -880,7 +878,7 @@ describe('contact tools', () => {
     });
 
     it('names missing contactId and points to list recovery', async () => {
-      const contact = store.upsert({ displayName: 'Lookup Target' });
+      const contact = await store.upsert({ displayName: 'Lookup Target' });
       const tool = createContactLookupTool(store);
 
       const result = await tool.execute('contact-lookup-missing-id', {} as any);
@@ -893,8 +891,8 @@ describe('contact tools', () => {
     });
 
     it('does not include Notes line when notes are empty', async () => {
-      store.upsert({ displayName: 'Frank' });
-      const frank = store.listAll().find(c => c.displayName === 'Frank')!;
+      await store.upsert({ displayName: 'Frank' });
+      const frank = (await store.listAll()).find(c => c.displayName === 'Frank')!;
       const tool = createContactLookupTool(store);
 
       const result = await tool.execute('call-10', { contactId: frank.id });
@@ -925,7 +923,7 @@ describe('contact tools', () => {
     });
 
     it('lists all contacts with contactId, channels, trust, and relationship info', async () => {
-      const grace = store.upsert({
+      const grace = await store.upsert({
         displayName: 'Grace',
         trustLevel: 'trusted',
         relationshipType: 'friend',
@@ -935,7 +933,7 @@ describe('contact tools', () => {
           { channel: 'api', userId: 'grace-api' },
         ],
       });
-      store.upsert({ displayName: 'Hank', trustLevel: 'regular', relationshipType: 'acquaintance' });
+      await store.upsert({ displayName: 'Hank', trustLevel: 'regular', relationshipType: 'acquaintance' });
       const tool = createContactListTool(store);
 
       const result = await tool.execute('call-12', {});
@@ -951,7 +949,7 @@ describe('contact tools', () => {
     });
 
     it('prefers nickname over display name in list output', async () => {
-      store.upsert({ displayName: 'Alex Example', nickname: 'A' });
+      await store.upsert({ displayName: 'Alex Example', nickname: 'A' });
       const tool = createContactListTool(store);
 
       const result = await tool.execute('call-12b', {});
@@ -961,7 +959,7 @@ describe('contact tools', () => {
     });
 
     it('omits notes dash when contact has no notes', async () => {
-      store.upsert({ displayName: 'Iris' });
+      await store.upsert({ displayName: 'Iris' });
       const tool = createContactListTool(store);
 
       const result = await tool.execute('call-13', {});
@@ -977,7 +975,7 @@ describe('contact tools', () => {
 
   describe('createContactLinkIdentityTool', () => {
     it('links a new channel identity to an existing contact', async () => {
-      const contact = store.upsert({ displayName: 'Nova', discordUserId: 'nova-discord' });
+      const contact = await store.upsert({ displayName: 'Nova', discordUserId: 'nova-discord' });
       const tool = createContactLinkIdentityTool(store);
 
       const result = await tool.execute('call-14', {
@@ -987,13 +985,13 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('Linked api:nova-api');
-      const resolved = store.getByChannelIdentity('api', 'nova-api');
+      const resolved = await store.getByChannelIdentity('api', 'nova-api');
       expect(resolved?.id).toBe(contact.id);
     });
 
     it('returns conflict when identity belongs to another contact', async () => {
-      const first = store.upsert({ displayName: 'First', channelIdentities: [{ channel: 'api', userId: 'shared-api' }] });
-      const second = store.upsert({ displayName: 'Second', discordUserId: 'second-discord' });
+      const first = await store.upsert({ displayName: 'First', channelIdentities: [{ channel: 'api', userId: 'shared-api' }] });
+      const second = await store.upsert({ displayName: 'Second', discordUserId: 'second-discord' });
       expect(first.id).not.toBe(second.id);
       const tool = createContactLinkIdentityTool(store);
 
@@ -1008,7 +1006,7 @@ describe('contact tools', () => {
     });
 
     it('treats already-linked identity as idempotent success', async () => {
-      const contact = store.upsert({
+      const contact = await store.upsert({
         displayName: 'Idempotent',
         channelIdentities: [{ channel: 'api', userId: 'existing-api' }],
       });
@@ -1027,8 +1025,8 @@ describe('contact tools', () => {
 
   describe('createContactSetChannelPrivacyTool', () => {
     it('updates channel privacy for an existing linked identity', async () => {
-      const contact = store.upsert({ displayName: 'Privacy User' });
-      store.linkChannelIdentity(contact.id, 'api', 'privacy-api');
+      const contact = await store.upsert({ displayName: 'Privacy User' });
+      await store.linkChannelIdentity(contact.id, 'api', 'privacy-api');
       const tool = createContactSetChannelPrivacyTool(store);
 
       const result = await tool.execute('call-17', {
@@ -1039,12 +1037,12 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('privacy to public');
-      expect(store.getByChannelIdentity('api', 'privacy-api')?.channels?.[0]?.privacyLevel).toBe('public');
+      expect((await store.getByChannelIdentity('api', 'privacy-api'))?.channels?.[0]?.privacyLevel).toBe('public');
     });
 
     it('rejects invalid privacy levels', async () => {
-      const contact = store.upsert({ displayName: 'Privacy User' });
-      store.linkChannelIdentity(contact.id, 'api', 'privacy-api');
+      const contact = await store.upsert({ displayName: 'Privacy User' });
+      await store.linkChannelIdentity(contact.id, 'api', 'privacy-api');
       const tool = createContactSetChannelPrivacyTool(store);
 
       const result = await tool.execute('call-18', {

@@ -227,7 +227,7 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
 
 ## Persistence Backends
 
-PostgreSQL is the required backend for the repo-owned runtime. SQLite-backed stores are retained only for legacy migration utilities, explicit repair flows, and tests that exercise those adapters directly.
+PostgreSQL is the only backend for the repo-owned runtime and persistence-aware maintenance commands. SQLite-backed stores, migration readers, and native packages are removed; unsupported backend selection fails before runtime composition.
 
 Operational rules:
 
@@ -400,7 +400,7 @@ authorization and redaction contracts.
 - `npm run verify:backup-restore -- --backup-dir <snapshot> --postgres-restore-url <scratch-url> [--postgres-source-url <url>]` decrypts encrypted backup sets using the manifest key reference and runs the same fidelity verification (the decant rehearsal).
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
 - Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump, companion-data tree, and Personal Workspace) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, the Shared Companion Workspace, and the Helm recovery bundle when applicable; Helm files and peer Personal Workspaces never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing the complete workspace family and system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Destination-aware restore helpers in `src/persistence/backups/fleet-restore.ts` restore exactly one companion, cluster, or group scope after verifying the backup manifests and reject existing or overlapping destination roots rather than merging them.
-- Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
+- Startup validates the PostgreSQL schema, pgvector availability, and configured embedding dimensions; there is no alternate database integrity path.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:
 

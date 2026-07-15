@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
-import { ContactStore } from './store.js';
+import type { ContactStorePort } from './contact-store-port.js';
+import { FakePostgresPool } from '../../test-support/fake-postgres-contact-pool.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 
 // ── Room roster (E4.1) ──
 // Bounded known-members queries over contact_channel_activity. These prove:
@@ -12,64 +13,65 @@ import { ContactStore } from './store.js';
 const PRIMARY_USER_ID = 'primary-1';
 
 function setActivityTimestamps(
-  db: Database.Database,
+  pool: FakePostgresPool,
   contactId: string,
   channelId: string,
   firstSeen: string,
   lastSeen: string,
 ): void {
-  db.prepare(
-    'UPDATE contact_channel_activity SET first_seen = ?, last_seen = ? WHERE contact_id = ? AND channel_id = ?',
-  ).run(firstSeen, lastSeen, contactId, channelId);
+  const activity = [...pool.contactChannelActivity.values()]
+    .find(row => row.contact_id === contactId && row.channel_id === channelId);
+  if (!activity) throw new Error(`Missing contact activity for ${contactId} in ${channelId}`);
+  activity.first_seen = firstSeen;
+  activity.last_seen = lastSeen;
 }
 
 describe('ContactStore room roster', () => {
-  let db: Database.Database;
-  let store: ContactStore;
+  let pool: FakePostgresPool;
+  let store: ContactStorePort;
 
   const ROOM_X = 'discord:room-x';
   const ROOM_Y = 'discord:room-y';
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    store = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    ({ pool, store } = await createTestPostgresContactStore(PRIMARY_USER_ID));
 
-    const alice = store.upsert({ displayName: 'Alice', trustLevel: 'trusted', relationshipType: 'friend' });
-    const bob = store.upsert({ displayName: 'Bob', trustLevel: 'regular', relationshipType: 'acquaintance' });
-    const carol = store.upsert({ displayName: 'Carol', trustLevel: 'regular', relationshipType: 'stranger' });
-    const dave = store.upsert({ displayName: 'Dave', trustLevel: 'trusted', relationshipType: 'friend' });
+    const alice = await store.upsert({ displayName: 'Alice', trustLevel: 'trusted', relationshipType: 'friend' });
+    const bob = await store.upsert({ displayName: 'Bob', trustLevel: 'regular', relationshipType: 'acquaintance' });
+    const carol = await store.upsert({ displayName: 'Carol', trustLevel: 'regular', relationshipType: 'stranger' });
+    const dave = await store.upsert({ displayName: 'Dave', trustLevel: 'trusted', relationshipType: 'friend' });
 
     // Room X: three known members.
-    store.recordChannelActivity(alice.id, 'discord', ROOM_X, 'invite_only');
-    store.recordChannelActivity(bob.id, 'discord', ROOM_X, 'invite_only');
-    store.recordChannelActivity(carol.id, 'discord', ROOM_X, 'invite_only');
+    await store.recordChannelActivity(alice.id, 'discord', ROOM_X, 'invite_only');
+    await store.recordChannelActivity(bob.id, 'discord', ROOM_X, 'invite_only');
+    await store.recordChannelActivity(carol.id, 'discord', ROOM_X, 'invite_only');
     // Deterministic activity timeline: Carol newest, Alice middle, Bob oldest
     // (Bob has NOT spoken recently, but is still a known member — must appear).
-    setActivityTimestamps(db, bob.id, ROOM_X, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
-    setActivityTimestamps(db, alice.id, ROOM_X, '2024-03-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
-    setActivityTimestamps(db, carol.id, ROOM_X, '2024-05-01T00:00:00.000Z', '2024-07-01T00:00:00.000Z');
+    setActivityTimestamps(pool, bob.id, ROOM_X, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
+    setActivityTimestamps(pool, alice.id, ROOM_X, '2024-03-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
+    setActivityTimestamps(pool, carol.id, ROOM_X, '2024-05-01T00:00:00.000Z', '2024-07-01T00:00:00.000Z');
 
     // Room Y: single member, most recent overall activity.
-    store.recordChannelActivity(dave.id, 'discord', ROOM_Y, 'private');
-    setActivityTimestamps(db, dave.id, ROOM_Y, '2024-08-01T00:00:00.000Z', '2024-08-01T00:00:00.000Z');
+    await store.recordChannelActivity(dave.id, 'discord', ROOM_Y, 'private');
+    setActivityTimestamps(pool, dave.id, ROOM_Y, '2024-08-01T00:00:00.000Z', '2024-08-01T00:00:00.000Z');
 
     // Contacts with NO room activity — must never inflate a roster (bounded).
     for (let i = 0; i < 25; i += 1) {
-      store.upsert({ displayName: `Noise ${i}`, trustLevel: 'regular', relationshipType: 'stranger' });
+      await store.upsert({ displayName: `Noise ${i}`, trustLevel: 'regular', relationshipType: 'stranger' });
     }
   });
 
-  it('lists known rooms with member counts, ordered by last activity desc', () => {
-    const rooms = store.listKnownRooms();
+  it('lists known rooms with member counts, ordered by last activity desc', async () => {
+    const rooms = await store.listKnownRooms();
     expect(rooms.map(r => r.channelId)).toEqual([ROOM_Y, ROOM_X]);
     const roomX = rooms.find(r => r.channelId === ROOM_X);
     expect(roomX).toMatchObject({ channel: 'discord', memberCount: 3, lastActivity: '2024-07-01T00:00:00.000Z' });
     expect(roomX?.firstActivity).toBe('2020-01-01T00:00:00.000Z');
-    expect(store.countKnownRooms()).toBe(2);
+    expect(await store.countKnownRooms()).toBe(2);
   });
 
-  it('returns roster ordered by last-seen desc including members who have not spoken recently', () => {
-    const roster = store.listRoomRoster(ROOM_X);
+  it('returns roster ordered by last-seen desc including members who have not spoken recently', async () => {
+    const roster = await store.listRoomRoster(ROOM_X);
     expect(roster.map(m => m.displayName)).toEqual(['Carol', 'Alice', 'Bob']);
     // Bob's row is old but present.
     const bob = roster.find(m => m.displayName === 'Bob');
@@ -84,16 +86,16 @@ describe('ContactStore room roster', () => {
     });
   });
 
-  it('paginates the roster with limit/offset and reports total via count', () => {
-    expect(store.countRoomRoster(ROOM_X)).toBe(3);
-    const page1 = store.listRoomRoster(ROOM_X, { limit: 2, offset: 0 });
+  it('paginates the roster with limit/offset and reports total via count', async () => {
+    expect(await store.countRoomRoster(ROOM_X)).toBe(3);
+    const page1 = await store.listRoomRoster(ROOM_X, { limit: 2, offset: 0 });
     expect(page1.map(m => m.displayName)).toEqual(['Carol', 'Alice']);
-    const page2 = store.listRoomRoster(ROOM_X, { limit: 2, offset: 2 });
+    const page2 = await store.listRoomRoster(ROOM_X, { limit: 2, offset: 2 });
     expect(page2.map(m => m.displayName)).toEqual(['Bob']);
   });
 
-  it('is bounded: only room members appear and the projection is not a full Contact', () => {
-    const roster = store.listRoomRoster(ROOM_X);
+  it('is bounded: only room members appear and the projection is not a full Contact', async () => {
+    const roster = await store.listRoomRoster(ROOM_X);
     // 25 noise contacts + Dave (room Y) exist but never appear in room X.
     expect(roster).toHaveLength(3);
     // Roster projection carries only the columns the surface needs — NOT the
@@ -106,13 +108,13 @@ describe('ContactStore room roster', () => {
     );
   });
 
-  it('respects the channel filter when channelIds could collide across channels', () => {
-    const other = store.upsert({ displayName: 'Eve', trustLevel: 'regular', relationshipType: 'stranger' });
+  it('respects the channel filter when channelIds could collide across channels', async () => {
+    const other = await store.upsert({ displayName: 'Eve', trustLevel: 'regular', relationshipType: 'stranger' });
     // Same bare channelId string under a different channel namespace.
-    store.recordChannelActivity(other.id, 'telegram', ROOM_X, 'invite_only');
-    expect(store.countRoomRoster(ROOM_X)).toBe(4); // both channels share the id
-    expect(store.countRoomRoster(ROOM_X, { channel: 'discord' })).toBe(3);
-    const discordOnly = store.listRoomRoster(ROOM_X, { channel: 'discord' });
+    await store.recordChannelActivity(other.id, 'telegram', ROOM_X, 'invite_only');
+    expect(await store.countRoomRoster(ROOM_X)).toBe(4); // both channels share the id
+    expect(await store.countRoomRoster(ROOM_X, { channel: 'discord' })).toBe(3);
+    const discordOnly = await store.listRoomRoster(ROOM_X, { channel: 'discord' });
     expect(discordOnly.every(m => m.channel === 'discord')).toBe(true);
   });
 });

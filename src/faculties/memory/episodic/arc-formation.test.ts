@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EpisodicStore } from './store.js';
+import type { Pool } from 'pg';
+import { describe, expect, it, vi } from 'vitest';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from './store-port.js';
@@ -17,16 +18,8 @@ function arcResponse(arcs: unknown[]): { content: string } {
 }
 
 describe('EpisodeArcWeaver', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
-
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
-    return new EpisodicStore(db, { now: () => NOW });
+  function makeStore(): PostgresEpisodicStore {
+    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, { now: () => NOW });
   }
 
   function episodeInput(
@@ -54,7 +47,7 @@ describe('EpisodeArcWeaver', () => {
     };
   }
 
-  async function seedWeekOfEpisodes(store: EpisodicStore): Promise<void> {
+  async function seedWeekOfEpisodes(store: PostgresEpisodicStore): Promise<void> {
     await store.createEpisode(episodeInput('day1', '2026-06-04T20:00:00.000Z', '2026-06-04T21:00:00.000Z'));
     await store.createEpisode(episodeInput('day2', '2026-06-06T20:00:00.000Z', '2026-06-06T21:00:00.000Z'));
     await store.createEpisode(episodeInput('day3', '2026-06-08T20:00:00.000Z', '2026-06-08T21:00:00.000Z'));

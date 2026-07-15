@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
-import { EpisodicStore } from '../episodic/store.js';
+import type { Pool } from 'pg';
+import { describe, expect, it } from 'vitest';
+import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { PostgresEpisodicStore } from '../episodic/postgres-store.js';
 import {
   type EpisodeCreateInput,
 } from '../episodic/store-port.js';
@@ -9,17 +10,9 @@ import { listEpisodeArcMemberships } from './episodic.js';
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
 describe('listEpisodeArcMemberships', () => {
-  let db: Database.Database | undefined;
-
-  afterEach(() => {
-    db?.close();
-    db = undefined;
-  });
-
-  function makeStore(): EpisodicStore {
-    db = new Database(':memory:');
+  function makeStore(): PostgresEpisodicStore {
     let sequence = 0;
-    return new EpisodicStore(db, {
+    return new PostgresEpisodicStore(new FakeEpisodicPool() as unknown as Pool, {
       now: () => NOW,
       idFactory: () => `generated-${++sequence}`,
     });

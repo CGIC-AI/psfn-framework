@@ -100,7 +100,7 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 ### Memory
 
 - Runtime memory/session composition requires PostgreSQL-backed ports.
-- SQLite-backed stores remain legacy/migration/test surfaces and must not be selected by runtime defaults.
+- SQLite-backed stores and migration readers are removed; runtime and maintenance composition use PostgreSQL-backed ports, while focused tests may use port fakes.
 - `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
 - `EpisodicSynthesizer` runs from the gated episode-synthesis lane (scheduler timer or turn threshold, then a deterministic new-messages + relevance-minimum gate). It can create multiple candidate episodes for one day and links longer themes as graph arcs; nightly rest-window sleeptime consolidates them.
 - `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
@@ -241,7 +241,7 @@ Persistence is shaped around domain ports, not raw database adapters.
 - Searchable transcript mirrors and projections belong to `TranscriptProjectionPort` and `TranscriptSearchPort`.
 - Durable state belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
 - Raw adapter code stays behind those ports and is not a composition-root seam.
-- The live runtime composes PostgreSQL implementations. SQLite implementations remain for legacy migration utilities, explicit repair flows, and adapter tests.
+- The live runtime and persistence-aware maintenance commands compose PostgreSQL implementations. No SQLite implementation or reader remains behind the domain ports.
 
 ## Extension Surfaces
 

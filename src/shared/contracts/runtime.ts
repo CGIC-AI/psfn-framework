@@ -94,10 +94,38 @@ export interface TurnRecordLocation {
   satelliteId?: string;
 }
 
+/**
+ * Write-time privacy decision for later introspection auditing. The audit
+ * runner never infers eligibility from legacy transcript text: only an
+ * explicitly public, non-DM turn may expose verbatim content. Every other
+ * shape is retained as emotional-signal-only and cannot be replayed.
+ */
+export interface TurnRecordAuditPrivacy {
+  schemaVersion: 1;
+  contentMode: 'verbatim_public' | 'emotional_signal_only';
+  channelPrivacy?: ChannelPrivacy;
+  contentSensitivity: 'non_intimate' | 'intimate' | 'ambiguous';
+  /** Present only when the companion classified this exact current turn. */
+  contentSensitivityActor?: {
+    kind: 'companion';
+    turnId: TurnID;
+    requestId: string;
+  };
+  reason:
+    | 'explicit_public_non_dm'
+    | 'direct_message'
+    | 'non_public_channel'
+    | 'intimate_content'
+    | 'missing_or_ambiguous_content_sensitivity'
+    | 'missing_or_ambiguous_privacy';
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
   requestId: string;
+  /** Logical session that owned the turn; distinct from the exact source channel. */
+  sessionId?: string;
   channelId: string;
   channelType: ChannelType;
   startedAt: number;
@@ -105,6 +133,7 @@ export interface TurnRecord {
   status: 'completed' | 'failed';
   /** Durable room/satellite place origin; absent on unbound turns. */
   location?: TurnRecordLocation;
+  auditPrivacy?: TurnRecordAuditPrivacy;
   /** Gateway/session disclosure classification captured for this turn. */
   channelPrivacy?: ChannelPrivacy;
   userMessage: TurnRecordMessage;
@@ -214,6 +243,9 @@ export type ObservabilityCallType =
   | 'background'
   | 'scheduled';
 
+export type TelemetryVisibility = 'operator_visible' | 'companion_private';
+export const COMPANION_PRIVATE_BACKGROUND_PURPOSE = 'companion_private.background';
+
 export interface LLMRequestMetadata {
   companionId?: string;
   sessionId?: string;
@@ -225,6 +257,11 @@ export interface LLMRequestMetadata {
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  /**
+   * Controls whether per-call telemetry may appear on operator surfaces.
+   * Companion-private work still contributes to aggregate cost accounting.
+   */
+  telemetryVisibility?: TelemetryVisibility;
   service?: string;
   process?: string;
   chargeLane?: ChargePolicyRuntimeLane;
@@ -293,7 +330,7 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.

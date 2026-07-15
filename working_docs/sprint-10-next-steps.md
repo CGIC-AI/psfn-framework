@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13 and the accounting completion status added as §0.6 on 2026-07-14; **room-mechanics feature branch completed 2026-07-13** on `feat/room-mechanics` @ `a410a342` (review-approved). Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13, the accounting completion status added as §0.6 on 2026-07-14, and the introspection-landmarks feature-branch completion added as §0.7 on 2026-07-13; **room-mechanics feature branch completed 2026-07-13** on `feat/room-mechanics` @ `a410a342` (review-approved). Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -112,8 +112,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 - **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) was the type-
   safety prerequisite for `s10mc.1` + `s10mc.2` and is now code-complete and
   independently approved on `feat/companion-id-branding` (§0.4); closing it
-  satisfies that dependency. `z7qe.1` (SQLite sweep) still blocks `s10mc.2`.
-  Rest of the charter-gap epic stays parked.
+  satisfies that dependency. `z7qe.2` (introspection landmarks) is also complete
+  and closed on its pushed feature branch (§0.7). `z7qe.1` (SQLite sweep) still
+  blocks `s10mc.2`. Rest of the charter-gap epic stays parked for genuine
+  children `z7qe.1`, `.3`, and `.5`-`.9`.
 - **Completed feature branch**: `cam.1`–`cam.6` accounting capture,
   attribution, durable dashboard accounting, canonical analytics,
   charge-to-cost reconciliation, migration/certification, and `574y` operator
@@ -136,7 +138,9 @@ was dependency-wired end to end, and the release path got tracker structure.
    and durable room/reply provenance are ready for the operator's later branch
    integration.
 3. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
-4. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
+4. `z7qe.3`, `.5`-`.9` — remaining charter-gap children; see their live bead
+   acceptance rather than treating the epic as parked
+5. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
    one activity with the `s10mc.8` live demo)
 5. Operator-only queue: `efc2` psfn-test preview review (committed
    ~2026-07-19), `kz0i`/`i698` morning live observations, `lpro.1` reboot.
@@ -425,6 +429,35 @@ their existing beads:
   tracker ID.
 - `psfn-framework-dsd5` — stale local Artemis Helm bootstrap state for strict
   owner/auth contracts.
+
+### 0.7 2026-07-13 completed feature branch — introspection landmarks
+
+- `feat/introspection-landmarks` is complete at reviewed code head `86cc6618`;
+  child bead `psfn-framework-z7qe.2` is closed. Parent charter epic `z7qe`
+  remains open because it still has live children (`z7qe.1`, `.3`, `.5`, `.6`,
+  `.7`, `.8`, and `.9`).
+- Delivered companion-owned append-only consent, a scheduled three-call blinded
+  divergence audit with auditor/companion context separation, append-only
+  Postgres landmark and terminal-decision ledgers, private values-consistency
+  findings, and private model-usage telemetry. Intimate or untrusted turns fail
+  closed and are never replayed into the audit.
+- The final privacy hardening binds each candidate to its exact logical-session
+  owner and revalidates route retirement, physical TurnRecord ownership,
+  owner loadability, and tombstones after every awaited disclosure boundary and
+  before durable writes. Deterministic disk-reload races cover both
+  `break_glass_quarantine` and `fresh_split` with zero subsequent model or write
+  calls.
+- Validation at `86cc6618`: 477/477 tests across all 24 changed-surface test
+  files, including seven real local Postgres cases; `npm run lint`, ESM+DTS
+  `npm run build`, `npm run verify:settings-contract`, and `git diff --check`
+  passed. The same independent adversarial reviewer that found the route and
+  in-flight retirement bugs gave final PASS (225 focused tests, Postgres 6/6,
+  lint green).
+- Repository-hygiene note: `npm run verify:repository-hygiene` still stops at
+  the inherited identity-literal baseline (the existing PSFN/`psfn` findings;
+  no introspection file or new feature literal is reported). Public-sanitize
+  passes. This is recorded as inherited branch baseline, not claimed as a green
+  hygiene gate and not expanded into this feature.
 
 ## 1. Where things stand
 

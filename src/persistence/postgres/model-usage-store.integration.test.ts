@@ -1,3 +1,4 @@
+import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,6 +53,83 @@ const TEST_IMAGE = 'postgres:16.8-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
 
 let harness: PostgresTestHarness | null = null;
+
+beforeAll(async () => {
+  harness = await startPostgresTestHarness({ image: TEST_IMAGE });
+}, INTEGRATION_TIMEOUT_MS);
+
+afterAll(async () => {
+  if (harness) await harness.stop();
+}, INTEGRATION_TIMEOUT_MS);
+
+async function withStore<T>(handler: (store: PostgresModelUsageStore, pool: Pool) => Promise<T>): Promise<T> {
+  if (!harness) throw new Error('Postgres integration harness is unavailable');
+  const database = await harness.createDatabase();
+  const pool = createPostgresPool(database.databaseUrl, {
+    applicationName: 'model-usage-private-telemetry-test',
+    allowExitOnIdle: true,
+    max: 2,
+  });
+  try {
+    return await handler(new PostgresModelUsageStore(pool), pool);
+  } finally {
+    await pool.end();
+  }
+}
+
+describe('PostgresModelUsageStore private telemetry', () => {
+  it('retains aggregate cost while filtering private details and source correlation', async () => {
+    await withStore(async (store) => {
+      await store.recordUsageEvent({
+        logicalCallId: 'visible-call',
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'background',
+          purpose: 'background',
+        },
+        provider: 'litellm',
+        model: 'visible-model',
+        inputTokens: 10,
+        outputTokens: 5,
+        providerCostUsd: 0.1,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'private-call',
+        status: 'success',
+        callKind: 'completion',
+        telemetryVisibility: 'companion_private',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'background',
+          purpose: 'background',
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+        provider: 'litellm',
+        model: 'private-model',
+        inputTokens: 20,
+        outputTokens: 10,
+        providerCostUsd: 0.5,
+      });
+
+      const aggregate = await store.getUsageData({ limit: 10 });
+      const operator = await store.getUsageData({ limit: 10, telemetryVisibility: 'operator_visible' });
+      const privateEvent = aggregate.recentEvents.find(event => event.logicalCallId === 'private-call');
+
+      expect(aggregate.totals).toMatchObject({ calls: 2, totalTokens: 45, totalCostUsd: 0.6 });
+      expect(operator.totals).toMatchObject({ calls: 1, totalTokens: 15, totalCostUsd: 0.1 });
+      expect(operator.recentEvents.map(event => event.logicalCallId)).toEqual(['visible-call']);
+      expect(privateEvent).toMatchObject({ telemetryVisibility: 'companion_private' });
+      // companion_private events never persist re-identifying source correlation.
+      expect(privateEvent?.attribution.turnId).toBe('unknown');
+      expect(privateEvent?.attribution.requestId).toBe('unknown');
+      expect(privateEvent?.attribution.channelId).toBe('unknown');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
 
 function makeSessionConfig(dataDir: string): SubstrateConfig {
   return {
@@ -153,14 +231,6 @@ function makeVisionChargePolicy(): ChargePolicyConfig {
     fatigue: makeTestFatiguePolicyConfig(),
   };
 }
-
-beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: TEST_IMAGE });
-}, INTEGRATION_TIMEOUT_MS);
-
-afterAll(async () => {
-  await harness?.stop();
-}, INTEGRATION_TIMEOUT_MS);
 
 describe('PostgresModelUsageStore reconciliation', () => {
   it('runs one tenant-scoped analytics grammar across DST buckets, groups, cursors, and export', async () => {

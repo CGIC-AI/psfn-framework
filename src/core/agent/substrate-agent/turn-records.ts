@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -15,6 +15,7 @@ import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
@@ -40,9 +41,86 @@ function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | und
   };
 }
 
+export function resolveTurnRecordAuditPrivacy(
+  message: SubstrateMessage,
+  turnId: TurnID,
+  requestId: string,
+  trustedDecision?: IntrospectionTurnSensitivityDecision,
+): TurnRecordAuditPrivacy {
+  const channelPrivacy = normalizeChannelPrivacy(message.routing?.channelPrivacy);
+  const decisionMatchesTurn = trustedDecision?.actor.kind === 'companion'
+    && trustedDecision.actor.turnId === turnId
+    && trustedDecision.actor.requestId === requestId;
+  const contentSensitivity = decisionMatchesTurn
+    ? trustedDecision.sensitivity
+    : 'ambiguous';
+  const contentSensitivityActor = decisionMatchesTurn ? trustedDecision.actor : undefined;
+  if (message.isDirectMessage === true) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
+      ...(contentSensitivityActor ? { contentSensitivityActor } : {}),
+      reason: 'direct_message',
+    };
+  }
+  if (
+    channelPrivacy === 'public'
+    && message.isDirectMessage === false
+    && contentSensitivity === 'non_intimate'
+  ) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy,
+      contentSensitivity,
+      ...(contentSensitivityActor ? { contentSensitivityActor } : {}),
+      reason: 'explicit_public_non_dm',
+    };
+  }
+  if (contentSensitivity === 'intimate') {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
+      ...(contentSensitivityActor ? { contentSensitivityActor } : {}),
+      reason: 'intimate_content',
+    };
+  }
+  if (contentSensitivity === 'ambiguous') {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
+      reason: 'missing_or_ambiguous_content_sensitivity',
+    };
+  }
+  if (channelPrivacy) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      channelPrivacy,
+      contentSensitivity,
+      ...(contentSensitivityActor ? { contentSensitivityActor } : {}),
+      reason: 'non_public_channel',
+    };
+  }
+  return {
+    schemaVersion: 1,
+    contentMode: 'emotional_signal_only',
+    contentSensitivity,
+    ...(contentSensitivityActor ? { contentSensitivityActor } : {}),
+    reason: 'missing_or_ambiguous_privacy',
+  };
+}
+
 export function recordUserMessage(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
+  sessionId?: string;
   turnId: TurnID;
   requestId: string;
   trustLevel: TrustLevel;
@@ -176,6 +254,7 @@ export function recordToolObservations(input: {
 
 export function buildTurnRecord(input: {
   message: SubstrateMessage;
+  sessionId?: string;
   turnId: TurnID;
   requestId: string;
   startedAt: number;
@@ -201,6 +280,7 @@ export function buildTurnRecord(input: {
   internalStateSnapshotRef?: string;
   persistedUserMessageContent?: string;
   hashPromptText: (text: string) => string;
+  introspectionSensitivityDecision?: IntrospectionTurnSensitivityDecision;
 }): TurnRecord {
   const toolCalls = buildTurnToolCalls(input.turnMessages);
   const roleEnvelopeRefs = normalizeRoleEnvelopeRefs(input.roleEnvelopeRefs);
@@ -235,12 +315,19 @@ export function buildTurnRecord(input: {
     schemaVersion: 1,
     turnId: input.turnId,
     requestId: input.requestId,
+    ...(input.sessionId?.trim() ? { sessionId: input.sessionId.trim() } : {}),
     channelId: input.message.channelId,
     channelType: input.message.channelType,
     startedAt: input.startedAt,
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
     ...(location ? { location } : {}),
+    auditPrivacy: resolveTurnRecordAuditPrivacy(
+      input.message,
+      input.turnId,
+      input.requestId,
+      input.introspectionSensitivityDecision,
+    ),
     ...(channelPrivacy ? { channelPrivacy } : {}),
     userMessage: {
       role: input.speakerRole,

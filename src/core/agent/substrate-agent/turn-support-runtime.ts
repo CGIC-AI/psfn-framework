@@ -49,6 +49,7 @@ import {
 } from './post-turn-actions.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -125,6 +126,7 @@ export class TurnSupportRuntime {
   private readonly sessionManager: SessionManager;
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
+  private introspectionTurnSensitivityDecisions: IntrospectionTurnSensitivityDecisions | null = null;
 
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private activeTurnTaskKind: string | null = null;
@@ -146,6 +148,12 @@ export class TurnSupportRuntime {
     this.sessionManager = options.sessionManager;
     this.hashPromptText = options.hashPromptText;
     this.resolveContextWindow = options.resolveContextWindow;
+  }
+
+  setIntrospectionTurnSensitivityDecisions(
+    decisions: IntrospectionTurnSensitivityDecisions | null,
+  ): void {
+    this.introspectionTurnSensitivityDecisions = decisions;
   }
 
   getActiveTurnCorrelation(): CorrelationMetadata | null {
@@ -705,10 +713,16 @@ export class TurnSupportRuntime {
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
       ],
     );
+    const introspectionSensitivityDecision = this.introspectionTurnSensitivityDecisions?.consume({
+      turnId: input.turnId,
+      requestId: input.requestId,
+    });
     return buildTurnRecordForTurn({
       ...input,
+      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
+      ...(introspectionSensitivityDecision ? { introspectionSensitivityDecision } : {}),
     });
   }
 

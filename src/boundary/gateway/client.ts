@@ -239,19 +239,24 @@ function buildOutboundUsageCorrelation(
     );
   }
   const charge = getRunChargeSnapshot();
+  // #49: companion_private work (e.g. blinded introspection audits) must not
+  // carry re-identifying turn/request/channel/tool linkage to the gateway. The
+  // visibility flag still rides along so downstream telemetry stays filtered.
+  const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
   return {
     ...(companionId ? { companionId } : (declaredCompanionId ? { companionId: declaredCompanionId } : {})),
     ...(correlation?.sessionId ? { sessionId: correlation.sessionId } : {}),
-    ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-    ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-    ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+    ...(!companionPrivate && correlation?.turnId ? { turnId: correlation.turnId } : {}),
+    ...(!companionPrivate && correlation?.requestId ? { requestId: correlation.requestId } : {}),
+    ...(!companionPrivate && correlation?.channelId ? { channelId: correlation.channelId } : {}),
     ...(correlation?.channelType ? { channelType: correlation.channelType } : {}),
     ...(correlation?.callType ? { callType: correlation.callType } : {}),
     ...(correlation?.originType ? { originType: correlation.originType } : {}),
     ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
-    ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-    ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+    ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
+    ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
     ...(correlation?.purpose ? { purpose: correlation.purpose } : {}),
+    ...(companionPrivate ? { telemetryVisibility: 'companion_private' as const } : {}),
     ...(correlation?.service ? { service: correlation.service } : {}),
     ...(correlation?.process ? { process: correlation.process } : {}),
     ...(charge?.lane ? { chargeLane: charge.lane } : (correlation?.chargeLane
@@ -497,7 +502,6 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
-        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
       }) as LLMChatResult;

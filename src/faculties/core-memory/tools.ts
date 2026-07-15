@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import {
   ACTIVE_CONCERN_EVIDENCE_KINDS,
@@ -29,6 +30,8 @@ import type { ValuesJournalStore } from '../values/store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { evaluateCogSecMemoryCandidacy } from '../../core/cogsec/memory-candidacy.js';
+import type { IntrospectionConsentStore } from '../introspection/consent-store.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../introspection/turn-sensitivity.js';
 import {
   CORE_MEMORY_LABELS,
   coreMemoryChannelScope,
@@ -54,6 +57,9 @@ const ORIENT_ACTIONS = [
   'list_concerns',
   'resolve_concern',
   'transition_concern',
+  'introspection_consent_get',
+  'introspection_consent_set',
+  'introspection_turn_sensitivity_set',
 ] as const;
 type OrientAction = (typeof ORIENT_ACTIONS)[number];
 
@@ -70,6 +76,8 @@ interface CoreMemoryToolStore {
 export interface OrientToolOptions {
   valuesJournal?: ValuesJournalStore | null;
   concernStore?: ConcernStorePort | null;
+  introspectionConsentStore?: IntrospectionConsentStore | null;
+  introspectionTurnSensitivityDecisions?: IntrospectionTurnSensitivityDecisions | null;
 }
 
 interface OrientToolParams extends ValuesListParams {
@@ -99,6 +107,10 @@ interface OrientToolParams extends ValuesListParams {
   concernId?: string;
   concernIds?: string[];
   outcome?: string;
+  enabled?: boolean;
+  allowedPublicChannelIds?: string[];
+  reason?: string;
+  auditContentSensitivity?: 'non_intimate' | 'intimate';
 }
 
 const CONCERN_EVIDENCE_REF_SCHEMA = Type.Object({
@@ -196,12 +208,11 @@ export function createOrientTool(
     name: 'orient',
     label: 'orient',
     description:
-      'Manage scoped continuity notes, values, and active concerns for the current channel or DM. '
-      + 'Do not use continuity blocks to assign identity, mood, feelings, or relationship stance. '
-      + 'Blocks: append/replace update one storage block; reorient refreshes local continuity, participant/room context, and commitments together. '
-      + 'Values: values_list/add/update handles values reflections. '
-      + 'Concerns: create_concern/list_concerns/resolve_concern/transition_concern tracks short-term follow-ups, checkups, reminders, and open threads. '
-      + 'Use exact concernId values from create_concern or list_concerns when resolving or transitioning.',
+      'Manage scoped continuity, values, concerns, and private introspection choices. '
+      + 'Blocks: append/replace or reorient local continuity; never assign identity or mood. '
+      + 'Values: values_list/add/update. '
+      + 'Concerns: create_concern/list_concerns/resolve_concern/transition_concern; copy exact concernId values. '
+      + 'Introspection: on an explicitly public non-DM turn, introspection_turn_sensitivity_set marks only the current turn non_intimate or intimate for later private audit; uncertainty stays unmarked and cannot be replayed.',
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
         type: 'string',
@@ -320,6 +331,24 @@ export function createOrientTool(
         minLength: 1,
         description: 'Optional concise resolution note for action=resolve_concern.',
       })),
+      enabled: Type.Optional(Type.Boolean({
+        description: 'Exact consent state for action=introspection_consent_set.',
+      })),
+      allowedPublicChannelIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), {
+        maxItems: 64,
+        description: 'Exact public channel ids the companion consents to audit. Wildcards are forbidden.',
+      })),
+      reason: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: 500,
+        description: 'Companion-authored reason for the introspection consent revision.',
+      })),
+      auditContentSensitivity: Type.Optional(Type.Union([
+        Type.Literal('non_intimate'),
+        Type.Literal('intimate'),
+      ], {
+        description: 'Companion classification of this exact current turn for action=introspection_turn_sensitivity_set.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -335,6 +364,67 @@ export function createOrientTool(
       }
 
       try {
+        if (action === 'introspection_turn_sensitivity_set') {
+          if (!options.introspectionTurnSensitivityDecisions) {
+            throw new Error('orient introspection turn sensitivity support is not wired');
+          }
+          const requestContext = getRequestContext();
+          if (
+            requestContext?.callType === 'background'
+            || !requestContext?.turnId?.trim()
+            || !requestContext.requestId?.trim()
+          ) {
+            throw new Error('introspection turn sensitivity requires an active companion turn with turnId and requestId');
+          }
+          if (
+            params.auditContentSensitivity !== 'non_intimate'
+            && params.auditContentSensitivity !== 'intimate'
+          ) {
+            throw new Error('auditContentSensitivity is required for action=introspection_turn_sensitivity_set');
+          }
+          const decision = options.introspectionTurnSensitivityDecisions.mark({
+            sensitivity: params.auditContentSensitivity,
+            turnId: requestContext.turnId as TurnID,
+            requestId: requestContext.requestId,
+          });
+          return textResult(JSON.stringify(decision, null, 2));
+        }
+
+        if (action === 'introspection_consent_get') {
+          if (!options.introspectionConsentStore) {
+            throw new Error('orient introspection consent support is not wired');
+          }
+          return textResult(JSON.stringify(options.introspectionConsentStore.load(), null, 2));
+        }
+
+        if (action === 'introspection_consent_set') {
+          if (!options.introspectionConsentStore) {
+            throw new Error('orient introspection consent support is not wired');
+          }
+          const requestContext = getRequestContext();
+          if (
+            requestContext?.callType === 'background'
+            || !requestContext?.turnId?.trim()
+            || !requestContext.requestId?.trim()
+          ) {
+            throw new Error('introspection consent changes require an active companion turn with turnId and requestId');
+          }
+          if (typeof params.enabled !== 'boolean') {
+            throw new Error('enabled is required for action=introspection_consent_set');
+          }
+          const revision = options.introspectionConsentStore.append({
+            enabled: params.enabled,
+            allowedPublicChannelIds: params.allowedPublicChannelIds ?? [],
+            actor: {
+              kind: 'companion',
+              turnId: requestContext.turnId,
+              requestId: requestContext.requestId,
+            },
+            reason: params.reason ?? '',
+          });
+          return textResult(JSON.stringify(revision, null, 2));
+        }
+
         if (action === 'values_list') {
           return executeValuesListAction(
             requireValuesJournal(options.valuesJournal),

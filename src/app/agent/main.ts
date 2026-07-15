@@ -60,10 +60,13 @@ import { createCompanionRoomContentWindowPort } from '../../core/agent/companion
 import {
   resolveDriftReviewCardsPath,
   resolveIntakeQuarantinePath,
+  resolveIntrospectionValuesFindingsPath,
+  resolveLegacyValuesJournalPath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
   resolveSocialGraphBuilderWatermarkPath,
+  resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { createFilePendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import {
@@ -107,6 +110,20 @@ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
 import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
+import {
+  createLLMCompanionLandmarkReflector,
+  createLLMIntrospectionAuditor,
+} from '../../faculties/introspection/model-runtime.js';
+import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
+import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
+import {
+  createLLMValuesConsistencyEvaluator,
+  IntrospectionValuesConsistencyRuntime,
+  ValuesConsistencyFindingStore,
+} from '../../faculties/introspection/values-consistency.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { hydrateStartupContinuity } from './startup-continuity.js';
 import {
   createOptionalJournalAutoPublisher,
@@ -325,6 +342,7 @@ async function main(): Promise<void> {
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
@@ -449,6 +467,57 @@ async function main(): Promise<void> {
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,
+  });
+  const introspectionAuditConfig = schedulerConfig.introspectionAudit
+    ?? DEFAULT_INTROSPECTION_AUDIT_CONFIG;
+  const introspectionAuditRuntime = new IntrospectionAuditRuntime({
+    config: introspectionAuditConfig,
+    consentStore: introspectionConsentStore,
+    source: createTurnRecordIntrospectionSource({
+      listRecentSessions: (limit, offset) => sessionManager.listRecentSessions(limit, offset).map((session) => ({
+        sessionId: session.sessionId,
+        sourceChannelId: sessionManager.getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
+          ?? session.channelId,
+      })),
+      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
+        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
+      ),
+      isSessionRetiredOrQuarantined: sessionId => (
+        sessionManager.isSessionRetiredOrQuarantined(sessionId)
+      ),
+      isSourceTurnRecordEligible: (sourceChannelId, ownerSessionId, turnId) => (
+        sessionStore.isSourceTurnRecordEligible(sourceChannelId, ownerSessionId, turnId)
+      ),
+    }),
+    auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),
+    reflector: createLLMCompanionLandmarkReflector(
+      llmProvider,
+      systemPrompt,
+      introspectionAuditConfig,
+    ),
+    persistence: persistenceRuntime.introspectionLandmarkStore,
+  });
+  const introspectionValuesConsistencyRuntime = new IntrospectionValuesConsistencyRuntime({
+    landmarks: persistenceRuntime.introspectionLandmarkStore,
+    consentStore: introspectionConsentStore,
+    claimedValues: new ValuesJournalStore(
+      resolveValuesJournalPath(pathSnapshot.companionDataDir),
+      { legacyFilePaths: [resolveLegacyValuesJournalPath(pathSnapshot.companionDataDir)] },
+    ),
+    findings: new ValuesConsistencyFindingStore(
+      resolveIntrospectionValuesFindingsPath(pathSnapshot.companionDataDir),
+    ),
+    evaluator: createLLMValuesConsistencyEvaluator({
+      llmProvider,
+      companionSystemPrompt: systemPrompt,
+      maxTokens: introspectionAuditConfig.reflectionMaxTokens,
+    }),
+  });
+  registerIntrospectionAuditTask({
+    scheduler,
+    runtime: introspectionAuditRuntime,
+    valuesConsistencyRuntime: introspectionValuesConsistencyRuntime,
+    config: introspectionAuditConfig,
   });
 
   const moduleLoader = new ModuleLoader({
@@ -777,7 +846,7 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => {},
+    closeDatabase: () => persistenceRuntime.introspectionLandmarkStore.close(),
     scheduler,
     moduleLoader,
     memoryExtractor,

@@ -48,6 +48,7 @@ import {
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
   extractDiscordDocumentAttachmentCandidates,
@@ -850,6 +851,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const resolvedContent = content === '(empty message)' && attachments.length > 0
       ? '(image attachment)'
       : content;
+    const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -863,6 +865,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       routing: {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
+        channelPrivacy,
         // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
         // set true for bot-authored messages so a human author never triggers
         // machine-intelligence auto-tagging. Consumed by author-context

@@ -6,6 +6,10 @@ import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import {
+  resetRuntimeChannelEnvelopeLabels,
+  setRuntimeChannelEnvelopeLabels,
+} from '../../system/trust/runtime-channel-labels.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -182,6 +186,7 @@ describe('DiscordAdapter startup backfill', () => {
   let store: SessionStore;
 
   beforeEach(() => {
+    resetRuntimeChannelEnvelopeLabels();
     sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-discord-adapter-'));
     store = new SessionStore(sessionsDir);
     discordMock.channelsById.clear();
@@ -591,6 +596,7 @@ describe('DiscordAdapter DM routing', () => {
       channelId,
       isDirectMessage: true,
       content: 'hello from dm',
+      routing: expect.objectContaining({ channelPrivacy: 'private' }),
     }));
     expect(interactive.sent).toContain('dm reply');
   });
@@ -1176,6 +1182,7 @@ describe('DiscordAdapter DM routing', () => {
       routing: expect.objectContaining({
         source: 'discord',
         responseMode: 'observe',
+        channelPrivacy: 'invite_only',
       }),
     }));
     expect(interactive.sent).toHaveLength(0);
@@ -1197,9 +1204,46 @@ describe('DiscordAdapter DM routing', () => {
       routing: expect.objectContaining({
         source: 'discord',
         responseMode: 'respond',
+        channelPrivacy: 'invite_only',
       }),
     }));
     expect(interactive.sent).toContain('guild reply');
+  });
+
+  it('stamps a configured public channel label as trusted ingress privacy provenance', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+    const channelId = 'guild-public-channel';
+    setRuntimeChannelEnvelopeLabels({ [channelId]: { privacy: 'public' } });
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: '',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    try {
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'guild-public-1',
+          guildId: 'guild-1',
+          content: '<@!bot-1> public planning question',
+          mentioned: true,
+        }),
+      );
+      expect(handler.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+        isDirectMessage: false,
+        routing: expect.objectContaining({
+          source: 'discord',
+          channelPrivacy: 'public',
+        }),
+      }));
+    } finally {
+      resetRuntimeChannelEnvelopeLabels();
+    }
   });
 
   it('ignores bot-authored guild mentions unless the bot is allowlisted', async () => {

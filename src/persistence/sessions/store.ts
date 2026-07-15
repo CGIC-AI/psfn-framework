@@ -983,6 +983,44 @@ export class SessionStore implements TranscriptSearchPort {
       requested = Math.min(requested * 2, scanCap);
     }
   }
+  /**
+   * Reads the physical turn-record stream for an exact source channel without
+   * resolving it through a logical-session alias. Introspection consent is
+   * channel-exact, so routed sessions must use this path instead of widening a
+   * source-channel decision to the whole logical session.
+   */
+  getRecentSourceTurnRecords(sourceChannelId: string, limit: number, offset = 0): TurnRecord[] {
+    if (limit <= 0 || offset < 0) return [];
+    const records = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    );
+    const filtered = records.filter((record) => {
+      const ownerSessionId = record.sessionId ?? sourceChannelId;
+      const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+      if (!owner) return false;
+      return !owner.turnTombstones.has(record.turnId);
+    });
+    const end = Math.max(0, filtered.length - offset);
+    const start = Math.max(0, end - limit);
+    return filtered.slice(start, end);
+  }
+  isSourceTurnRecordEligible(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): boolean {
+    const matches = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    ).filter(record => record.turnId === turnId);
+    if (matches.length !== 1) return false;
+    const record = matches[0];
+    const declaredOwnerSessionId = record.sessionId ?? sourceChannelId;
+    if (record.channelId !== sourceChannelId || declaredOwnerSessionId !== ownerSessionId) return false;
+    const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+    return owner !== null && !owner.turnTombstones.has(turnId);
+  }
   async searchByKeywords(
     query: string,
     limit = 10,
@@ -1436,8 +1474,8 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     };
   }
-  listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
-    if (limit <= 0) return [];
+  listSessionsByRecentActivity(limit = 20, offset = 0): SessionActivitySummary[] {
+    if (limit <= 0 || offset < 0) return [];
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
@@ -1462,7 +1500,7 @@ export class SessionStore implements TranscriptSearchPort {
       return left.sessionId.localeCompare(right.sessionId);
     });
 
-    return sessions.slice(0, limit);
+    return sessions.slice(offset, offset + limit);
   }
   getLatestSessionByTimestamp(): LatestSessionSummary | null {
     const latest = this.listSessionsByRecentActivity(1)[0];

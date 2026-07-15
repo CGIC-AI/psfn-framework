@@ -741,6 +741,14 @@ export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'heartbeat-policy.json');
 }
 
+export function resolveIntrospectionConsentLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'introspection-consent.jsonl');
+}
+
+export function resolveIntrospectionValuesFindingsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'introspection-values-findings.jsonl');
+}
+
 export function resolvePostTurnActionQueuePath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'post-turn-actions.queue.json');
 }
@@ -958,6 +966,8 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['prompt-registry-history.jsonl', resolvePromptRegistryHistoryPath(companionDataDir)],
     ['north-star.json', resolveNorthStarPath(companionDataDir)],
     ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
+    ['introspection-consent.jsonl', resolveIntrospectionConsentLedgerPath(companionDataDir)],
+    ['introspection-values-findings.jsonl', resolveIntrospectionValuesFindingsPath(companionDataDir)],
     ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],
     ['outreach-outbox.jsonl', resolveOutreachOutboxLedgerPath(companionDataDir)],
     ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],

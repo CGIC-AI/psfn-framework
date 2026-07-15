@@ -1,7 +1,138 @@
 import { describe, expect, it } from 'vitest';
-import { buildTurnRecord, sanitizePersistedReasoningText } from './turn-records.js';
+import {
+  buildTurnRecord,
+  resolveTurnRecordAuditPrivacy,
+  sanitizePersistedReasoningText,
+} from './turn-records.js';
+
+const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+const AUDIT_REQUEST_ID = 'request-audit-privacy';
+
+function sensitivityDecision(sensitivity: 'non_intimate' | 'intimate') {
+  return {
+    sensitivity,
+    actor: {
+      kind: 'companion' as const,
+      turnId: AUDIT_TURN_ID,
+      requestId: AUDIT_REQUEST_ID,
+    },
+  };
+}
 
 describe('turn-records tool persistence', () => {
+  it('captures verbatim audit eligibility only for explicitly public non-DM turns', () => {
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'public statement',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID, sensitivityDecision('non_intimate'))).toEqual({
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy: 'public',
+      contentSensitivity: 'non_intimate',
+      contentSensitivityActor: sensitivityDecision('non_intimate').actor,
+      reason: 'explicit_public_non_dm',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public-intimate',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'trusted classifier marked this intimate',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID, sensitivityDecision('intimate'))).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'intimate',
+      reason: 'intimate_content',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public-unclassified',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'no trusted content classification',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID)).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+      reason: 'missing_or_ambiguous_content_sensitivity',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-private',
+      channelId: 'discord:private',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'private statement',
+      timestamp: new Date(),
+      isDirectMessage: true,
+      routing: { channelPrivacy: 'private' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID).contentMode).toBe('emotional_signal_only');
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-ambiguous',
+      channelId: 'api:ambiguous',
+      channelType: 'api',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'ambiguous statement',
+      timestamp: new Date(),
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID).contentMode).toBe('emotional_signal_only');
+  });
+
+  it('ignores transport-provided sensitivity claims and mismatched companion decisions', () => {
+    const message = {
+      id: 'message-untrusted-sensitivity',
+      channelId: 'discord:public',
+      channelType: 'discord' as const,
+      authorId: 'user',
+      authorName: 'User',
+      content: 'transport claim must not authorize replay',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: {
+        channelPrivacy: 'public' as const,
+        auditContentSensitivity: 'non_intimate',
+      },
+    };
+
+    expect(resolveTurnRecordAuditPrivacy(
+      message,
+      AUDIT_TURN_ID,
+      AUDIT_REQUEST_ID,
+    )).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+    });
+    expect(resolveTurnRecordAuditPrivacy(
+      message,
+      AUDIT_TURN_ID,
+      AUDIT_REQUEST_ID,
+      {
+        ...sensitivityDecision('non_intimate'),
+        actor: { ...sensitivityDecision('non_intimate').actor, requestId: 'different-request' },
+      },
+    )).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+    });
+  });
+
   it('keeps concise persisted reasoning that is useful to operators', () => {
     expect(sanitizePersistedReasoningText('Need the memory tool first.')).toBe('Need the memory tool first.');
   });

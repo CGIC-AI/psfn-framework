@@ -145,6 +145,26 @@ describe('correlation helpers', () => {
         originStage: 'summary',
       });
     });
+
+    it('drops source identifiers from explicitly companion-private telemetry', () => {
+      expect(resolveCorrelationMetadata({
+        turnId: 'source-turn',
+        requestId: 'source-request',
+        channelId: 'source-channel',
+        toolName: 'source-tool',
+        toolCallId: 'source-tool-call',
+        callType: 'background',
+        purpose: 'companion_private.background',
+        telemetryVisibility: 'companion_private',
+      }, undefined, 'background')).toEqual({
+        requestId: 'companion-private',
+        callType: 'background',
+        purpose: 'companion_private.background',
+        originType: 'background',
+        originStage: 'companion_private.background',
+        telemetryVisibility: 'companion_private',
+      });
+    });
   });
 
   describe('toCorrelationLogFields', () => {

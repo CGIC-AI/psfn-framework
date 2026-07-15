@@ -63,6 +63,8 @@ import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbe
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
+import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
@@ -341,6 +343,8 @@ export interface CoreMemoryRuntimeOptions {
   sessionManager: SessionManager;
   config: SubstrateConfig;
   concernStore?: ConcernStorePort | null;
+  introspectionConsentStore?: IntrospectionConsentStore | null;
+  introspectionTurnSensitivityDecisions?: IntrospectionTurnSensitivityDecisions | null;
 }
 
 export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStorePort {
@@ -355,6 +359,8 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
   options.agentLoop.registerTool(createOrientTool(store, {
     valuesJournal,
     concernStore: options.concernStore ?? null,
+    introspectionConsentStore: options.introspectionConsentStore ?? null,
+    introspectionTurnSensitivityDecisions: options.introspectionTurnSensitivityDecisions ?? null,
   }));
   return store;
 }

@@ -20,7 +20,16 @@ export class AdminModelUsageDataService implements AdminModelUsageService {
   constructor(private readonly store: ModelUsageQueryPort & ModelUsageExportPort) {}
 
   async getModelUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
-    return this.store.getUsageData(query);
+    // #49: the operator surface never exposes companion-private per-call detail,
+    // but aggregate totals must still reflect that spend. Query the full ledger
+    // for totals and an operator_visible-only slice for the detail projections.
+    const aggregateQuery = { ...query };
+    delete aggregateQuery.telemetryVisibility;
+    const [aggregateData, operatorData] = await Promise.all([
+      this.store.getUsageData(aggregateQuery),
+      this.store.getUsageData({ ...aggregateQuery, telemetryVisibility: 'operator_visible' }),
+    ]);
+    return combineAggregateTotalsWithOperatorDetails(aggregateData, operatorData);
   }
 
   async exportModelUsageData(
@@ -29,4 +38,17 @@ export class AdminModelUsageDataService implements AdminModelUsageService {
   ): Promise<SerializedModelUsageExport> {
     return serializeModelUsageExport(await this.store.exportUsageEvents(query), format);
   }
+}
+
+function combineAggregateTotalsWithOperatorDetails(
+  aggregateData: ModelUsageData,
+  operatorData: ModelUsageData,
+): ModelUsageData {
+  return {
+    ...operatorData,
+    query: aggregateData.query,
+    totals: aggregateData.totals,
+    recentEvents: operatorData.recentEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
+    expensiveEvents: operatorData.expensiveEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
+  };
 }

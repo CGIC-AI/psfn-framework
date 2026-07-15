@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { GatewayClient } from './client.js';
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
@@ -245,6 +246,45 @@ describe('GatewayClient streaming', () => {
       pin: true,
       maxTokens: 128,
     });
+  });
+
+  it('propagates private completion telemetry without source correlation', async () => {
+    const completion = client.complete(
+      { systemPrompt: 'private', messages: [{ role: 'user', content: 'work' }] },
+      'background',
+      {
+        correlation: {
+          ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+      },
+    );
+    const req = conn.sent[0] as { id: number; params: Record<string, unknown> };
+
+    expect(req.params).toMatchObject({
+      purpose: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    });
+    expect(req.params).not.toHaveProperty('turnId');
+    expect(req.params).not.toHaveProperty('requestId');
+    expect(req.params).not.toHaveProperty('channelId');
+
+    conn._emit({
+      id: req.id,
+      jsonrpc: '2.0',
+      result: {
+        content: 'done',
+        toolCalls: [],
+        model: 'test',
+        inputTokens: 10,
+        outputTokens: 5,
+        stopReason: 'end',
+      },
+    });
+    await expect(completion).resolves.toMatchObject({ content: 'done' });
   });
 
   it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {

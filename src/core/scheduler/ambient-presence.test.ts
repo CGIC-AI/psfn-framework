@@ -103,6 +103,83 @@ describe('evaluateAmbientPresenceEligibility', () => {
 });
 
 describe('registerAmbientPresenceTask', () => {
+  it('rejects recent conversational metadata without reading session entries', async () => {
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 500 });
+    const getRecentMessages = vi.fn(() => []);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendSystemNote = vi.fn();
+
+    try {
+      registerAmbientPresenceTask({
+        scheduler,
+        sessionManager: {
+          resolveStartupSessionMetadata: () => ({
+            sessionId: 'api:main',
+            channelType: 'api',
+            timestamp: nowMs - 30 * 60_000,
+            lastRole: 'assistant',
+          }),
+          getRecentMessages,
+          getRecentSessionEntries,
+          appendSystemNote,
+        },
+        restWindow,
+      });
+
+      const handler = scheduler.getTask('ambient-presence')?.handler;
+      if (!handler) throw new Error('ambient presence task was not registered');
+      await handler();
+
+      expect(getRecentMessages).not.toHaveBeenCalled();
+      expect(getRecentSessionEntries).not.toHaveBeenCalled();
+      expect(appendSystemNote).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('does not treat a recent system index row as recent conversation', async () => {
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const lastConversationAt = Date.parse('2026-06-10T22:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 500 });
+    const getRecentMessages = vi.fn(() => [
+      entry({ role: 'user', timestamp: lastConversationAt }),
+    ]);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendSystemNote = vi.fn();
+
+    try {
+      registerAmbientPresenceTask({
+        scheduler,
+        sessionManager: {
+          resolveStartupSessionMetadata: () => ({
+            sessionId: 'api:main',
+            channelType: 'api',
+            timestamp: nowMs - 30 * 60_000,
+            lastRole: 'system',
+          }),
+          getRecentMessages,
+          getRecentSessionEntries,
+          appendSystemNote,
+        },
+        restWindow,
+      });
+
+      const handler = scheduler.getTask('ambient-presence')?.handler;
+      if (!handler) throw new Error('ambient presence task was not registered');
+      await handler();
+
+      expect(getRecentMessages).toHaveBeenCalledTimes(1);
+      expect(getRecentSessionEntries).toHaveBeenCalledTimes(1);
+      expect(appendSystemNote).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('records internal notes without emitting outbound messages and anti-loops on the next tick', async () => {
     let nowMs = Date.parse('2026-06-11T05:59:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
@@ -113,17 +190,27 @@ describe('registerAmbientPresenceTask', () => {
     const persisted: SessionEntry[] = [];
     const notes: string[] = [];
     const lastAt = Date.parse('2026-06-10T22:00:00.000Z');
+    const getRecentMessages = vi.fn(() => [
+      entry({ id: 1, role: 'user', timestamp: lastAt - 60_000 }),
+      entry({ id: 2, role: 'assistant', timestamp: lastAt }),
+    ]);
+    const getRecentSessionEntries = vi.fn(() => persisted);
 
     try {
       registerAmbientPresenceTask({
         scheduler,
         sessionManager: {
-          resolveStartupSessionMetadata: () => ({ sessionId: 'api:main', channelType: 'api', timestamp: lastAt }),
-          getRecentMessages: () => [
-            entry({ id: 1, role: 'user', timestamp: lastAt - 60_000 }),
-            entry({ id: 2, role: 'assistant', timestamp: lastAt }),
-          ],
-          getRecentSessionEntries: () => persisted,
+          resolveStartupSessionMetadata: () => {
+            const latest = persisted.at(-1);
+            return {
+              sessionId: 'api:main',
+              channelType: 'api',
+              timestamp: latest?.timestamp ?? lastAt,
+              lastRole: latest?.role ?? 'assistant',
+            };
+          },
+          getRecentMessages,
+          getRecentSessionEntries,
           appendSystemNote: (_channelId, note, source) => {
             notes.push(note);
             persisted.push(entry({
@@ -150,10 +237,16 @@ describe('registerAmbientPresenceTask', () => {
       expect(notes).toHaveLength(1);
       expect(sent).toHaveLength(0);
       expect(notes[0]).toContain('No outbound message was sent');
+      expect(getRecentMessages).toHaveBeenCalledTimes(1);
+      expect(getRecentSessionEntries).toHaveBeenCalledTimes(1);
 
+      getRecentMessages.mockClear();
+      getRecentSessionEntries.mockClear();
       nowMs += 1_000;
       await scheduler.tick();
       expect(notes).toHaveLength(1);
+      expect(getRecentMessages).not.toHaveBeenCalled();
+      expect(getRecentSessionEntries).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
     }

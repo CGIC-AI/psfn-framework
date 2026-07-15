@@ -1257,6 +1257,7 @@ describe('SessionManager', () => {
     expect(resolved?.sessionId).toBe('discord:chan-1');
     expect(resolved?.channelType).toBe('discord');
     expect(typeof resolved?.timestamp).toBe('number');
+    expect(resolved?.lastRole).toBe('user');
   });
 
   it('creates fresh startup metadata when restart behavior is new_session', () => {

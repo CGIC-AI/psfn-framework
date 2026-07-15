@@ -7,6 +7,10 @@ import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import { evaluateRestWindowEligibility } from './rest-window.js';
 import type { Scheduler } from './scheduler.js';
+import {
+  conversationalEntryFromSessionMetadata,
+  latestSessionActivityAtOrBefore,
+} from './session-metadata-preflight.js';
 import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
 
 const log = createComponentLogger('AmbientPresence');
@@ -229,6 +233,67 @@ export function buildAmbientPresenceNote(decision: Extract<AmbientPresenceDecisi
   ].join('\n');
 }
 
+function evaluateAmbientPresencePreflight(
+  input: Omit<AmbientPresenceEvaluateInput, 'recentEntries'>,
+): AmbientPresenceDecision | null {
+  const structuralDecision = evaluateAmbientPresenceEligibility({
+    ...input,
+    recentEntries: [],
+  });
+  if (
+    !structuralDecision.allowed
+    && (
+      structuralDecision.reason === 'no_recent_session'
+      || structuralDecision.reason === 'internal_session'
+      || structuralDecision.reason === 'privacy_boundary'
+    )
+  ) {
+    return structuralDecision;
+  }
+
+  const latestConversation = conversationalEntryFromSessionMetadata(input.session);
+  if (latestConversation) {
+    const metadataDecision = evaluateAmbientPresenceEligibility({
+      ...input,
+      recentEntries: [latestConversation],
+    });
+    if (!metadataDecision.allowed && metadataDecision.reason === 'below_idle_threshold') {
+      return metadataDecision;
+    }
+  }
+
+  const inMemoryNoteAt = input.lastAmbientNoteAtMs;
+  if (
+    inMemoryNoteAt === undefined
+    || !latestSessionActivityAtOrBefore(input.session, inMemoryNoteAt)
+  ) {
+    return null;
+  }
+  const nowMs = Math.max(0, Math.floor(input.nowMs ?? Date.now()));
+  const minIdleMs = Math.max(
+    0,
+    Math.floor(input.minIdleMs ?? DEFAULT_AMBIENT_PRESENCE_MIN_IDLE_MS),
+  );
+  const provenPriorConversation: SessionEntry = {
+    id: 0,
+    channelId: input.session?.sessionId ?? '',
+    role: 'assistant',
+    content: '',
+    timestamp: Math.min(input.session?.timestamp ?? 0, nowMs - minIdleMs),
+  };
+  const antiLoopDecision = evaluateAmbientPresenceEligibility({
+    ...input,
+    recentEntries: [provenPriorConversation],
+  });
+  return !antiLoopDecision.allowed
+    && (
+      antiLoopDecision.reason === 'outside_rest_window'
+      || antiLoopDecision.reason === 'anti_loop_recent_note'
+    )
+    ? antiLoopDecision
+    : null;
+}
+
 export function registerAmbientPresenceTask(options: AmbientPresenceRuntimeOptions): void {
   const lastRecordedBySession = new Map<string, number>();
   const intervalMs = Math.max(
@@ -244,6 +309,26 @@ export function registerAmbientPresenceTask(options: AmbientPresenceRuntimeOptio
     handler: async () => {
       const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
       const sessionId = session?.sessionId;
+      const inMemoryLastNoteAt = sessionId ? lastRecordedBySession.get(sessionId) : undefined;
+      const preflightDecision = evaluateAmbientPresencePreflight({
+        session,
+        restWindow: options.restWindow,
+        minIdleMs: options.minIdleMs,
+        minNoteIntervalMs: options.minNoteIntervalMs,
+        nowMs: Date.now(),
+        ...(inMemoryLastNoteAt !== undefined
+          ? { lastAmbientNoteAtMs: inMemoryLastNoteAt }
+          : {}),
+      });
+      if (preflightDecision) {
+        log.debug('Ambient presence skipped', {
+          reason: preflightDecision.reason,
+          sessionId: preflightDecision.sessionId,
+          idleGapMs: preflightDecision.idleGapMs,
+          nextEligibleAtMs: preflightDecision.nextEligibleAtMs,
+        });
+        return;
+      }
       const recentEntries = sessionId
         ? options.sessionManager.getRecentMessages(sessionId, 8)
         : [];
@@ -251,7 +336,6 @@ export function registerAmbientPresenceTask(options: AmbientPresenceRuntimeOptio
         ? options.sessionManager.getRecentSessionEntries(sessionId, 32)
         : [];
       const persistedLastNoteAt = findLatestAmbientPresenceNoteAt(persistedEntries);
-      const inMemoryLastNoteAt = sessionId ? lastRecordedBySession.get(sessionId) : undefined;
       const lastAmbientNoteAtMs = Math.max(
         persistedLastNoteAt ?? 0,
         inMemoryLastNoteAt ?? 0,

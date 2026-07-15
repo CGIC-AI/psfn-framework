@@ -757,6 +757,248 @@ describe('morning wake outward phase', () => {
   });
 });
 
+describe('temporal wake handler entry-read preflights', () => {
+  it('morning rejects recent partner metadata without reading session entries', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const getRecentMessages = vi.fn(() => []);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendContextSystemNote = vi.fn();
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => ({
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: DAY2_MORNING - 30 * 60_000,
+          lastRole: 'user',
+        }),
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { minPartnerIdleMinutes: 60 },
+        refresher: { enabled: false },
+      }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
+  });
+
+  it('morning still reads history when the latest index row is a recent system note', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const getRecentMessages = vi.fn(() => [entry({ role: 'user', timestamp: DAY1_EVENING })]);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendContextSystemNote = vi.fn();
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => ({
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: DAY2_MORNING - 30 * 60_000,
+          lastRole: 'system',
+        }),
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { minPartnerIdleMinutes: 60 },
+        refresher: { enabled: false },
+      }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(getRecentMessages).toHaveBeenCalledTimes(1);
+    expect(getRecentSessionEntries).toHaveBeenCalledTimes(1);
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('idle refresher rejects recent conversational metadata without reading session entries', async () => {
+    vi.useFakeTimers();
+    const nowMs = Date.parse('2026-06-11T15:30:00.000Z');
+    vi.setSystemTime(new Date(nowMs));
+    const getRecentMessages = vi.fn(() => []);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendContextSystemNote = vi.fn();
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => ({
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: nowMs - 30 * 60_000,
+          lastRole: 'assistant',
+        }),
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: { enabled: true, minIdleMinutes: 120 },
+      }),
+    });
+
+    const handler = scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.handler;
+    if (!handler) throw new Error('refresher task was not registered');
+    await handler();
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(appendContextSystemNote).not.toHaveBeenCalled();
+  });
+
+  it('idle refresher still reads history when the latest index row is a recent system note', async () => {
+    vi.useFakeTimers();
+    const nowMs = Date.parse('2026-06-11T15:30:00.000Z');
+    const lastConversationAt = Date.parse('2026-06-11T09:00:00.000Z');
+    vi.setSystemTime(new Date(nowMs));
+    const getRecentMessages = vi.fn(() => [entry({ role: 'user', timestamp: lastConversationAt })]);
+    const getRecentSessionEntries = vi.fn(() => []);
+    const appendContextSystemNote = vi.fn();
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => ({
+          sessionId: 'api:main',
+          channelType: 'api',
+          timestamp: nowMs - 30 * 60_000,
+          lastRole: 'system',
+        }),
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: { enabled: true, minIdleMinutes: 120 },
+      }),
+    });
+
+    const handler = scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.handler;
+    if (!handler) throw new Error('refresher task was not registered');
+    await handler();
+
+    expect(getRecentMessages).toHaveBeenCalledTimes(1);
+    expect(getRecentSessionEntries).toHaveBeenCalledTimes(1);
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('morning uses its in-memory note proof before rereading an unchanged session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const persisted: SessionEntry[] = [];
+    const getRecentMessages = vi.fn(() => [entry({ role: 'user', timestamp: DAY1_EVENING })]);
+    const getRecentSessionEntries = vi.fn(() => persisted);
+    const appendContextSystemNote = vi.fn((channelId: string, note: string, source?: string) => {
+      persisted.push(wakeNoteEntry(Date.now(), source));
+      persisted[persisted.length - 1]!.channelId = channelId;
+      persisted[persisted.length - 1]!.content = note;
+    });
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => {
+          const latest = persisted.at(-1);
+          return {
+            sessionId: 'api:main',
+            channelType: 'api',
+            timestamp: latest?.timestamp ?? DAY1_EVENING,
+            lastRole: latest?.role ?? 'user',
+          };
+        },
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+    getRecentMessages.mockClear();
+    getRecentSessionEntries.mockClear();
+
+    vi.setSystemTime(new Date(DAY2_MORNING + 60_000));
+    await runMorningHandler(scheduler);
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('idle refresher uses its in-memory note proof before rereading an unchanged session', async () => {
+    vi.useFakeTimers();
+    const nowMs = Date.parse('2026-06-11T15:30:00.000Z');
+    const lastConversationAt = Date.parse('2026-06-11T09:00:00.000Z');
+    vi.setSystemTime(new Date(nowMs));
+    const persisted: SessionEntry[] = [];
+    const getRecentMessages = vi.fn(() => [entry({ role: 'user', timestamp: lastConversationAt })]);
+    const getRecentSessionEntries = vi.fn(() => persisted);
+    const appendContextSystemNote = vi.fn((channelId: string, note: string, source?: string) => {
+      persisted.push(wakeNoteEntry(Date.now(), source));
+      persisted[persisted.length - 1]!.channelId = channelId;
+      persisted[persisted.length - 1]!.content = note;
+    });
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: {
+        resolveStartupSessionMetadata: () => {
+          const latest = persisted.at(-1);
+          return {
+            sessionId: 'api:main',
+            channelType: 'api',
+            timestamp: latest?.timestamp ?? lastConversationAt,
+            lastRole: latest?.role ?? 'user',
+          };
+        },
+        getRecentMessages,
+        getRecentSessionEntries,
+        appendContextSystemNote,
+      },
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: { enabled: true, minIdleMinutes: 120, minNoteIntervalMinutes: 120 },
+      }),
+    });
+
+    const handler = scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.handler;
+    if (!handler) throw new Error('refresher task was not registered');
+    await handler();
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+    getRecentMessages.mockClear();
+    getRecentSessionEntries.mockClear();
+
+    vi.setSystemTime(new Date(nowMs + 60_000));
+    await handler();
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(appendContextSystemNote).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('idle refresher lane', () => {
   it('injects the lighter refresh after a same-day gap and anti-loops afterwards', async () => {
     vi.useFakeTimers();
@@ -1014,8 +1256,8 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
     });
 
     await runMorningHandler(scheduler);
-    // Second fire later the SAME day: the persisted-note scan + in-memory map
-    // suppress any further note per channel.
+    // Second fire later the SAME day: the in-memory proof (with persisted-note
+    // fallback when needed) suppresses any further note per channel.
     vi.setSystemTime(new Date(DAY2_MORNING + 3 * 60 * 60_000));
     await runMorningHandler(scheduler);
 
@@ -1089,6 +1331,7 @@ describe('listRecentlyActiveChannels (real session manager)', () => {
 
     const active = mgr.listRecentlyActiveChannels({ lookbackMs: 72 * 60 * 60_000, nowMs });
     expect(active.map(channel => channel.sessionId)).toEqual(['satellite:bedroom', 'discord:dm-alpha']);
+    expect(active.map(channel => channel.lastRole)).toEqual(['user', 'user']);
   });
 });
 

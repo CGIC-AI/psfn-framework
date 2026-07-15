@@ -46,6 +46,10 @@ import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import {
+  evaluateIdleRefresherPreflight,
+  evaluateMorningWakePreflight,
+} from './temporal-wakeup-preflight.js';
 import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
 import {
   estimateWakeWindow,
@@ -929,6 +933,24 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         }> = [];
 
         for (const channel of channels) {
+          const inMemoryLastNoteAt = morningNoteBySession.get(channel.sessionId);
+          const preflightDecision = evaluateMorningWakePreflight({
+            session: channel,
+            fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+            minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+            nowMs: Date.now(),
+            evaluateEligibility: evaluateMorningWakeEligibility,
+            ...(inMemoryLastNoteAt !== undefined
+              ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
+              : {}),
+          });
+          if (preflightDecision) {
+            log.info('Morning wake skipped', {
+              reason: preflightDecision.reason,
+              sessionId: preflightDecision.sessionId,
+            });
+            continue;
+          }
           const context = resolveWakeupChannelContext(
             options,
             morningNoteBySession,
@@ -1031,6 +1053,25 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         // and anti-loop spacing. No outward delivery on this lane.
         const channels = enumerateWakeupChannels(options, Date.now());
         for (const channel of channels) {
+          const inMemoryLastNoteAt = combinedNoteBySession.get(channel.sessionId);
+          const preflightDecision = evaluateIdleRefresherPreflight({
+            session: channel,
+            minIdleMs: refresher.minIdleMinutes * MINUTE_MS,
+            minNoteIntervalMs: refresher.minNoteIntervalMinutes * MINUTE_MS,
+            nowMs: Date.now(),
+            evaluateEligibility: evaluateIdleRefresherEligibility,
+            ...(inMemoryLastNoteAt !== undefined
+              ? { lastWakeupNoteAtMs: inMemoryLastNoteAt }
+              : {}),
+          });
+          if (preflightDecision) {
+            log.debug('Idle refresher skipped', {
+              reason: preflightDecision.reason,
+              sessionId: preflightDecision.sessionId,
+              idleGapMs: preflightDecision.idleGapMs,
+            });
+            continue;
+          }
           const context = resolveWakeupChannelContext(options, combinedNoteBySession, channel, 32);
           const decision = evaluateIdleRefresherEligibility({
             session: context.session,

@@ -2157,6 +2157,7 @@ describe('SessionStore', () => {
       sessionId: 'api:newer',
       timestamp: 3_000,
       channelType: 'api',
+      lastRole: 'assistant',
     });
   });
 

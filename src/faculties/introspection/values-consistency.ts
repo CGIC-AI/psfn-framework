@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { IntrospectionConsentStore } from './consent-store.js';
 import type { IntrospectionDivergenceType } from './contracts.js';
@@ -170,7 +171,7 @@ export function createLLMValuesConsistencyEvaluator(options: {
           model: 'deterministic:no-claimed-values',
         };
       }
-      const response = await options.llmProvider.complete({
+      const response = await completeWithWorkSpec(options.llmProvider, {
         systemPrompt: options.companionSystemPrompt,
         messages: [{
           role: 'user',
@@ -192,9 +193,12 @@ export function createLLMValuesConsistencyEvaluator(options: {
             },
           }),
         }],
-      }, 'background', {
-        modelHint: { maxTokens: options.maxTokens },
+      }, buildLLMWorkSpec({
+        purpose: 'background',
+        durable: false,
         correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+      }), {
+        modelHint: { maxTokens: options.maxTokens },
       });
       let parsed: unknown;
       try {

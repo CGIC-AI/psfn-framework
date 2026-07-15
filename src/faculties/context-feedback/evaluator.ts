@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { ResponseMetadata } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -185,12 +186,15 @@ export class ContextEvaluator {
     const requestId = input.icpCorrelation
       ? `${input.icpCorrelation.requestId}:context-feedback`
       : input.turnId;
-    const completion = await this.llmProvider.complete({
+    const completion = await completeWithWorkSpec(this.llmProvider, {
       systemPrompt: EVALUATOR_SYSTEM_PROMPT,
       messages: [{
         role: 'user',
         content: buildEvaluationPrompt(input),
       }],
+    }, buildLLMWorkSpec({
+      purpose: 'memory',
+      durable: false,
       correlation: {
         requestId,
         turnId: input.turnId,
@@ -212,7 +216,7 @@ export class ContextEvaluator {
             }
           : {}),
       },
-    }, 'memory');
+    }));
 
     const parsed = parseContextEvaluationResponse(completion.content);
     return {

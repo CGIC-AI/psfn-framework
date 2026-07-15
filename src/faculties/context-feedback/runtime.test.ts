@@ -238,6 +238,8 @@ describe('wireContextFeedbackRuntime', () => {
 
     expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
     expect(llmProvider.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      'memory',
       expect.objectContaining({
         correlation: expect.objectContaining({
           callType: 'memory',
@@ -254,8 +256,8 @@ describe('wireContextFeedbackRuntime', () => {
             costOriginStage: 'post_turn',
           },
         }),
+        workSpec: expect.objectContaining({ purpose: 'memory' }),
       }),
-      'memory',
     );
     expect(telemetryPhases).toEqual(expect.arrayContaining(['started', 'scored', 'persisted']));
   });

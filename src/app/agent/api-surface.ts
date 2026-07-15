@@ -8,6 +8,7 @@ import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.j
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { LLMProviderObservability, ModelSlot } from '../../shared/contracts/runtime.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 import type { ApiServerConfig } from '../../channels/api/server.js';
@@ -71,12 +72,13 @@ export function buildApiHealthChecks(
       }
 
       const probeResult = await llmActiveProbe.run(async (signal) => {
-        const response = await options.gateway.complete(
+        const response = await completeWithWorkSpec(
+          options.gateway,
           {
             systemPrompt: 'You are a health check. Respond with exactly: OK',
             messages: [{ role: 'user', content: 'health probe' }],
           },
-          'reasoning',
+          buildLLMWorkSpec({ purpose: 'reasoning', durable: false }),
           { signal },
         );
         return buildResolvedProbeRouteMeta(response.model, response.providerObservability);

@@ -3,6 +3,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
@@ -646,13 +647,13 @@ export class CompressionGuidelineRuntime {
       originStage: 'session.compression_guideline.update',
     };
 
-    const response = await llmProvider.complete(
+    const response = await completeWithWorkSpec(
+      llmProvider,
       {
         systemPrompt,
         messages: [{ role: 'user', content: userPayload }],
-        correlation,
       },
-      'context',
+      buildLLMWorkSpec({ purpose: 'context', durable: false, correlation }),
     ).catch((error) => {
       log.warn('Compression guideline update LLM call failed', {
         error: String(error),

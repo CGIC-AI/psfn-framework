@@ -31,6 +31,7 @@ import {
   updateBudgetRuntime,
 } from './loop-helpers.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
 import {
   getRunChargeContext,
@@ -661,7 +662,12 @@ export async function runRLMLoop(
           : {}),
       },
     };
-    const response = await llmProvider.complete(correlatedContext, purpose);
+    const { correlation: sandboxCorrelation, ...contextWithoutCorrelation } = correlatedContext;
+    const response = await completeWithWorkSpec(
+      llmProvider,
+      contextWithoutCorrelation,
+      buildLLMWorkSpec({ purpose, durable: false, correlation: sandboxCorrelation }),
+    );
     sandboxTokenUsage.inputTokens += response.inputTokens;
     sandboxTokenUsage.outputTokens += response.outputTokens;
     return response;
@@ -881,17 +887,21 @@ export async function runRLMLoop(
         break;
       }
 
-      const runCompletion = async () => await llmProvider.complete(
+      const runCompletion = async () => await completeWithWorkSpec(
+        llmProvider,
         {
           systemPrompt,
           messages,
+        },
+        buildLLMWorkSpec({
+          purpose: 'reasoning',
+          durable: false,
           correlation: buildAnalysisCorrelation(
             requestMetadata,
             'repl.analysis_workbench.iteration',
             `iteration-${iterationNumber}`,
           ),
-        },
-        'reasoning',
+        }),
       );
       const completion = iterationNumber > 1
         ? runWithChargedSurface('analysisWorkbenchExtensionBand', {

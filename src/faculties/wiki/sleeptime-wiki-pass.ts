@@ -27,6 +27,7 @@
 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import {
@@ -454,13 +455,18 @@ export class SleeptimeWikiPass {
     const existingEntries = this.wikiStore.list().map(entry => ({ id: entry.id, title: entry.title }));
     let proposals: WikiPassProposal[];
     try {
-      const response = await this.llmProvider.complete(
+      const response = await completeWithWorkSpec(
+        this.llmProvider,
         {
           systemPrompt: this.resolveSystemPrompt(),
           messages: [{
             role: 'user',
             content: this.buildRequestPrompt(sourceEpisodes, worldMemories, existingEntries),
           }],
+        },
+        buildLLMWorkSpec({
+          purpose: 'memory',
+          durable: true,
           correlation: {
             requestId: `wiki-pass:${input.sessionId}:${String(nowMs)}`,
             channelId: input.sessionId,
@@ -469,8 +475,7 @@ export class SleeptimeWikiPass {
             originType: 'memory',
             originStage: 'memory.sleeptime.wiki',
           },
-        },
-        'memory',
+        }),
       );
       proposals = parseWikiPassProposals(response.content);
     } catch (error) {

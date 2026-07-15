@@ -30,6 +30,7 @@ import { withRetry } from '../../../primitives/llm/retry.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import {
   deriveChildIcpConversationCostCorrelation,
   type IcpConversationCorrelation,
@@ -141,9 +142,16 @@ function requestSessionSummaryCompletion(
       ? signal.reason
       : new Error('Session summary completion was aborted');
   }
-  return signal
-    ? llmProvider.complete(context, 'background', { signal })
-    : llmProvider.complete(context, 'background');
+  // The correlation (callType 'summary' -> post_turn_appraisal lane) is carried
+  // on the context; lift it onto the work spec so lane/purpose are declared.
+  const { correlation, ...contextWithoutCorrelation } = context;
+  const spec = buildLLMWorkSpec({ purpose: 'background', durable: false, correlation });
+  return completeWithWorkSpec(
+    llmProvider,
+    contextWithoutCorrelation,
+    spec,
+    signal ? { signal } : undefined,
+  );
 }
 
 /**

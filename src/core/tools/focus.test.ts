@@ -319,17 +319,21 @@ describe('focus tools', () => {
       await executeCompleteFocusAction(focusManager, llmProvider, { channelId });
     });
 
-    expect(llmProvider.complete).toHaveBeenCalledWith(expect.objectContaining({
-      correlation: expect.objectContaining({
-        requestId: `${icpCorrelation.requestId}:focus_complete`,
-        callType: 'tool',
-        originType: 'tool',
-        icpCorrelation: {
-          ...icpCorrelation,
+    expect(llmProvider.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      'context',
+      expect.objectContaining({
+        correlation: expect.objectContaining({
           requestId: `${icpCorrelation.requestId}:focus_complete`,
-          costPurpose: 'tool',
-        },
+          callType: 'tool',
+          originType: 'tool',
+          icpCorrelation: {
+            ...icpCorrelation,
+            requestId: `${icpCorrelation.requestId}:focus_complete`,
+            costPurpose: 'tool',
+          },
+        }),
       }),
-    }), 'context');
+    );
   });
 });

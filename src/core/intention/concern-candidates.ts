@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { PersonaPreamblePort } from '../identity/persona-preamble.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
@@ -346,13 +347,18 @@ export class ConcernCandidateReviewer {
     const prompt = this.personaPreamble
       ? this.personaPreamble.prepend('concern_review', reviewPrompt)
       : reviewPrompt;
-    const response = await this.llmProvider.complete(
+    const response = await completeWithWorkSpec(
+      this.llmProvider,
       {
         systemPrompt: prompt,
         messages: [{
           role: 'user',
           content: 'Review the candidate follow-up threads and return the JSON decision object.',
         }],
+      },
+      buildLLMWorkSpec({
+        purpose: 'background',
+        durable: false,
         correlation: {
           requestId: `concern-candidate-review:${candidates.map(candidate => candidate.id).join(',')}`,
           callType: 'background',
@@ -361,8 +367,7 @@ export class ConcernCandidateReviewer {
           originStage: 'intention.concern_candidate_review',
           ...(candidates[0]?.channelId ? { channelId: candidates[0].channelId } : {}),
         },
-      },
-      'background',
+      }),
     );
     return {
       decisions: parseConcernCandidateReviewResponse(response.content, candidates),

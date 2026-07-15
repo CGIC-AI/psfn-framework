@@ -8,6 +8,7 @@
 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type {
   NudgeDecision,
   NudgeEvaluationInput,
@@ -63,12 +64,15 @@ export function createLlmNudgeEvaluator(options: LlmNudgeEvaluatorOptions): Nudg
         ...(options.characterName ? { you: options.characterName } : {}),
       };
       try {
-        const completion = await options.llmProvider.complete(
+        // Preserve the prior no-correlation attribution byte-identically; the
+        // work spec only formalizes purpose + lane (background_continuation).
+        const completion = await completeWithWorkSpec(
+          options.llmProvider,
           {
             systemPrompt,
             messages: [{ role: 'user', content: JSON.stringify(promptPayload, null, 2) }],
           },
-          'background',
+          buildLLMWorkSpec({ purpose: 'background', durable: false }),
         );
         const parsed = extractFirstJsonObject(completion.content);
         if (!parsed) {

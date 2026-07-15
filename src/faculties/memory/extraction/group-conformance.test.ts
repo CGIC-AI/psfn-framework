@@ -498,7 +498,7 @@ describe('group-room memory conformance', () => {
       systemPrompt: expect.stringContaining(
         '[message_id:15] Vega: Lyra, remember that my favorite coffee is cardamom latte.',
       ),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(processFact).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Vega's favorite coffee is cardamom latte." }),
       expect.stringContaining('|lines:1-100|'),

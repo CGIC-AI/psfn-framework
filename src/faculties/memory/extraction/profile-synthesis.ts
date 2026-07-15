@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import {
@@ -198,18 +199,22 @@ export async function refreshContactProfile(
     ? options.personaPreamble.prepend('profile_synthesis', taskPrompt)
     : taskPrompt;
 
-  const response = await options.llmClient.complete(
+  const response = await completeWithWorkSpec(
+    options.llmClient,
     {
       systemPrompt: prompt,
       messages: [{ role: 'user', content: 'Synthesize the stable contact profile now.' }],
+    },
+    buildLLMWorkSpec({
+      purpose: 'memory',
+      durable: true,
       correlation: {
         requestId: `profile-synthesis:${options.canonicalContactId}:${now}`,
         channelId: options.channelId,
         callType: 'memory',
         purpose: 'memory.profile_synthesis',
       },
-    },
-    'memory',
+    }),
   );
 
   const parsedSummary = normalizeProfileSummary(parseProfileSummary(response.content));

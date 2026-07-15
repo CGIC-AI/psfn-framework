@@ -1,6 +1,7 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type {
   IcpInitiationConsent,
   IcpInitiationConsentEvaluator,
@@ -54,7 +55,7 @@ export function createLlmIcpInitiationConsentEvaluator(input: {
   return {
     async evaluate({ candidate, peer, channelId }) {
       try {
-        const completion = await input.llmProvider.complete({
+        const completion = await completeWithWorkSpec(input.llmProvider, {
           systemPrompt,
           messages: [{
             role: 'user',
@@ -66,14 +67,16 @@ export function createLlmIcpInitiationConsentEvaluator(input: {
               channelId,
             }),
           }],
-        }, 'background', {
+        }, buildLLMWorkSpec({
+          purpose: 'background',
+          durable: false,
           correlation: {
             requestId: `icp-consent:${candidate.candidateId}`,
             channelId: `internal:icp-consent:${candidate.candidateId}`,
             callType: 'background',
             purpose: 'agent.intention.appraisal',
           },
-        });
+        }));
         return parseConsent(completion.content) ?? {
           action: 'decline',
           reason: 'invalid_consent_response',

@@ -283,6 +283,8 @@ describe('SleeptimeMemoryAgent', () => {
         tags: expect.arrayContaining(['preferences', 'coding', 'sleeptime']),
       }));
       expect((llmProvider.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+        expect.anything(),
+        'memory',
         expect.objectContaining({
           correlation: expect.objectContaining({
             callType: 'memory',
@@ -292,7 +294,6 @@ describe('SleeptimeMemoryAgent', () => {
             channelId: 'terminal:test',
           }),
         }),
-        'memory',
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

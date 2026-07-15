@@ -22,6 +22,12 @@ import {
 } from './types.js';
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
+// u5bv.11: a durable bounded extraction that failed closed because the extractor
+// drained defers rather than consuming a retry attempt. A slightly longer delay
+// than the source-not-ready grace avoids a hot re-defer loop if the extractor is
+// drained while the supervisor is still claiming; the job survives shutdown as a
+// deferred row and its exact snapshot re-runs on a fresh (accepting) process.
+const EXTRACTION_DRAIN_REQUEUE_DELAY_MS = 1_000;
 
 export interface PostTurnBackgroundRuntimeDependencies {
   sessionManager: SessionManager;
@@ -202,17 +208,33 @@ export async function executePostTurnBackgroundWork(
         await input.effects.assertOwned();
         const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
-        await input.effects.run('memory-extraction', async (assertOwned) => {
-          await extractor.maybeExtract(
-            payload.source.logicalSessionId,
-            payload.canonicalContactId,
-            record.turnId,
-            payload.placeId,
-            payload.icpCorrelation,
-            assertOwned,
-            recentEntries,
-          );
-        });
+        try {
+          await input.effects.run('memory-extraction', async (assertOwned) => {
+            await extractor.maybeExtract(
+              payload.source.logicalSessionId,
+              payload.canonicalContactId,
+              record.turnId,
+              payload.placeId,
+              payload.icpCorrelation,
+              assertOwned,
+              recentEntries,
+            );
+          });
+        } catch (error) {
+          // u5bv.11: the queued durable extraction found the extractor draining
+          // before its serialized run wrote any fact. It crossed no write
+          // boundary and its `pending` receipt was abandoned by the effect
+          // runner, so defer the job (retryable) rather than let a drain-time
+          // no-op complete the receipt and mark the snapshot covered. Matched by
+          // name to avoid a core -> faculties error-class import.
+          if (error instanceof Error && error.name === 'ExtractionDrainRequeueError') {
+            throw new BackgroundWorkDeferredError(
+              'source_not_ready',
+              EXTRACTION_DRAIN_REQUEUE_DELAY_MS,
+            );
+          }
+          throw error;
+        }
       },
     );
     return;

@@ -586,6 +586,125 @@ describe('executePostTurnBackgroundWork', () => {
     await expect(groupPromise).resolves.toBe(true);
   });
 
+  it('defers durable B as retryable when the extractor drains before its queued run starts', async () => {
+    const record = makeTurnRecord({
+      sessionId: 'logical-session-drained-b',
+      channelId: 'discord:drained-b',
+    });
+    const execution = makeExecution(record);
+    delete execution.payload.canonicalContactId;
+    execution.job.payloadFingerprint = fingerprintBackgroundWorkPayload(execution.payload);
+    const sourceEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'Exact fenced turn B contains a durable private preference.',
+        authorName: 'Partner',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: 'Exact fenced turn B response.',
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const fixture = makeDependencies({ record, recentEntries: sourceEntries });
+    const groupStarted = deferred();
+    const releaseGroup = deferred();
+    const complete = vi.fn(async () => {
+      groupStarted.resolve();
+      await releaseGroup.promise;
+      return { content: '<response></response>' };
+    });
+    const extractor = new RealMemoryExtractor(
+      { complete } as unknown as LLMProviderPort,
+      fixture.dependencies.sessionManager,
+      {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[2],
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as ConstructorParameters<typeof RealMemoryExtractor>[3],
+      {
+        emit: vi.fn().mockResolvedValue(undefined),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[4],
+      {
+        extractionInterval: 1,
+        minImportance: 0,
+        minConfidence: 0,
+        minNovelty: 0,
+        telemetryEnabled: true,
+      },
+    );
+    fixture.dependencies.getMemoryExtractor = () => extractor;
+
+    // An unrelated extraction on the same session holds in-flight, so durable B
+    // queues behind it (serialize scheduling).
+    const groupPromise = extractor.extractObservedGroupRange({
+      channelId: record.sessionId!,
+      triggerReason: 'observed_count',
+      recoveredEntries: [
+        {
+          id: 101,
+          channelId: record.sessionId!,
+          role: 'user',
+          content: 'Unrelated group range discusses a substantial travel plan.',
+          authorName: 'Group member',
+          timestamp: 10,
+        },
+        {
+          id: 102,
+          channelId: record.sessionId!,
+          role: 'assistant',
+          content: 'Unrelated group range response.',
+          timestamp: 11,
+        },
+      ],
+      groupWriteCaps: createDefaultGroupMemorySettings().writeCaps,
+    });
+    await groupStarted.promise;
+
+    const postTurnPromise = executePostTurnBackgroundWork(execution, fixture.dependencies);
+    await Promise.resolve();
+    expect(execution.effects.run).toHaveBeenCalledOnce();
+
+    // Graceful shutdown flips acceptance before B's chained run starts.
+    const stopping = extractor.stop({ timeoutMs: 5_000 });
+    releaseGroup.resolve();
+
+    // B fails closed: the post-turn seam translates the drain requeue into a
+    // retryable defer so the job (and its effect receipt) survive for a later
+    // run rather than completing as covered.
+    await expect(postTurnPromise).rejects.toEqual(
+      expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'source_not_ready',
+      }),
+    );
+    // B never ran its own extraction LLM (threw before the boundary crossing).
+    expect(complete).toHaveBeenCalledOnce();
+
+    await expect(groupPromise).resolves.toBe(true);
+    await expect(stopping).resolves.toBe(true);
+  });
+
   it('rehydrates an exact physical-source/logical-session turn without copying content into the job', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);

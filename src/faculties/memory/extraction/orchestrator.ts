@@ -24,6 +24,7 @@ import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
+import { ExtractionDrainRequeueError } from './drain-signal.js';
 import {
   buildExtractionEntryChunks,
   formatExtractionTranscript,
@@ -250,6 +251,13 @@ export interface ExtractionRunOptions {
   telemetryEnabled: boolean;
   useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
+  /**
+   * True when the extractor is draining (stopping), as distinct from a stale
+   * session route. Lets a durable, receipt-bound run (assertEffectAllowed present)
+   * fail closed on a mid-flight drain instead of resolving as a covered no-op
+   * that completes its effect receipt without writing (u5bv.11).
+   */
+  isDraining?: () => boolean;
   adjustFactForWrite?: (fact: ExtractedFact) => ExtractedFact;
   processFact: (
     fact: ExtractedFact,
@@ -474,6 +482,17 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
 
     if (!options.isAcceptingExtractions()) {
+      // u5bv.11: a durable, receipt-bound run (assertEffectAllowed present) that
+      // began draining mid-flight must not resolve as a covered no-op — that
+      // would complete its effect receipt and advance coverage without ever
+      // writing a fact (silent durable memory loss). Fail closed (retryable) so
+      // the exact snapshot re-runs. No fact has been written yet at this point,
+      // so requeuing cannot duplicate a durable effect. A stale session route
+      // (isDraining false) keeps the intentional normal skip, as do
+      // foreground/manual/group drains (no receipt).
+      if (options.assertEffectAllowed && options.isDraining?.()) {
+        throw new ExtractionDrainRequeueError(options.channelId, options.triggerReason);
+      }
       log.debug('Skipping fact writes while extractor is stopping', {
         channelId: options.channelId,
         factCount: facts.length,
@@ -881,6 +900,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       );
     }
   } catch (error) {
+    // A durable drain requeue is an intentional retryable control signal, not an
+    // integrity failure — surface it unwrapped so the post-turn seam can defer
+    // the job and its receipt for a later run (u5bv.11).
+    if (error instanceof ExtractionDrainRequeueError) throw error;
     const wrapped = error instanceof ExtractionIntegrityError
       ? error
       : new ExtractionIntegrityError(

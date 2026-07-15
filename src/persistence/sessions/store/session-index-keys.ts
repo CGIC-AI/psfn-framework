@@ -29,7 +29,7 @@ export function findSessionIdByFilename(
   channelIndex: ReadonlyMap<string, ChannelIndexEntry>,
 ): string | null {
   for (const [sessionId, entry] of channelIndex.entries()) {
-    if (entry.filename === filename) {
+    if (entry.filenames.includes(filename)) {
       return sessionId;
     }
   }
@@ -46,7 +46,7 @@ export function deriveSessionIndexId(
     indexedChannelId(sessionId, entry) === channelId
   ));
   const hasMultipleSessions = (
-    matchingSessions.some(([, entry]) => entry.filename !== filename)
+    matchingSessions.some(([, entry]) => !entry.filenames.includes(filename))
     || matchingSessions.length > 1
   );
 

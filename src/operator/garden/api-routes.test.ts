@@ -441,6 +441,7 @@ const testConfig: SubstrateConfig = {
   primaryMaxTokens: 16384,
   extractionMaxTokens: 8192,
   maintenanceIntervalMs: 300_000,
+  salienceDecayIntervalMs: 300_000,
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
@@ -3338,7 +3339,7 @@ describe('AdminServer JSON API routes', () => {
         sessionHistoryBudgetPct: number;
         sessionRestartBehavior: string;
         primaryModel?: string;
-        maintenanceIntervalMs?: number;
+        salienceDecayIntervalMs?: number;
         capabilityTier?: string;
       };
       editors: {
@@ -3356,7 +3357,7 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsPayload.config.sessionHistoryBudgetPct).toBe(testConfig.sessionHistoryBudgetPct);
     expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
     expect(settingsPayload.config.primaryModel).toBeUndefined();
-    expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(settingsPayload.config.salienceDecayIntervalMs).toBeUndefined();
     expect(settingsPayload.config.capabilityTier).toBeUndefined();
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
       schemaVersion: number;
@@ -3366,7 +3367,7 @@ describe('AdminServer JSON API routes', () => {
     const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
     expect(typeof persistedPrimaryModel).toBe('string');
     expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
-    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.salienceDecayIntervalMs);
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -3404,7 +3405,7 @@ describe('AdminServer JSON API routes', () => {
             provider: 'openrouter',
           },
         },
-        maintenanceIntervalMs: 240000,
+        salienceDecayIntervalMs: 240000,
         capabilityTier: 'custom',
         customTokens: ['identity.read', 'git.read'],
       }),
@@ -3418,7 +3419,7 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(ownerPatchPayload.ok).toBe(false);
     expect(ownerPatchPayload.message).toContain('primaryModel is owned by models.json');
-    expect(ownerPatchPayload.message).toContain('maintenanceIntervalMs is owned by scheduler.json');
+    expect(ownerPatchPayload.message).toContain('salienceDecayIntervalMs is owned by scheduler.json');
     expect(ownerPatchPayload.message).toContain('capabilityTier is owned by capability-tier.json');
     expect(ownerPatchPayload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -3432,8 +3433,8 @@ describe('AdminServer JSON API routes', () => {
         code: 'wrong_owner',
       }),
       expect.objectContaining({
-        field: 'maintenanceIntervalMs',
-        message: 'maintenanceIntervalMs is owned by scheduler.json; edit that canonical config instead',
+        field: 'salienceDecayIntervalMs',
+        message: 'salienceDecayIntervalMs is owned by scheduler.json; edit that canonical config instead',
         code: 'wrong_owner',
       }),
       expect.objectContaining({
@@ -3984,14 +3985,14 @@ describe('AdminServer JSON API routes', () => {
 
     expect(afterPayload.config).toEqual(expect.objectContaining(patch));
     expect(afterPayload.config.primaryModel).toBeUndefined();
-    expect(afterPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(afterPayload.config.salienceDecayIntervalMs).toBeUndefined();
     expect(afterPayload.config.capabilityTier).toBeUndefined();
     expect(afterPayload.editors).toEqual(beforePayload.editors);
 
     const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
     expect(persistedSettings).toEqual(expect.objectContaining(patch));
     expect(persistedSettings.primaryModel).toBeUndefined();
-    expect(persistedSettings.maintenanceIntervalMs).toBeUndefined();
+    expect(persistedSettings.salienceDecayIntervalMs).toBeUndefined();
     expect(persistedSettings.capabilityTier).toBeUndefined();
   });
 
@@ -4181,7 +4182,7 @@ describe('AdminServer JSON API routes', () => {
       const modelCatalogField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelCatalog');
       const modelRoleAssignmentsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoleAssignments');
       const modelRosterField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoster');
-      const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
+      const salienceDecayIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'salienceDecayIntervalMs');
       const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
       const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
@@ -4203,7 +4204,7 @@ describe('AdminServer JSON API routes', () => {
       expect(readStringMetadata(modelCatalogField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readStringMetadata(modelRoleAssignmentsField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
-      expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
+      expect(readOwnerFiles(salienceDecayIntervalMsField)).toContain('scheduler.json');
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
       expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
       expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');

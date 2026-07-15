@@ -607,6 +607,7 @@ export async function invokeAgentForTurn(input: {
         logger: log,
         visionReviewer: runtime.imageVisionReviewer,
         visionIntakeScreener: runtime.visionIntakeScreener,
+        imageRetentionScope: turnId,
       }),
     });
   } catch (error) {

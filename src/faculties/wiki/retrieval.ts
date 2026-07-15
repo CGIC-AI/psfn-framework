@@ -7,6 +7,10 @@ import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
 import type { SharedWikiSearchPort } from './shared-pgvector-projection.js';
 import { isSharedWorldScope, resolveReadableWikiScopes, type WikiScope } from './scope.js';
+import type {
+  RetrievalQueryEmbeddingProvenance,
+  TurnRetrievalQueryEmbedding,
+} from '../../shared/retrieval-query-embedding.js';
 
 const log = createComponentLogger('WikiRetrieval');
 
@@ -204,6 +208,7 @@ export interface WikiRetrievalServiceDeps {
    */
   sharedProjection?: SharedWikiSearchPort;
   embedding: EmbeddingProviderPort;
+  embeddingProvenance?: RetrievalQueryEmbeddingProvenance;
   eventBus?: Pick<EventBus, 'emit'>;
   getSettings: () => WikiRetrievalSettings;
   /**
@@ -219,6 +224,11 @@ export interface WikiRetrievalRequest {
   queryText: string;
   isDirectMessage: boolean | undefined;
   focusActive: boolean;
+  turnId?: string;
+  requestId?: string;
+  companionId?: string;
+  canonicalContactId?: string;
+  retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
   /**
    * W5b: the companion's current site resolved from the situated place seam
    * (satellite `placeId` → place → `siteId`). Absent when not situated; only
@@ -295,7 +305,22 @@ export class WikiRetrievalService {
     let matches: WikiSemanticMatch[];
     let queryEmbedding: Float32Array;
     try {
-      queryEmbedding = await this.deps.embedding.embed(query);
+      if (request.retrievalQueryEmbedding) {
+        if (!this.deps.embeddingProvenance) {
+          throw new Error('Shared turn retrieval query embedding requires configured wiki embedding provenance');
+        }
+        queryEmbedding = await request.retrievalQueryEmbedding.resolve({
+          turnId: request.turnId ?? '',
+          requestId: request.requestId ?? '',
+          companionId: request.companionId ?? '',
+          channelId: request.channelId,
+          ...(request.canonicalContactId ? { canonicalContactId: request.canonicalContactId } : {}),
+          queryText: request.queryText,
+          provenance: this.deps.embeddingProvenance,
+        });
+      } else {
+        queryEmbedding = await this.deps.embedding.embed(query);
+      }
       // plan.allowedScopes is undefined under flag-off → unrestricted, byte-identical.
       matches = await this.deps.projection.search(
         queryEmbedding,

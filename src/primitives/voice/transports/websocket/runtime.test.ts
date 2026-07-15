@@ -192,7 +192,7 @@ describe('WebSocketVoiceRuntime', () => {
       type: 'audio.chunk',
       sessionId: 'voice-1',
       seq: 1,
-      audioBase64: Buffer.from([1, 2, 3, 4]).toString('base64'),
+      audio: new Uint8Array([1, 2, 3, 4]),
     });
 
     harness.sttQueue.push({ type: 'partial', text: 'hello' });
@@ -236,12 +236,12 @@ describe('WebSocketVoiceRuntime', () => {
     expect(playbackFrames).toContainEqual(expect.objectContaining({
       type: 'playback.chunk',
       seq: 0,
-      audioBase64: Buffer.from([10, 11]).toString('base64'),
+      audio: new Uint8Array([10, 11]),
     }));
     expect(playbackFrames).toContainEqual(expect.objectContaining({
       type: 'playback.chunk',
       seq: 1,
-      audioBase64: Buffer.from([12, 13]).toString('base64'),
+      audio: new Uint8Array([12, 13]),
     }));
     expect(findAckFrame(harness.outboundFrames, 'session.end')).toBeDefined();
   });
@@ -294,13 +294,13 @@ describe('WebSocketVoiceRuntime', () => {
       type: 'audio.chunk',
       sessionId: 'voice-1',
       seq: 0,
-      audioBase64: 'not-base64!!!',
+      audio: new Uint8Array(),
     });
 
     expect(harness.writeAudio).not.toHaveBeenCalled();
     expect(harness.outboundFrames).toContainEqual(expect.objectContaining({
       type: 'error',
-      code: 'INVALID_AUDIO_BASE64',
+      code: 'INVALID_AUDIO_CHUNK',
       sessionId: 'voice-1',
     }));
   });

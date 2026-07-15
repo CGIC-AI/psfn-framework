@@ -326,7 +326,7 @@ export function hydrateCanonicalStartupConfig(
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),
   };
-  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
 

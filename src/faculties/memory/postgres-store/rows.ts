@@ -19,6 +19,7 @@ export interface MemoryRow {
   emotional_valence: PgNumeric;
   formation_vad: unknown;
   salience: PgNumeric;
+  salience_decay_anchor_at: PgNumeric;
   source_ref: string;
   source_type: string | null;
   provenance_json: unknown;
@@ -249,6 +250,7 @@ export function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): Memor
     emotional_valence: memory.emotionalValence,
     formation_vad: memory.formationVAD ?? null,
     salience: memory.salience,
+    salience_decay_anchor_at: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     source_ref: memory.sourceRef,
     source_type: normalizeMemorySourceType(
       memory.sourceType,
@@ -295,6 +297,7 @@ export function fromMemoryRow(row: MemoryRow): PurrMemory {
     emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),
     formationVAD: decodeFormationVAD(row.formation_vad),
     salience: parsePgNumber(row.salience, 'salience'),
+    salienceDecayAnchorAt: parsePgNumber(row.salience_decay_anchor_at, 'salience_decay_anchor_at'),
     sourceRef: row.source_ref,
     sourceType: normalizeMemorySourceType(
       row.source_type,

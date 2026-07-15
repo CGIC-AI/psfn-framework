@@ -3,7 +3,10 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { WebSocketVoiceConnection } from '../../primitives/voice/transports/websocket/types.js';
+import type {
+  VoiceWireTransportData,
+  WebSocketVoiceConnection,
+} from '../../primitives/voice/transports/websocket/types.js';
 import {
   getBearerToken,
   getCookieValue,
@@ -42,7 +45,7 @@ export interface VoiceWebSocketRuntime {
 export interface VoiceWebSocketRuntimeHooks {
   onSessionOpen?: (session: WebSocketVoiceSession, context: VoiceWebSocketRuntimeContext) => void | Promise<void>;
   onSessionClose?: (session: WebSocketVoiceSession, reason: VoiceWebSocketCloseReason) => void | Promise<void>;
-  onMessage?: (session: WebSocketVoiceSession, data: string) => void | Promise<void>;
+  onMessage?: (session: WebSocketVoiceSession, data: VoiceWireTransportData) => void | Promise<void>;
 }
 
 export interface ApiVoiceWebSocketConfig {
@@ -65,7 +68,7 @@ function fireHook(fn: (() => void | Promise<void>) | undefined): void {
   });
 }
 
-function decodeRawData(raw: RawData): string {
+function decodeTextRawData(raw: RawData): string {
   if (typeof raw === 'string') return raw;
   if (raw instanceof Buffer) return raw.toString('utf8');
   if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
@@ -73,6 +76,13 @@ function decodeRawData(raw: RawData): string {
     return Buffer.from(new Uint8Array(raw)).toString('utf8');
   }
   return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString('utf8');
+}
+
+function decodeBinaryRawData(raw: RawData): Uint8Array {
+  if (raw instanceof Buffer) return new Uint8Array(raw);
+  if (Array.isArray(raw)) return new Uint8Array(Buffer.concat(raw));
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
 }
 
 function sendUpgradeRejection(socket: Duplex, status: UpgradeRejectStatus): void {
@@ -143,11 +153,13 @@ function redactRequestPath(rawUrl: string | undefined): string {
 }
 
 function createVoiceConnection(connectionId: string, socket: WebSocket): WebSocketVoiceConnection {
-  const messageHandlers = new Set<(data: string) => void>();
+  const messageHandlers = new Set<(data: VoiceWireTransportData) => void>();
   const closeHandlers = new Set<() => void>();
 
-  socket.on('message', (raw: RawData) => {
-    const data = decodeRawData(raw);
+  socket.on('message', (raw: RawData, isBinary: boolean) => {
+    const data = isBinary
+      ? decodeBinaryRawData(raw)
+      : decodeTextRawData(raw);
     for (const handler of [...messageHandlers]) {
       handler(data);
     }
@@ -163,15 +175,15 @@ function createVoiceConnection(connectionId: string, socket: WebSocket): WebSock
 
   return {
     id: connectionId,
-    send(data: string): void {
+    send(data: VoiceWireTransportData): void {
       if (socket.readyState !== WebSocket.OPEN) return;
-      socket.send(data);
+      socket.send(data, { binary: typeof data !== 'string' });
     },
     close(code?: number, reason?: string): void {
       if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) return;
       socket.close(code, reason);
     },
-    onMessage(handler: (data: string) => void): () => void {
+    onMessage(handler: (data: VoiceWireTransportData) => void): () => void {
       messageHandlers.add(handler);
       return () => {
         messageHandlers.delete(handler);

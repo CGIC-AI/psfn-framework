@@ -14,4 +14,3 @@ export const CERTIFICATION_SESSION_KEYRING = {
 } as const;
 
 export const CERTIFICATION_EMBEDDING_DIMS = 16;
-

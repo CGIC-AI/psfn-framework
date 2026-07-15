@@ -8,7 +8,7 @@ import {
 
 const baseData = {
   config: {
-    maintenanceIntervalMs: 300000,
+    salienceDecayIntervalMs: 3600000,
     capabilityTier: 'apprentice',
   },
   env: {},
@@ -44,8 +44,8 @@ const baseSchema = {
   schemaVersion: 1,
   subsystems: {},
   fields: {
-    maintenanceIntervalMs: {
-      key: 'maintenanceIntervalMs',
+    salienceDecayIntervalMs: {
+      key: 'salienceDecayIntervalMs',
       ownerSubsystem: 'scheduler',
       ownerFile: 'scheduler.json',
       type: 'integer',
@@ -71,12 +71,12 @@ const baseSchema = {
   },
 };
 
-test('maintenance interval authority points at scheduler ownership', () => {
-  const info = resolveSettingAuthority(baseData, baseSchema, 'maintenanceIntervalMs');
+test('salience-decay interval authority points at scheduler ownership', () => {
+  const info = resolveSettingAuthority(baseData, baseSchema, 'salienceDecayIntervalMs');
   assert.equal(info.sourceLabel, 'scheduler.json');
   assert.equal(info.effectiveValue, '120,000 ms');
   assert.match(info.detail, /scheduler\.json > salienceDecayIntervalMs/);
-  assert.match(info.precedence ?? '', /mirror/);
+  assert.match(info.precedence ?? '', /scheduler\.json wins/);
 });
 
 test('custom capability tokens authority shows dormant/active precedence', () => {

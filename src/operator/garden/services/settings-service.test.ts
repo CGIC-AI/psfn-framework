@@ -71,6 +71,7 @@ function buildConfig(
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
     maintenanceIntervalMs: 300_000,
+    salienceDecayIntervalMs: 300_000,
     defaultContextWindow,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
@@ -531,7 +532,8 @@ describe('AdminSettingsDataService', () => {
 
     const schedulerConfig = loadSchedulerConfig(root);
     expect(schedulerConfig.salienceDecayIntervalMs).toBe(180_000);
-    expect(config.maintenanceIntervalMs).toBe(180_000);
+    expect(config.salienceDecayIntervalMs).toBe(180_000);
+    expect(config.maintenanceIntervalMs).toBe(300_000);
 
     const capabilityConfig = loadCapabilityTierConfig(root);
     expect(capabilityConfig.tier).toBe('custom');

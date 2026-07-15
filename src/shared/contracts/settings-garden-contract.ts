@@ -63,7 +63,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   compactionEmotionalSalienceThresholdPct: { sectionId: 'memory', surface: 'advanced' },
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
   observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
-  maintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
+  salienceDecayIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingEnabled: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowStartLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowEndLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },

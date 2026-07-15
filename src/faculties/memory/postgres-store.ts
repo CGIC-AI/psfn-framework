@@ -169,6 +169,8 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
   private readonly initialization: Promise<void>;
+  private salienceMaintenanceRevision = 0;
+  private retrievalCorpusVersion = 0;
   /** Active transaction scope: writes issued inside a runInTransaction handler join its client. */
   private readonly transactionContext = new AsyncLocalStorage<MemoryStoreTransactionState>();
 
@@ -194,11 +196,34 @@ class PostgresMemoryStore implements MemoryStorePort {
     await this.initialization;
   }
 
+  getSalienceMaintenanceRevision(): number {
+    return this.salienceMaintenanceRevision;
+  }
+
+  async getRetrievalCorpusVersion(): Promise<number> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Retrieval corpus version is unavailable inside a memory-store transaction');
+    }
+    // Retrieval must not fingerprint or scan the in-memory mirror while a
+    // transaction can still roll back. The persist chain settles only after
+    // COMMIT/ROLLBACK and cache restoration have completed.
+    await this.persistChain;
+    return this.retrievalCorpusVersion;
+  }
+
+  private markSalienceMaintenanceChanged(): void {
+    this.salienceMaintenanceRevision += 1;
+  }
+
+  private markRetrievalCorpusChanged(): void {
+    this.retrievalCorpusVersion += 1;
+  }
+
   private async initialize(): Promise<void> {
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -361,13 +386,14 @@ class PostgresMemoryStore implements MemoryStorePort {
     await this.executeWrite(`
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
+        salience_decay_anchor_at,
         source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
         superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::vector
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -377,6 +403,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         emotional_valence = EXCLUDED.emotional_valence,
         formation_vad = EXCLUDED.formation_vad,
         salience = EXCLUDED.salience,
+        salience_decay_anchor_at = EXCLUDED.salience_decay_anchor_at,
         source_ref = EXCLUDED.source_ref,
         source_type = EXCLUDED.source_type,
         provenance_json = EXCLUDED.provenance_json,
@@ -407,6 +434,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       row.emotional_valence,
       serializeJsonValue(row.formation_vad),
       row.salience,
+      row.salience_decay_anchor_at,
       row.source_ref,
       row.source_type,
       serializeJsonValue(row.provenance_json),
@@ -526,10 +554,16 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
-    await this.runWrite(() => this.upsertMemoryRow(memory, embedding));
-    this.memories.set(memory.id, memory);
+    const anchoredMemory = {
+      ...memory,
+      salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
+    };
+    await this.runWrite(() => this.upsertMemoryRow(anchoredMemory, embedding));
+    this.memories.set(memory.id, anchoredMemory);
     this.embeddings.set(memory.id, embedding);
-    this.journal?.onInsert(memory);
+    this.markSalienceMaintenanceChanged();
+    this.markRetrievalCorpusChanged();
+    this.journal?.onInsert(anchoredMemory);
   }
 
   async persistMemoryWrite(input: MemoryWriteCommit): Promise<void> {
@@ -558,6 +592,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       const state: MemoryStoreTransactionState = { client, operations: [] };
       const memoriesSnapshot = new Map(this.memories);
       const embeddingsSnapshot = new Map(this.embeddings);
+      const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
         await client.query('BEGIN');
         const result = await this.transactionContext.run(state, () => handler());
@@ -577,6 +612,10 @@ class PostgresMemoryStore implements MemoryStorePort {
         }
         this.memories = memoriesSnapshot;
         this.embeddings = embeddingsSnapshot;
+        this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
+        // Generations are monotonic. A rollback is itself a corpus transition:
+        // any refresh that observed staged in-memory data must become stale.
+        this.markRetrievalCorpusChanged();
         throw error;
       } finally {
         client.release();
@@ -615,7 +654,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -679,6 +718,9 @@ class PostgresMemoryStore implements MemoryStorePort {
     const next = { ...existing };
     if (updates.salience !== undefined) next.salience = updates.salience;
     if (updates.lastAccessed !== undefined) next.lastAccessed = updates.lastAccessed;
+    if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
+      next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
+    }
     if (updates.accessCount !== undefined) next.accessCount = updates.accessCount;
     if (updates.supersededBy !== undefined) next.supersededBy = updates.supersededBy;
     if (updates.sensitivity !== undefined) next.sensitivity = updates.sensitivity;
@@ -695,6 +737,10 @@ class PostgresMemoryStore implements MemoryStorePort {
     const embedding = this.embeddings.get(id);
     await this.runWrite(() => this.upsertMemoryRow(next, embedding));
     this.memories.set(id, next);
+    this.markSalienceMaintenanceChanged();
+    if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
+      this.markRetrievalCorpusChanged();
+    }
   }
 
   async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
@@ -775,7 +821,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
@@ -861,6 +907,8 @@ class PostgresMemoryStore implements MemoryStorePort {
       await this.upsertMemoryRow({ ...memory, deletedAt, deletedBy, deleteReason }, this.embeddings.get(id));
     });
     this.memories.set(id, { ...memory, deletedAt, deletedBy, deleteReason });
+    this.markSalienceMaintenanceChanged();
+    this.markRetrievalCorpusChanged();
     this.deleteVersions.set(deleteId, version);
     this.journal?.onSoftDelete(version);
     return version;
@@ -880,6 +928,8 @@ class PostgresMemoryStore implements MemoryStorePort {
       await this.upsertMemoryRow(restored, this.embeddings.get(version.memoryId));
     });
     this.memories.set(version.memoryId, restored);
+    this.markSalienceMaintenanceChanged();
+    this.markRetrievalCorpusChanged();
     this.deleteVersions.set(deleteId, nextVersion);
     this.journal?.onRestore(nextVersion);
     return nextVersion;
@@ -962,6 +1012,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       link.targetMemoryId,
       link.relation,
     ), link);
+    this.markRetrievalCorpusChanged();
     return link;
   }
 
@@ -1132,6 +1183,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       `, [link.id1, link.id2, link.linkType, link.createdAt]);
     });
     this.memoryLinks.set(key, link);
+    this.markRetrievalCorpusChanged();
     return link;
   }
 
@@ -1146,6 +1198,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       await executeQuery(this.pool, 'DELETE FROM memory_links WHERE id1 = $1 AND id2 = $2', [first, second]);
     });
     this.memoryLinks.delete(key);
+    this.markRetrievalCorpusChanged();
     return true;
   }
 
@@ -1247,6 +1300,10 @@ class PostgresMemoryStore implements MemoryStorePort {
         this.memories.set(update.id, update);
       }
     }
+    if (updatedIds.size > 0) {
+      this.markSalienceMaintenanceChanged();
+      this.markRetrievalCorpusChanged();
+    }
     return result.rowCount ?? updatedIds.size;
   }
 
@@ -1256,16 +1313,18 @@ class PostgresMemoryStore implements MemoryStorePort {
 
     const values: unknown[] = [];
     const rows = normalizedUpdates.map((update, index) => {
-      const idParam = index * 2 + 1;
+      const idParam = index * 3 + 1;
       const salienceParam = idParam + 1;
-      values.push(update.id, update.salience);
-      return `($${idParam}::text, $${salienceParam}::numeric)`;
+      const anchorParam = salienceParam + 1;
+      values.push(update.id, update.salience, update.salienceDecayAnchorAt);
+      return `($${idParam}::text, $${salienceParam}::numeric, $${anchorParam}::bigint)`;
     });
 
     const result = await this.persist(() => executeQuery(this.pool, `
       UPDATE l2_memories AS memory
-      SET salience = updates.salience
-      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience)
+      SET salience = updates.salience,
+          salience_decay_anchor_at = updates.salience_decay_anchor_at
+      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience, salience_decay_anchor_at)
       WHERE memory.id = updates.id
         AND memory.deleted_at IS NULL
         AND memory.superseded_by IS NULL
@@ -1279,7 +1338,16 @@ class PostgresMemoryStore implements MemoryStorePort {
       if (!updatedIds.has(update.id)) continue;
       const existing = this.memories.get(update.id);
       if (!existing || existing.deletedAt) continue;
-      this.memories.set(update.id, { ...existing, salience: update.salience });
+      this.memories.set(update.id, {
+        ...existing,
+        salience: update.salience,
+        salienceDecayAnchorAt: update.salienceDecayAnchorAt,
+      });
+    }
+
+    if (updatedIds.size > 0) {
+      this.markSalienceMaintenanceChanged();
+      this.markRetrievalCorpusChanged();
     }
 
     return result.rowCount ?? 0;
@@ -1288,6 +1356,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
     await this.persist(() => this.persistContactProfile(profile));
     this.contactProfiles.set(profile.contactId, profile);
+    this.markRetrievalCorpusChanged();
   }
 
   async getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined> {

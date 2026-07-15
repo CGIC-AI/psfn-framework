@@ -1,8 +1,138 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app, CompanionId, workspace/restore, room-mechanics, accounting, introspection-landmarks, Garden WAN-performance, and ICP-autonomy feature status refreshed through 2026-07-14. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app, CompanionId, workspace/restore, room-mechanics, accounting, introspection-landmarks, Garden WAN-performance, ICP-autonomy, and fleet-efficiency feature status refreshed through 2026-07-15. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
+
+## 2026-07-14 feature status — `feat/fleet-efficiency`
+
+- `psfn-framework-2z12.2` is closed at `0b741e01` (implementation `af9f4a33`,
+  bounded remediation `0b741e01`). Clean session appends now use a cached archive
+  fingerprint instead of rescanning the full journal; stale/unknown fingerprints
+  still take the lock-scoped full reconciliation path.
+- The remediation preserves exactly-once HMAC append semantics after a transient
+  post-commit fingerprint fault, invalidates the cache for the next write, and
+  keeps a missing archive fail-closed.
+- Final integrated gate: focused session suites 79/79, lint, ESM+DTS build, and
+  diff check all passed. The branch is pushed for backup and remains unmerged;
+  parent epic `psfn-framework-2z12` remains open for its other children.
+- `psfn-framework-2z12.5` is closed at `5dbc011b` (implementation `0dd8e7c6`,
+  bounded review remediation `5dbc011b`). PostgreSQL transcript projection boot
+  now retains aggregate count/max metadata per channel instead of every message
+  ID, and clean writes skip the no-op drift-row delete while tracked drift still
+  clears normally.
+- The independent review found queued insert/delete reconciliation could overwrite
+  newer replacement metadata. Per-channel epochs now discard superseded
+  reconciliation, with insert-gap-before-replace and missing-delete-before-replace
+  regressions proving cached counts match persisted replacement IDs.
+- Final integrated gate for `2z12.5`: projection/repair 15/15, store/journal
+  79/79, lint, ESM+DTS build, and worktree plus branch-range diff checks passed.
+- Material report-only observations: none.
+- `psfn-framework-2z12.8` is closed on integration merge `816253b7`
+  (memory implementation `f4d8f8f9`, guideline implementation `a86da443`,
+  bounded review remediation `8ae54b72`). Unchanged PostgreSQL decay cycles
+  now skip store/DB scans until the next meaningful exponential-curve threshold,
+  while memory mutations wake the loop; unchanged guideline cycles skip both
+  file reads and model calls until a new failure is appended.
+- The single independent review found that reconstructing decay state could
+  double-apply the already-persisted interval after restart. The bounded
+  remediation preserves a restart decay epoch and pins both no-discontinuity
+  and next-day exponential continuation. Generic/non-signaling eager behavior,
+  half-lives, and guideline semantics remain unchanged.
+- Final integrated gate for `2z12.8`: memory/guideline/restart 51/51 plus merged
+  projection/repair 15/15, lint, ESM+DTS build, and worktree plus branch-range
+  diff checks passed. The known full-suite dependency on the untracked
+  `<companion>/satellites.json` owner file remains report-only; no rerun was
+  needed for this bounded closeout.
+- `psfn-framework-2z12.7` is closed on integration merge `05ec2557`
+  (implementations `d311f9e0`, `a8561fe7`, `5d73270b`, and `ad0c37cc`; bounded
+  review remediation `75dc46aa`). Successfully screened inline images are now
+  retained behind opaque connection-local handles so the main-model call crosses
+  the gateway transport once on a retention hit. Screening/main behavior is
+  unchanged; retention is connection-, companion-, and turn-scoped with a 60s
+  TTL, entry/byte caps, disconnect/stop cleanup, exact-byte one-shot resend on a
+  miss, an unchanged URL-image path, and exact serialized transport counters.
+- The single independent review found two important issues: idle connections did
+  not physically prune expired partner bytes, and the gateway wire union omitted
+  `gateway_image_ref`. The bounded remediation added proactive unref'd expiry and
+  shutdown cleanup with regression coverage, and made the wire contract explicit.
+- Final integrated gate for `2z12.7`: image/privacy/transport 192/192 plus merged
+  gateway/server regressions 53/53, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. Material remaining image observations: none.
+- `psfn-framework-2z12.6` is closed on integration head `96c5ef34`
+  (active-refresh implementation `c30b3afe`, shared-query-embedding implementation
+  `0a6114c7`, bounded review remediation `96c5ef34`). Unchanged active-memory
+  refreshes now reuse the byte-identical snapshot without a new embed, vector
+  scan, or compositional rerank, and each turn can share one provenance-checked
+  query embedding between memory and wiki retrieval.
+- The single independent review found that cache identity omitted mutable
+  disclosure/room-visibility inputs and that a PostgreSQL rollback could rewind
+  the retrieval generation. The bounded remediation fingerprints the normalized
+  access-policy snapshot, disables reuse when that snapshot is unsafe, clears
+  retained context after access withdrawal, and keeps rollback generations
+  monotonic while preventing uncommitted retrieval snapshots. Evidence lives in
+  `src/faculties/memory/retrieval.ts`, `src/faculties/memory/postgres-store.ts`,
+  `src/shared/retrieval-query-embedding.ts`, and their focused regressions.
+- Final integrated gate for `2z12.6`: retrieval/cache/wiki/PostgreSQL 76/76,
+  memory-port/trust-policy support 87/87, lint, ESM+DTS build, and worktree plus
+  branch-range diff checks passed. The parent epic `psfn-framework-2z12` remains
+  open for its other children.
+- `psfn-framework-2z12.10` is closed on integration merge `65c79e38`
+  (implementation `4c70daac`, bounded review remediation `4acbd9b1`). Salience
+  decay now runs on its own scheduler-owned `salienceDecayIntervalMs` key
+  defaulting to hourly (previously a 60s-seeded key aliased with
+  `maintenanceIntervalMs`), the compaction-guideline review rides the gated
+  heartbeat lane instead of the decay key, and retrieval computes decay lazily
+  so scoring is cadence-independent. Seed, runtime-config contract, owner-file
+  settings contract, Garden admin UI, and docs moved in the same change.
+- Both independent adversarial reviews (Opus and Pi, blind to each other)
+  converged on one verified blocker: retrieval re-applied exponential decay on
+  top of sweep-persisted already-decayed salience (squared decay; a one-half-life
+  memory scored 0.25 instead of 0.5). The bounded remediation adds a dedicated
+  `salience_decay_anchor_at` column persisted atomically with swept salience in
+  both stores (legacy rows backfill from `last_accessed`), makes retrieval decay
+  only the residual since the anchor, routes duplicate reinforcement through
+  effective salience, and pins the gap with sweep-then-retrieve and 120-day
+  aged-memory regressions that the original tests could not see.
+- Final integrated gate for `2z12.10`: memory/scheduler/config/settings
+  focused suites 378/378, real-PostgreSQL store integration 6/6 (new anchor
+  column exercised against a live database), lint, and ESM+DTS build passed on
+  the integrated branch.
+- `psfn-framework-2z12.3` is closed on integration merge `215d028b`
+  (implementation `4d8807e1`). Idle keepalive now uses authenticated
+  transport heartbeats instead of an audited `discord.typing` RPC; real typing
+  remains audited and missing acknowledgements still close the connection.
+  Its single two-axis review passed without findings. Worker evidence was 178
+  targeted tests plus lint/build; the combined final gate below supersedes it.
+- `psfn-framework-2z12.9` is closed on integration merge `94234eab`
+  (implementation `642fcbd4`, single remediation `39a36a16`). The narrowed
+  six-item sweep landed recoverable directory caching, coherent archive
+  fingerprints, exact token-count reuse, chain-index boot fingerprints,
+  disk-load-only settings logging, and strict binary voice audio frames.
+  Sampling extraction was explicitly rejected because this branch has no
+  owner/config authority for that decision. The one important review finding
+  was a derived-index channel-id isolation hole; canonical journal identity is
+  now authoritative. Lesser fingerprint/test/voice-order observations remain
+  report-only.
+- `psfn-framework-2z12.4` is closed on merge `7ce11bd8` plus integration repair
+  `0985c297` (implementation `0964f4ad`, single remediation `183e375a`). The
+  validated 16 MiB turn-boundary rotation is integrated and general range,
+  compaction-summary, tombstoned recent, and tombstoned turn-record reads are
+  segment/byte bounded while preserving exact redaction. The one review found
+  two valid blockers: unverified leading rows could be treated as empty, and
+  unsigned index tombstone IDs could weaken partner-data redaction. Canonical
+  fallback and journal-authoritative tombstones now fail closed. Legacy
+  Garden/`t5z7.2` scope was explicitly cut from this lane; no Garden branch was
+  merged or resurrected.
+- Final integrated gate at pushed `feat/fleet-efficiency` head `0985c297`:
+  session/journal/repair 182/182, gateway/small-wins 288/288, lint, ESM+DTS
+  build, and diff check passed. The branch is clean and origin-equal.
+- Final tracker classification for the original nine-child wave: **9/9 closed**.
+  Three newer scheduler-census children (`2z12.10`-`.12`) were subsequently
+  attached and are not part of that original-wave ratio; `.10` is also closed.
+  `2z12.1` operational enablement/soak/pricing proof remains separately owned by
+  top-level validation bead `9hyv`. The parent epic remains open only for real
+  newer children/validation, not for the completed original wave.
 
 ## 2026-07-14 feature status — `feat/garden-wan-performance`
 

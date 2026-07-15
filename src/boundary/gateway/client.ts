@@ -7,7 +7,11 @@ import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import type {
+  GatewayRpcConnection,
+  GatewayRpcEndpoint,
+  GatewayRpcSerializedTransportStats,
+} from './transport.js';
 import {
   createSocketClient,
   createWebSocketRpcClient,
@@ -168,6 +172,7 @@ import {
   SESSION_INTEGRITY_WORKER_SOURCE,
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
@@ -180,13 +185,11 @@ import {
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
 import { parseGatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
-import { isRecord } from '../../shared/utils/types.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
-const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 
 function assertRpcSubstrateMessage(
   value: unknown,
@@ -383,7 +386,6 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private readonly keepaliveIntervalMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  private keepaliveInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
@@ -392,6 +394,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly companionId?: CompanionId;
   private readonly companionAuthToken?: string;
   private readonly sessionIntegrityAuthToken?: string;
+  private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
@@ -547,12 +550,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
 
     try {
-      const result = await this.rpcInstance.request('llm.chat', {
+      const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
+        context.messages,
+        context.correlation?.turnId,
+      );
+      const requestParams = {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
         ...usageCorrelation,
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
-        messages: context.messages,
+        messages: referencedMessages.messages,
         systemPrompt: context.systemPrompt,
         ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
         stream: !!callbacks?.onText,
@@ -564,9 +571,25 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
-      }) as LLMChatResult;
+      };
+      let result: LLMChatResult;
+      try {
+        result = await this.rpcInstance.request('llm.chat', requestParams) as LLMChatResult;
+      } catch (error) {
+        if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
+        this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
+        log.warn('Gateway retained image unavailable; resending explicit inline bytes once', {
+          requestId,
+          imageCount: referencedMessages.usedHintKeys.length,
+        });
+        result = await this.rpcInstance.request('llm.chat', {
+          ...requestParams,
+          messages: context.messages,
+        }) as LLMChatResult;
+      }
 
       const response: LLMResponse = {
         content: result.content,
@@ -619,32 +642,51 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const model = qualifiedHint?.model ?? hintedModel ?? '';
     const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
+    const referencedMessages = this.inlineImageReferenceHints.referenceMessages(
+      context.messages,
+      correlation.turnId,
+    );
+    const requestParams = {
+      model,
+      provider,
+      ...usageCorrelation,
+      ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
+      messages: referencedMessages.messages,
+      systemPrompt: context.systemPrompt,
+      ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
+      purpose,
+      ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
+      ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
+      ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
+      ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
+      ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
+      ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
+      ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
+      ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+      ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
+      ...(context.accounting ? { accounting: context.accounting } : {}),
+    };
     let result: LLMCompleteResult;
     try {
-      result = await this.requestWithAbortSignal<LLMCompleteResult>(
-        'llm.complete',
-        {
-        model,
-        provider,
-        ...usageCorrelation,
-        ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
-        messages: context.messages,
-        systemPrompt: context.systemPrompt,
-        ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
-        purpose,
-        ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
-        ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
-        ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
-        ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
-        ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
-        ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
-        ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
-        ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
-        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
-        ...(context.accounting ? { accounting: context.accounting } : {}),
-      },
-        options.signal,
-      );
+      try {
+        result = await this.requestWithAbortSignal<LLMCompleteResult>(
+          'llm.complete',
+          requestParams,
+          options.signal,
+        );
+      } catch (error) {
+        if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
+        this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
+        log.warn('Gateway retained image unavailable; resending explicit inline bytes once', {
+          requestId: correlation.requestId,
+          imageCount: referencedMessages.usedHintKeys.length,
+        });
+        result = await this.requestWithAbortSignal<LLMCompleteResult>(
+          'llm.complete',
+          { ...requestParams, messages: context.messages },
+          options.signal,
+        );
+      }
     } catch (error) {
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) throw icpCostBlock;
@@ -670,6 +712,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   get dims(): number {
     return this.embeddingDims;
+  }
+
+  getSerializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return this.conn.serializedTransportStats;
   }
 
   async embed(text: string, options: { signal?: AbortSignal } = {}): Promise<Float32Array> {
@@ -941,8 +987,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     originDetail?: string;
     subjectIndex?: number;
     canonicalContactId?: string;
+    requestScope?: string;
   }): Promise<VisionIntakeImageScreenResult> {
-    return await this.rpcInstance.request('intake.screen_image', {
+    const result = await this.rpcInstance.request('intake.screen_image', {
       ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
       ...(input.imageBase64 ? { imageBase64: input.imageBase64 } : {}),
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
@@ -950,7 +997,22 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(input.originDetail ? { originDetail: input.originDetail } : {}),
       ...(typeof input.subjectIndex === 'number' ? { subjectIndex: input.subjectIndex } : {}),
       ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+      ...(input.requestScope ? { requestScope: input.requestScope } : {}),
     }) as VisionIntakeImageScreenResult;
+    if (
+      input.imageBase64
+      && input.mimeType
+      && input.requestScope
+      && result.retainedImage
+    ) {
+      this.inlineImageReferenceHints.record({
+        imageBase64: input.imageBase64,
+        mimeType: input.mimeType,
+        requestScope: input.requestScope,
+        descriptor: result.retainedImage,
+      });
+    }
+    return result;
   }
 
   async webRequestBinary(
@@ -1358,7 +1420,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       return;
     }
     this.keepaliveTimer = setInterval(() => {
-      void this.sendKeepalive();
+      this.sendKeepalive();
     }, this.keepaliveIntervalMs);
     this.keepaliveTimer.unref();
   }
@@ -1371,19 +1433,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.keepaliveTimer = null;
   }
 
-  private async sendKeepalive(): Promise<void> {
-    if (this.isDestroying || this.keepaliveInFlight) {
+  private sendKeepalive(): void {
+    if (this.isDestroying) {
       return;
     }
-    this.keepaliveInFlight = true;
-    try {
-      await this.rpcInstance.request('discord.typing', {
-        channelId: GATEWAY_KEEPALIVE_CHANNEL_ID,
-      });
-    } catch (error) {
-      log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
-    } finally {
-      this.keepaliveInFlight = false;
+    if (!this.conn.sendHeartbeat()) {
+      log.debug('Gateway transport heartbeat failed; closing connection');
+      this.conn.destroy();
     }
   }
 
@@ -1753,6 +1809,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }
     this.closedNotified = true;
     this.stopKeepalive();
+    this.inlineImageReferenceHints.clear();
     for (const handler of this.connectionCloseHandlers) {
       try {
         handler(event);
@@ -1869,6 +1926,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.isDestroying = true;
     this.stopKeepalive();
     this.sessionIntegrityVerifyCache.clear();
+    this.inlineImageReferenceHints.clear();
     this.voiceStreams.clear();
     this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {
@@ -1876,6 +1934,12 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       this.sessionIntegrityWorker = null;
     }
     this.conn.destroy();
+  }
+
+  private shouldResendInlineImages(error: unknown, usedHintKeys: readonly string[]): boolean {
+    return usedHintKeys.length > 0
+      && error instanceof JSONRPCErrorException
+      && error.code === GatewayErrors.INLINE_IMAGE_RETENTION_MISS;
   }
 }
 

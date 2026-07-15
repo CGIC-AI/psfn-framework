@@ -32,6 +32,8 @@ import { resolveContinuitySubjectKey, resolveRequesterProvenance, type ResolvedA
 import { resolveSituatedSiteId } from '../runtime-context-sections/situated-presence.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
 import type { TurnExecutionObservability } from './observability.js';
+import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
+import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -164,6 +166,14 @@ function buildMemoryRetrievalContextText(
 interface TurnActiveMemorySurface {
   getActiveMemoryContext: (request: ActiveMemoryContextRequest) => ActiveMemoryContextSnapshot | null;
   refreshActiveMemoryContext: (request: ActiveMemoryContextRequest) => Promise<ActiveMemoryContextSnapshot | null>;
+  createTurnRetrievalQueryEmbedding?: (input: {
+    turnId: string;
+    requestId: string;
+    companionId: string;
+    channelId: string;
+    canonicalContactId?: string;
+    queryText: string;
+  }) => TurnRetrievalQueryEmbedding;
 }
 
 /**
@@ -181,13 +191,20 @@ function requireTurnActiveMemorySurface(memoryProvider: MemoryProvider | null): 
   const refreshActiveMemoryContext = typeof memoryProvider.refreshActiveMemoryContext === 'function'
     ? memoryProvider.refreshActiveMemoryContext.bind(memoryProvider)
     : undefined;
+  const createTurnRetrievalQueryEmbedding = typeof memoryProvider.createTurnRetrievalQueryEmbedding === 'function'
+    ? memoryProvider.createTurnRetrievalQueryEmbedding.bind(memoryProvider)
+    : undefined;
   if (!getActiveMemoryContext || !refreshActiveMemoryContext) {
     throw new Error(
       'Turn execution memory provider must implement getActiveMemoryContext and refreshActiveMemoryContext: '
       + 'the blocking legacy retrieval fallback is retired from the turn hot path (E5.5, fail closed)',
     );
   }
-  return { getActiveMemoryContext, refreshActiveMemoryContext };
+  return {
+    getActiveMemoryContext,
+    refreshActiveMemoryContext,
+    ...(createTurnRetrievalQueryEmbedding ? { createTurnRetrievalQueryEmbedding } : {}),
+  };
 }
 
 /**
@@ -602,6 +619,19 @@ export async function computePreTurnState(input: {
   });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);
+  const companionId = activeMemorySurface?.createTurnRetrievalQueryEmbedding
+    ? resolveCompanionIdFromConfig(runtime.config)
+    : undefined;
+  const retrievalQueryEmbedding = activeMemorySurface?.createTurnRetrievalQueryEmbedding?.({
+    turnId,
+    requestId,
+    companionId: companionId!,
+    channelId: message.channelId,
+    ...(authorContext.canonicalContactKey
+      ? { canonicalContactId: authorContext.canonicalContactKey }
+      : {}),
+    queryText: memoryRetrievalContextText,
+  });
   const activeMemoryRequest = {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
@@ -610,6 +640,9 @@ export async function computePreTurnState(input: {
     channelMeta,
     conversationScope,
     turnBudgetCharacteristics,
+    ...(retrievalQueryEmbedding && companionId
+      ? { turnId, requestId, companionId, retrievalQueryEmbedding }
+      : {}),
     ...(authorContext.canonicalContactKey ? { canonicalContactId: authorContext.canonicalContactKey } : {}),
     ...(focusMemoryScopeQuery ? { scopeQuery: focusMemoryScopeQuery } : {}),
     ...(temporalRetrievalCallerContext ? { callerContext: temporalRetrievalCallerContext } : {}),
@@ -785,6 +818,17 @@ export async function computePreTurnState(input: {
       queryText: memoryRetrievalContextText,
       isDirectMessage: channelMeta.isDirectMessage,
       focusActive: focusMemoryScopeQuery != null,
+      ...(retrievalQueryEmbedding && companionId
+        ? {
+          turnId,
+          requestId,
+          companionId,
+          ...(authorContext.canonicalContactKey
+            ? { canonicalContactId: authorContext.canonicalContactKey }
+            : {}),
+          retrievalQueryEmbedding,
+        }
+        : {}),
       ...(currentSiteId ? { currentSiteId } : {}),
       correlation: turnCorrelationBase,
     })

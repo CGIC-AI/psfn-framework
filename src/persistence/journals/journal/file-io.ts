@@ -329,17 +329,19 @@ export function readJournalFile(
 
 export function readJournalFirstEntry(filePath: string): JournalEntry | null {
   for (const path of listJournalArchivePaths(filePath)) {
-    const found: JournalEntry[] = [];
+    let first: JournalEntry | null = null;
     const foundEntry = scanJournalLinesForward(path, (line) => {
       if (line.trim().length === 0) return false;
       try {
-        found.push(parseJournalLine(line));
-        return true;
+        first = parseJournalLine(line);
       } catch {
-        return false;
+        first = null;
       }
+      // The first nonblank physical row is boundary authority. A malformed
+      // row cannot authorize skipping forward to a later parseable id.
+      return true;
     });
-    if (foundEntry) return found[0]!;
+    if (foundEntry) return first;
   }
   return null;
 }
@@ -352,8 +354,11 @@ export function scanJournalFileMetadata(
   if (parsed.entries.length === 0 && parsed.quarantined.length === 0) {
     return {
       entryCount: 0,
+      minId: 0,
       maxId: 0,
       messageCount: 0,
+      compactionCount: 0,
+      turnTombstoneCount: 0,
       activeTurnTombstoneCount: 0,
       activeTurnTombstoneIds: [],
       lastTimestamp: 0,
@@ -365,7 +370,10 @@ export function scanJournalFileMetadata(
   }
 
   let entryCount = 0;
+  let minId = Number.POSITIVE_INFINITY;
   let maxId = 0;
+  let compactionCount = 0;
+  let turnTombstoneCount = 0;
   const messageCountsByTurn = new Map<string, number>();
   const activeTurnTombstones = new Set<string>();
   let lastTimestamp = 0;
@@ -376,11 +384,15 @@ export function scanJournalFileMetadata(
 
   for (const entry of parsed.entries) {
     entryCount += 1;
+    minId = Math.min(minId, entry.id);
     maxId = Math.max(maxId, entry.id);
     if (entry.type === 'message') {
       const turnId = resolveJournalMessageTurnId(entry);
       messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+    } else if (entry.type === 'compaction') {
+      compactionCount += 1;
     } else if (entry.type === 'tombstone' && entry.tombstoneTargetType === 'turn') {
+      turnTombstoneCount += 1;
       const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
       if (turnId) {
         if (entry.tombstoneAction === 'redact') {
@@ -406,8 +418,11 @@ export function scanJournalFileMetadata(
 
   return {
     entryCount,
+    minId: Number.isFinite(minId) ? minId : 0,
     maxId,
     messageCount,
+    compactionCount,
+    turnTombstoneCount,
     activeTurnTombstoneCount: activeTurnTombstones.size,
     activeTurnTombstoneIds: [...activeTurnTombstones].sort(),
     lastTimestamp,
@@ -517,7 +532,6 @@ export function readJournalMatchingEntriesBackward(
   }
   return { matches, quarantined };
 }
-
 function appendQuarantinedLine(
   target: QuarantinedJournalEntry[],
   line: string,
@@ -542,6 +556,7 @@ function readJournalEntriesBeforeOnce(
   chunkBytes: number,
   stats: JournalBoundedReadStats | undefined,
   trustSeekEntry: ReadJournalBeforeOptions['trustSeekEntry'],
+  previousFileHmac: string | null,
 ): ReadJournalBeforeResult {
   const parsedDescending: JournalEntry[] = [];
   const quarantined: QuarantinedJournalEntry[] = [];
@@ -588,7 +603,7 @@ function readJournalEntriesBeforeOnce(
           scannedFileIdentities: seekFileIdentities,
         })
         : null;
-    let previousHmac: string | null = null;
+    let previousHmac = previousFileHmac;
     if (previousRow?.line.trim()) {
       try {
         const previousEntry = parseJournalLine(previousRow.line);
@@ -755,6 +770,7 @@ export function readJournalEntriesBefore(
         chunkBytes,
         options.stats,
         options.trustSeekEntry,
+        options.previousFileHmac ?? null,
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {

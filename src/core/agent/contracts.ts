@@ -18,6 +18,7 @@ import type {
   ActiveMemoryContextSnapshot,
 } from '../../faculties/memory/active-context.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
+import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
@@ -58,6 +59,11 @@ export interface WikiRetrievalPort {
     queryText: string;
     isDirectMessage: boolean | undefined;
     focusActive: boolean;
+    turnId?: string;
+    requestId?: string;
+    companionId?: string;
+    canonicalContactId?: string;
+    retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
     /**
      * W5b: companion's current site (from the situated place seam). Consulted
      * only under multi-companion mode to add the site's shared-world scope.
@@ -74,6 +80,14 @@ export interface RetrievalVADInput {
 }
 
 export interface MemoryProvider {
+  createTurnRetrievalQueryEmbedding?(input: {
+    turnId: string;
+    requestId: string;
+    companionId: string;
+    channelId: string;
+    canonicalContactId?: string;
+    queryText: string;
+  }): TurnRetrievalQueryEmbedding;
   getActiveMemoryContext?(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null;
   refreshActiveMemoryContext?(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null>;
   captureTurnMemorySnapshot?(

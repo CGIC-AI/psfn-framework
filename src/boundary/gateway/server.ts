@@ -17,6 +17,7 @@ import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
@@ -283,6 +284,10 @@ export class GatewayServer {
   private readonly connections = new Set<GatewayRpcConnection>();
   private readonly rpcClients = new Map<GatewayRpcConnection, JSONRPCServerAndClient>();
   private readonly connectionStatuses = new Map<GatewayRpcConnection, GatewayConnectionStatus>();
+  private readonly inlineImageRetentionByConnection = new Map<
+    GatewayRpcConnection,
+    GatewayInlineImageRetention
+  >();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -491,6 +496,8 @@ export class GatewayServer {
   }
 
   private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
+    const inlineImageRetention = new GatewayInlineImageRetention();
+    this.inlineImageRetentionByConnection.set(conn, inlineImageRetention);
     const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const runtime: GatewayMethodRuntime = {
@@ -505,6 +512,7 @@ export class GatewayServer {
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
       ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
       ...(this.options.visionIntake ? { visionIntake: this.options.visionIntake } : {}),
+      inlineImageRetention,
       get policyConfig() { return resolvePolicyConfig(); },
       get workspacePath() { return resolveWorkspacePath(); },
       personalWorkspaceIsolation: this.multiCompanion.enabled,
@@ -1304,6 +1312,10 @@ export class GatewayServer {
       await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
     });
 
+    conn.on('heartbeat', () => {
+      this.touchConnectionHealthcheck(conn);
+    });
+
     conn.onMessage(async (message) => {
       if (!this.connections.has(conn)) {
         return;
@@ -1791,6 +1803,8 @@ export class GatewayServer {
         });
     }
     this.connections.delete(conn);
+    this.inlineImageRetentionByConnection.get(conn)?.clear();
+    this.inlineImageRetentionByConnection.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
   }
@@ -2233,6 +2247,10 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    for (const retention of this.inlineImageRetentionByConnection.values()) {
+      retention.clear();
+    }
+    this.inlineImageRetentionByConnection.clear();
     if (this.icpAutonomyBroker) {
       const companionIds = new Set([
         ...this.companionConnections.keys(),

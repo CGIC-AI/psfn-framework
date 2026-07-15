@@ -537,16 +537,19 @@ export async function assembleTurnPrompt(input: {
     }));
   }
   const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);
+  let systemContextPromptBlockTokens: number | undefined;
   if (systemContextPromptBlock) {
     const sessionContextScope = resolveSectionScope('session_context');
-    planBlocks.push(createPromptPlanBlock({
+    const sessionContextBlock = createPromptPlanBlock({
       id: 'session_context',
       layer: 'provider',
       volatility: 'turn',
       producer: sessionContextScope?.producer ?? 'session.context-builder',
       ...(sessionContextScope?.scopeKey ? { scopeKey: sessionContextScope.scopeKey } : {}),
       renderedText: systemContextPromptBlock,
-    }));
+    });
+    systemContextPromptBlockTokens = sessionContextBlock.tokensEst;
+    planBlocks.push(sessionContextBlock);
   }
   // Ephemeral background-completion notices: compact, render-once, and placed
   // in the system prompt (never among the recent chat messages). Draining here
@@ -566,16 +569,19 @@ export async function assembleTurnPrompt(input: {
   // The canonical clock ships as an ordered turn-volatile block, rendered from
   // the frozen variable namespace — not appended by string surgery.
   const currentDatetimeProximityAnchor = buildCurrentDatetimeProximityAnchor(promptRuntimeVariables);
+  let currentDatetimeProximityAnchorTokens: number | undefined;
   if (currentDatetimeProximityAnchor) {
     const anchorScope = resolveSectionScope('runtime_current_datetime');
-    planBlocks.push(createPromptPlanBlock({
+    const datetimeBlock = createPromptPlanBlock({
       id: DATETIME_ANCHOR_BLOCK_ID,
       layer: 'provider',
       volatility: 'turn',
       producer: anchorScope?.producer ?? 'runtime-context.current-datetime',
       scopeKey: 'global',
       renderedText: currentDatetimeProximityAnchor,
-    }));
+    });
+    currentDatetimeProximityAnchorTokens = datetimeBlock.tokensEst;
+    planBlocks.push(datetimeBlock);
   }
   const plan = createPromptPlan({
     blocks: planBlocks,
@@ -765,7 +771,7 @@ export async function assembleTurnPrompt(input: {
             title: 'Session Context',
             content: systemContextPromptBlock,
             charCount: systemContextPromptBlock.length,
-            tokenCount: countTokens(systemContextPromptBlock),
+            tokenCount: systemContextPromptBlockTokens!,
             ...(resolveSectionScope('session_context')
               ? { scopeProvenance: resolveSectionScope('session_context')! }
               : {}),
@@ -789,7 +795,7 @@ export async function assembleTurnPrompt(input: {
             title: 'Current Date & Time',
             content: currentDatetimeProximityAnchor,
             charCount: currentDatetimeProximityAnchor.length,
-            tokenCount: countTokens(currentDatetimeProximityAnchor),
+            tokenCount: currentDatetimeProximityAnchorTokens!,
             provenance: buildAuthenticityProvenance({
               kind: 'system_injection',
               sourceAuthor: 'system',

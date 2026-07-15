@@ -290,14 +290,14 @@ export function applyAdminSettingsMutation(options: {
     }
   }
 
-  if (domainSplit.maintenanceIntervalMs !== undefined) {
+  if (domainSplit.salienceDecayIntervalMs !== undefined) {
     try {
       const currentScheduler = configStore.loadScheduler();
       const savedScheduler = configStore.saveScheduler({
         ...currentScheduler,
-        salienceDecayIntervalMs: domainSplit.maintenanceIntervalMs,
+        salienceDecayIntervalMs: domainSplit.salienceDecayIntervalMs,
       });
-      config.maintenanceIntervalMs = savedScheduler.salienceDecayIntervalMs;
+      config.salienceDecayIntervalMs = savedScheduler.salienceDecayIntervalMs;
     } catch (error) {
       return {
         ok: false,
@@ -409,7 +409,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       configured ? '[set]' : '[not set]';
     return {
       salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
-      maintenanceIntervalMs: this.deps.config.maintenanceIntervalMs,
+      salienceDecayIntervalMs: this.deps.config.salienceDecayIntervalMs,
       discordToken: marker(presence.discordToken),
       apiKey: marker(presence.apiKey),
       adminToken: marker(presence.adminToken),
@@ -1122,7 +1122,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         }
         case 'scheduler': {
           const saved = this.deps.configStore.saveScheduler(parsed);
-          this.deps.config.maintenanceIntervalMs = saved.salienceDecayIntervalMs;
+          this.deps.config.salienceDecayIntervalMs = saved.salienceDecayIntervalMs;
           return { ok: true, message: 'scheduler.json saved' };
         }
         case 'capabilities': {

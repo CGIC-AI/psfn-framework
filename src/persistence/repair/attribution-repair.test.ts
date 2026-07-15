@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildSessionHmacKeyring, signJournalEntry } from '../journals/journal-utils.js';
+import type { JournalEntry } from '../../core/session/types.js';
+import {
+  buildSessionHmacKeyring,
+  signJournalEntry,
+  verifyJournalEntryIntegrity,
+} from '../journals/journal-utils.js';
+import { makeRolledFilePath } from '../sessions/store/channel-filenames.js';
 import { runAttributionRepair } from './attribution-repair.js';
 
 describe('runAttributionRepair', () => {
@@ -140,6 +146,79 @@ describe('runAttributionRepair', () => {
 
       const repairedTurnRecord = readFileSync(turnRecordPath, 'utf-8').trim();
       expect(repairedTurnRecord).toContain('"userMessage":{"role":"system"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('re-signs every rolled segment continuously when attribution changes an earlier entry', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-attribution-chain-repair-'));
+    try {
+      const sessionsDir = join(root, 'sessions');
+      const continuityDir = join(root, 'continuity');
+      const reflectionsDir = join(root, 'reflections');
+      const backupDir = join(root, 'backups');
+      mkdirSync(sessionsDir, { recursive: true });
+      mkdirSync(continuityDir, { recursive: true });
+      mkdirSync(reflectionsDir, { recursive: true });
+      const keyring = buildSessionHmacKeyring({ singleKey: 'repair-secret' });
+      expect(keyring).not.toBeNull();
+      const channelId = 'api:attribution-chain';
+      const rootPath = join(sessionsDir, '20260325_api-attribution-chain_user_000001.jsonl');
+      const segmentPath = makeRolledFilePath(rootPath, 2);
+      const malformed = signJournalEntry({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'user',
+        content: '[Intention Appraisal] follow up',
+        authorName: 'Intention Appraisal',
+        timestamp: 1_000,
+      }, keyring!, null);
+      const segmentEntry = signJournalEntry({
+        type: 'message',
+        id: 2,
+        channelId,
+        role: 'assistant',
+        content: 'segment reply',
+        timestamp: 2_000,
+      }, keyring!, malformed._hmac ?? null);
+      writeFileSync(rootPath, `${JSON.stringify(malformed)}\n`, 'utf8');
+      writeFileSync(segmentPath, `${JSON.stringify(segmentEntry)}\n`, 'utf8');
+
+      const report = runAttributionRepair({
+        sessionsDir,
+        continuityDir,
+        reflectionsDir,
+        backupDir,
+        keyring,
+        repoRoot: root,
+      });
+
+      expect(report.journal.modifiedEntries).toBe(1);
+      expect(report.journal.modifiedFiles).toBe(2);
+      const repairedRoot = JSON.parse(readFileSync(rootPath, 'utf8').trim()) as JournalEntry;
+      const repairedSegment = JSON.parse(readFileSync(segmentPath, 'utf8').trim()) as JournalEntry;
+      expect(repairedRoot.role).toBe('system');
+      expect(repairedRoot.authorId).toBe('system:intention');
+      expect(verifyJournalEntryIntegrity(
+        repairedSegment,
+        keyring!,
+        repairedRoot._hmac ?? null,
+      ).verified).toBe(true);
+      expect(verifyJournalEntryIntegrity(
+        repairedSegment,
+        keyring!,
+        malformed._hmac ?? null,
+      ).verified).toBe(false);
+
+      const index = JSON.parse(readFileSync(join(sessionsDir, '_channel_index.json'), 'utf8')) as {
+        channels: Record<string, { filenames: string[] }>;
+      };
+      expect(index.channels[channelId].filenames).toEqual([
+        basename(rootPath),
+        basename(segmentPath),
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

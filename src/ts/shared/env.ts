@@ -29,6 +29,15 @@ export interface PsfnRuntimeConfig {
   apiKey?: string;
   channelType: string;
   satelliteClaim: PsfnSatelliteClaimConfig;
+  /**
+   * Total wall-clock budget for producing a voice-turn reply, across all
+   * attempts. When an attempt returns an empty completion the adapter may
+   * retry within this budget; once it elapses the turn fails closed so the
+   * voice client is never left waiting on an unbounded fallback.
+   */
+  voiceReplyDeadlineMs?: number;
+  /** Per-attempt timeout, clamped to the remaining reply deadline. */
+  voiceAttemptTimeoutMs?: number;
 }
 
 export interface CompanionBridgeIdentity {
@@ -179,12 +188,19 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
     },
     tls: loadPsfnClientCertificateConfig(projectRoot),
   });
+  const voiceReplyDeadlineMs = parsePositiveIntegerEnv("PSFN_VOICE_REPLY_DEADLINE_MS", 8_000);
+  const voiceAttemptTimeoutMs = parsePositiveIntegerEnv("PSFN_VOICE_ATTEMPT_TIMEOUT_MS", 6_000);
+  if (voiceAttemptTimeoutMs > voiceReplyDeadlineMs) {
+    throw new Error("PSFN_VOICE_ATTEMPT_TIMEOUT_MS must be less than or equal to PSFN_VOICE_REPLY_DEADLINE_MS");
+  }
   return {
     model,
     baseUrl,
     apiKey,
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    voiceReplyDeadlineMs,
+    voiceAttemptTimeoutMs,
   };
 }
 

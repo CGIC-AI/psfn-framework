@@ -8,6 +8,12 @@ export interface FrameworkAgentAdapter {
     conversationId?: string;
     history?: ConversationMessage[];
     channel?: PsfnChannelContext;
+    /**
+     * Cancels the in-flight request (and any bounded fallback attempt) when the
+     * voice client disconnects or interrupts. Abort is propagated to the
+     * underlying HTTP request, not merely observed between deltas.
+     */
+    signal?: AbortSignal;
   }): AsyncGenerator<string, string, void>;
 
   getIdentity?(): Promise<RuntimeIdentity | null>;

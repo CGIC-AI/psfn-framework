@@ -2,8 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PsfnChannelContext } from "./embodied-session.js";
-import { PsfnModelAdapter } from "./psfn-model.js";
+import { PsfnModelAdapter, type PsfnReplyTelemetry } from "./psfn-model.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
+import type { PsfnRuntimeConfig } from "../shared/env.js";
+
+function buildRuntimeConfig(overrides: Partial<PsfnRuntimeConfig> = {}): PsfnRuntimeConfig {
+  const satelliteClaim = normalizeSatelliteClaimConfig({
+    capabilityProfile: "voxta-avatar",
+    satelliteId: "voxta-vam",
+    endpointId: "voxta-vam",
+    displayName: "Voxta VaM",
+  });
+  return {
+    baseUrl: "http://psfn.test",
+    model: "psfn",
+    apiKey: "secret",
+    channelType: satelliteClaim.channelType,
+    satelliteClaim,
+    ...overrides,
+  };
+}
+
+function jsonResponse(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const EMPTY_COMPLETION = '{"choices":[{"message":{"role":"assistant","content":""}}]}';
 
 test("psfn model adapter sends embodied hub channel headers", async () => {
   const originalFetch = globalThis.fetch;
@@ -284,6 +311,159 @@ test("psfn model adapter injects retained VaM context into the active user turn"
       key: "VaM/Slot2",
       text: "The scene view shows Purrsephone's body and surroundings - use what you see.",
     }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter recovers from an empty primary response within the reply deadline", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return jsonResponse(EMPTY_COMPLETION);
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered reply"}}]}');
+  };
+
+  const telemetry: PsfnReplyTelemetry[] = [];
+  const adapter = new PsfnModelAdapter(
+    buildRuntimeConfig({ voiceReplyDeadlineMs: 2_000, voiceAttemptTimeoutMs: 1_000 }),
+    (record) => telemetry.push(record),
+  );
+
+  try {
+    const startedAt = Date.now();
+    const chunks: string[] = [];
+    for await (const chunk of adapter.streamReply({
+      userText: "hello",
+      conversationId: "voxta-session",
+      history: [],
+    })) {
+      chunks.push(chunk);
+    }
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.deepEqual(chunks, ["Recovered reply"]);
+    assert.equal(calls, 2);
+    assert.ok(elapsedMs < 2_000, `recovery must land within the reply deadline (was ${elapsedMs} ms)`);
+
+    // Telemetry records BOTH attempts and only ever a character count for the
+    // accepted content, never the discarded delta text.
+    assert.equal(telemetry.length, 1);
+    const record = telemetry[0]!;
+    assert.equal(record.outcome, "recovered");
+    assert.deepEqual(record.attempts.map((a) => a.status), ["empty", "ok"]);
+    assert.equal(record.attempts[1]!.chars, "Recovered reply".length);
+    assert.equal(JSON.stringify(record).includes("Recovered reply"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter fails clearly within the reply deadline when responses stay empty", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse(EMPTY_COMPLETION);
+  };
+
+  const telemetry: PsfnReplyTelemetry[] = [];
+  const adapter = new PsfnModelAdapter(
+    buildRuntimeConfig({ voiceReplyDeadlineMs: 300, voiceAttemptTimeoutMs: 150 }),
+    (record) => telemetry.push(record),
+  );
+
+  try {
+    const startedAt = Date.now();
+    await assert.rejects(
+      (async () => {
+        for await (const _chunk of adapter.streamReply({
+          userText: "hello",
+          conversationId: "voxta-session",
+          history: [],
+        })) {
+          // drain
+        }
+      })(),
+      /did not produce assistant content within 300 ms/,
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs < 2_000, `failure must be bounded by the reply deadline (was ${elapsedMs} ms)`);
+    assert.equal(calls, 2);
+    assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.outcome, "failed");
+    assert.deepEqual(telemetry[0]!.attempts.map((a) => a.status), ["empty", "empty"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter cancels an in-flight fallback on client disconnect and accepts the next turn", async () => {
+  const originalFetch = globalThis.fetch;
+  let sawAbortedSignal = false;
+  let hungCalls = 0;
+
+  const telemetry: PsfnReplyTelemetry[] = [];
+  const adapter = new PsfnModelAdapter(buildRuntimeConfig(), (record) => telemetry.push(record));
+
+  try {
+    // First turn: the framework request hangs until the client disconnects.
+    globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      hungCalls += 1;
+      const signal = init?.signal ?? undefined;
+      return await new Promise<Response>((_resolve, reject) => {
+        const abort = (): void => {
+          sawAbortedSignal = true;
+          reject(signal?.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+      });
+    };
+
+    const controller = new AbortController();
+    const drain = (async () => {
+      for await (const _chunk of adapter.streamReply({
+        userText: "are you there?",
+        conversationId: "voxta-session",
+        history: [],
+        signal: controller.signal,
+      })) {
+        // drain
+      }
+    })();
+
+    // Let the request reach the in-flight state, then simulate client disconnect.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort(new DOMException("client disconnect", "AbortError"));
+
+    await assert.rejects(drain);
+    assert.equal(sawAbortedSignal, true, "the in-flight request must observe the abort");
+    assert.equal(hungCalls, 1);
+    assert.equal(telemetry.at(-1)!.outcome, "cancelled");
+
+    // Next turn: the channel accepts a fresh request without any process restart.
+    globalThis.fetch = async () =>
+      jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Next turn works"}}]}');
+
+    const chunks: string[] = [];
+    for await (const chunk of adapter.streamReply({
+      userText: "hello again",
+      conversationId: "voxta-session",
+      history: [],
+    })) {
+      chunks.push(chunk);
+    }
+    assert.deepEqual(chunks, ["Next turn works"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -35,14 +35,45 @@ type PsfnChatMessage = {
 };
 
 const DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES = 12;
+const DEFAULT_VOICE_REPLY_DEADLINE_MS = 8_000;
+const DEFAULT_VOICE_ATTEMPT_TIMEOUT_MS = 6_000;
+const MAX_VOICE_REPLY_ATTEMPTS = 2;
+
+export type PsfnReplyAttemptStatus = "ok" | "empty" | "timeout" | "error";
+
+export interface PsfnReplyAttemptTelemetry {
+  attempt: number;
+  status: PsfnReplyAttemptStatus;
+  elapsedMs: number;
+  httpStatus?: number;
+  /**
+   * Character count of accepted assistant content. Discarded content (empty
+   * primaries, timed-out attempts) is never recorded here, so telemetry can
+   * never leak the text of a delta that was thrown away.
+   */
+  chars?: number;
+}
+
+export interface PsfnReplyTelemetry {
+  conversationId: string;
+  model: string;
+  deadlineMs: number;
+  totalMs: number;
+  outcome: "primary" | "recovered" | "failed" | "cancelled";
+  attempts: PsfnReplyAttemptTelemetry[];
+}
+
+export type PsfnTelemetrySink = (telemetry: PsfnReplyTelemetry) => void;
 
 export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private readonly apiBaseUrl: string;
+  private readonly onTelemetry: PsfnTelemetrySink;
   private identityRequest: Promise<RuntimeIdentity | null> | null = null;
 
-  constructor(private readonly runtime: PsfnRuntimeConfig) {
+  constructor(private readonly runtime: PsfnRuntimeConfig, onTelemetry?: PsfnTelemetrySink) {
     const baseUrl = runtime.baseUrl.replace(/\/$/, "");
     this.apiBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+    this.onTelemetry = onTelemetry ?? defaultTelemetrySink;
   }
 
   async *streamReply(input: {
@@ -50,6 +81,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     conversationId?: string;
     history?: ConversationMessage[];
     channel?: PsfnChannelContext;
+    signal?: AbortSignal;
   }): AsyncGenerator<string, string, void> {
     const conversationId = input.conversationId?.trim();
     if (!conversationId) {
@@ -63,30 +95,88 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       apiKey: this.runtime.apiKey,
     });
     const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
-    const response = await this.postChatCompletionWithBusyRetry(
-      this.buildHeaders(channel, satelliteClaim, channelMetadata),
-      JSON.stringify({
+    const headers = this.buildHeaders(channel, satelliteClaim, channelMetadata);
+    const body = JSON.stringify({
+      model: this.runtime.model,
+      stream: false,
+      system_prompt_mode: "default",
+      response_style: "concise",
+      user: conversationId,
+      satellite_claim: satelliteClaim,
+      channel_metadata: channelMetadata,
+      messages: this.buildMessages(input.history ?? [], input.userText, channel),
+    });
+
+    const deadlineMs = normalizeDurationMs(this.runtime.voiceReplyDeadlineMs, DEFAULT_VOICE_REPLY_DEADLINE_MS);
+    const attemptTimeoutMs = normalizeDurationMs(this.runtime.voiceAttemptTimeoutMs, DEFAULT_VOICE_ATTEMPT_TIMEOUT_MS);
+    const externalSignal = input.signal;
+    const startedAt = Date.now();
+    const attempts: PsfnReplyAttemptTelemetry[] = [];
+    const emit = (outcome: PsfnReplyTelemetry["outcome"]): void => {
+      this.onTelemetry({
+        conversationId,
         model: this.runtime.model,
-        stream: false,
-        system_prompt_mode: "default",
-        response_style: "concise",
-        user: conversationId,
-        satellite_claim: satelliteClaim,
-        channel_metadata: channelMetadata,
-        messages: this.buildMessages(input.history ?? [], input.userText, channel),
-      }),
+        deadlineMs,
+        totalMs: Date.now() - startedAt,
+        outcome,
+        attempts,
+      });
+    };
+    const cancelled = (): Error => {
+      emit("cancelled");
+      return abortReason(externalSignal);
+    };
+
+    for (let attempt = 1; attempt <= MAX_VOICE_REPLY_ATTEMPTS; attempt += 1) {
+      if (externalSignal?.aborted) {
+        throw cancelled();
+      }
+      const remainingMs = deadlineMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      const attemptStart = Date.now();
+      const scope = createAttemptScope(externalSignal, Math.min(attemptTimeoutMs, remainingMs));
+      try {
+        const response = await this.postChatCompletionWithBusyRetry(headers, body, scope.signal);
+        if (!response.ok) {
+          const errorText = await formatError(response);
+          attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart, httpStatus: response.status });
+          throw new Error(errorText);
+        }
+        const fullText = extractCompletionText(await response.text()).trim();
+        if (fullText) {
+          attempts.push({
+            attempt,
+            status: "ok",
+            elapsedMs: Date.now() - attemptStart,
+            httpStatus: response.status,
+            chars: fullText.length,
+          });
+          emit(attempt === 1 ? "primary" : "recovered");
+          yield fullText;
+          return fullText;
+        }
+        attempts.push({ attempt, status: "empty", elapsedMs: Date.now() - attemptStart, httpStatus: response.status });
+      } catch (error) {
+        if (externalSignal?.aborted) {
+          throw cancelled();
+        }
+        if (isAbortError(error)) {
+          attempts.push({ attempt, status: "timeout", elapsedMs: Date.now() - attemptStart });
+          continue;
+        }
+        emit("failed");
+        throw error;
+      } finally {
+        scope.dispose();
+      }
+    }
+
+    emit("failed");
+    throw new Error(
+      `PSFN chat completion did not produce assistant content within ${deadlineMs} ms after ${attempts.length} attempt(s)`,
     );
-
-    if (!response.ok) {
-      throw new Error(await formatError(response));
-    }
-
-    const fullText = extractCompletionText(await response.text()).trim();
-    if (!fullText) {
-      throw new Error("PSFN chat completion response did not include assistant content");
-    }
-    yield fullText;
-    return fullText.trim();
   }
 
   async close(): Promise<void> {}
@@ -122,16 +212,21 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     return headers;
   }
 
-  private async postChatCompletion(headers: Record<string, string>, body: string): Promise<CompletionResponse> {
+  private async postChatCompletion(
+    headers: Record<string, string>,
+    body: string,
+    signal?: AbortSignal,
+  ): Promise<CompletionResponse> {
     const url = `${this.apiBaseUrl}/chat/completions`;
     const tls = this.runtime.satelliteClaim.tls;
     if (tls?.certPath && tls.keyPath) {
-      return this.postChatCompletionWithClientCertificate(url, headers, body, tls);
+      return this.postChatCompletionWithClientCertificate(url, headers, body, tls, signal);
     }
     const response = await fetch(url, {
       method: "POST",
       headers,
       body,
+      signal,
     });
     return {
       ok: response.ok,
@@ -156,10 +251,14 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private async postChatCompletionWithBusyRetry(
     headers: Record<string, string>,
     body: string,
+    signal?: AbortSignal,
   ): Promise<CompletionResponse> {
     const maxRetries = agentBusyMaxRetries();
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const response = await this.postChatCompletion(headers, body);
+      if (signal?.aborted) {
+        throw abortReason(signal);
+      }
+      const response = await this.postChatCompletion(headers, body, signal);
       if (response.ok) {
         return response;
       }
@@ -167,7 +266,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       if (!isAgentBusyResponse(response.status, responseText) || attempt >= maxRetries) {
         return responseFromText(response.status, responseText);
       }
-      await delay(agentBusyRetryDelayMs(attempt));
+      await delay(agentBusyRetryDelayMs(attempt), undefined, { signal });
     }
     return responseFromText(503, '{"error":{"message":"Agent is already processing another prompt"}}');
   }
@@ -177,12 +276,17 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     headers: Record<string, string>,
     body: string,
     tls: NonNullable<PsfnRuntimeConfig["satelliteClaim"]["tls"]>,
+    signal?: AbortSignal,
   ): Promise<CompletionResponse> {
     const url = new URL(rawUrl);
     if (url.protocol !== "https:") {
       throw new Error("PSFN_CLIENT_CERT_PATH requires an https PSFN_API_BASE_URL");
     }
     return await new Promise<CompletionResponse>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortReason(signal));
+        return;
+      }
       const request = https.request(
         url,
         {
@@ -196,10 +300,18 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           ...(tls.caPath ? { ca: fs.readFileSync(tls.caPath) } : {}),
         },
         (message) => {
+          signal?.removeEventListener("abort", onAbort);
           resolve(responseFromIncomingMessage(message));
         },
       );
-      request.on("error", reject);
+      const onAbort = (): void => {
+        request.destroy(abortReason(signal));
+      };
+      request.on("error", (error) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(error);
+      });
+      signal?.addEventListener("abort", onAbort, { once: true });
       request.write(body);
       request.end();
     });
@@ -538,4 +650,63 @@ function requiredPath(value: string | undefined, name: string): string {
     throw new Error(`${name} is required when PSFN client certificate auth is configured`);
   }
   return value;
+}
+
+function normalizeDurationMs(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+interface AttemptScope {
+  signal: AbortSignal;
+  dispose: () => void;
+}
+
+/**
+ * Builds an AbortSignal for a single attempt that fires when either the caller's
+ * signal aborts (client disconnect / interrupt) or the per-attempt timeout
+ * elapses. Disposing detaches the listeners and clears the timer so an attempt
+ * that finishes normally leaves nothing pending.
+ */
+function createAttemptScope(external: AbortSignal | undefined, timeoutMs: number): AttemptScope {
+  const controller = new AbortController();
+  const onExternalAbort = (): void => controller.abort(external?.reason);
+  if (external) {
+    if (external.aborted) {
+      controller.abort(external.reason);
+    } else {
+      external.addEventListener("abort", onExternalAbort, { once: true });
+    }
+  }
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException(`PSFN attempt exceeded ${timeoutMs} ms`, "TimeoutError"));
+  }, timeoutMs);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", onExternalAbort);
+    },
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+function abortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new DOMException("The PSFN voice reply was aborted", "AbortError");
+}
+
+function defaultTelemetrySink(telemetry: PsfnReplyTelemetry): void {
+  // Structured single-line record. Only accepted-content character counts are
+  // included, never the assistant text of any attempt, so discarded deltas
+  // cannot leak into logs.
+  console.log(`psfn.voice.reply ${JSON.stringify(telemetry)}`);
 }

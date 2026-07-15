@@ -215,6 +215,7 @@ class RealtimeConnection {
   private replyAbort = false;
   private replySequence = 0;
   private replyTask: Promise<void> | null = null;
+  private replyAbortController: AbortController | null = null;
   private messageChain: Promise<void> = Promise.resolve();
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
   private claimIdentity: PsfnChannelContext["claimIdentity"];
@@ -827,6 +828,8 @@ class RealtimeConnection {
   private async runReply(turn: ArtifactTurn, transcript: string): Promise<void> {
     const replyId = ++this.replySequence;
     this.replyAbort = false;
+    const replyAbortController = new AbortController();
+    this.replyAbortController = replyAbortController;
     let responseText = "";
     const shouldStreamAudio = canReceiveStreamingAudio(this.capabilities);
     const audioSegmentQueue = shouldStreamAudio ? new AsyncQueue<string>() : null;
@@ -875,6 +878,7 @@ class RealtimeConnection {
         conversationId: this.sessionId,
         history: this.sessions.getHistory(this.sessionId),
         channel: this.embodiedSessions.getContext(this.sessionId, this.satelliteId),
+        signal: replyAbortController.signal,
       });
       for await (const delta of stream) {
         if (this.replyAbort || replyId !== this.replySequence) {
@@ -937,24 +941,37 @@ class RealtimeConnection {
     } catch (error) {
       audioSegmentQueue?.close();
       await audioTask.catch(() => undefined);
-      writeJson(turn.replyPath, {
-        sessionId: this.sessionId,
-        turnId: turn.turnId,
-        transcript,
-        error: String(error),
-      });
-      await this.send({
-        type: "error-event",
-        data: {
-          message: String(error),
-        },
-      });
+      if (this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted) {
+        // The in-flight request (including any bounded fallback attempt) was
+        // cancelled because the client disconnected or interrupted. This is a
+        // normal cancel, not a reply failure, so it must not surface as an
+        // error-event.
+        appendEvent(turn, "reply.cancel", { reason: "client_interrupt" });
+      } else {
+        writeJson(turn.replyPath, {
+          sessionId: this.sessionId,
+          turnId: turn.turnId,
+          transcript,
+          error: String(error),
+        });
+        await this.send({
+          type: "error-event",
+          data: {
+            message: String(error),
+          },
+        });
+      }
+    } finally {
+      if (this.replyAbortController === replyAbortController) {
+        this.replyAbortController = null;
+      }
     }
   }
 
   private async cancelReply(reason: string): Promise<void> {
     this.replyAbort = true;
     this.replySequence += 1;
+    this.replyAbortController?.abort(new DOMException(`reply cancelled: ${reason}`, "AbortError"));
     if (this.activeTurn) {
       appendEvent(this.activeTurn, "reply.cancel", { reason });
     }

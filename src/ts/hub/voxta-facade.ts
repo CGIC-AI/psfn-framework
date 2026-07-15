@@ -423,6 +423,7 @@ class VoxtaConnection {
   private readonly voxtaContexts = new Map<string, string[]>();
   private replyAbort = false;
   private replySequence = 0;
+  private replyAbortController: AbortController | null = null;
   private keepAlive: NodeJS.Timeout | null = null;
 
   constructor(
@@ -776,7 +777,36 @@ class VoxtaConnection {
   private async streamAssistantReply(userText: string): Promise<void> {
     const replyId = ++this.replySequence;
     this.replyAbort = false;
+    const replyAbortController = new AbortController();
+    this.replyAbortController = replyAbortController;
     const messageId = crypto.randomUUID();
+    try {
+      await this.streamAssistantReplyInner(userText, replyId, messageId, replyAbortController);
+    } catch (error) {
+      if (this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted) {
+        // Client disconnected or interrupted; the in-flight request and any
+        // bounded fallback attempt were cancelled. Report a normal cancel.
+        await this.sendReceive({
+          $type: "replyCancelled",
+          sessionId: this.sessionId,
+          messageId,
+        });
+        return;
+      }
+      throw error;
+    } finally {
+      if (this.replyAbortController === replyAbortController) {
+        this.replyAbortController = null;
+      }
+    }
+  }
+
+  private async streamAssistantReplyInner(
+    userText: string,
+    replyId: number,
+    messageId: string,
+    replyAbortController: AbortController,
+  ): Promise<void> {
     let responseText = "";
     await this.requestVisionCapturesIfNeeded();
 
@@ -809,6 +839,7 @@ class VoxtaConnection {
       conversationId: this.sessionId,
       history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],
       channel: this.agentChannelContext(),
+      signal: replyAbortController.signal,
     });
     for await (const delta of stream) {
       if (this.replyAbort || replyId !== this.replySequence) {
@@ -1042,6 +1073,7 @@ class VoxtaConnection {
   private cancelReply(): void {
     this.replyAbort = true;
     this.replySequence += 1;
+    this.replyAbortController?.abort(new DOMException("voxta reply cancelled", "AbortError"));
   }
 
   private characterSummary(): Record<string, unknown> {

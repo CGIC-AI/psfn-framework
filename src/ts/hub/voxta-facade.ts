@@ -6,6 +6,7 @@ import type { Duplex } from "node:stream";
 
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
+import { abortReason, awaitWithAbort, throwIfAborted } from "../shared/abort.js";
 import type { VoxtaFacadeConfig } from "../shared/env.js";
 import { sanitizeSpokenText } from "../shared/text.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
@@ -34,7 +35,7 @@ interface VoxtaFacadeDependencies {
 }
 
 export interface VoxtaTtsAdapter {
-  synthesizeWav(text: string): Promise<Buffer>;
+  synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer>;
 }
 
 export interface VoxtaAudioInputSpec {
@@ -839,12 +840,14 @@ class VoxtaConnection {
   ): Promise<void> {
     let responseText = "";
     await this.requestVisionCapturesIfNeeded();
+    this.assertReplyActive(replyId, replyAbortController);
 
     await this.sendReceive({
       $type: "chatFlow",
       state: "Thinking",
       sessionId: this.sessionId,
     });
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyGenerating",
       sessionId: this.sessionId,
@@ -854,6 +857,7 @@ class VoxtaConnection {
       thinkingSpeechUrl: "",
       isNarration: false,
     });
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyStart",
       sessionId: this.sessionId,
@@ -863,6 +867,7 @@ class VoxtaConnection {
       role: this.assistant.role,
       timestamp: new Date().toISOString(),
     });
+    this.assertReplyActive(replyId, replyAbortController);
 
     const stream = this.deps.agent.streamReply({
       inputMode: "voice",
@@ -873,21 +878,21 @@ class VoxtaConnection {
       signal: replyAbortController.signal,
     });
     for await (const delta of stream) {
-      if (this.replyAbort || replyId !== this.replySequence) {
-        await this.sendReceive({
-          $type: "replyCancelled",
-          sessionId: this.sessionId,
-          messageId,
-        });
-        return;
-      }
+      this.assertReplyActive(replyId, replyAbortController);
       responseText += delta;
     }
 
+    this.assertReplyActive(replyId, replyAbortController);
     responseText = responseText.trim();
+    const audioUrl = await this.createSpeechArtifact(
+      messageId,
+      responseText,
+      replyAbortController.signal,
+    );
+    this.assertReplyActive(replyId, replyAbortController);
     this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
-    const audioUrl = await this.createSpeechArtifact(messageId, responseText);
     const wireResponseText = sanitizeVoxtaWireText(responseText);
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyChunk",
       sessionId: this.sessionId,
@@ -902,23 +907,31 @@ class VoxtaConnection {
       audioGapMs: 0,
       timestamp: new Date().toISOString(),
     });
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "replyEnd",
       sessionId: this.sessionId,
       messageId,
       senderId: this.assistant.id,
     });
+    this.assertReplyActive(replyId, replyAbortController);
     await this.sendReceive({
       $type: "chatFlow",
       state: "WaitingForUser",
       sessionId: this.sessionId,
     });
+    this.assertReplyActive(replyId, replyAbortController);
     if (this.deps.config.sttStreamEnabled && this.currentServiceState().SpeechToText) {
       await this.emitRecordingRequest(true);
+      this.assertReplyActive(replyId, replyAbortController);
     }
   }
 
-  private async createSpeechArtifact(messageId: string, text: string): Promise<string> {
+  private async createSpeechArtifact(
+    messageId: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     const serviceState = this.runtime.serviceStates.get(this.servicesConfigurationsSetId);
     if (!this.deps.tts || serviceState?.TextToSpeech === false) {
       return "silence:0";
@@ -928,7 +941,8 @@ class VoxtaConnection {
       return "silence:0";
     }
     try {
-      const wav = await this.deps.tts.synthesizeWav(spokenText);
+      const wav = await awaitWithAbort(this.deps.tts.synthesizeWav(spokenText, signal), signal);
+      throwIfAborted(signal);
       if (wav.length === 0) {
         return "silence:0";
       }
@@ -946,6 +960,9 @@ class VoxtaConnection {
       fs.writeFileSync(filePath, wav);
       return filePath;
     } catch (error) {
+      if (signal.aborted) {
+        throw abortReason(signal);
+      }
       console.error("Voxta TTS artifact generation failed:", error);
       return "silence:0";
     }
@@ -1107,6 +1124,13 @@ class VoxtaConnection {
     this.replySequence += 1;
     this.replyAbortController?.abort(new DOMException("voxta reply cancelled", "AbortError"));
     return hadActiveReply;
+  }
+
+  private assertReplyActive(replyId: number, controller: AbortController): void {
+    if (this.replyAbort || replyId !== this.replySequence) {
+      throw controller.signal.reason ?? new DOMException("voxta reply cancelled", "AbortError");
+    }
+    throwIfAborted(controller.signal);
   }
 
   private characterSummary(): Record<string, unknown> {

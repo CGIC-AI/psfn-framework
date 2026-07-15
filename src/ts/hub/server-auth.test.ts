@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import WebSocket from "ws";
 
+import type { StreamingTtsAdapter } from "./elevenlabs-stream.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { RealtimeHubServer } from "./server.js";
 import type { HubConfig } from "../shared/env.js";
@@ -160,10 +161,76 @@ test("authenticated realtime replacement and interrupt preempt active replies wi
   }
 });
 
-function config(options: { allowInterrupt?: boolean } = {}): HubConfig {
+test("authenticated realtime interruption detaches stalled TTS before admitting a replacement", async () => {
+  const replyAgent = new BlockingAgent();
+  const tts = new FirstReplyStallingTts();
+  const server = new RealtimeHubServer(
+    config({ allowInterrupt: true, streamingAudio: true }),
+    { agent: replyAgent, realtimeTts: tts },
+  );
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", (raw) => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: {
+        input: ["text"],
+        output: ["text", "streamed_audio"],
+        control: ["interrupt"],
+        safety: [],
+      },
+    }));
+    await waitFor(() => messages.some((message) => message.type === "hello.ack"));
+
+    socket.send(JSON.stringify({ type: "user.text", text: "old reply" }));
+    await tts.firstStarted;
+    assert.equal(replyAgent.calls.length, 1, "the old model reply must finish before TTS stalls");
+
+    socket.send(JSON.stringify({ type: "interrupt" }));
+    await waitFor(() => messages.some((message) => message.type === "assistant.interrupted"));
+    socket.send(JSON.stringify({ type: "user.text", text: "replacement" }));
+
+    await waitFor(() => replyAgent.calls.length === 2);
+    await waitFor(() => finalAssistantMessages(messages).includes("reply:replacement"));
+
+    const oldTtsCall = tts.calls[0];
+    assert.ok(oldTtsCall?.signal);
+    assert.equal(oldTtsCall.signal, replyAgent.calls[0]?.signal);
+    assert.equal(oldTtsCall.signal.aborted, true);
+    assert.deepEqual(replyAgent.calls[1]?.history?.map((message) => message.content), [
+      "old reply",
+      "replacement",
+    ]);
+    assert.equal(finalAssistantMessages(messages).includes("reply:old reply"), false);
+    assert.equal(audioPayloads(messages).includes("stale-audio:reply:old reply"), false);
+
+    tts.releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(finalAssistantMessages(messages).includes("reply:old reply"), false);
+    assert.equal(audioPayloads(messages).includes("stale-audio:reply:old reply"), false);
+  } finally {
+    tts.releaseFirst();
+    socket.close();
+    await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
+function config(options: { allowInterrupt?: boolean; streamingAudio?: boolean } = {}): HubConfig {
   return {
-    textOnlyMode: true, bindHost: "127.0.0.1", port: 0,
-    deepgramApiKey: null, elevenlabsApiKey: null, elevenlabsVoiceId: null,
+    textOnlyMode: !options.streamingAudio, bindHost: "127.0.0.1", port: 0,
+    deepgramApiKey: null,
+    elevenlabsApiKey: options.streamingAudio ? "test-elevenlabs" : null,
+    elevenlabsVoiceId: options.streamingAudio ? "test-voice" : null,
     elevenlabsModelId: "eleven_flash_v2_5", artifactsRoot: ".artifacts/test-auth",
     psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", satelliteClaim: {
       namespace: "satellite.endpoint", type: "text-only", channelType: "satellite.endpoint",
@@ -179,7 +246,7 @@ function config(options: { allowInterrupt?: boolean } = {}): HubConfig {
       homeAssistantEntityIds: [],
       maxCapabilities: {
         input: ["text"],
-        output: ["text"],
+        output: options.streamingAudio ? ["text", "streamed_audio"] : ["text"],
         control: options.allowInterrupt ? ["interrupt"] : [],
         safety: ["local_only"],
       },
@@ -225,12 +292,58 @@ class BlockingAgent implements FrameworkAgentAdapter {
   async close(): Promise<void> {}
 }
 
+class FirstReplyStallingTts implements StreamingTtsAdapter {
+  readonly calls: Array<{ text: string; signal?: AbortSignal }> = [];
+  private resolveFirstStarted: () => void = () => undefined;
+  private releaseStalledReply: () => void = () => undefined;
+  readonly firstStarted = new Promise<void>((resolve) => {
+    this.resolveFirstStarted = resolve;
+  });
+  private readonly stalledReply = new Promise<void>((resolve) => {
+    this.releaseStalledReply = resolve;
+  });
+
+  async *streamText(
+    textStream: AsyncIterable<string>,
+    options?: { signal?: AbortSignal },
+  ): AsyncGenerator<Buffer, void, void> {
+    let text = "";
+    for await (const chunk of textStream) {
+      text += chunk;
+    }
+    const callIndex = this.calls.push({ text, signal: options?.signal }) - 1;
+    if (callIndex === 0) {
+      this.resolveFirstStarted();
+      await this.stalledReply;
+      yield Buffer.from(`stale-audio:${text}`);
+      return;
+    }
+    yield Buffer.from(`current-audio:${text}`);
+  }
+
+  releaseFirst(): void {
+    this.releaseStalledReply();
+  }
+
+  async close(): Promise<void> {
+    this.releaseFirst();
+  }
+}
+
 function finalAssistantMessages(messages: HubToClientMessage[]): string[] {
   return messages.flatMap((message) => (
     message.type === "message"
       && message.data.role === "assistant"
       && message.data.final === true
       ? [message.data.content]
+      : []
+  ));
+}
+
+function audioPayloads(messages: HubToClientMessage[]): string[] {
+  return messages.flatMap((message) => (
+    message.type === "audio"
+      ? [Buffer.from(message.data, "base64").toString("utf8")]
       : []
   ));
 }

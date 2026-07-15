@@ -2,9 +2,23 @@ import crypto from "node:crypto";
 
 import WebSocket from "ws";
 
+import {
+  abortableAsyncIterable,
+  abortReason,
+  awaitWithAbort,
+  throwIfAborted,
+} from "../shared/abort.js";
 import { AsyncQueue } from "../shared/async-queue.js";
 
-export class ElevenLabsStream {
+export interface StreamingTtsAdapter {
+  streamText(
+    textStream: AsyncIterable<string>,
+    options?: { signal?: AbortSignal },
+  ): AsyncIterable<Buffer>;
+  close(): Promise<void>;
+}
+
+export class ElevenLabsStream implements StreamingTtsAdapter {
   private ws: WebSocket | null = null;
   private readonly contexts = new Map<string, AsyncQueue<Buffer>>();
 
@@ -14,11 +28,48 @@ export class ElevenLabsStream {
     private readonly voiceId: string,
   ) {}
 
-  async *streamText(textStream: AsyncIterable<string>): AsyncGenerator<Buffer, void, void> {
-    await this.ensureConnected();
+  async *streamText(
+    textStream: AsyncIterable<string>,
+    options: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<Buffer, void, void> {
+    const signal = options.signal;
+    if (signal) {
+      throwIfAborted(signal);
+      await awaitWithAbort(this.ensureConnected(), signal);
+      throwIfAborted(signal);
+    } else {
+      await this.ensureConnected();
+    }
     const contextId = `ctx-${crypto.randomUUID()}`;
     const queue = new AsyncQueue<Buffer>();
     this.contexts.set(contextId, queue);
+
+    let closeRequested = false;
+    const requestContextClose = (): void => {
+      if (closeRequested) {
+        return;
+      }
+      closeRequested = true;
+      this.sendJson({
+        context_id: contextId,
+        close_context: true,
+      });
+    };
+    const onAbort = (): void => {
+      queue.close();
+      try {
+        requestContextClose();
+      } catch (error) {
+        console.error("Failed to close cancelled ElevenLabs TTS context:", error);
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      signal.removeEventListener("abort", onAbort);
+      queue.close();
+      this.contexts.delete(contextId);
+      throw abortReason(signal);
+    }
 
     this.sendJson({
       context_id: contextId,
@@ -30,8 +81,12 @@ export class ElevenLabsStream {
       },
     });
 
-    const sender = (async () => {
-      for await (const delta of textStream) {
+    const sender = (async (): Promise<void> => {
+      const input = signal ? abortableAsyncIterable(textStream, signal) : textStream;
+      for await (const delta of input) {
+        if (signal) {
+          throwIfAborted(signal);
+        }
         const text = delta.trim();
         if (!text) {
           continue;
@@ -42,19 +97,30 @@ export class ElevenLabsStream {
           flush: true,
         });
       }
-      this.sendJson({
-        context_id: contextId,
-        close_context: true,
-      });
+      requestContextClose();
     })();
+    void sender.catch(() => undefined);
 
     try {
       for await (const chunk of queue) {
+        if (signal) {
+          throwIfAborted(signal);
+        }
         yield chunk;
       }
     } finally {
-      await sender.catch(() => undefined);
+      signal?.removeEventListener("abort", onAbort);
+      requestContextClose();
+      queue.close();
       this.contexts.delete(contextId);
+      if (signal?.aborted) {
+        void sender.catch(() => undefined);
+      } else {
+        await sender;
+      }
+    }
+    if (signal) {
+      throwIfAborted(signal);
     }
   }
 
@@ -88,15 +154,51 @@ export class ElevenLabsStream {
       "&output_format=mp3_44100_128" +
       "&inactivity_timeout=180" +
       "&auto_mode=true";
-    this.ws = new WebSocket(uri, {
+    const ws = new WebSocket(uri, {
       headers: {
         "xi-api-key": this.apiKey,
       },
     });
-    this.ws.on("message", (data) => this.handleMessage(String(data)));
+    this.ws = ws;
+    ws.on("message", (data) => this.handleMessage(String(data)));
+    ws.on("error", (error) => {
+      console.error("ElevenLabs TTS stream failed:", error);
+      if (this.ws === ws) {
+        for (const queue of this.contexts.values()) {
+          queue.close();
+        }
+      }
+    });
+    ws.on("close", () => {
+      if (this.ws === ws) {
+        this.ws = null;
+        for (const queue of this.contexts.values()) {
+          queue.close();
+        }
+      }
+    });
     await new Promise<void>((resolve, reject) => {
-      this.ws?.once("open", () => resolve());
-      this.ws?.once("error", (error) => reject(error));
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        ws.removeListener("open", onOpen);
+        ws.removeListener("error", onError);
+        ws.removeListener("close", onClose);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const onOpen = (): void => finish();
+      const onError = (error: Error): void => finish(error);
+      const onClose = (): void => finish(new Error("ElevenLabs TTS stream closed before opening"));
+      ws.once("open", onOpen);
+      ws.once("error", onError);
+      ws.once("close", onClose);
     });
   }
 

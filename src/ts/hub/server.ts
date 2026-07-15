@@ -5,6 +5,11 @@ import type { AddressInfo } from "node:net";
 
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
+import {
+  abortableAsyncIterable,
+  abortReason,
+  throwIfAborted,
+} from "../shared/abort.js";
 import { AsyncQueue } from "../shared/async-queue.js";
 import type { HubConfig } from "../shared/env.js";
 import {
@@ -35,7 +40,7 @@ import {
   CompanionRequestError,
   type CompanionEvent,
 } from "./companion-bridge.js";
-import { ElevenLabsStream } from "./elevenlabs-stream.js";
+import { ElevenLabsStream, type StreamingTtsAdapter } from "./elevenlabs-stream.js";
 import { PsfnModelAdapter } from "./psfn-model.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
@@ -66,7 +71,7 @@ export class RealtimeHubServer {
   private readonly sessions: SessionStore;
   private readonly embodiedSessions: EmbodiedSessionRegistry;
   private readonly agent: FrameworkAgentAdapter;
-  private readonly tts: ElevenLabsStream;
+  private readonly tts: StreamingTtsAdapter;
   private readonly voxta: VoxtaFacade;
   private readonly companion: CompanionBridge | null;
 
@@ -74,6 +79,7 @@ export class RealtimeHubServer {
     private readonly config: HubConfig,
     options: {
       agent?: FrameworkAgentAdapter;
+      realtimeTts?: StreamingTtsAdapter;
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
       companion?: CompanionBridge | null;
@@ -85,7 +91,7 @@ export class RealtimeHubServer {
     this.companion = options.companion !== undefined
       ? options.companion
       : (config.companion ? new CompanionBridge(config.companion) : null);
-    this.tts = new ElevenLabsStream(
+    this.tts = options.realtimeTts ?? new ElevenLabsStream(
       config.elevenlabsApiKey ?? "",
       config.elevenlabsModelId,
       config.elevenlabsVoiceId ?? "",
@@ -179,18 +185,20 @@ class DeepgramVoxtaStt implements VoxtaSttAdapter {
 }
 
 class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
-  constructor(private readonly tts: ElevenLabsStream) {}
+  constructor(private readonly tts: StreamingTtsAdapter) {}
 
-  async synthesizeWav(text: string): Promise<Buffer> {
+  async synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer> {
     const mp3Chunks: Buffer[] = [];
-    for await (const chunk of this.tts.streamText(singleValueStream(text))) {
+    const audio = this.tts.streamText(singleValueStream(text), { signal });
+    for await (const chunk of abortableAsyncIterable(audio, signal)) {
       mp3Chunks.push(chunk);
     }
+    throwIfAborted(signal);
     const mp3 = Buffer.concat(mp3Chunks);
     if (mp3.length === 0) {
       return Buffer.alloc(0);
     }
-    return convertMp3ToWav(mp3);
+    return convertMp3ToWav(mp3, signal);
   }
 }
 
@@ -228,7 +236,7 @@ class RealtimeConnection {
     private readonly sessions: SessionStore,
     private readonly embodiedSessions: EmbodiedSessionRegistry,
     private readonly agent: FrameworkAgentAdapter,
-    private readonly tts: ElevenLabsStream,
+    private readonly tts: StreamingTtsAdapter,
     private readonly companion: CompanionBridge | null = null,
     private readonly deviceRegistry: HubDeviceRegistry | null = null,
   ) {
@@ -855,9 +863,7 @@ class RealtimeConnection {
 
     const audioTask: Promise<void> = shouldStreamAudio && audioSegmentQueue ? (async () => {
       for await (const segmentText of audioSegmentQueue) {
-        if (this.replyAbort || replyId !== this.replySequence) {
-          break;
-        }
+        this.assertReplyActive(replyId, replyAbortController);
         const spokenSegmentText = sanitizeSpokenText(segmentText);
         if (!spokenSegmentText) {
           continue;
@@ -869,25 +875,31 @@ class RealtimeConnection {
           type: "text",
           data: "audio-init",
         });
+        this.assertReplyActive(replyId, replyAbortController);
         let emittedAudio = false;
-        for await (const audioChunk of this.tts.streamText(singleValueStream(spokenSegmentText))) {
-          if (this.replyAbort || replyId !== this.replySequence) {
-            break;
-          }
+        const audio = this.tts.streamText(singleValueStream(spokenSegmentText), {
+          signal: replyAbortController.signal,
+        });
+        for await (const audioChunk of abortableAsyncIterable(audio, replyAbortController.signal)) {
+          this.assertReplyActive(replyId, replyAbortController);
           emittedAudio = true;
           await this.send({
             type: "audio",
             data: encodeAudioChunk(audioChunk),
           });
+          this.assertReplyActive(replyId, replyAbortController);
         }
-        if (emittedAudio && !this.replyAbort && replyId === this.replySequence) {
+        this.assertReplyActive(replyId, replyAbortController);
+        if (emittedAudio) {
           await this.send({
             type: "text",
             data: "audio-end",
           });
+          this.assertReplyActive(replyId, replyAbortController);
         }
       }
     })() : Promise.resolve();
+    void audioTask.catch(() => undefined);
 
     try {
       let pendingAudioText = "";
@@ -901,9 +913,7 @@ class RealtimeConnection {
         signal: replyAbortController.signal,
       });
       for await (const delta of stream) {
-        if (this.replyAbort || replyId !== this.replySequence) {
-          break;
-        }
+        this.assertReplyActive(replyId, replyAbortController);
         responseText += delta;
         await this.send({
           type: "message",
@@ -913,6 +923,7 @@ class RealtimeConnection {
             live: true,
           },
         });
+        this.assertReplyActive(replyId, replyAbortController);
         if (audioSegmentQueue) {
           pendingAudioText += delta;
           while (true) {
@@ -929,16 +940,13 @@ class RealtimeConnection {
           }
         }
       }
+      this.assertReplyActive(replyId, replyAbortController);
       if (audioSegmentQueue && pendingAudioText.trim()) {
         audioSegmentQueue.push(pendingAudioText.trim());
       }
       audioSegmentQueue?.close();
       await audioTask;
-
-      if (this.replyAbort || replyId !== this.replySequence) {
-        appendEvent(turn, "reply.cancel", { reason: "client_interrupt" });
-        return;
-      }
+      this.assertReplyActive(replyId, replyAbortController);
 
       responseText = responseText.trim();
       this.sessions.append(this.sessionId, { role: "assistant", content: responseText });
@@ -995,6 +1003,13 @@ class RealtimeConnection {
     if (this.activeTurn) {
       appendEvent(this.activeTurn, "reply.cancel", { reason });
     }
+  }
+
+  private assertReplyActive(replyId: number, controller: AbortController): void {
+    if (this.replyAbort || replyId !== this.replySequence) {
+      throw controller.signal.reason ?? new DOMException("reply cancelled", "AbortError");
+    }
+    throwIfAborted(controller.signal);
   }
 
   private async sendRelayError(
@@ -1099,7 +1114,8 @@ async function* singleValueStream(text: string): AsyncGenerator<string, void, vo
   yield text;
 }
 
-async function convertMp3ToWav(mp3: Buffer): Promise<Buffer> {
+async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer> {
+  throwIfAborted(signal);
   const ffmpeg = spawn("ffmpeg", [
     "-hide_banner",
     "-loglevel",
@@ -1123,17 +1139,42 @@ async function convertMp3ToWav(mp3: Buffer): Promise<Buffer> {
   ffmpeg.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
   ffmpeg.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
   const exit = new Promise<void>((resolve, reject) => {
-    ffmpeg.once("error", reject);
-    ffmpeg.once("close", (code) => {
-      if (code === 0) {
-        resolve();
+    let settled = false;
+    const finish = (error?: unknown): void => {
+      if (settled) {
         return;
       }
-      reject(new Error(`ffmpeg failed converting Voxta TTS audio: ${Buffer.concat(stderr).toString("utf8").trim()}`));
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    };
+    const onAbort = (): void => {
+      ffmpeg.kill("SIGKILL");
+      finish(abortReason(signal));
+    };
+    ffmpeg.once("error", (error) => finish(error));
+    ffmpeg.stdin.once("error", (error) => finish(error));
+    ffmpeg.once("close", (code) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      finish(new Error(
+        `ffmpeg failed converting Voxta TTS audio: ${Buffer.concat(stderr).toString("utf8").trim()}`,
+      ));
     });
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
   });
   ffmpeg.stdin.end(mp3);
   await exit;
+  throwIfAborted(signal);
   return Buffer.concat(stdout);
 }
 

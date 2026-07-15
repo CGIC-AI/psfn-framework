@@ -16,6 +16,7 @@ import type { PsfnChannelContext } from "./embodied-session.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import { RealtimeHubServer } from "./server.js";
 import type { ConversationMessage } from "./session-store.js";
+import type { VoxtaTtsAdapter } from "./voxta-facade.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
 
@@ -74,6 +75,32 @@ class BlockingVoxtaAgent implements FrameworkAgentAdapter {
   }
 
   async close(): Promise<void> {}
+}
+
+class FirstReplyStallingVoxtaTts implements VoxtaTtsAdapter {
+  readonly calls: Array<{ text: string; signal: AbortSignal }> = [];
+  private resolveFirstStarted: () => void = () => undefined;
+  private releaseStalledReply: () => void = () => undefined;
+  readonly firstStarted = new Promise<void>((resolve) => {
+    this.resolveFirstStarted = resolve;
+  });
+  private readonly stalledReply = new Promise<void>((resolve) => {
+    this.releaseStalledReply = resolve;
+  });
+
+  async synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer> {
+    const callIndex = this.calls.push({ text, signal }) - 1;
+    if (callIndex === 0) {
+      this.resolveFirstStarted();
+      await this.stalledReply;
+      throw new Error("late stale TTS rejection");
+    }
+    return Buffer.alloc(0);
+  }
+
+  releaseFirst(): void {
+    this.releaseStalledReply();
+  }
 }
 
 test("Voxta facade negotiates SignalR and routes SendMessage into the embodied session", async () => {
@@ -272,6 +299,102 @@ test("Voxta replacement and interrupt frames preempt active replies without bloc
   } finally {
     socket?.close();
     await server.close();
+  }
+});
+
+test("authenticated Voxta interruption detaches stalled TTS before admitting a replacement", async () => {
+  const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-cancelled-tts-"));
+  const agent = new BlockingVoxtaAgent();
+  const tts = new FirstReplyStallingVoxtaTts();
+  const server = new RealtimeHubServer(testHubConfig({ artifactsRoot }), { agent, voxtaTts: tts });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-stalled-tts", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-stalled-tts");
+    socket.send(encodeFrame(invocation("start-stalled-tts", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-stalled-tts");
+
+    socket.send(encodeFrame(invocation("send-old-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "old reply",
+    })));
+    const oldReplyStart = await waitForVoxta(frames, "replyStart");
+    await tts.firstStarted;
+    assert.equal(agent.calls.length, 1, "the old model reply must finish before TTS stalls");
+
+    socket.send(encodeFrame(invocation("interrupt-stalled-tts", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-stalled-tts");
+    socket.send(encodeFrame(invocation("send-replacement-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+
+    await waitForCondition(() => agent.calls.length === 2);
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-replacement-tts");
+
+    const oldTtsCall = tts.calls[0];
+    assert.ok(oldTtsCall?.signal);
+    assert.equal(oldTtsCall.signal, agent.calls[0]?.signal);
+    assert.equal(oldTtsCall.signal.aborted, true);
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "old reply",
+      "replacement",
+    ]);
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === oldReplyStart.messageId
+        && (payload.$type === "replyChunk" || payload.$type === "replyEnd")
+      )),
+      [],
+    );
+
+    tts.releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(
+      voxtaPayloads(frames).filter((payload) => (
+        payload.messageId === oldReplyStart.messageId
+        && (payload.$type === "replyChunk" || payload.$type === "replyEnd")
+      )),
+      [],
+    );
+
+    socket.send(encodeFrame(invocation("send-after-stalled-tts", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after release",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after release");
+    await waitForCompletion(frames, "send-after-stalled-tts");
+    assert.deepEqual(agent.calls[2]?.history?.map((message) => message.content), [
+      "old reply",
+      "replacement",
+      "reply:replacement",
+      "after release",
+    ]);
+  } finally {
+    tts.releaseFirst();
+    socket?.close();
+    await server.close();
+    fs.rmSync(artifactsRoot, { recursive: true, force: true });
   }
 });
 

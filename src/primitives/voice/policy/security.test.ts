@@ -5,6 +5,7 @@ import {
   assertBoundedText,
   resolveVoiceSecurityLimits,
   validatePcmAudio,
+  validatePcmAudioChunk,
   validateTranscriptText,
   validateTtsAudioChunk,
   validateTtsInputText,
@@ -43,5 +44,18 @@ describe('voice security policy', () => {
     const totalAfterFirst = validateTtsAudioChunk(new Uint8Array([1, 2, 3]), 0, limits);
     expect(totalAfterFirst).toBe(3);
     expect(() => validateTtsAudioChunk(new Uint8Array([4, 5, 6, 7, 8, 9, 10]), totalAfterFirst, limits)).toThrow(VoiceSecurityError);
+  });
+
+  it('bounds streamed PCM incrementally on the running total (mmo9.6.3)', () => {
+    const limits = resolveVoiceSecurityLimits({ maxPcmBytes: 8 });
+
+    // Cumulative total stays within the cap across frames.
+    let total = validatePcmAudioChunk(new Uint8Array(4), 0, limits);
+    expect(total).toBe(4);
+    total = validatePcmAudioChunk(new Uint8Array(4), total, limits);
+    expect(total).toBe(8);
+
+    // The moment the running total would exceed the cap, it fails closed.
+    expect(() => validatePcmAudioChunk(new Uint8Array(1), total, limits)).toThrow(VoiceSecurityError);
   });
 });

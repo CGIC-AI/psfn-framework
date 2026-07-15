@@ -73,6 +73,27 @@ export function validatePcmAudio(pcm: Uint8Array, limits = DEFAULT_VOICE_SECURIT
   assertBoundedBytes('voice.pcm', pcm, limits.maxPcmBytes);
 }
 
+/**
+ * Incremental variant of {@link validatePcmAudio} for streamed capture: bounds
+ * the cumulative PCM byte total as frames arrive, so the security byte-cap is
+ * enforced fail-closed while audio is piped to STT during speech rather than
+ * only on a fully buffered utterance. Returns the running total including this
+ * chunk. Throws {@link VoiceSecurityError} the moment the cap is exceeded.
+ */
+export function validatePcmAudioChunk(
+  chunk: Uint8Array,
+  totalBytesSoFar: number,
+  limits = DEFAULT_VOICE_SECURITY_LIMITS,
+): number {
+  const nextTotal = totalBytesSoFar + byteLength(chunk);
+
+  if (nextTotal > limits.maxPcmBytes) {
+    throw new VoiceSecurityError('voice.pcm', nextTotal, limits.maxPcmBytes);
+  }
+
+  return nextTotal;
+}
+
 export function validateTranscriptText(text: string, limits = DEFAULT_VOICE_SECURITY_LIMITS): string {
   return assertBoundedText('voice.transcript', text, limits.maxTranscriptChars);
 }

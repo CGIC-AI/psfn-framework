@@ -8,7 +8,7 @@ import {
   type VoiceConnection,
 } from '@discordjs/voice';
 import prism from 'prism-media';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import {
@@ -17,11 +17,12 @@ import {
   selectFallbackCandidate,
 } from '../../primitives/voice/policy/reliability.js';
 import {
-  validatePcmAudio,
+  validatePcmAudioChunk,
   validateTranscriptText,
   validateTtsAudioChunk,
   validateTtsInputText,
 } from '../../primitives/voice/policy/security.js';
+import type { SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -32,8 +33,8 @@ import {
 import {
   CAPTURE_SILENCE_MS,
   MIN_PCM_BYTES,
-  STT_STREAM_CHUNK_BYTES,
   type ActiveVoiceTurn,
+  type VoiceStreamTranscription,
   type VoiceTurnErrorStage,
   type VoiceTurnObservationKind,
   type VoiceTurnRuntimeContext,
@@ -165,8 +166,7 @@ export async function emitVoiceTurnObservation(runtime: VoiceTurnRuntimeContext,
 export async function handleVoiceUtterance(
   runtime: VoiceTurnRuntimeContext & {
     recordStreamError(userId: string): void;
-    decodeOpusToPcm(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): Promise<Buffer>;
-    transcribePcm(pcm: Buffer, turn: ActiveVoiceTurn): Promise<string>;
+    transcribeOpusStream(opusStream: NodeJS.ReadableStream, turn: ActiveVoiceTurn): Promise<VoiceStreamTranscription>;
     speakText(text: string, turn?: ActiveVoiceTurn): Promise<void>;
     emitTurnObservation(params: {
       turnId?: string;
@@ -231,34 +231,33 @@ export async function handleVoiceUtterance(
     };
     opusStream.on('error', safetyErrorHandler);
 
-    const pcm = await runWithVoiceStageBudget({
-      stage: 'ingest',
+    // mmo9.6.3: stream decoded PCM to STT AS IT ARRIVES during speech rather
+    // than buffering the whole utterance until AfterSilence fires. The intake
+    // firewall is positional and unchanged: partials emit only as telemetry
+    // inside transcribeOpusStream, and the FINAL assembled transcript below is
+    // still the sole input to validateTranscriptText + intake screening.
+    const { transcript: rawTranscript, pcmBytes } = await runWithVoiceStageBudget({
+      stage: 'stt',
       budgets: runtime.reliabilityBudgets,
       signal: turn.abortController.signal,
-      task: () => runtime.decodeOpusToPcm(opusStream, turn.abortController.signal),
+      task: () => runtime.transcribeOpusStream(opusStream, turn),
     });
     assertActiveVoiceTurn(runtime, turn);
     emitVoicePerformance(runtime, turn, 'speech_end');
-    if (pcm.length < MIN_PCM_BYTES) {
+
+    // MIN_PCM_BYTES silence gate, applied on the total decoded PCM. With lazy
+    // STT start the session is only opened once this threshold is crossed, so a
+    // sub-threshold capture never reaches STT and never reaches the handler.
+    if (pcmBytes < MIN_PCM_BYTES) {
       turnReason = 'silence';
       await runtime.emitTurnObservation({
         turnId,
         stage: 'ingest',
         kind: 'silence',
-        detail: { pcmBytes: pcm.length, minimumPcmBytes: MIN_PCM_BYTES },
+        detail: { pcmBytes, minimumPcmBytes: MIN_PCM_BYTES },
       });
       return;
     }
-
-    validatePcmAudio(pcm, runtime.securityLimits);
-
-    const rawTranscript = await runWithVoiceStageBudget({
-      stage: 'stt',
-      budgets: runtime.reliabilityBudgets,
-      signal: turn.abortController.signal,
-      task: () => runtime.transcribePcm(pcm, turn),
-    });
-    assertActiveVoiceTurn(runtime, turn);
 
     const transcript = validateTranscriptText(rawTranscript, runtime.securityLimits);
     if (!transcript) {
@@ -400,69 +399,169 @@ export async function handleVoiceUtterance(
   }
 }
 
-export async function transcribeVoicePcm(
-  runtime: VoiceTurnRuntimeContext,
-  pcm: Buffer,
+/**
+ * Stream a captured opus utterance through STT while the speaker is still
+ * talking. Decoded PCM frames are piped to the connector session AS THEY
+ * ARRIVE (`writeAudio` per frame), and `endInput` fires when decode ends —
+ * rather than buffering the whole utterance until AfterSilence and only then
+ * feeding STT.
+ *
+ * COGSEC INVARIANT (positional intake firewall, unchanged): interim/partial
+ * transcripts emit ONLY as `voice.stt.partial` / `channel.voice.transcript.partial`
+ * telemetry here and NEVER become handler/message input. The single FINAL
+ * assembled transcript is returned to the caller, which remains the sole input
+ * to `validateTranscriptText` and `intakeScreening.screen(...)`.
+ *
+ * The MIN_PCM_BYTES silence gate is preserved exactly via lazy session start:
+ * decoded PCM is buffered until the threshold is crossed; only then is the STT
+ * session opened, the buffered lead-in flushed, and every later frame streamed
+ * live. A sub-threshold capture never opens a session (no STT, nothing reaches
+ * the handler). The security byte-cap is enforced incrementally on the running
+ * total via `validatePcmAudioChunk`, failing closed the instant it is exceeded.
+ */
+export async function transcribeOpusStream(
+  runtime: VoiceTurnRuntimeContext & {
+    decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream;
+  },
+  opusStream: NodeJS.ReadableStream,
   turn: ActiveVoiceTurn,
-): Promise<string> {
-  if (!runtime.sttConnector) return '';
+): Promise<VoiceStreamTranscription> {
+  const connector = runtime.sttConnector;
+  if (!connector) return { transcript: '', pcmBytes: 0 };
 
-  const session = await runtime.sttConnector.startStream({
-    sampleRateHz: 48_000,
-    channels: 2,
-    encoding: 'pcm_s16le',
-    model: runtime.config.deepgramModel,
-    interimResults: true,
-  }, turn.abortController.signal);
-  turn.sttSession = session;
+  const signal = turn.abortController.signal;
+  const pcmStream = runtime.decodeOpusToPcmStream(opusStream, signal);
+
+  let pcmBytes = 0;
+  // Holder (not a bare `let`) so the session assigned inside the async pump
+  // closure below is visible to the outer cleanup — a bare `let` is
+  // control-flow-narrowed to `null` at the outer `finally`.
+  const sessionRef: { current: SttStreamSession | null } = { current: null };
+
+  const preBuffer: Buffer[] = [];
+  let preBufferBytes = 0;
+
+  let settleSession!: (value: SttStreamSession | null) => void;
+  const sessionReady = new Promise<SttStreamSession | null>((resolve) => {
+    settleSession = resolve;
+  });
+  let sessionSettled = false;
+  const resolveSessionReady = (value: SttStreamSession | null): void => {
+    if (sessionSettled) return;
+    sessionSettled = true;
+    settleSession(value);
+  };
+
+  const throwIfAborted = (): void => {
+    if (signal.aborted) {
+      throw new Error('STT session aborted');
+    }
+  };
+
+  // Incremental pump: decode -> writeAudio per frame AS THEY ARRIVE -> endInput
+  // on decode end. Runs concurrently with the transcript consumer below.
+  const pumpPromise = (async (): Promise<number> => {
+    try {
+      for await (const frame of pcmStream as AsyncIterable<Buffer | Uint8Array | string>) {
+        throwIfAborted();
+        const chunk = Buffer.isBuffer(frame) ? frame : Buffer.from(frame as Uint8Array);
+        // Fail-closed byte cap bounding the TOTAL streamed PCM.
+        pcmBytes = validatePcmAudioChunk(chunk, pcmBytes, runtime.securityLimits);
+        if (chunk.byteLength === 0) continue;
+
+        if (sessionRef.current) {
+          await sessionRef.current.writeAudio(chunk);
+          continue;
+        }
+
+        preBuffer.push(chunk);
+        preBufferBytes += chunk.byteLength;
+        if (preBufferBytes < MIN_PCM_BYTES) continue;
+
+        const started = await connector.startStream({
+          sampleRateHz: 48_000,
+          channels: 2,
+          encoding: 'pcm_s16le',
+          model: runtime.config.deepgramModel,
+          interimResults: true,
+        }, signal);
+        sessionRef.current = started;
+        turn.sttSession = started;
+        resolveSessionReady(started);
+        for (const buffered of preBuffer) {
+          throwIfAborted();
+          await started.writeAudio(buffered);
+        }
+        preBuffer.length = 0;
+      }
+
+      throwIfAborted();
+      if (sessionRef.current) {
+        await sessionRef.current.endInput();
+      }
+      return pcmBytes;
+    } catch (error) {
+      // Unblock the transcript consumer so it cannot hang awaiting a final that
+      // will never arrive, then propagate. No swallowed errors.
+      if (sessionRef.current) {
+        await sessionRef.current.cancel('stt-ingest-error').catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      resolveSessionReady(sessionRef.current);
+    }
+  })();
 
   let finalTranscript = '';
   let latestPartial = '';
   let streamError: unknown;
-  const writerPromise = writePcmToSttSession(session, pcm, turn.abortController.signal);
 
-  try {
-    for await (const chunk of session.transcripts) {
-      assertActiveVoiceTurn(runtime, turn);
-      const transcriptText = chunk.text.trim();
-      if (!transcriptText) continue;
+  const activeSession = await sessionReady;
+  if (activeSession) {
+    try {
+      for await (const chunk of activeSession.transcripts) {
+        assertActiveVoiceTurn(runtime, turn);
+        const transcriptText = chunk.text.trim();
+        if (!transcriptText) continue;
 
-      if (chunk.type === 'partial') {
-        latestPartial = transcriptText;
-        await runtime.eventBus.emit('channel.voice.transcript.partial', {
-          guildId: turn.channel.guild.id,
-          channelId: turn.channel.id,
-          userId: runtime.targetUserId,
-          transcript: transcriptText,
-          confidence: chunk.confidence,
-          startMs: chunk.startMs,
-          endMs: chunk.endMs,
-        });
-        await runtime.eventBus.emit('voice.stt.partial', {
-          turnId: turn.turnId,
-          channelId: turn.channel.id,
-          userId: runtime.targetUserId,
-          text: transcriptText,
-          timestampMs: Date.now(),
-        });
-        continue;
+        if (chunk.type === 'partial') {
+          latestPartial = transcriptText;
+          // Partials are telemetry ONLY — never handler/message.received input.
+          await runtime.eventBus.emit('channel.voice.transcript.partial', {
+            guildId: turn.channel.guild.id,
+            channelId: turn.channel.id,
+            userId: runtime.targetUserId,
+            transcript: transcriptText,
+            confidence: chunk.confidence,
+            startMs: chunk.startMs,
+            endMs: chunk.endMs,
+          });
+          await runtime.eventBus.emit('voice.stt.partial', {
+            turnId: turn.turnId,
+            channelId: turn.channel.id,
+            userId: runtime.targetUserId,
+            text: transcriptText,
+            timestampMs: Date.now(),
+          });
+          continue;
+        }
+
+        if (transcriptText.length >= finalTranscript.length) {
+          finalTranscript = transcriptText;
+        }
       }
-
-      if (transcriptText.length >= finalTranscript.length) {
-        finalTranscript = transcriptText;
-      }
+    } catch (error) {
+      streamError = error;
+      await activeSession.cancel('stt-stream-error').catch(() => undefined);
     }
-  } catch (error) {
-    streamError = error;
-    await session.cancel('stt-stream-error').catch(() => undefined);
   }
 
   try {
-    await writerPromise;
+    await pumpPromise;
   } catch (error) {
     if (!streamError) streamError = error;
   } finally {
-    if (turn.sttSession === session) {
+    if (sessionRef.current && turn.sttSession === sessionRef.current) {
       turn.sttSession = null;
     }
   }
@@ -475,28 +574,7 @@ export async function transcribeVoicePcm(
     });
   }
 
-  return finalTranscript || latestPartial;
-}
-
-export async function writePcmToSttSession(
-  session: { writeAudio(chunk: Uint8Array): Promise<void>; endInput(): Promise<void> },
-  pcm: Buffer,
-  signal?: AbortSignal,
-): Promise<void> {
-  for (let offset = 0; offset < pcm.length; offset += STT_STREAM_CHUNK_BYTES) {
-    if (signal?.aborted) {
-      throw new Error('STT session aborted');
-    }
-
-    const nextChunk = pcm.subarray(offset, Math.min(offset + STT_STREAM_CHUNK_BYTES, pcm.length));
-    await session.writeAudio(nextChunk);
-  }
-
-  if (signal?.aborted) {
-    throw new Error('STT session aborted');
-  }
-
-  await session.endInput();
+  return { transcript: finalTranscript || latestPartial, pcmBytes };
 }
 
 export async function speakVoiceText(
@@ -695,95 +773,104 @@ export async function playReadableAudio(
   }
 }
 
-export async function decodeOpusStreamToPcm(
+/**
+ * Decode a captured opus stream into a live Readable of PCM frames. Unlike the
+ * previous buffered decoder, this returns immediately and emits decoded PCM as
+ * it arrives so the STT pump can stream during speech. Natural stream
+ * backpressure (the consumer awaits each `writeAudio`) paces decoding, so
+ * memory stays bounded to roughly one frame in flight. Errors from the opus
+ * receive stream and the decoder are re-wrapped as structured ingest errors and
+ * surfaced to the consumer by destroying the output stream — never swallowed.
+ */
+export function decodeOpusToPcmStream(
   runtime: VoiceTurnRuntimeContext & { recordStreamError(userId: string): void },
   opusStream: NodeJS.ReadableStream,
   signal?: AbortSignal,
-): Promise<Buffer> {
-  return await new Promise((resolve, reject) => {
-    let decoder: InstanceType<typeof prism.opus.Decoder>;
+): NodeJS.ReadableStream {
+  let decoder: InstanceType<typeof prism.opus.Decoder>;
 
+  try {
+    decoder = new prism.opus.Decoder({ rate: 48_000, channels: 2, frameSize: 960 });
+  } catch (error) {
+    log.error('Failed to create Opus decoder. Install @discordjs/opus or opusscript.', {
+      error: toErrorMessage(error),
+    });
+    throw createStructuredVoiceError({
+      error: new Error(`Opus decoder unavailable: ${toErrorMessage(error)}`),
+      stage: 'ingest',
+      code: 'VOICE_OPUS_UNAVAILABLE',
+    });
+  }
+
+  const output = new PassThrough();
+  let settled = false;
+
+  const cleanup = (): void => {
+    opusStream.off('error', onOpusError);
+    decoder.off('error', onDecoderError);
+    signal?.removeEventListener('abort', onAbort);
+  };
+
+  const destroyOutput = (error?: Error): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
     try {
-      decoder = new prism.opus.Decoder({ rate: 48_000, channels: 2, frameSize: 960 });
-    } catch (error) {
-      log.error('Failed to create Opus decoder. Install @discordjs/opus or opusscript.', {
-        error: toErrorMessage(error),
-      });
-      reject(createStructuredVoiceError({
-        error: new Error(`Opus decoder unavailable: ${toErrorMessage(error)}`),
-        stage: 'ingest',
-        code: 'VOICE_OPUS_UNAVAILABLE',
-      }));
-      return;
+      decoder.destroy();
+    } catch {
+      // Ignore decoder teardown errors.
     }
+    output.destroy(error);
+  };
 
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
+  function onOpusError(error: Error): void {
+    log.warn('AudioReceiveStream error (contained)', { error: toErrorMessage(error) });
+    runtime.recordStreamError(runtime.targetUserId);
+    destroyOutput(createStructuredVoiceError({
+      error,
+      stage: 'ingest',
+      code: 'VOICE_RECEIVE_STREAM_ERROR',
+    }));
+  }
 
-    const cleanup = (): void => {
-      decoder.off('data', onData);
-      decoder.off('end', onEnd);
-      decoder.off('error', onDecoderError);
-      opusStream.off('error', onOpusError);
-      signal?.removeEventListener('abort', onAbort);
-      try {
-        decoder.destroy();
-      } catch {
-        // Ignore cleanup errors.
-      }
-    };
+  function onDecoderError(error: Error): void {
+    log.warn('Opus decoder error (contained)', { error: toErrorMessage(error) });
+    destroyOutput(createStructuredVoiceError({
+      error,
+      stage: 'ingest',
+      code: 'VOICE_OPUS_DECODE_FAILED',
+    }));
+  }
 
-    const fail = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
+  function onAbort(): void {
+    // The STT pump and transcript consumer raise the canonical abort error;
+    // here we only end decode so the consumer's async iterator completes.
+    destroyOutput();
+  }
 
-    const succeed = (): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(Buffer.concat(chunks, total));
-    };
-
-    const onData = (chunk: Buffer): void => {
-      chunks.push(chunk);
-      total += chunk.length;
-    };
-    const onEnd = (): void => succeed();
-    const onDecoderError = (error: Error): void => {
-      log.warn('Opus decoder error (contained)', { error: toErrorMessage(error) });
-      fail(createStructuredVoiceError({
-        error,
-        stage: 'ingest',
-        code: 'VOICE_OPUS_DECODE_FAILED',
-      }));
-    };
-    const onOpusError = (error: Error): void => {
-      log.warn('AudioReceiveStream error (contained)', { error: toErrorMessage(error) });
-      runtime.recordStreamError(runtime.targetUserId);
-      fail(createStructuredVoiceError({
-        error,
-        stage: 'ingest',
-        code: 'VOICE_RECEIVE_STREAM_ERROR',
-      }));
-    };
-    const onAbort = (): void => {
-      fail(new Error('Voice capture aborted'));
-    };
-
-    if (signal?.aborted) {
-      fail(new Error('Voice capture aborted'));
-      return;
+  opusStream.once('error', onOpusError);
+  decoder.once('error', onDecoderError);
+  if (signal) {
+    if (signal.aborted) {
+      queueMicrotask(onAbort);
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true });
     }
+  }
 
-    decoder.on('data', onData);
-    decoder.once('end', onEnd);
-    decoder.once('error', onDecoderError);
-    opusStream.once('error', onOpusError);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    opusStream.pipe(decoder);
+  decoder.once('end', () => {
+    // Normal completion: the decoder has flushed all PCM (piped to `output`,
+    // which pipe ends for us). Drop listeners and release the decoder's native
+    // handles; buffered PCM already queued in `output` still drains to the
+    // consumer.
+    cleanup();
+    try {
+      decoder.destroy();
+    } catch {
+      // Ignore decoder teardown errors.
+    }
   });
+  opusStream.pipe(decoder);
+  decoder.pipe(output);
+  return output;
 }

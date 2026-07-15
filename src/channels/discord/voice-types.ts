@@ -13,7 +13,6 @@ import type { MessageHandler } from '../backplane/types.js';
 
 export const CAPTURE_SILENCE_MS = 1_200;
 export const MIN_PCM_BYTES = 32_000;
-export const STT_STREAM_CHUNK_BYTES = 3_840;
 export const UNKNOWN_VOICE_ERROR_CODE = 'VOICE_PIPELINE_ERROR';
 export const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 export const DECRYPT_RECOVERY_MAX_REJOINS = 3;
@@ -76,6 +75,17 @@ export interface ActiveVoiceTurn {
   abortController: AbortController;
   sttSession: SttStreamSession | null;
   ttsSession: TtsSynthesisSession | null;
+}
+
+/**
+ * Result of streaming an opus capture through STT. `transcript` is the final
+ * assembled transcript (the sole downstream firewall/model input); `pcmBytes`
+ * is the total decoded PCM streamed, used for the MIN_PCM_BYTES silence gate
+ * applied on the total after capture ends.
+ */
+export interface VoiceStreamTranscription {
+  transcript: string;
+  pcmBytes: number;
 }
 
 export interface VoiceRuntimeBaseContext {

@@ -33,7 +33,7 @@ import {
   type RuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProvider,
 } from '../../app/startup/support/bootstrap-helpers.js';
-import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
+import type { StreamingSttConnector } from '../../primitives/voice/connectors/stt/index.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type {
   ActiveVoiceTurn,
@@ -43,6 +43,7 @@ import type {
   VoiceConnectionStateChange,
   VoiceRecoveryRuntimeContext,
   VoiceStreamDegradedPhase,
+  VoiceStreamTranscription,
   VoiceTurnErrorStage,
   VoiceTurnObservationKind,
   VoiceTurnRuntimeContext,
@@ -74,7 +75,7 @@ import {
   cancelActiveVoiceTurn,
   cancelVoiceTurnResources,
   createPlaybackChunkIterator as createVoicePlaybackChunkIterator,
-  decodeOpusStreamToPcm,
+  decodeOpusToPcmStream,
   emitVoiceTurnObservation,
   handleVoiceUtterance,
   playReadableAudio as playVoiceReadableAudio,
@@ -82,8 +83,7 @@ import {
   playWithTtsConnector as playVoiceWithTtsConnector,
   resetActiveVoiceTurnState,
   speakVoiceText,
-  transcribeVoicePcm,
-  writePcmToSttSession as writeVoicePcmToSttSession,
+  transcribeOpusStream as transcribeVoiceOpusStream,
 } from './voice-turn-runtime.js';
 
 export type { OpusAvailabilityResult, VoicePreflightResult } from './voice-types.js';
@@ -552,8 +552,7 @@ export class DiscordVoiceRuntime {
   private async handleUtterance(): Promise<void> {
     await handleVoiceUtterance(this as unknown as VoiceTurnRuntimeContext & {
       recordStreamError(userId: string): void;
-      decodeOpusToPcm(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): Promise<Buffer>;
-      transcribePcm(pcm: Buffer, turn: ActiveVoiceTurn): Promise<string>;
+      transcribeOpusStream(opusStream: NodeJS.ReadableStream, turn: ActiveVoiceTurn): Promise<VoiceStreamTranscription>;
       speakText(text: string, turn?: ActiveVoiceTurn): Promise<void>;
       emitTurnObservation(params: {
         turnId?: string;
@@ -565,12 +564,13 @@ export class DiscordVoiceRuntime {
     });
   }
 
-  private async transcribePcm(pcm: Buffer, turn: ActiveVoiceTurn): Promise<string> {
-    return await transcribeVoicePcm(this as unknown as VoiceTurnRuntimeContext, pcm, turn);
-  }
-
-  private async writePcmToSttSession(session: SttStreamSession, pcm: Buffer, signal?: AbortSignal): Promise<void> {
-    await writeVoicePcmToSttSession(session, pcm, signal);
+  private async transcribeOpusStream(
+    opusStream: NodeJS.ReadableStream,
+    turn: ActiveVoiceTurn,
+  ): Promise<VoiceStreamTranscription> {
+    return await transcribeVoiceOpusStream(this as unknown as VoiceTurnRuntimeContext & {
+      decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream;
+    }, opusStream, turn);
   }
 
   private async speakText(text: string, turn?: ActiveVoiceTurn): Promise<void> {
@@ -607,8 +607,8 @@ export class DiscordVoiceRuntime {
     await playVoiceReadableAudio(this as unknown as VoiceTurnRuntimeContext, audio, turn);
   }
 
-  private async decodeOpusToPcm(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): Promise<Buffer> {
-    return await decodeOpusStreamToPcm(this as unknown as VoiceTurnRuntimeContext & {
+  private decodeOpusToPcmStream(opusStream: NodeJS.ReadableStream, signal?: AbortSignal): NodeJS.ReadableStream {
+    return decodeOpusToPcmStream(this as unknown as VoiceTurnRuntimeContext & {
       recordStreamError(userId: string): void;
     }, opusStream, signal);
   }

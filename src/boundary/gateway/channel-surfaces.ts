@@ -269,10 +269,11 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
       // per bot account when accounts are configured — and fails closed on
       // any routing ambiguity.
       const payload = { message: input.serializeMessage(outbound) };
-      if (accountId) {
-        input.gateway.notifyChannelMessage('discord', 'discord.message', payload, accountId);
-      } else {
-        input.gateway.notifyChannelMessage('discord', 'discord.message', payload);
+      const recipientCount = accountId
+        ? input.gateway.notifyChannelMessage('discord', 'discord.message', payload, accountId)
+        : input.gateway.notifyChannelMessage('discord', 'discord.message', payload);
+      if (!(recipientCount > 0)) {
+        throw new Error('Discord inbound notification reached zero eligible agents');
       }
       return notificationAck(message.channelId, 'forwarded_to_agent');
     });

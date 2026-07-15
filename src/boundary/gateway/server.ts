@@ -1372,20 +1372,23 @@ export class GatewayServer {
     });
   }
 
-  // Send notification to all connected agents
-  notifyAll(method: string, params: unknown): void {
+  // Send notification to all connected agents and report eligible recipients.
+  notifyAll(method: string, params: unknown): number {
     const notification = {
       jsonrpc: '2.0' as const,
       method,
       params,
     };
+    let recipientCount = 0;
     for (const conn of this.connections) {
       const status = this.connectionStatuses.get(conn);
       if (status?.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
         continue;
       }
       conn.send(notification);
+      recipientCount += 1;
     }
+    return recipientCount;
   }
 
   // Send notification to a specific connection
@@ -1408,13 +1411,14 @@ export class GatewayServer {
     method: string,
     params: unknown,
     discordAccountId?: string,
-  ): void {
+  ): number {
     if (!this.multiCompanion.enabled) {
-      this.notifyAll(method, params);
-      return;
+      this.refreshConnectionHealth();
+      return this.notifyAll(method, params);
     }
     const route = this.resolveCompanionAgent(surface, discordAccountId);
     this.notifyOne(route.conn, method, params);
+    return 1;
   }
 
   /**

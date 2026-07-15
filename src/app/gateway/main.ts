@@ -59,6 +59,17 @@ import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
+import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
+import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
+import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
+import {
+  registerScheduledFleetAuthBackupTask,
+  SCHEDULED_BACKUP_TASK_ID,
+  SCHEDULED_BACKUP_TASK_NAME,
+} from '../../persistence/backups/service.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -91,6 +102,11 @@ function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecisi
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadConfig();
+  assertFleetAuthLegacySurfacesUnavailable({
+    fleetAuthEnabled: config.fleetAuth !== undefined,
+    processMode: 'gateway',
+    env,
+  });
   applyGatewayTlsConfig({
     caPath: config.gatewayTlsCaPath,
     rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
@@ -103,6 +119,26 @@ async function main(): Promise<void> {
     env,
     logger: log,
   });
+  const fleetAuthProtectedRestoreRoots = [
+    startupHydration.pathSnapshot.systemDataDir,
+    startupHydration.pathSnapshot.companionDataDir,
+    startupHydration.pathSnapshot.workspacePath,
+    startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
+  ];
+  const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
+    config: config.fleetAuth,
+    credentialVault: config.credentialVault,
+    ...(config.postgresDatabaseUrl
+      ? { companionDatabaseUrl: config.postgresDatabaseUrl }
+      : {}),
+    protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
+    lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
+  });
+  if (config.fleetAuth && !config.companionFleet) {
+    throw new Error(
+      'Fleet auth is enabled but the resolved config carries no companion fleet — refusing to start without a complete gateway-owned backup family',
+    );
+  }
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
@@ -147,6 +183,62 @@ async function main(): Promise<void> {
     privilegedServices,
     createGatewayServer,
   } = privilegedCore;
+  let fleetAuthBackupScheduler: Scheduler | undefined;
+  if (config.fleetAuth) {
+    if (!config.companionFleet || !fleetAuthPersistence || !config.credentialVault) {
+      throw new Error('Fleet auth backup startup invariants are incomplete');
+    }
+    const backupConfig = resolveBackupRuntimeConfig({
+      dataDir: startupHydration.pathSnapshot.systemDataDir,
+      env,
+    });
+    const fleetAuthSecrets = resolveGatewayFleetAuthSecrets({
+      config: config.fleetAuth,
+      credentialVault: config.credentialVault,
+      protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
+      ...(config.postgresDatabaseUrl
+        ? { companionDatabaseUrl: config.postgresDatabaseUrl }
+        : {}),
+    });
+    const cycleOptions = buildFleetAuthBackupCycleOptions({
+      fleet: config.companionFleet,
+      systemDataDir: startupHydration.pathSnapshot.systemDataDir,
+      backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      roles: config.fleetAuth.databaseRoles,
+      backupConfig,
+    });
+    fleetAuthBackupScheduler = new Scheduler(
+      eventBus,
+      {
+        tickIntervalMs: startupHydration.schedulerConfig.tickIntervalMs,
+        heartbeatIntervalMs: startupHydration.schedulerConfig.heartbeatIntervalMs,
+      },
+      { eligibilityGate },
+    );
+    registerScheduledFleetAuthBackupTask({
+      scheduler: fleetAuthBackupScheduler,
+      cycleOptions,
+      config: backupConfig,
+      onBackupFailure: (error) => {
+        void eventBus.emit('backup.failed', {
+          taskId: SCHEDULED_BACKUP_TASK_ID,
+          taskName: SCHEDULED_BACKUP_TASK_NAME,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: Date.now(),
+        });
+      },
+    });
+    fleetAuthBackupScheduler.start();
+    log.info('Gateway-owned fleet auth consistent backups enabled', {
+      companionCount: config.companionFleet.companions.length,
+      mode: 'consistent-family',
+      intervalMs: backupConfig.intervalMs,
+      backupRootDir: backupConfig.rootDir,
+      verifyRestore: backupConfig.verifyRestore,
+      encryption: backupConfig.encryption.mode,
+      mirrorDir: backupConfig.mirrorDir || '(none)',
+    });
+  }
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
@@ -407,6 +499,12 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        ...(fleetAuthBackupScheduler
+          ? [{
+            step: 'stop fleet auth backup scheduler',
+            action: async () => { await fleetAuthBackupScheduler.stop(); },
+          }]
+          : []),
         { step: 'stop turn performance forwarder', action: () => detachTurnPerformanceForwarder() },
         { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
         { step: 'stop companion event relay', action: () => companionRelay.stop() },
@@ -417,6 +515,7 @@ async function main(): Promise<void> {
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
         { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },
         { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
+        { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);

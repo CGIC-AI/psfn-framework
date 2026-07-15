@@ -53,6 +53,13 @@ import {
   removeFleetRestoreDatabaseMarker,
   rollbackFleetRestoreDatabaseSchemas,
 } from './fleet-restore-database-marker.js';
+import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
+import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import {
+  restoreFleetAuthSnapshot,
+  verifyFleetAuthBackupManifest,
+} from './fleet-auth-coordinator.js';
+import type { FleetAuthRestoreResult } from './fleet-auth-restore.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -129,6 +136,11 @@ export interface FleetRestoreResult {
   artifactDir: string;
   databaseDumpPath: string;
   restoredDestinations: string[];
+}
+
+export interface FleetAuthConsistentFamilyRestoreResult {
+  restoredSchemas: string[];
+  fleetAuth: FleetAuthRestoreResult;
 }
 
 const FLEET_ARTIFACT_TIMESTAMP_PATTERN = /^\d{8}T\d{9}Z$/u;
@@ -329,6 +341,82 @@ async function assertDumpScope(
     );
   }
   return expectedSchemas;
+}
+
+async function assertFleetAuthFamilyDumpScope(
+  dumpPath: string,
+  expectedSchema: string,
+  pgRestoreBinary?: string,
+): Promise<void> {
+  const schema = assertValidPostgresSchemaName(expectedSchema);
+  const binary = pgRestoreBinary?.trim() || 'pg_restore';
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(binary, ['--list', dumpPath], {
+      maxBuffer: POSTGRES_COMMAND_MAX_BUFFER_BYTES,
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Fleet auth family restore could not inspect Postgres dump ${dumpPath}: ${message}`);
+  }
+  const actualSchemas = new Set(
+    stdout.split(/\r?\n/u).map(parseTocNamespace).filter((value): value is string => Boolean(value)),
+  );
+  if (actualSchemas.size !== 1 || !actualSchemas.has(schema)) {
+    throw new Error(
+      `Fleet auth family dump schema scope mismatch: expected [${schema}], `
+      + `found [${[...actualSchemas].sort().join(', ')}]`,
+    );
+  }
+}
+
+export async function restoreFleetAuthConsistentFamily(options: {
+  manifestPath: string;
+  backupRestoreDatabaseUrl: string;
+  roles: FleetAuthDatabaseRoles;
+  authorityFloors: FleetAuthAuthorityFloorStore;
+  activationGeneration: number;
+  restoredAt?: string;
+  pgRestoreBinary?: string;
+}): Promise<FleetAuthConsistentFamilyRestoreResult> {
+  const manifest = verifyFleetAuthBackupManifest(options.manifestPath);
+  const familyDir = dirname(resolve(options.manifestPath));
+  const schemaArtifacts = manifest.artifacts.filter(
+    (artifact): artifact is typeof artifact & { kind: 'companion' | 'shared'; postgresSchema: string } => (
+      (artifact.kind === 'companion' || artifact.kind === 'shared')
+      && artifact.postgresSchema !== undefined
+    ),
+  );
+  const verifiedSchemaDumps = schemaArtifacts.map(artifact => ({
+    artifact,
+    dumpPath: resolve(familyDir, artifact.path),
+  }));
+  for (const { artifact, dumpPath } of verifiedSchemaDumps) {
+    await assertFleetAuthFamilyDumpScope(
+      dumpPath,
+      artifact.postgresSchema,
+      options.pgRestoreBinary,
+    );
+  }
+
+  const restoredSchemas: string[] = [];
+  for (const { artifact, dumpPath } of verifiedSchemaDumps) {
+    await restorePostgresDump(dumpPath, {
+      databaseUrl: options.backupRestoreDatabaseUrl,
+      ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+    });
+    restoredSchemas.push(artifact.postgresSchema);
+  }
+
+  const fleetAuth = await restoreFleetAuthSnapshot({
+    manifestPath: options.manifestPath,
+    databaseUrl: options.backupRestoreDatabaseUrl,
+    roles: options.roles,
+    authorityFloors: options.authorityFloors,
+    activationGeneration: options.activationGeneration,
+    ...(options.restoredAt ? { restoredAt: options.restoredAt } : {}),
+  });
+  return { restoredSchemas, fleetAuth };
 }
 
 interface TargetSchemaState {

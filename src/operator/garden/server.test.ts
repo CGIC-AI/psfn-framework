@@ -202,6 +202,7 @@ async function createHarness(options: {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   host?: string;
+  fleetAuthEnabled?: boolean;
   modelDiscovery?: {
     getAvailableModels: () => Promise<DiscoveredModel[]>;
     invalidateCache: () => void;
@@ -251,6 +252,16 @@ async function createHarness(options: {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
+    ...(options.fleetAuthEnabled
+      ? {
+          fleetAuthVerifier: {
+            kind: 'verifier' as const,
+            enabled: true as const,
+            canonicalOrigin: 'https://fleet.example.test',
+            verifierKeys: [],
+          },
+        }
+      : {}),
   };
   saveModelsConfig(tempDir, {
     schemaVersion: 1,
@@ -376,6 +387,14 @@ async function destroyHarness(harness: ServerHarness): Promise<void> {
 
 describe('AdminServer Garden routing', () => {
   describe('startup auth policy', () => {
+    it('rejects legacy bearer/cookie Garden auth before listen when fleet auth is enabled', async () => {
+      await expect(createHarness({
+        token: 'legacy-admin-token',
+        host: '127.0.0.1',
+        fleetAuthEnabled: true,
+      })).rejects.toThrow(/fleet auth.*legacy.*before listen/i);
+    });
+
     it('rejects insecure local mode on non-loopback hosts', async () => {
       await expect(
         createHarness({

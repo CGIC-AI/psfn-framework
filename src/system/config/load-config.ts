@@ -23,6 +23,7 @@ import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   type PersistenceBackend,
   DEFAULT_UI_THEME_ID,
@@ -44,6 +45,7 @@ import {
   GATEWAY_COMPANION_AUTH_TOKEN_ENV,
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV,
 } from '../../boundary/gateway/companion-auth.js';
+import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -94,6 +96,9 @@ const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
+const POSTGRES_DATABASE_URL_ENV = 'POSTGRES_DATABASE_URL';
+const POSTGRES_DATABASE_URL_FILE_ENV = 'POSTGRES_DATABASE_URL_FILE';
+const POSTGRES_DATABASE_URL_FD_ENV = 'POSTGRES_DATABASE_URL_FD';
 type LoadConfigMode = 'gateway' | 'agent' | 'operator';
 
 function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
@@ -333,8 +338,17 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const databasePath = env.DATABASE_PATH
     ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
-  const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
-  if (!postgresDatabaseUrl && mode !== 'operator') {
+  const postgresDatabaseUrl = mode === 'agent'
+    ? resolveRuntimeCredentialFromEnvironment(env, {
+      description: 'PostgreSQL database URL',
+      inlineEnvName: POSTGRES_DATABASE_URL_ENV,
+      fileEnvName: POSTGRES_DATABASE_URL_FILE_ENV,
+      fdEnvName: POSTGRES_DATABASE_URL_FD_ENV,
+    })
+    : mode === 'gateway'
+      ? parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_ENV])
+      : undefined;
+  if (!postgresDatabaseUrl && mode === 'gateway') {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
 
@@ -464,6 +478,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     embeddingApiDims: undefined,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
+    sessionTailCache: createDefaultSessionTailCacheSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     homeAssistantEnabled: false,

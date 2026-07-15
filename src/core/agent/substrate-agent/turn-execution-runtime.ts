@@ -74,6 +74,11 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import {
+  MISSING_IMAGE_ATTACHMENT_CORRECTION,
+  rejectsMissingImageAttachmentClaim,
+} from '../../../primitives/images/attachment-claim-guard.js';
+import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
@@ -367,6 +372,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
+    runtimeFallbackProvenance?: import('../../../shared/contracts/runtime.js').RuntimeFallbackProvenance,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {
@@ -897,11 +903,16 @@ export async function handleMessageForTurn(
     const {
       firstTokenAt,
       turnUsage,
-      responseText,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
+      runtimeFallbackProvenance,
       turnIntent,
     } = invocationResult;
+    // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
+    // applied where the model's turn text is accepted so persistence
+    // (recordAssistantMessage), channel dispatch (AgentResponse.content), and
+    // TTS all see clean output.
+    const responseText = stripLeadingHistoryStamps(invocationResult.responseText);
     const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
     // authored. A no_reply issued during internal follow-up continuation
@@ -1031,6 +1042,24 @@ export async function handleMessageForTurn(
           },
         });
 
+    if (rejectsMissingImageAttachmentClaim({
+      responseText: safeResponseText,
+      attachmentCount: responseAttachments.length,
+    })) {
+      safeResponseText = MISSING_IMAGE_ATTACHMENT_CORRECTION;
+      log.warn('Rejected assistant image-attachment claim without a current-turn attachment', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.image_attachment_claim.rejected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_attachment_claim.rejected'),
+      });
+    }
+
     // Fail loud, never silently: if a charged image deliverable was produced this
     // turn but is not riding out on the reply, surface it. The response_control
     // guard should prevent the no-reply case; this is the last-resort audit trail.
@@ -1059,7 +1088,7 @@ export async function handleMessageForTurn(
     }
 
     if (!broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
-      assistantSessionEntryId = runtime.recordAssistantMessage(
+      const assistantPersistenceArgs = [
         message,
         turnId,
         requestId,
@@ -1067,7 +1096,10 @@ export async function handleMessageForTurn(
         trustLevel,
         continuitySubjectKey,
         preTurnState.emotionSnapshot,
-      );
+      ] as const;
+      assistantSessionEntryId = runtimeFallbackProvenance
+        ? runtime.recordAssistantMessage(...assistantPersistenceArgs, runtimeFallbackProvenance)
+        : runtime.recordAssistantMessage(...assistantPersistenceArgs);
     }
 
     if (runtime.skillsRuntime) {
@@ -1130,6 +1162,7 @@ export async function handleMessageForTurn(
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,
         durationMs: completedAt - startTime,
+        ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),
         internalState: cloneComputedInternalStateForResponse(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),

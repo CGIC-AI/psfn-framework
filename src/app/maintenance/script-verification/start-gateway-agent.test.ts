@@ -281,6 +281,104 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(agentAllowlist).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*LITELLM_API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*FAL_API_KEY\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*POSTGRES_DATABASE_URL\s*\\/);
+    expect(agentAllowlist).toMatch(/\n\s*POSTGRES_DATABASE_URL_FD\s*\\/);
+  });
+
+  it('hands the local split database credential to the agent outside its environment', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-postgres-credential-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+
+    const launcherPath = join(scriptsDir, 'start-gateway-agent.sh');
+    writeFileSync(launcherPath, readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'), 'utf8');
+    chmodSync(launcherPath, 0o755);
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'), 'utf8');
+
+    const fakeTsxPath = join(tsxDir, 'tsx');
+    writeFileSync(
+      fakeTsxPath,
+      [
+        '#!/usr/bin/env bash',
+        'case "$1" in',
+        '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
+        '  src/app/gateway/main.ts)',
+        '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
+        'import os, socket, sys, time',
+        'path = sys.argv[1]',
+        'os.makedirs(os.path.dirname(path), exist_ok=True)',
+        'server = socket.socket(socket.AF_UNIX)',
+        'server.bind(path)',
+        'server.listen(1)',
+        'time.sleep(30)',
+        'PY',
+        '    ;;',
+        '  src/app/agent/main.ts)',
+        '    env | sort > agent.env',
+        '    cat "/proc/self/fd/${POSTGRES_DATABASE_URL_FD:-999}" > agent.database-url 2>/dev/null || true',
+        '    kill -TERM "$PPID"',
+        '    sleep 2',
+        '    ;;',
+        '  *) sleep 30 ;;',
+        'esac',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeTsxPath, 0o755);
+
+    const fakeNodePath = join(fakeBinDir, 'node');
+    writeFileSync(
+      fakeNodePath,
+      [
+        '#!/usr/bin/env bash',
+        'if [ "$1" = "-p" ]; then',
+        '  printf "22\\n"',
+        'else',
+        '  printf "v22.22.3\\n"',
+        'fi',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeNodePath, 0o755);
+
+    try {
+      const output = execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            'set -euo pipefail',
+            'export PSFN_SKIP_DOTENV=true',
+            `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
+            `export XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
+            `export GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
+            'export POSTGRES_DATABASE_URL=postgresql://psfn:split-secret@postgres/psfn',
+            'set +e',
+            './scripts/start-gateway-agent.sh >launcher.out 2>&1',
+            'status=$?',
+            'set -e',
+            'printf "status=%s\\n" "$status"',
+          ].join('\n'),
+        ],
+        { cwd: workDir, encoding: 'utf8', timeout: 15000 },
+      );
+
+      expect(output).toContain('status=0');
+      const agentEnv = readFileSync(join(workDir, 'agent.env'), 'utf8');
+      expect(agentEnv).not.toContain('POSTGRES_DATABASE_URL=');
+      expect(agentEnv).not.toContain('split-secret');
+      expect(agentEnv).toMatch(/^POSTGRES_DATABASE_URL_FD=[0-9]+$/m);
+      expect(readFileSync(join(workDir, 'agent.database-url'), 'utf8').trim())
+        .toBe('postgresql://psfn:split-secret@postgres/psfn');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it('does not inject npm run split as an unsafe lifecycle restart command', () => {

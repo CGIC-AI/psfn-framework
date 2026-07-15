@@ -816,6 +816,31 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
+  it('records observation-only reverse-RPC messages without generating a response', async () => {
+    const harness = createHarness();
+    const message = makeMessage({
+      id: 'stimulus-observe-1',
+      routing: {
+        source: 'satellite',
+        responseMode: 'observe',
+      },
+    });
+
+    const response = await harness.onHandleMessage(message);
+
+    expect(response.content).toBe('');
+    expect(response.channelId).toBe(message.channelId);
+    expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.observed', {
+      route: 'handle',
+      channelId: message.channelId,
+      messageId: message.id,
+      authorId: message.authorId,
+    });
+  });
+
   // ── Inter-companion channel lane (sprint 10, W6) ──
 
   function makeCompanionMessage(overrides?: Record<string, unknown>): SubstrateMessage {

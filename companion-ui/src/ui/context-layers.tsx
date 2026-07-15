@@ -6,6 +6,7 @@ import {
   LockKeyhole,
   Mic,
   Paperclip,
+  RefreshCw,
   X,
 } from 'lucide-react';
 import type { ApprovalPanelState, ApprovalRequestView } from '../lib/approvals.js';
@@ -19,6 +20,7 @@ export function ToastLayer({
   onApprovalDecision,
   onArtifactPreview,
   stacked,
+  updateReady,
   voiceNotice,
 }: {
   approvals: ApprovalPanelState;
@@ -27,9 +29,14 @@ export function ToastLayer({
   onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
   onArtifactPreview: (artifactId: string) => void;
   stacked: boolean;
+  updateReady: boolean;
   voiceNotice: string | null;
 }) {
-  const hasToasts = error || voiceNotice || approvals.requests.length > 0 || artifacts.items.length > 0;
+  const hasToasts = error
+    || updateReady
+    || voiceNotice
+    || approvals.requests.length > 0
+    || artifacts.items.length > 0;
   if (!hasToasts) return null;
 
   return (
@@ -40,6 +47,15 @@ export function ToastLayer({
           <div>
             <strong>Voice Mode</strong>
             <p>{voiceNotice}</p>
+          </div>
+        </article>
+      )}
+      {updateReady && (
+        <article className="context-toast update-toast" role="status">
+          <RefreshCw aria-hidden />
+          <div>
+            <strong>Update ready</strong>
+            <p>Reload this page when your draft and live work are safe.</p>
           </div>
         </article>
       )}

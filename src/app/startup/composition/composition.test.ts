@@ -229,6 +229,13 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 
     expect(target.registrations.find((entry) => entry.tool.name === 'subagent')?.category).toBe('core');
     expect(target.registrations.some((entry) => entry.tool.name === 'spawn_subagent')).toBe(false);
+
+    const registeredNames = new Set(target.registrations.map((entry) => entry.tool.name));
+    const advertisedToolNames = target.registrations.flatMap((entry) => (
+      [...entry.tool.description.matchAll(/\buse\s+([a-z][a-z0-9_]*)\s+action=/giu)]
+        .map((match) => match[1])
+    ));
+    expect(advertisedToolNames.filter((name) => !registeredNames.has(name))).toEqual([]);
   });
 
   it('does not expose module mutation helpers for nursery tier', async () => {

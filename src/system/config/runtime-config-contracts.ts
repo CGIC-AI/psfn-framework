@@ -118,6 +118,30 @@ export interface WyomingShardRoutingConfig {
   satelliteAllowlist?: string[];
 }
 
+/**
+ * Optional Redis-backed hot session tail (psfn-framework-hgw3.5). Owned by
+ * settings.json. Enablement and the per-channel bound live here; the Redis
+ * connection itself (URL, credentials, TLS) stays in `.env` (PSFN_REDIS_URL
+ * and friends — see src/shared/cache/redis-cache.ts). Disabled by default:
+ * deployments without Redis keep byte-identical file-only session reads.
+ */
+export interface SessionTailCacheSettings {
+  enabled: boolean;
+  maxEntriesPerChannel: number;
+}
+
+export const SESSION_TAIL_CACHE_MAX_ENTRIES_RANGE = {
+  min: 16,
+  max: 8_192,
+} as const;
+
+export function createDefaultSessionTailCacheSettings(): SessionTailCacheSettings {
+  return {
+    enabled: false,
+    maxEntriesPerChannel: 512,
+  };
+}
+
 export interface SubstrateConfig {
   [key: string]: unknown;
   primaryModel: string;
@@ -230,6 +254,7 @@ export interface SubstrateConfig {
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;
+  sessionTailCache?: SessionTailCacheSettings;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;

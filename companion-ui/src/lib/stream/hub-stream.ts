@@ -12,6 +12,7 @@ import type {
   HubToClientMessage,
   ToolActivityPhase,
 } from '../protocol/events.js';
+import type { TouchInteraction } from '../touch-interactions.js';
 
 export type HubStreamConnection =
   | 'idle'
@@ -133,6 +134,7 @@ export interface HubStreamClientLike {
   interrupt(): void;
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
+  sendTouchInteraction(interaction: TouchInteraction): void;
   snapshot(): SatelliteHubSnapshot;
 }
 
@@ -295,6 +297,10 @@ export class HubStreamStore {
 
   interrupt(): void {
     this.client.interrupt();
+  }
+
+  sendTouchInteraction(interaction: TouchInteraction): void {
+    this.client.sendTouchInteraction(interaction);
   }
 
   /**

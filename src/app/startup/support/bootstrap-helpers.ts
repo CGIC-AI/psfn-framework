@@ -283,6 +283,7 @@ export function hydrateCanonicalStartupConfig(
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
     temporalWakeup: {
       enabled: persistedScheduler.temporalWakeup.enabled,
+      activeChannelLookbackHours: persistedScheduler.temporalWakeup.activeChannelLookbackHours,
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
       wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },

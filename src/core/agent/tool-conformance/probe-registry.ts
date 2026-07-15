@@ -16,7 +16,7 @@
 //     toolset, tool_search, self_status) → read_only.
 //   - boundary/external/side-effecting surfaces (fs, repo, shell, web,
 //     analysis_workbench sandbox, notify, generate_image, selfie_create, subagent,
-//     shard, vault, beads, world, response_control) → schema_only. Their only "read"
+//     vault, beads, world, response_control) → schema_only. Their only "read"
 //     actions depend on a live gateway, external processes, or arguments that
 //     do not belong in a hermetic handler smoke, and several have no read
 //     action at all.
@@ -91,7 +91,6 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   generate_image: { kind: 'schema_only' },
   selfie_create: { kind: 'schema_only' },
   subagent: { kind: 'schema_only' },
-  shard: { kind: 'schema_only' },
   vault: { kind: 'schema_only' },
   beads: { kind: 'schema_only' },
   // world's read actions (perceive/list) require live gateway ops against the

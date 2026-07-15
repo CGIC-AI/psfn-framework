@@ -105,6 +105,23 @@ export function assertCompanionAdminTransportSocketPath(
   return actual;
 }
 
+/**
+ * Enforce companion isolation for the selected admin transport topology.
+ *
+ * Socket-mode supervisors share one filesystem namespace, so each companion
+ * must use its derived socket name. Network-mode deployments isolate agents
+ * into separate processes/pods and are instead authenticated by the mTLS and
+ * SPIFFE checks performed while resolving their client/server endpoints.
+ */
+export function assertCompanionAdminTransportIsolation(
+  companionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (resolveAdminTransportMode(env) === 'socket') {
+    assertCompanionAdminTransportSocketPath(companionId, env);
+  }
+}
+
 export function resolveAdminTransportMode(
   env: NodeJS.ProcessEnv = process.env,
 ): GardenAdminTransportMode {

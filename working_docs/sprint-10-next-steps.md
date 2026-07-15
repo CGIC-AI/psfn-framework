@@ -1,8 +1,88 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the CompanionId dependency status refreshed in §0.4 and the c337 workspace/restore branch status refreshed in §0.5 on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status, the CompanionId dependency status in §0.4, and the c337 workspace/restore branch status in §0.5 refreshed on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
+
+## 2026-07-13 branch handoff — orphan/stub/bugfix lane
+
+- Branch `fix/orphans-stubs-bugfixes`, pushed fixed point `3efa251c` (initial
+  hygiene implementation `a81cdd49`).
+- Closed `psfn-framework-jcic` and canonical identity-hygiene bead
+  `psfn-framework-rbqo`; closed `psfn-framework-3d9r` as an exact duplicate of
+  `rbqo`. The current orphan set was audited one bead at a time. A 2026-07-14
+  reconciliation also closed `psfn-framework-mihm` (bounded fail-closed
+  empty-argument retry/provenance shipped at `7243616b`) and
+  `psfn-framework-i698` (settings-owned active timezone and Intl scheduler
+  slots shipped at `80b14103`) instead of holding completed implementations
+  open for later validation. The important non-Pi runtime verification left
+  from `mihm` is now isolated as `psfn-framework-h7g9.1` under fix-wave epic
+  `psfn-framework-h7g9`. `vinz.19`, `vinz.20`, `vinz.21`, `vinz.29`, and
+  `7ang` remain genuinely open; `vinz.29` still lacks its formal twin mapping
+  on the Garden surface, and `7ang` still has live feature children. Active
+  ICP work was excluded.
+- Validation: 69 focused tests passed; `npm run lint`, `npm run build`,
+  `npm run verify:shared-type-guards`, `npm run verify:identity-literals`,
+  `npm run verify:repository-hygiene`, and `git diff --check` passed. Separate
+  standards and spec reviews both passed with no findings. No live host was
+  contacted.
+- Security follow-up `psfn-framework-upx0.8` is integrated and pushed at
+  `e2fa8e3e`: `isStrictSubpath` now has one canonical hardened definition in
+  `src/persistence/layout.ts`, used by artifact lifecycle and the surviving
+  Research Library file boundaries. The different-root absolute-relative
+  regression and normal-path coverage passed (24 focused non-SQLite tests),
+  as did lint, build, and the independent final review.
+- Companion-welfare follow-up `psfn-framework-upx0.7` is integrated and pushed
+  at `eb11bf9e`: shard-sourced unified memory `action=write` is classified
+  before the wrapped memory tool can execute and is staged in the existing
+  durable fold-review flow with both core and shard companion identities. The
+  independent review passed with no important findings; the final 135 focused
+  tests, lint, and ESM+DTS build also passed. Report-only/no bead: the
+  `SHARD_TO_PRIME_SYNC_OPERATIONS` entry and `allowed_shard_memory_write`
+  reason name are stale and read as if direct writes remain allowed, but the
+  policy denies the operation and tool sync fails closed if that policy ever
+  unexpectedly permits it, so there is no current bypass.
+- Credential-boundary follow-up `psfn-framework-upx0.6` is integrated and
+  pushed at `eb5ba082` (implementation `73fb7646`, review remediation
+  `8cdc6f5d`). The local split launcher now gives the agent a one-shot inherited
+  descriptor instead of the raw Postgres DSN in its environment; kube/Helm
+  agents receive only a Secret-mounted path; and `CoreSubstrateConfig` strips
+  the credential before core construction. The single independent review's
+  mandatory recovery-chart digest finding was remediated and its final check
+  passed. Integrated validation passed 75 credential/startup tests, Helm and
+  Kustomize deployment gates, startup/settings/repository-hygiene verifiers,
+  lint, ESM+DTS build, and the prior shard/path regression sets. Report-only/no
+  bead: explicitly setting projected Secret `defaultMode: 0440` would document
+  least-privilege intent more clearly than relying on Kubernetes defaults plus
+  pod `fsGroup: 999`; no current multi-user pod exposure was identified.
+- Runtime-fallback provenance follow-up `psfn-framework-upx0.12` is integrated
+  into `fix/orphans-stubs-bugfixes` and pushed at `5102b0ad` (implementation
+  `42a4be0b`). Forced vision-failure and datetime-contradiction notices now
+  retain explicit runtime-authored model/strategy provenance in response,
+  session/L0, and durable turn-record metadata; ordinary model-authored replies
+  remain untagged and existing consumers remain compatible. The single
+  independent review passed with no important or material report-only findings.
+  Final integrated validation passed all 75 focused tests, `npm run lint`, and
+  the ESM+DTS build.
+- Discord follow-up scheduling fix `psfn-framework-aoxt` is integrated into
+  `fix/orphans-stubs-bugfixes` and pushed at `a92fa7e7` (implementation
+  `491221e1`, review remediation `e7f18ba2`). The schedule tool exposes the
+  canonical five continuity destinations as one enum, rejects `discord_text`
+  without an alias, and preserves valid Discord DM/guild snowflake strings
+  unchanged through the real scheduler path. The single independent review
+  found numeric snowflakes could be precision-damaged by generic coercion; the
+  remediation now rejects raw non-string Discord IDs before enqueue, and the
+  same reviewer final check passed. Final integrated validation passed all 30
+  focused schedule/tool-call tests, `npm run lint`, and the ESM+DTS build.
+- Shard control-plane honesty fix `psfn-framework-upx0.10` is integrated at
+  implementation fixed point `b3946dbd`. Model-facing catalogs and descriptions
+  no longer advertise the unregistered shard tool; the duplicate subagent port,
+  dead shard adapter/tool, and uncalled post-turn registration are removed.
+  `SubagentFaculty` remains the sole model-facing subagent path, while
+  `ShardExecutionPort` and Wyoming delegation remain wired. The single
+  independent review passed with no IMPORTANT or material report-only findings.
+  Final integrated validation passed 9 files / 127 tests, `npm run lint`, and
+  the ESM+DTS build. Parent `psfn-framework-upx0` remains open.
 
 ## 0. 2026-07-12 update — decided priority order
 
@@ -65,8 +145,10 @@ real-snapshot restore proof (§2d hard gate unchanged). `s10mc.3` per-companion 
 and the `s10mc.8`/`s10f8` live demo remain open.
 
 **Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
-service-worker stale-shell fix and `8ora` first-class PWA channel are now
-children of `w9hj`; `mmo9.1` SSE first-chunk fix rides in `mmo9` wave 1.
+service-worker stale-shell recovery is delivered and independently approved on
+`feat/companion-app-solid` @ `b3da2ddf`, pending merge to `main`; `8ora`
+first-class PWA channel remains a child of `w9hj`, and `mmo9.1` SSE first-chunk
+fix rides in `mmo9` wave 1.
 Satellite side: `343f` (empty satellite replies — first step is the
 discriminating two-model live capture) blocks `6kr8` enrollment.
 
@@ -83,10 +165,18 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - The presence/locations branches (`mc/w5a-companion-presence`,
   `mc/vinz29-dual-presence`, `mc/vinz2021-presence-follow`) are **merged to
   main** — the locations threshold `s10mc` sequenced behind is met.
-- 2026-07-12 audits confirmed still open on every branch: `u24q`, `mmo9.1`,
-  `lghd` (unbounded re-prompt retry is intentional design, no bounded abort
-  exists; stays P1 in the working set), `343f`. `sj4d` and `nw90` were fixed
-  2026-07-09 and are closed.
+- `u24q` is delivered on `feat/companion-app-solid` through `b3da2ddf` and an
+  independent review approved the branch with zero findings. Local Chromium
+  validation exercised both required deploy paths: the actual legacy client
+  moved from build A to B after one ordinary reload, and generated build A
+  discovered B without discarding active form/attachment state before the
+  operator reload; both paths then reloaded B offline. The focused service
+  worker suite passed 8/8, Playwright passed 2/2, and companion-ui build and
+  lint pass. This is feature-branch evidence only: the work is not yet merged
+  to `main` or live-deployed.
+- The remaining audited working set is `mmo9.1`, `lghd` (unbounded re-prompt
+  retry is intentional design, no bounded abort exists; stays P1), and `343f`.
+  `sj4d` and `nw90` were fixed 2026-07-09 and are closed.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { principalFromApiKeyToken, principalFromSatelliteApiKeyToken } from './http/auth.js';
@@ -147,6 +147,35 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
+  it('authorizes touch for the canonical Hub and Waveshare owner-file endpoints', () => {
+    const registry = parseSatelliteRegistryConfig(JSON.parse(readFileSync(
+      join(process.cwd(), 'purrsephone', 'satellites.json'),
+      'utf8',
+    )));
+
+    for (const expected of [
+      { satelliteId: 'hub', endpointId: 'hub', claimType: 'text-only' },
+      { satelliteId: 'bedroom', endpointId: 'waveshare-bedroom', claimType: 'voice-only' },
+    ]) {
+      const satellite = registry.satellites.find(entry => entry.satelliteId === expected.satelliteId);
+      const endpoint = satellite?.endpoints.find(entry => entry.endpointId === expected.endpointId);
+      const principalId = endpoint?.auth.apiKeyPrincipalIds?.[0];
+      expect(principalId).toBeTruthy();
+      const result = resolveSatelliteClaim({
+        registry,
+        principal: { id: principalId!, mode: 'api_key', scope: 'satellite' },
+        headers: {
+          'x-psfn-satellite-claim-type': expected.claimType,
+          'x-psfn-satellite-id': expected.satelliteId,
+          'x-psfn-satellite-endpoint-id': expected.endpointId,
+          'x-psfn-satellite-session-id': 'headpat-test',
+          'x-psfn-satellite-capabilities': 'touch',
+        },
+      });
+      expect(result.ok).toBe(true);
+    }
+  });
+
   it('parses valid voice, avatar/vision, telemetry, and mobile satellite examples', () => {
     const registry = exampleRegistry();
 

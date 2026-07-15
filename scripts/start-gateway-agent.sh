@@ -197,7 +197,7 @@ build_agent_env() {
     NODE_OPTIONS \
     PATH \
     PERSISTENCE_BACKEND \
-    POSTGRES_DATABASE_URL \
+    POSTGRES_DATABASE_URL_FD \
     PRIMARY_TELEGRAM_USER_ID \
     PRIMARY_USER_ID \
     PSFN_DEBUG_EVENTS \
@@ -207,6 +207,11 @@ build_agent_env() {
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
     PSFN_MULTI_COMPANION \
+    PSFN_REDIS_PASSWORD \
+    PSFN_REDIS_TLS_CA_CERT_PATH \
+    PSFN_REDIS_TLS_REJECT_UNAUTHORIZED \
+    PSFN_REDIS_URL \
+    PSFN_REDIS_USERNAME \
     PSFN_RUNTIME_LAYOUT_MODE \
     PSFN_RUNTIME_MODE \
     PSFN_RUNTIME_ROOT \
@@ -455,12 +460,21 @@ start_gateway() {
 }
 
 spawn_agent_process() {
+  if [ -z "${POSTGRES_DATABASE_URL:-}" ]; then
+    echo "[${MODE_LABEL}] POSTGRES_DATABASE_URL is required by the launcher credential boundary" >&2
+    return 1
+  fi
+
+  local postgres_database_url_fd
+  exec {postgres_database_url_fd}<<<"${POSTGRES_DATABASE_URL}"
+  local POSTGRES_DATABASE_URL_FD="${postgres_database_url_fd}"
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts
   else
     launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
+  exec {postgres_database_url_fd}<&-
 }
 
 start_agent() {

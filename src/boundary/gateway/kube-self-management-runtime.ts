@@ -1,32 +1,39 @@
 import type { AuditSummaryEntry } from './audit-port.js';
 import {
   KubeSelfManagementController,
+  combineKubeSelfManagementExecutors,
   isKubeDnsLabel,
   isKubeSourceRevision,
   isPinnedKubeImageReference,
   type KubeSelfManagementAuditEvent,
+  type KubeSelfManagementExecutor,
 } from '../../system/lifecycle/kube-self-management.js';
 import {
   createKubeDiagnosticsExecutor,
   type KubeReadApiPort,
 } from '../../system/lifecycle/kube-diagnostics.js';
 import {
-  combineKubeSelfManagementExecutors,
+  createKubeRolloutRestartExecutor,
+  type KubeRolloutApiPort,
+} from '../../system/lifecycle/kube-rollout-restart.js';
+import {
   createKubeDeployPipelineExecutor,
   type KubeDeployPipelineExecutorOptions,
 } from '../../system/lifecycle/kube-deploy-pipeline.js';
 import { createInClusterKubernetesReadApi } from './kubernetes-read-api.js';
+import { createInClusterKubernetesRolloutApi } from './kubernetes-rollout-api.js';
 
 export interface ResolveKubeSelfManagementControllerOptions {
   env: NodeJS.ProcessEnv;
   audit(entry: AuditSummaryEntry): Promise<unknown>;
   createApi?: (env: NodeJS.ProcessEnv) => KubeReadApiPort;
+  createRolloutApi?: (env: NodeJS.ProcessEnv) => KubeRolloutApiPort;
   /**
    * Operator-job composition seam for the guarded build/deploy pipeline. When
    * supplied, the controller additionally dispatches `rebuild`/`deploy` through
    * the pipeline. This carries the operator-job's own build-host transport;
    * the agent runtime never supplies it, keeping the credential separation
-   * from x5rt.10 intact (the agent path stays diagnose-only).
+   * from x5rt.10 intact (the agent path stays diagnose + restart only).
    */
   deployPipeline?: KubeDeployPipelineExecutorOptions;
 }
@@ -96,25 +103,39 @@ export function resolveKubeSelfManagementController(
   }
   const helmRevision = requirePositiveRevision(options.env.PSFN_HELM_REVISION);
   const api = (options.createApi ?? createInClusterKubernetesReadApi)(options.env);
-  const diagnosticsExecutor = createKubeDiagnosticsExecutor({
-    namespace,
-    release,
-    resourcePrefix,
-    helmRevision,
-    sourceRevision,
-    targetImage,
-    api,
-  });
-  const executor = options.deployPipeline
-    ? combineKubeSelfManagementExecutors([
-      diagnosticsExecutor,
-      createKubeDeployPipelineExecutor(options.deployPipeline),
-    ])
-    : diagnosticsExecutor;
+  const rolloutApi = (options.createRolloutApi ?? createInClusterKubernetesRolloutApi)(options.env);
+  // Compose every applicable executor into ONE fail-closed combinator. The
+  // diagnostics (read-only, x5rt.5) and rollout-restart (mutating, x5rt.5)
+  // executors are always present; the guarded deploy pipeline (x5rt.6) is added
+  // only when the operator-job composition supplies its build-host transport,
+  // keeping the credential separation from x5rt.10 intact (the agent path stays
+  // diagnose + restart only). The action sets never overlap, so the
+  // unique-executor guard is transparent here and only fails closed on a
+  // misconfigured runtime that wires two executors for the same action.
+  const executors: KubeSelfManagementExecutor[] = [
+    createKubeDiagnosticsExecutor({
+      namespace,
+      release,
+      resourcePrefix,
+      helmRevision,
+      sourceRevision,
+      targetImage,
+      api,
+    }),
+    createKubeRolloutRestartExecutor({
+      namespace,
+      release,
+      resourcePrefix,
+      api: rolloutApi,
+    }),
+  ];
+  if (options.deployPipeline) {
+    executors.push(createKubeDeployPipelineExecutor(options.deployPipeline));
+  }
   return new KubeSelfManagementController({
     namespace,
     release,
-    executor,
+    executor: combineKubeSelfManagementExecutors(executors),
     audit: async event => {
       await options.audit(auditSummary(event));
     },

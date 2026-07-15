@@ -28,6 +28,41 @@ export interface KubeSelfManagementExecutor {
   execute(request: KubeSelfManagementRequest): Promise<KubeSelfManagementExecutionResult>;
 }
 
+/**
+ * Combine executors so a single controller can dispatch across the read-only
+ * diagnostics executor, the mutating rollout-restart executor, and the guarded
+ * deploy pipeline. Fail-closed: an action is supported only when EXACTLY ONE
+ * executor claims it, and execution throws unless the supporting executor is
+ * unique. This overlap guard is a security property — it prevents an ambiguous
+ * configuration from silently routing a mutating action to an unintended
+ * executor. Distinct action sets (diagnose/validate vs restart vs
+ * rebuild/deploy) never overlap, so the unique-executor rule is transparent in
+ * normal composition and only bites on misconfiguration.
+ */
+export function combineKubeSelfManagementExecutors(
+  executors: readonly KubeSelfManagementExecutor[],
+): KubeSelfManagementExecutor {
+  if (executors.length === 0) {
+    throw new Error('At least one kube self-management executor is required.');
+  }
+  const supportersFor = (action: KubeSelfManagementAction): KubeSelfManagementExecutor[] =>
+    executors.filter(executor => executor.supports(action));
+  return {
+    supports: (action: KubeSelfManagementAction): boolean => supportersFor(action).length === 1,
+    execute: async (
+      request: KubeSelfManagementRequest,
+    ): Promise<KubeSelfManagementExecutionResult> => {
+      const supporters = supportersFor(request.action);
+      if (supporters.length !== 1) {
+        throw new Error(
+          `Kube self-management action ${request.action} has no unique executor.`,
+        );
+      }
+      return supporters[0].execute(request);
+    },
+  };
+}
+
 export interface KubeSelfManagementApprovalQueue {
   enqueue(
     request: ConfirmationQueueRequest,

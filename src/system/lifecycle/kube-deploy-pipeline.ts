@@ -662,32 +662,3 @@ export function createKubeDeployPipelineExecutor(
     },
   };
 }
-
-/**
- * Combines executors so a single controller can dispatch read-only diagnostics
- * (existing) alongside the deploy pipeline. First executor that `supports` an
- * action wins; ambiguous overlap fails closed.
- */
-export function combineKubeSelfManagementExecutors(
-  executors: readonly KubeSelfManagementExecutor[],
-): KubeSelfManagementExecutor {
-  if (executors.length === 0) {
-    throw new Error('At least one kube self-management executor is required.');
-  }
-  const supportersFor = (action: KubeSelfManagementAction): KubeSelfManagementExecutor[] =>
-    executors.filter(executor => executor.supports(action));
-  return {
-    supports: (action: KubeSelfManagementAction): boolean => supportersFor(action).length === 1,
-    execute: async (
-      request: KubeSelfManagementRequest,
-    ): Promise<KubeSelfManagementExecutionResult> => {
-      const supporters = supportersFor(request.action);
-      if (supporters.length !== 1) {
-        throw new Error(
-          `Kube self-management action ${request.action} has no unique executor.`,
-        );
-      }
-      return supporters[0].execute(request);
-    },
-  };
-}

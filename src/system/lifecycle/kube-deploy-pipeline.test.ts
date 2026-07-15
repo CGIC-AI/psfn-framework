@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  combineKubeSelfManagementExecutors,
   createKubeDeployPipelineExecutor,
   deriveLocalImportRetag,
   DeployPipelineError,
@@ -11,9 +10,10 @@ import {
   type DeployPipelineRunner,
   type DeployPipelineRunnerContext,
 } from './kube-deploy-pipeline.js';
-import type {
-  KubeSelfManagementExecutor,
-  KubeSelfManagementRequest,
+import {
+  combineKubeSelfManagementExecutors,
+  type KubeSelfManagementExecutor,
+  type KubeSelfManagementRequest,
 } from './kube-self-management.js';
 
 const COMMIT = 'a'.repeat(40);

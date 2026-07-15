@@ -14,12 +14,12 @@ export const OPERATIONS_TOOL_CONTRACTS = {
     example: { action: 'snapshot', recentChannelLimit: 3 },
   },
   system: {
-    purpose: 'Read safe runtime settings and request guarded lifecycle operations.',
+    purpose: 'Read safe runtime settings and request guarded lifecycle operations; under Kubernetes it also reports deployment mode and routes restart/rebuild through the approval-gated kube pipeline.',
     actions: [
       action('read', [], ['key', 'keys', 'list']),
       action('restart', ['reason']), action('rebuild', ['reason']),
     ],
-    output: 'It returns settings or lifecycle acknowledgement and never bypasses supervisor safeguards.',
+    output: 'It returns settings (plus kube deployment status when applicable) or a lifecycle acknowledgement; on Kubernetes restart requires operator approval and rebuild refuses in-pod builds, and it never bypasses supervisor safeguards.',
     guidance: 'Do not use it for diagnosis; use self_status.',
     example: { action: 'read', list: true },
   },

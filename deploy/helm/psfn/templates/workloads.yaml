@@ -245,6 +245,19 @@ spec:
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
+            {{- if .Values.kubeSelfManagement.enabled }}
+            {{- /* Kube-aware lifecycle (x5rt.5): the agent detects the guarded
+                 Kubernetes deployment and routes restart/rebuild through the
+                 gateway's approval-gated controller. PSFN_KUBE_CURRENT_IMAGE must
+                 match the gateway's own value so the restart request validates
+                 against the controller's configured scope. The agent holds no kube
+                 RBAC (automountServiceAccountToken: false); the write path stays on
+                 the gateway ServiceAccount. */}}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+            {{- end }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
               value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG

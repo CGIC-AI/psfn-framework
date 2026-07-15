@@ -33,6 +33,7 @@ import {
   runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,
   type IntentionPostTurnHook,
   type IntentionPostTurnHookContext,
+  type IntentionPostTurnHookRunOptions,
   type PostTurnActionInferer,
   type PostTurnInferenceContext,
 } from './post-turn-actions.js';
@@ -214,8 +215,8 @@ export class TurnSupportRuntime {
     return this.backgroundWorkSupervisor?.beginForeground(logicalSessionId) ?? null;
   }
 
-  endForegroundBackgroundWork(lease: ForegroundWorkLease | null): void {
-    if (lease) this.backgroundWorkSupervisor?.endForeground(lease);
+  async endForegroundBackgroundWork(lease: ForegroundWorkLease | null): Promise<void> {
+    if (lease) await this.backgroundWorkSupervisor?.endForeground(lease);
   }
 
   async inferPostTurnActions(
@@ -230,11 +231,13 @@ export class TurnSupportRuntime {
 
   async runIntentionPostTurnHooks(
     context: IntentionPostTurnHookContext,
+    options?: IntentionPostTurnHookRunOptions,
   ): Promise<void> {
     await runIntentionPostTurnHooksForTurn({
       hooks: this.intentionPostTurnHooks,
       context,
       logger: log,
+      ...(options ? { options } : {}),
     });
   }
 

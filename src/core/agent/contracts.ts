@@ -133,6 +133,7 @@ export interface MemoryExtractor {
     turnId?: TurnID,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<void>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }

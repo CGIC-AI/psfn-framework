@@ -35,6 +35,14 @@ export type IntentionPostTurnHook = (
   context: IntentionPostTurnHookContext,
 ) => Promise<void> | void;
 
+export interface IntentionPostTurnHookRunOptions {
+  propagateFailures?: boolean;
+  runEffect?: (
+    effectKey: string,
+    operation: (assertOwned: () => Promise<void>) => Promise<void>,
+  ) => Promise<void>;
+}
+
 interface PostTurnLogger {
   warn: (message: string, payload: Record<string, unknown>) => void;
 }
@@ -84,19 +92,29 @@ export async function runIntentionPostTurnHooks(input: {
   hooks: readonly IntentionPostTurnHook[];
   context: IntentionPostTurnHookContext;
   logger: PostTurnLogger;
+  options?: IntentionPostTurnHookRunOptions;
 }): Promise<void> {
   if (input.hooks.length === 0) {
     return;
   }
-  for (const hook of input.hooks) {
+  for (let index = 0; index < input.hooks.length; index += 1) {
+    const hook = input.hooks[index]!;
     try {
-      await hook(input.context);
+      if (input.options?.runEffect) {
+        await input.options.runEffect(`intention-hook:${String(index)}`, async (assertOwned) => {
+          await assertOwned();
+          await hook(input.context);
+        });
+      } else {
+        await hook(input.context);
+      }
     } catch (error) {
       input.logger.warn('Intention post-turn hook failed', {
         channelId: input.context.message.channelId,
         messageId: input.context.message.id,
         error: toErrorMessage(error),
       });
+      if (input.options?.propagateFailures === true) throw error;
     }
   }
 }

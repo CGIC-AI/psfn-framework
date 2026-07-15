@@ -276,6 +276,7 @@ export interface ExtractionRunOptions {
     acceptedWrites: AcceptedFactWrite[],
   ) => void;
   emitConcernCandidates?: ConcernCandidateExtractionSink;
+  assertEffectAllowed?: () => Promise<void>;
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
@@ -831,9 +832,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     if (options.telemetryEnabled) {
       log.info('Extraction completed', { ...telemetry, maxWrites: options.maxWrites });
     }
+    await options.assertEffectAllowed?.();
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
     if (options.emitConcernCandidates) {
+      await options.assertEffectAllowed?.();
       await options.emitConcernCandidates({
         channelId: options.channelId,
         triggerReason: options.triggerReason,
@@ -858,6 +861,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       ? acceptedFactsByContact
       : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);
     for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
+      await options.assertEffectAllowed?.();
       options.maybePersistEmotionalState(
         contactId,
         acceptedFacts,
@@ -867,6 +871,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, options.canonicalContactId);
     for (const [contactId, writes] of refreshGroups.entries()) {
+      await options.assertEffectAllowed?.();
       options.maybeRefreshContactProfile(
         options.channelId,
         options.triggerReason,

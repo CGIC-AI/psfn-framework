@@ -2935,6 +2935,41 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
+  it('propagates background compaction failures into the durable retry owner', async () => {
+    const config = makeConfig({ compactionThresholdPct: 1 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    vi.mocked(mockLLM.complete).mockRejectedValue(new Error('compaction provider failed'));
+    for (let i = 0; i < 5; i += 1) {
+      mgr.recordUserMessage('ch1', `User ${String(i)} ${'A'.repeat(200)}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${String(i)} ${'B'.repeat(200)}`);
+    }
+
+    await expect(runScheduledCompaction(mgr, mockLLM, { throwOnFailure: true }))
+      .rejects.toThrow('compaction provider failed');
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
+  });
+
+  it('checks the background claim fence immediately before a compaction write', async () => {
+    const config = makeConfig({ compactionThresholdPct: 1 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    const assertEffectAllowed = vi.fn(async () => {
+      throw new Error('background lease lost');
+    });
+    for (let i = 0; i < 5; i += 1) {
+      mgr.recordUserMessage('ch1', `User ${String(i)} ${'A'.repeat(200)}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${String(i)} ${'B'.repeat(200)}`);
+    }
+
+    await expect(runScheduledCompaction(mgr, mockLLM, {
+      throwOnFailure: true,
+      assertEffectAllowed,
+    })).rejects.toThrow('background lease lost');
+    expect(assertEffectAllowed).toHaveBeenCalledTimes(1);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
+  });
+
   it('appendSystemNote stores an internal system entry that stays out of conversational context', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

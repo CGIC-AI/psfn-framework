@@ -57,6 +57,8 @@ export interface CompactionParams {
   }) => void;
   userId?: string;
   icpCorrelation?: IcpConversationCorrelation;
+  throwOnFailure?: boolean;
+  assertEffectAllowed?: () => Promise<void>;
 }
 
 export interface CompactionResult {
@@ -331,6 +333,7 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
         channelId: params.channelId,
         error: toErrorMessage(error),
       });
+      if (params.throwOnFailure === true) throw error;
     }
   }
 
@@ -376,6 +379,7 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
       preservedTagBlock,
     ]);
     const coveredUpTo = toCompact[toCompact.length - 1].id;
+    await params.assertEffectAllowed?.();
     params.store.insertCompaction(params.channelId, compactionSummary, coveredUpTo);
     const keepTokens = countMessageTokens(
       entriesToMessages(toKeep, params.channelVisibility, false),
@@ -383,18 +387,25 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
     const summaryTokens = countTokens(compactionSummary);
     tokensAfter = params.systemTokens + keepTokens + summaryTokens;
 
-    if (sawRetry) {
-      await params.eventBus?.emit('agent.retry.end', {
+    try {
+      if (sawRetry) {
+        await params.eventBus?.emit('agent.retry.end', {
+          channelId: params.channelId,
+          success: true,
+          attempt: lastRetryAttempt,
+        });
+      }
+      await params.eventBus?.emit('session.compacted', {
         channelId: params.channelId,
-        success: true,
-        attempt: lastRetryAttempt,
+        before: totalTokens,
+        after: tokensAfter,
+      });
+    } catch (error) {
+      log.warn('Post-write compaction telemetry failed', {
+        channelId: params.channelId,
+        error: toErrorMessage(error),
       });
     }
-    await params.eventBus?.emit('session.compacted', {
-      channelId: params.channelId,
-      before: totalTokens,
-      after: tokensAfter,
-    });
     if (params.onCompactionComplete) {
       const capturedAt = Date.now();
       try {
@@ -423,12 +434,20 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
       });
     }
     log.error('Auto-compaction failed, using full context', { error: String(err) });
+    if (params.throwOnFailure === true) throw err;
     return { recent: params.recent, compacted: false };
   } finally {
-    await params.eventBus?.emit('agent.compaction.end', {
-      channelId: params.channelId,
-      tokensBefore: totalTokens,
-      tokensAfter,
-    });
+    try {
+      await params.eventBus?.emit('agent.compaction.end', {
+        channelId: params.channelId,
+        tokensBefore: totalTokens,
+        tokensAfter,
+      });
+    } catch (error) {
+      log.warn('Compaction end telemetry failed', {
+        channelId: params.channelId,
+        error: toErrorMessage(error),
+      });
+    }
   }
 }

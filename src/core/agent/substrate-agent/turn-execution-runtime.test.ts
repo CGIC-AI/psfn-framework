@@ -35,6 +35,7 @@ import type {
   AgentResponse,
   IntentionalNoReplyMetadata,
   SubstrateMessage,
+  TurnRecord,
 } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { notePendingPaidDeliverable } from '../../../shared/paid-deliverable-tracking.js';
@@ -605,6 +606,7 @@ function createRuntime(params: {
       })),
       recordTurn: vi.fn(),
       hasRecordedTurn: vi.fn(() => false),
+      findRecordedTurn: vi.fn(() => null),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
@@ -753,22 +755,42 @@ function createRuntime(params: {
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
-    buildTurnRecord: vi.fn(() => ({
+    buildTurnRecord: vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
       schemaVersion: 1,
       extractedMemoryIds: [],
       concernDeltaRefs: [],
       contactDeltaRefs: [],
       provenanceRefs: [],
       toolCalls: [],
-      versionPointers: { model: 'test-model' },
-      userMessage: { role: 'user', content: 'Hello there', timestamp: Date.now() },
-      channelId: 'ch1',
-      channelType: 'api',
-      requestId: 'req-1',
-      startedAt: Date.now(),
-      completedAt: Date.now(),
-      status: 'completed',
-      turnId: 'turn-1',
+      versionPointers: { model: input.response?.metadata.model ?? input.model ?? 'test-model' },
+      userMessage: {
+        role: 'user',
+        content: input.persistedUserMessageContent ?? input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+      },
+      ...(input.response || input.assistantMessageContent !== undefined
+        ? {
+            assistantMessage: {
+              role: 'assistant' as const,
+              content: input.assistantMessageContent ?? input.response?.content ?? '',
+              timestamp: input.completedAt,
+            },
+          }
+        : {}),
+      sessionId: input.message.channelId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      requestId: input.requestId,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      status: input.status ?? 'completed',
+      turnId: input.turnId,
+      ...(input.internalStateSnapshotRef
+        ? { internalStateSnapshotRef: input.internalStateSnapshotRef }
+        : {}),
+      ...(input.message.routing?.icpCorrelation
+        ? { icpCorrelation: input.message.routing.icpCorrelation }
+        : {}),
     })),
     queueBackgroundContinuationCompletion: vi.fn(),
     emitBackgroundContinuationEvent: vi.fn(async () => undefined),
@@ -2254,8 +2276,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       }
       reservationOutcome = input.outcome;
     });
-    let turnRecorded = false;
-    const recordTurn = vi.fn(() => { turnRecorded = true; });
+    let recordedTurn: TurnRecord | null = null;
+    const recordTurn = vi.fn((record: TurnRecord) => { recordedTurn = record; });
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
       fatigueRegulationReservations: {
@@ -2270,7 +2292,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       consumeIntentionalNoReplyDecision: vi.fn(() => noReplyMetadata),
       sessionManager: {
         recordTurn,
-        hasRecordedTurn: vi.fn(() => turnRecorded),
+        hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
+        findRecordedTurn: vi.fn(() => recordedTurn),
       },
     });
     if (noReply) runtime.extractResponseText = vi.fn(() => '');
@@ -2391,9 +2414,27 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         canonicalContactId: 'contact-mi',
         authorIsMachineIntelligence: true,
         privateTurnTrigger: true,
+        broadcast: {
+          approvalToken: 'ephemeral-broadcast-secret',
+          visibilityScope: 'approved_private_context',
+        },
         icpCorrelation: correlation,
       },
     });
+
+    runtime.buildPromptTemplateVariables = vi.fn(() => ({
+      personality: 'private free-form personality prose',
+    }));
+    runtime.sessionManager.captureTurnSessionContext = vi.fn(async () => ({
+      channelId: correlation.channelId,
+      recentEntries: [],
+      sourceEntryCount: 0,
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [],
+      compactionPromptText: 'private pinned compaction prompt',
+      versionPointer: 'mock-session-context',
+    }));
 
     await expect(handleMessageForTurn(runtime, message, {
       finalizeDelivery: async () => undefined,
@@ -2595,7 +2636,25 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       fatigueBudget,
       configOverrides: { companionId: localCompanionId },
       sessionManager: {
-        hasRecordedTurn: vi.fn(() => true),
+        findRecordedTurn: vi.fn(() => ({
+          schemaVersion: 1,
+          turnId: correlation.turnId,
+          requestId: correlation.requestId,
+          sessionId: channelId,
+          channelId,
+          channelType: 'companion',
+          startedAt: 1,
+          completedAt: 2,
+          status: 'completed',
+          userMessage: { role: 'user', content: 'source', timestamp: 1 },
+          assistantMessage: { role: 'assistant', content: '', timestamp: 2 },
+          toolCalls: [],
+          extractedMemoryIds: [],
+          concernDeltaRefs: [],
+          contactDeltaRefs: [],
+          versionPointers: { model: 'durable-suppression' },
+          provenanceRefs: [],
+        })),
         recordTurn,
       },
     });
@@ -3439,9 +3498,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(enqueued).toHaveLength(4);
     expect(JSON.stringify(enqueued)).not.toContain(message.content);
     expect(JSON.stringify(enqueued)).not.toContain('assistant reply');
+    expect(JSON.stringify(enqueued)).not.toContain('ephemeral-broadcast-secret');
+    expect(JSON.stringify(enqueued)).not.toContain('private free-form personality prose');
+    expect(JSON.stringify(enqueued)).not.toContain('private pinned compaction prompt');
+    expect(JSON.stringify(enqueued)).not.toContain('broadcastApprovalToken');
+    expect(JSON.stringify(enqueued)).not.toContain('compactionPromptText');
+    expect(JSON.stringify(enqueued)).not.toContain('templateVariables');
     const emotionPayload = enqueued.find(job => job.kind === 'emotion_appraisal')?.payload;
     expect(emotionPayload).toMatchObject({
       internalStateSnapshotRef: expect.stringMatching(/^internal-state-v1:/),
+      personalityOwnerRef: 'character-card',
+      personalityProjectionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       appraisalState: {
         schemaVersion: 1,
         attention: {
@@ -3533,7 +3600,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]));
   });
 
-  it('durably enqueues compaction without executing it on the foreground response path', async () => {
+  it('records a replayable TurnRecord before atomically enqueueing post-turn work', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -3566,7 +3633,18 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
 
     expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
-    expect(recordTurn).not.toHaveBeenCalled();
+    expect(recordTurn).toHaveBeenCalledTimes(1);
+    expect(recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      backgroundWorkHandoff: {
+        schemaVersion: 1,
+        jobs: expect.arrayContaining([
+          expect.objectContaining({ kind: 'intention_post_turn_hooks' }),
+          expect.objectContaining({ kind: 'emotion_appraisal' }),
+          expect.objectContaining({ kind: 'auto_compaction' }),
+        ]),
+      },
+    }));
     expect(responseSettled).toBe(false);
 
     enqueueHandoff.resolve();
@@ -3581,9 +3659,138 @@ describe('handleMessageForTurn compaction scheduling', () => {
       expect.objectContaining({ kind: 'emotion_appraisal' }),
       expect.objectContaining({ kind: 'auto_compaction' }),
     ]));
-    expect(enqueuePostTurnBackgroundWork.mock.invocationCallOrder[0]).toBeLessThan(
-      recordTurn.mock.invocationCallOrder[0]!,
+    expect(recordTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      enqueuePostTurnBackgroundWork.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('replays the exact TurnRecord handoff after a record-to-queue crash gap', async () => {
+    const eventBus = new EventBus();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const sourceMessageId = 'icp-initiation:33333333-3333-4333-8333-333333333333';
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-mi',
+      channelId,
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: sourceMessageId,
+      requestId: sourceMessageId,
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+    let recordedTurn: TurnRecord | null = null;
+    const recordTurn = vi.fn((record: TurnRecord) => { recordedTurn = record; });
+    const enqueuePostTurnBackgroundWork = vi.fn()
+      .mockRejectedValueOnce(new Error('injected queue crash gap'))
+      .mockResolvedValue(undefined);
+    const sessionManager = {
+      recordTurn,
+      hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
+      findRecordedTurn: vi.fn(() => recordedTurn),
+    } as unknown as SessionManager;
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      enqueuePostTurnBackgroundWork,
+      configOverrides: { companionId: localCompanionId },
+      resolveAuthorContext: vi.fn(() => machineIntelligenceAuthorContext({
+        canonicalContactKey: correlation.peerContactId,
+      })),
+    });
+    runtime.buildTurnRecord = vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
+      schemaVersion: 1,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      sessionId: input.message.channelId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: input.response?.content ?? 'assistant reply',
+        timestamp: input.completedAt,
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: input.response?.metadata.model ?? 'test-model' },
+      provenanceRefs: [],
+      ...(input.internalStateSnapshotRef
+        ? { internalStateSnapshotRef: input.internalStateSnapshotRef }
+        : {}),
+      ...(input.message.routing?.icpCorrelation
+        ? { icpCorrelation: input.message.routing.icpCorrelation }
+        : {}),
+    }));
+    const message = createMessage(sourceMessageId, {
+      channelId,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        canonicalContactId: correlation.peerContactId,
+        authorIsMachineIntelligence: true,
+        privateTurnTrigger: true,
+        icpCorrelation: correlation,
+      },
+    });
+
+    await expect(handleMessageForTurn(runtime, message, {
+      finalizeDelivery: vi.fn(async () => undefined),
+    })).rejects.toThrow('injected queue crash gap');
+    expect(recordTurn).toHaveBeenCalledTimes(1);
+    const recordedJobs = recordedTurn.backgroundWorkHandoff?.jobs;
+    expect(recordedJobs).toHaveLength(3);
+
+    const recoveredResponse: AgentResponse = {
+      content: 'assistant reply',
+      channelId: message.channelId,
+      metadata: {
+        model: 'test-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId: recordedTurn.turnId,
+        requestId: recordedTurn.requestId,
+        icpCorrelation: correlation,
+      },
+    };
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      finalizeDelivery: vi.fn(async () => undefined),
+    })).resolves.toEqual(recoveredResponse);
+
+    expect(enqueuePostTurnBackgroundWork).toHaveBeenCalledTimes(2);
+    expect(enqueuePostTurnBackgroundWork.mock.calls[1]?.[0]).toEqual(recordedJobs);
+    expect(recordTurn).toHaveBeenCalledTimes(1);
   });
 
   it.each([

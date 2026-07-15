@@ -7,6 +7,7 @@ import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-
 import type { BackgroundWorkStorePort } from './store-port.js';
 import {
   BACKGROUND_WORK_KINDS,
+  assertClaimedBackgroundWorkBinding,
   parseBackgroundWorkPayload,
   type BackgroundWorkKind,
   type BackgroundWorkPayload,
@@ -28,6 +29,12 @@ const TERMINAL_PURGE_BATCH_SIZE = 500;
 export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
   payload: BackgroundWorkPayload;
+  effects: BackgroundWorkEffectRunner;
+}
+
+export interface BackgroundWorkEffectRunner {
+  assertOwned(): Promise<void>;
+  run(effectKey: string, operation: (assertOwned: () => Promise<void>) => Promise<void>): Promise<void>;
 }
 
 export type BackgroundWorkExecutor = (
@@ -52,6 +59,21 @@ export interface BackgroundWorkSupervisorOptions {
 export interface ForegroundWorkLease {
   readonly id: string;
   readonly logicalSessionId: string;
+  readonly ready: Promise<void>;
+}
+
+class BackgroundWorkLeaseLostError extends Error {
+  constructor() {
+    super('Background work lease ownership was lost');
+    this.name = 'BackgroundWorkLeaseLostError';
+  }
+}
+
+class BackgroundWorkEffectOutcomeUnknownError extends Error {
+  constructor() {
+    super('A prior background effect outcome is unknown');
+    this.name = 'BackgroundWorkEffectOutcomeUnknownError';
+  }
 }
 
 export class BackgroundWorkDeferredError extends Error {
@@ -127,15 +149,19 @@ export class BackgroundWorkSupervisor {
   private readonly cleanupIntervalMs: number;
   private readonly foregroundCounts = new Map<string, number>();
   private readonly foregroundLeases = new Map<string, ForegroundWorkLease>();
+  private readonly readyForegroundLeaseIds = new Set<string>();
   private readonly running = new Map<string, {
     job: ClaimedBackgroundWorkJob;
     promise: Promise<void>;
+    fence: { lost: boolean };
   }>();
   private sessionTransitionTail: Promise<void> = Promise.resolve();
   private tickPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
   private stopping = false;
   private lastCleanupAtMs = Number.NEGATIVE_INFINITY;
+  private heartbeatPromise: Promise<void> | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
   constructor(options: BackgroundWorkSupervisorOptions) {
     this.store = options.store;
@@ -182,8 +208,11 @@ export class BackgroundWorkSupervisor {
 
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {
     if (this.stopping) throw new Error('Background work supervisor is stopping');
-    for (const input of inputs) {
-      const result = await this.store.enqueue(input);
+    const results = await this.store.enqueueBatch(inputs);
+    for (let index = 0; index < inputs.length; index += 1) {
+      const input = inputs[index]!;
+      const result = results[index]!;
+      if (result.outcome === 'already_accepted') continue;
       this.emitJobTelemetry(result.job, result.outcome === 'deduplicated' ? 'deduplicated' : undefined);
       for (const staleJobId of result.staleDiscardedJobIds) {
         const stale = await this.store.get(staleJobId);
@@ -198,28 +227,64 @@ export class BackgroundWorkSupervisor {
   beginForeground(logicalSessionId: string): ForegroundWorkLease {
     const normalizedSessionId = logicalSessionId.trim();
     if (!normalizedSessionId) throw new Error('Foreground work requires a logical session id');
+    let settleReady!: () => void;
+    let rejectReady!: (error: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      settleReady = resolve;
+      rejectReady = reject;
+    });
     const lease: ForegroundWorkLease = {
       id: randomUUID(),
       logicalSessionId: normalizedSessionId,
+      ready,
     };
     this.foregroundLeases.set(lease.id, lease);
     const current = this.foregroundCounts.get(normalizedSessionId) ?? 0;
     this.foregroundCounts.set(normalizedSessionId, current + 1);
-    if (current === 0) {
-      this.queueForegroundDeferral(normalizedSessionId);
-    }
+    void this.store.beginForeground({
+      logicalSessionId: normalizedSessionId,
+      leaseOwner: this.leaseOwner,
+      leaseId: lease.id,
+      nowMs: this.now(),
+      leaseDurationMs: this.leaseDurationMs,
+    }).then(() => {
+      this.readyForegroundLeaseIds.add(lease.id);
+      this.ensureHeartbeat();
+      settleReady();
+    }).catch((error) => {
+      this.foregroundLeases.delete(lease.id);
+      this.readyForegroundLeaseIds.delete(lease.id);
+      const count = this.foregroundCounts.get(normalizedSessionId) ?? 0;
+      if (count <= 1) this.foregroundCounts.delete(normalizedSessionId);
+      else this.foregroundCounts.set(normalizedSessionId, count - 1);
+      rejectReady(error);
+    });
     return lease;
   }
 
-  endForeground(lease: ForegroundWorkLease): void {
+  async endForeground(lease: ForegroundWorkLease): Promise<void> {
+    await lease.ready;
     if (!this.foregroundLeases.delete(lease.id)) return;
+    this.readyForegroundLeaseIds.delete(lease.id);
     const current = this.foregroundCounts.get(lease.logicalSessionId) ?? 0;
     if (current > 1) {
       this.foregroundCounts.set(lease.logicalSessionId, current - 1);
+      await this.store.endForeground({
+        logicalSessionId: lease.logicalSessionId,
+        leaseOwner: this.leaseOwner,
+        leaseId: lease.id,
+        nowMs: this.now(),
+      });
       return;
     }
     this.foregroundCounts.delete(lease.logicalSessionId);
-    this.queueSessionTransition(async () => {
+    const idle = await this.store.endForeground({
+      logicalSessionId: lease.logicalSessionId,
+      leaseOwner: this.leaseOwner,
+      leaseId: lease.id,
+      nowMs: this.now(),
+    });
+    if (idle) this.queueSessionTransition(async () => {
       const resumed = await this.store.resumeDeferredForSession({
         logicalSessionId: lease.logicalSessionId,
         nowMs: this.now(),
@@ -256,26 +321,17 @@ export class BackgroundWorkSupervisor {
           new Promise<void>(resolve => setTimeout(resolve, this.shutdownTimeoutMs)),
         ]);
       }
-      await this.store.releaseClaims({
-        leaseOwner: this.leaseOwner,
-        nowMs: this.now(),
-        reasonCode: 'shutdown',
-      });
+      // Never release a claim while its handler can still write. A live
+      // handler keeps its heartbeat; a crashed process loses the connection
+      // and is reclaimed only after the durable lease expires.
+      if (this.running.size === 0) this.stopHeartbeat();
     })();
     return this.stopPromise;
   }
 
   private async runTick(): Promise<void> {
     const nowMs = this.now();
-    const runningJobIds = [...this.running.keys()];
-    if (runningJobIds.length > 0) {
-      await this.store.renewClaims({
-        leaseOwner: this.leaseOwner,
-        jobIds: runningJobIds,
-        nowMs,
-        leaseDurationMs: this.leaseDurationMs,
-      });
-    }
+    await this.heartbeat();
     await this.store.recoverExpired({ nowMs });
     if (nowMs - this.lastCleanupAtMs >= this.cleanupIntervalMs) {
       await this.store.purgeTerminal({
@@ -297,7 +353,9 @@ export class BackgroundWorkSupervisor {
         excludedLogicalSessionIds: [...excludedSessions],
       });
       if (!job) break;
-      const promise = Promise.resolve().then(() => this.executeClaim(job))
+      const fence = { lost: false };
+      this.ensureHeartbeat();
+      const promise = Promise.resolve().then(() => this.executeClaim(job, fence))
         .catch((error) => {
           // A lease/CAS fence may have moved while the handler was running.
           // Leave the durable row for expiry recovery; never leak an unhandled
@@ -310,12 +368,13 @@ export class BackgroundWorkSupervisor {
         })
         .finally(() => {
           this.running.delete(job.jobId);
+          if (this.running.size === 0 && this.foregroundLeases.size === 0) this.stopHeartbeat();
         });
-      this.running.set(job.jobId, { job, promise });
+      this.running.set(job.jobId, { job, promise, fence });
     }
   }
 
-  private async executeClaim(job: ClaimedBackgroundWorkJob): Promise<void> {
+  private async executeClaim(job: ClaimedBackgroundWorkJob, fence: { lost: boolean }): Promise<void> {
     if (this.foregroundCounts.has(job.logicalSessionId)) {
       await this.transitionClaimToDeferred(job, 'foreground_active', this.retryBaseDelayMs);
       return;
@@ -334,6 +393,7 @@ export class BackgroundWorkSupervisor {
     let payload: BackgroundWorkPayload;
     try {
       payload = parseBackgroundWorkPayload(job.kind, job.payload);
+      assertClaimedBackgroundWorkBinding(job, payload);
     } catch {
       const malformed = await this.store.markClaimMalformed({
         jobId: job.jobId,
@@ -348,7 +408,7 @@ export class BackgroundWorkSupervisor {
 
     this.emitJobTelemetry(job);
     try {
-      await this.executor({ job, payload });
+      await this.executor({ job, payload, effects: this.createEffectRunner(job, fence) });
     } catch (error) {
       if (error instanceof BackgroundWorkDeferredError) {
         await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
@@ -376,6 +436,18 @@ export class BackgroundWorkSupervisor {
         this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
         return;
       }
+      if (error instanceof BackgroundWorkEffectOutcomeUnknownError) {
+        const failed = await this.store.markClaimFailed({
+          jobId: job.jobId,
+          leaseOwner: this.leaseOwner,
+          expectedRevision: job.revision,
+          reasonCode: 'effect_outcome_unknown',
+          nowMs: this.now(),
+        });
+        this.emitJobTelemetry(failed, undefined, this.executionDurationMs(job));
+        return;
+      }
+      if (error instanceof BackgroundWorkLeaseLostError) return;
       const failed = await this.store.failOrRetry({
         jobId: job.jobId,
         leaseOwner: this.leaseOwner,
@@ -423,6 +495,124 @@ export class BackgroundWorkSupervisor {
       this.retryMaxDelayMs,
       this.retryBaseDelayMs * (2 ** Math.max(0, attempt - 1)),
     );
+  }
+
+  private createEffectRunner(
+    job: ClaimedBackgroundWorkJob,
+    fence: { lost: boolean },
+  ): BackgroundWorkEffectRunner {
+    const assertOwned = async (): Promise<void> => {
+      if (fence.lost) throw new BackgroundWorkLeaseLostError();
+      const owned = await this.store.assertClaimOwned({
+        jobId: job.jobId,
+        leaseOwner: this.leaseOwner,
+        expectedRevision: job.revision,
+        nowMs: this.now(),
+      });
+      if (!owned) {
+        fence.lost = true;
+        throw new BackgroundWorkLeaseLostError();
+      }
+    };
+    return {
+      assertOwned,
+      run: async (effectKey, operation) => {
+        await assertOwned();
+        const disposition = await this.store.beginEffect({
+          jobId: job.jobId,
+          effectKey,
+          leaseOwner: this.leaseOwner,
+          expectedRevision: job.revision,
+          nowMs: this.now(),
+        });
+        if (disposition === 'applied') return;
+        if (disposition === 'outcome_unknown') {
+          throw new BackgroundWorkEffectOutcomeUnknownError();
+        }
+        let operationCompleted = false;
+        try {
+          await operation(assertOwned);
+          operationCompleted = true;
+          await assertOwned();
+          await this.store.completeEffect({
+            jobId: job.jobId,
+            effectKey,
+            leaseOwner: this.leaseOwner,
+            expectedRevision: job.revision,
+            nowMs: this.now(),
+          });
+        } catch (error) {
+          if (!operationCompleted && !(error instanceof BackgroundWorkLeaseLostError)) {
+            await this.store.abandonEffect({
+              jobId: job.jobId,
+              effectKey,
+              leaseOwner: this.leaseOwner,
+              expectedRevision: job.revision,
+              nowMs: this.now(),
+            });
+          }
+          throw error;
+        }
+      },
+    };
+  }
+
+  private async heartbeat(): Promise<void> {
+    if (this.heartbeatPromise) return this.heartbeatPromise;
+    this.heartbeatPromise = (async () => {
+      const nowMs = this.now();
+      const running = [...this.running.values()];
+      if (running.length > 0) {
+        let renewed: string[];
+        try {
+          renewed = await this.store.renewClaims({
+            leaseOwner: this.leaseOwner,
+            jobIds: running.map(entry => entry.job.jobId),
+            nowMs,
+            leaseDurationMs: this.leaseDurationMs,
+          });
+        } catch (error) {
+          for (const entry of running) entry.fence.lost = true;
+          throw error;
+        }
+        const renewedIds = new Set(renewed);
+        for (const entry of running) {
+          if (!renewedIds.has(entry.job.jobId)) entry.fence.lost = true;
+        }
+      }
+      const foregroundLeaseIds = [...this.readyForegroundLeaseIds];
+      if (foregroundLeaseIds.length > 0) {
+        const renewed = new Set(await this.store.renewForeground({
+          leaseOwner: this.leaseOwner,
+          leaseIds: foregroundLeaseIds,
+          nowMs,
+          leaseDurationMs: this.leaseDurationMs,
+        }));
+        if (renewed.size !== foregroundLeaseIds.length) {
+          throw new Error('Foreground background-work fence renewal lost ownership');
+        }
+      }
+    })().finally(() => { this.heartbeatPromise = null; });
+    return this.heartbeatPromise;
+  }
+
+  private ensureHeartbeat(): void {
+    if (this.heartbeatTimer) return;
+    const intervalMs = Math.max(10, Math.floor(this.leaseDurationMs / 3));
+    this.heartbeatTimer = setInterval(() => {
+      void this.heartbeat().catch((error) => {
+        log.error('Background lease heartbeat failed', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+      });
+    }, intervalMs);
+    this.heartbeatTimer.unref();
+  }
+
+  private stopHeartbeat(): void {
+    if (!this.heartbeatTimer) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   private executionDurationMs(job: ClaimedBackgroundWorkJob): number {

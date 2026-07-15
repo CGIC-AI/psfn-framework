@@ -1097,6 +1097,8 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     lease_expires_at_ms BIGINT,
     completed_at_ms BIGINT,
     revision INTEGER NOT NULL DEFAULT 1,
+    deferred_from_state TEXT,
+    deferred_from_available_at_ms BIGINT,
     CHECK (kind IN (
       'memory_extraction',
       'intention_post_turn_hooks',
@@ -1112,13 +1114,18 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
       'enqueued', 'deduplicated', 'foreground_active', 'started', 'completed',
       'handler_failed', 'retry_scheduled', 'retry_exhausted', 'lease_expired',
       'shutdown', 'source_not_ready', 'source_missing', 'source_mismatch',
-      'superseded', 'malformed_payload', 'unknown_kind'
+      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown'
     )),
     CHECK (attempt_count >= 0),
     CHECK (max_attempts > 0),
     CHECK (attempt_count <= max_attempts),
     CHECK (created_at_ms >= 0 AND available_at_ms >= 0 AND updated_at_ms >= 0),
     CHECK (revision > 0),
+    CHECK (deferred_from_state IS NULL OR deferred_from_state IN ('queued', 'retry_wait')),
+    CHECK (deferred_from_available_at_ms IS NULL OR deferred_from_available_at_ms >= 0),
+    CHECK ((state = 'deferred') OR (
+      deferred_from_state IS NULL AND deferred_from_available_at_ms IS NULL
+    )),
     CHECK (
       (state = 'running' AND lease_owner IS NOT NULL AND lease_expires_at_ms IS NOT NULL)
       OR (state <> 'running' AND lease_owner IS NULL AND lease_expires_at_ms IS NULL)
@@ -1129,6 +1136,65 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     )
   );
   `,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS deferred_from_state TEXT;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS deferred_from_available_at_ms BIGINT;`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_reason_code_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_reason_code_check CHECK (reason_code IN (
+      'enqueued', 'deduplicated', 'foreground_active', 'started', 'completed',
+      'handler_failed', 'retry_scheduled', 'retry_exhausted', 'lease_expired',
+      'shutdown', 'source_not_ready', 'source_missing', 'source_mismatch',
+      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown'
+    ));`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_deferred_from_state_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_deferred_from_state_check
+      CHECK (deferred_from_state IS NULL OR deferred_from_state IN ('queued', 'retry_wait'));`,
+  `
+  CREATE TABLE IF NOT EXISTS agent_background_work_foreground_leases (
+    lease_id TEXT PRIMARY KEY,
+    logical_session_id TEXT NOT NULL,
+    lease_owner TEXT NOT NULL,
+    acquired_at_ms BIGINT NOT NULL CHECK (acquired_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms >= acquired_at_ms)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_agent_background_work_foreground_session
+    ON agent_background_work_foreground_leases (logical_session_id, expires_at_ms);`,
+  `
+  CREATE TABLE IF NOT EXISTS agent_background_work_handoffs (
+    logical_session_id TEXT NOT NULL,
+    source_turn_id TEXT NOT NULL,
+    manifest_fingerprint TEXT NOT NULL,
+    accepted_at_ms BIGINT NOT NULL CHECK (accepted_at_ms >= 0),
+    PRIMARY KEY (logical_session_id, source_turn_id)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS agent_background_work_effect_receipts (
+    job_id TEXT NOT NULL REFERENCES agent_background_work_jobs(job_id) ON DELETE CASCADE,
+    effect_key TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('started', 'applied')),
+    lease_owner TEXT NOT NULL,
+    lease_revision INTEGER NOT NULL CHECK (lease_revision > 0),
+    started_at_ms BIGINT NOT NULL CHECK (started_at_ms >= 0),
+    applied_at_ms BIGINT,
+    PRIMARY KEY (job_id, effect_key),
+    CHECK ((state = 'applied') = (applied_at_ms IS NOT NULL))
+  );
+  `,
+  `ALTER TABLE agent_background_work_effect_receipts
+    ADD COLUMN IF NOT EXISTS lease_revision INTEGER;`,
+  `UPDATE agent_background_work_effect_receipts receipt
+    SET lease_revision = job.revision
+    FROM agent_background_work_jobs job
+    WHERE receipt.job_id = job.job_id AND receipt.lease_revision IS NULL;`,
+  `ALTER TABLE agent_background_work_effect_receipts
+    ALTER COLUMN lease_revision SET NOT NULL;`,
   `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_background_work_one_running_per_session
     ON agent_background_work_jobs (logical_session_id)
@@ -1149,6 +1215,11 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     WHERE state IN ('succeeded', 'failed', 'stale_discarded');
   `,
 ];
+
+export const POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK = [
+  1_297_431_347,
+  1_159_535_447,
+] as const;
 
 export const POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [
   1_297_431_347,

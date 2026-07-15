@@ -213,6 +213,8 @@ export interface AutoCompactionBetweenTurnsParams {
   compactionPromptText?: string;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   icpCorrelation?: IcpConversationCorrelation;
+  throwOnFailure?: boolean;
+  assertEffectAllowed?: () => Promise<void>;
 }
 
 function resolveCompactionTokenCount(input: {
@@ -902,6 +904,10 @@ export class SessionManager {
             });
           },
           userId: params.userId,
+          ...(params.throwOnFailure === true ? { throwOnFailure: true } : {}),
+          ...(params.assertEffectAllowed
+            ? { assertEffectAllowed: params.assertEffectAllowed }
+            : {}),
         });
       })
       .finally(() => {
@@ -1010,6 +1016,46 @@ export class SessionManager {
     turnId: string,
   ): TurnRecord | null {
     return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  isSourceRecordedTurnEligible(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): boolean {
+    return this.store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  /**
+   * One startup recovery view of record-first background handoffs. Exact source
+   * eligibility is checked here so tombstoned or physically duplicated turns
+   * never reach the queue replay path.
+   */
+  listRecoverableBackgroundWorkTurnRecords(): TurnRecord[] {
+    const sourceChannelIds = new Set<string>();
+    for (const channel of this.store.listChannels()) {
+      sourceChannelIds.add(channel.channelId);
+      sourceChannelIds.add(channel.sessionId);
+    }
+    const recovered = new Map<string, TurnRecord>();
+    for (const sourceChannelId of sourceChannelIds) {
+      for (const record of this.store.getRecentSourceTurnRecords(
+        sourceChannelId,
+        Number.MAX_SAFE_INTEGER,
+      )) {
+        if (record.status !== 'completed' || !record.backgroundWorkHandoff) continue;
+        const logicalSessionId = record.sessionId ?? record.channelId;
+        if (!this.store.isSourceTurnRecordEligible(
+          record.channelId,
+          logicalSessionId,
+          record.turnId,
+        )) continue;
+        recovered.set(`${record.channelId}\u0000${record.turnId}`, record);
+      }
+    }
+    return [...recovered.values()].sort((left, right) => (
+      left.completedAt - right.completedAt || left.turnId.localeCompare(right.turnId)
+    ));
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {

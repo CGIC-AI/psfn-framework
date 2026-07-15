@@ -11,7 +11,20 @@ import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { CHANNEL_TYPES, type ChannelType, type ParentTurnContinuationStop, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import {
+  CHANNEL_TYPES,
+  type ChannelType,
+  type ParentTurnContinuationStop,
+  type TurnID,
+  type TurnRecord,
+  type TurnRecordAuditPrivacy,
+  type TurnRecordBackgroundWorkHandoff,
+  type TurnRecordBackgroundWorkKind,
+  type TurnRecordLocation,
+  type TurnRecordMessage,
+  type TurnRecordToolCall,
+  type TurnRecordVersionPointers,
+} from '../../shared/contracts/runtime.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
@@ -87,6 +100,12 @@ export function getQuarantinedTurnRecordLineCount(): number {
 }
 const VALID_CHANNEL_TYPES = new Set<ChannelType>(CHANNEL_TYPES);
 const VALID_TURN_STATUSES = new Set<TurnRecord['status']>(['completed', 'failed']);
+const VALID_BACKGROUND_WORK_KINDS = new Set<TurnRecordBackgroundWorkKind>([
+  'memory_extraction',
+  'intention_post_turn_hooks',
+  'emotion_appraisal',
+  'auto_compaction',
+]);
 const VALID_OBSERVABILITY_CALL_TYPES = new Set<TurnObservabilityCallType>([
   'chat',
   'tool',
@@ -333,6 +352,7 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   const sourceMessageId = value.sourceMessageId;
   const authorId = value.authorId;
   const authorName = value.authorName;
+  const replyToMessageId = value.replyToMessageId;
   const runtimeFallbackProvenance = value.runtimeFallbackProvenance;
 
   return {
@@ -350,6 +370,9 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
       : {}),
     ...(typeof authorName === 'string' && authorName.trim().length > 0
       ? { authorName: authorName.trim() }
+      : {}),
+    ...(typeof replyToMessageId === 'string' && replyToMessageId.trim().length > 0
+      ? { replyToMessageId: replyToMessageId.trim() }
       : {}),
     ...(runtimeFallbackProvenance !== undefined
       ? {
@@ -572,6 +595,97 @@ function parseTurnIdOrBackfill(raw: Record<string, unknown>, channelId: string):
   return backfillLegacyTurnId(seed);
 }
 
+function parseBackgroundWorkSafeInteger(
+  value: unknown,
+  fieldName: string,
+  minimum: number,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be a safe integer >= ${String(minimum)}`);
+  }
+  return value as number;
+}
+
+function parseBackgroundWorkHandoff(
+  value: unknown,
+  expected: {
+    turnId: TurnID;
+    requestId: string;
+    sessionId: string;
+    channelId: string;
+    completedAt: number;
+  },
+): TurnRecordBackgroundWorkHandoff | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    throw new Error('TurnRecord field "backgroundWorkHandoff" must use schemaVersion 1');
+  }
+  if (Object.keys(value).some(key => key !== 'schemaVersion' && key !== 'jobs')) {
+    throw new Error('TurnRecord field "backgroundWorkHandoff" contains unsupported fields');
+  }
+  if (!Array.isArray(value.jobs) || value.jobs.length < 1 || value.jobs.length > 4) {
+    throw new Error('TurnRecord field "backgroundWorkHandoff.jobs" must contain 1-4 jobs');
+  }
+  const seenKinds = new Set<TurnRecordBackgroundWorkKind>();
+  const jobs = value.jobs.map((rawJob, index) => {
+    const fieldName = `backgroundWorkHandoff.jobs[${String(index)}]`;
+    if (!isRecord(rawJob)) throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
+    const allowedKeys = new Set([
+      'jobId',
+      'idempotencyKey',
+      'logicalSessionId',
+      'kind',
+      'payload',
+      'payloadFingerprint',
+      'sourceTurnId',
+      'sourceRequestId',
+      'sourceChannelId',
+      'createdAtMs',
+      'maxAttempts',
+    ]);
+    if (Object.keys(rawJob).some(key => !allowedKeys.has(key))) {
+      throw new Error(`TurnRecord field \"${fieldName}\" contains unsupported fields`);
+    }
+    const kind = parseRequiredString(rawJob.kind, `${fieldName}.kind`) as TurnRecordBackgroundWorkKind;
+    if (!VALID_BACKGROUND_WORK_KINDS.has(kind) || seenKinds.has(kind)) {
+      throw new Error(`TurnRecord field \"${fieldName}.kind\" is invalid or duplicated`);
+    }
+    seenKinds.add(kind);
+    if (!isRecord(rawJob.payload)) {
+      throw new Error(`TurnRecord field \"${fieldName}.payload\" must be an object`);
+    }
+    const logicalSessionId = parseRequiredString(rawJob.logicalSessionId, `${fieldName}.logicalSessionId`);
+    const sourceTurnId = parseRequiredString(rawJob.sourceTurnId, `${fieldName}.sourceTurnId`);
+    const sourceRequestId = parseRequiredString(rawJob.sourceRequestId, `${fieldName}.sourceRequestId`);
+    const sourceChannelId = parseRequiredString(rawJob.sourceChannelId, `${fieldName}.sourceChannelId`);
+    const createdAtMs = parseBackgroundWorkSafeInteger(rawJob.createdAtMs, `${fieldName}.createdAtMs`, 0);
+    if (logicalSessionId !== expected.sessionId
+      || sourceTurnId !== expected.turnId
+      || sourceRequestId !== expected.requestId
+      || sourceChannelId !== expected.channelId
+      || createdAtMs !== expected.completedAt) {
+      throw new Error(`TurnRecord field \"${fieldName}\" does not bind to its owning turn`);
+    }
+    return {
+      jobId: parseRequiredString(rawJob.jobId, `${fieldName}.jobId`),
+      idempotencyKey: parseRequiredString(rawJob.idempotencyKey, `${fieldName}.idempotencyKey`),
+      logicalSessionId,
+      kind,
+      payload: cloneUnknownValue(rawJob.payload),
+      payloadFingerprint: parseRequiredString(
+        rawJob.payloadFingerprint,
+        `${fieldName}.payloadFingerprint`,
+      ),
+      sourceTurnId,
+      sourceRequestId,
+      sourceChannelId,
+      createdAtMs,
+      maxAttempts: parseBackgroundWorkSafeInteger(rawJob.maxAttempts, `${fieldName}.maxAttempts`, 1),
+    };
+  });
+  return { schemaVersion: 1, jobs };
+}
+
 function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecord {
   if (!isRecord(raw)) {
     throw new Error('TurnRecord entry must be a JSON object');
@@ -608,6 +722,13 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     : parseRequiredString(raw.sessionId, 'sessionId');
   const startedAt = parseRequiredTimestamp(raw.startedAt, 'startedAt');
   const completedAt = parseRequiredTimestamp(raw.completedAt, 'completedAt');
+  const backgroundWorkHandoff = parseBackgroundWorkHandoff(raw.backgroundWorkHandoff, {
+    turnId,
+    requestId,
+    sessionId: sessionId ?? channelId,
+    channelId,
+    completedAt,
+  });
 
   const userMessage = parseTurnRecordMessage(raw.userMessage, 'userMessage');
   const assistantMessage = raw.assistantMessage === undefined
@@ -640,9 +761,16 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     throw new Error('TurnRecord ICP correlation does not match its channel/turn/request binding');
   }
   const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
+  const channelPrivacy = raw.channelPrivacy;
+  if (channelPrivacy !== undefined && !isChannelPrivacy(channelPrivacy)) {
+    throw new Error('TurnRecord field "channelPrivacy" is invalid');
+  }
   const continuationStop = parseOptionalContinuationStop(raw.continuationStop);
   if (continuationStop && status !== 'failed') {
     throw new Error('TurnRecord continuationStop requires status "failed"');
+  }
+  if (backgroundWorkHandoff && status !== 'completed') {
+    throw new Error('TurnRecord backgroundWorkHandoff requires status "completed"');
   }
   if (
     auditPrivacy?.contentSensitivityActor
@@ -667,6 +795,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     ...(continuationStop ? { continuationStop } : {}),
     ...(location ? { location } : {}),
     ...(auditPrivacy ? { auditPrivacy } : {}),
+    ...(channelPrivacy ? { channelPrivacy } : {}),
     userMessage,
     ...(assistantMessage ? { assistantMessage } : {}),
     toolCalls,
@@ -686,6 +815,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     ...(icpCorrelation ? { icpCorrelation } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
+    ...(backgroundWorkHandoff ? { backgroundWorkHandoff } : {}),
   };
 }
 

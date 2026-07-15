@@ -119,6 +119,35 @@ describe('turn-records', () => {
     expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
   });
 
+  it('round-trips a bounded background handoff and rejects cross-turn bindings', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-background-handoff-'));
+    const base = createTurnRecord();
+    const job = {
+      jobId: 'bgw_test',
+      idempotencyKey: 'background-work:v1:test',
+      logicalSessionId: base.channelId,
+      kind: 'memory_extraction' as const,
+      payload: { schemaVersion: 1, kind: 'memory_extraction' },
+      payloadFingerprint: 'a'.repeat(64),
+      sourceTurnId: base.turnId,
+      sourceRequestId: base.requestId,
+      sourceChannelId: base.channelId,
+      createdAtMs: base.completedAt,
+      maxAttempts: 5,
+    };
+    const record = createTurnRecord({
+      backgroundWorkHandoff: { schemaVersion: 1, jobs: [job] },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+    expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
+    expect(() => turnRecordStore.appendTurnRecord(createTurnRecord({
+      turnId: backfillLegacyTurnId('different-turn'),
+      backgroundWorkHandoff: { schemaVersion: 1, jobs: [job] },
+    }))).toThrow('does not bind to its owning turn');
+  });
+
   it('round-trips the typed content-free parent-turn continuation stop', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-continuation-stop-'));
     const record = createTurnRecord({

@@ -113,6 +113,7 @@ import type { ConversationScopeSpeaker } from '../../session/conversation-scope.
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
+import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
 
@@ -193,7 +194,7 @@ export interface TurnExecutionRuntime {
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   beginForegroundBackgroundWork: (logicalSessionId: string) => ForegroundWorkLease | null;
-  endForegroundBackgroundWork: (lease: ForegroundWorkLease | null) => void;
+  endForegroundBackgroundWork: (lease: ForegroundWorkLease | null) => Promise<void>;
   enqueuePostTurnBackgroundWork: (
     inputs: readonly EnqueueBackgroundWorkInput[],
   ) => Promise<void>;
@@ -727,6 +728,7 @@ export async function handleMessageForTurn(
     throw new Error('Turn execution requires a logical session id');
   }
   const foregroundLease = runtime.beginForegroundBackgroundWork(logicalSessionId);
+  if (foregroundLease) await foregroundLease.ready;
   try {
   const startTime = Date.now();
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
@@ -1527,9 +1529,15 @@ export async function handleMessageForTurn(
       durableFatigueReservation = null;
     }
 
-    const postTurnAlreadyScheduled = recoveredResponse !== undefined
-      && runtime.sessionManager.hasRecordedTurn(message.channelId, turnId);
-    if (postTurnAlreadyScheduled) {
+    const recoveredSourceTurnId = recoveredResponse?.metadata.turnId
+      ? parseTurnId(recoveredResponse.metadata.turnId, 'Recovered response metadata.turnId')
+      : turnId;
+    const recoveredTurnRecord = recoveredResponse === undefined
+      ? null
+      : runtime.sessionManager.findRecordedTurn(message.channelId, recoveredSourceTurnId);
+    if (recoveredTurnRecord?.status === 'completed') {
+      const replayJobs = parseTurnRecordBackgroundWorkHandoff(recoveredTurnRecord);
+      if (replayJobs.length > 0) await runtime.enqueuePostTurnBackgroundWork(replayJobs);
       return agentResponse;
     }
 
@@ -1669,8 +1677,12 @@ export async function handleMessageForTurn(
         });
       }
     }
-    runtime.sessionManager.recordTurn(
-      runtime.buildTurnRecord({
+    // A completed TurnRecord with a background handoff is deliberately written
+    // before the Postgres batch. If that batch fails, delivery recovery must
+    // replay the manifest; appending a second failed record for the same turn
+    // would destroy the source uniqueness gate and make recovery impossible.
+    if (!runtime.sessionManager.hasRecordedTurn(message.channelId, turnId)) {
+      runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
         message,
         turnId,
         requestId,
@@ -1699,8 +1711,8 @@ export async function handleMessageForTurn(
           ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
         },
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
-      }),
-    );
+      }));
+    }
     if (continuationStop) {
       runtime.emitTelemetry('agent.turn.continuation_stopped', {
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.continuation_stopped'),
@@ -1721,6 +1733,6 @@ export async function handleMessageForTurn(
     observability.unsubscribe();
   }
   } finally {
-    runtime.endForegroundBackgroundWork(foregroundLease);
+    await runtime.endForegroundBackgroundWork(foregroundLease);
   }
 }

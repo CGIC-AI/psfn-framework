@@ -5,14 +5,44 @@ import type {
   StoredBackgroundWorkJob,
 } from './types.js';
 
-export interface BackgroundWorkEnqueueResult {
+export interface BackgroundWorkJobEnqueueResult {
   outcome: 'enqueued' | 'deduplicated';
   job: StoredBackgroundWorkJob;
   staleDiscardedJobIds: string[];
 }
 
+export type BackgroundWorkEnqueueResult =
+  | BackgroundWorkJobEnqueueResult
+  | {
+    /** Permanent turn-level ledger survived terminal job retention cleanup. */
+    outcome: 'already_accepted';
+    jobId: string;
+    staleDiscardedJobIds: [];
+  };
+
 export interface BackgroundWorkStorePort {
-  enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkEnqueueResult>;
+  enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
+  /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
+  enqueueBatch(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<BackgroundWorkEnqueueResult[]>;
+  beginForeground(input: {
+    logicalSessionId: string;
+    leaseOwner: string;
+    leaseId: string;
+    nowMs: number;
+    leaseDurationMs: number;
+  }): Promise<void>;
+  renewForeground(input: {
+    leaseOwner: string;
+    leaseIds: readonly string[];
+    nowMs: number;
+    leaseDurationMs: number;
+  }): Promise<string[]>;
+  endForeground(input: {
+    logicalSessionId: string;
+    leaseOwner: string;
+    leaseId: string;
+    nowMs: number;
+  }): Promise<boolean>;
   deferRunnableForSession(input: {
     logicalSessionId: string;
     nowMs: number;
@@ -33,7 +63,34 @@ export interface BackgroundWorkStorePort {
     jobIds: readonly string[];
     nowMs: number;
     leaseDurationMs: number;
-  }): Promise<number>;
+  }): Promise<string[]>;
+  assertClaimOwned(input: {
+    jobId: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<boolean>;
+  beginEffect(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<'execute' | 'applied' | 'outcome_unknown'>;
+  completeEffect(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<void>;
+  abandonEffect(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<void>;
   complete(input: {
     jobId: string;
     leaseOwner: string;
@@ -66,7 +123,7 @@ export interface BackgroundWorkStorePort {
     jobId: string;
     leaseOwner: string;
     expectedRevision: number;
-    reasonCode: 'source_missing' | 'source_mismatch';
+    reasonCode: 'source_missing' | 'source_mismatch' | 'effect_outcome_unknown';
     nowMs: number;
   }): Promise<StoredBackgroundWorkJob>;
   markClaimStale(input: {

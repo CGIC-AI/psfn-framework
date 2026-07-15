@@ -254,6 +254,7 @@ export class MemoryExtractor {
     turnId?: TurnID,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -291,6 +292,7 @@ export class MemoryExtractor {
       undefined,
       placeId,
       icpCorrelation,
+      assertEffectAllowed,
     );
   }
 
@@ -431,6 +433,7 @@ export class MemoryExtractor {
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
@@ -449,6 +452,7 @@ export class MemoryExtractor {
       groupOptions,
       placeId,
       icpCorrelation,
+      assertEffectAllowed,
     );
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(logicalSessionId, promise);
@@ -481,7 +485,9 @@ export class MemoryExtractor {
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<void> {
+    await assertEffectAllowed?.();
     if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
       log.debug('Skipping stale extraction after session route changed', {
         channelId,
@@ -565,6 +571,7 @@ export class MemoryExtractor {
           turnId,
           routing,
           placeId,
+          assertEffectAllowed,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -591,6 +598,7 @@ export class MemoryExtractor {
       ...(this.emitConcernCandidates
         ? { emitConcernCandidates: this.emitConcernCandidates }
         : {}),
+      ...(assertEffectAllowed ? { assertEffectAllowed } : {}),
     });
   }
 
@@ -677,7 +685,9 @@ export class MemoryExtractor {
     turnId?: TurnID,
     routing?: ExtractionFactRouting,
     placeId?: string,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<WriteResult> {
+    await assertEffectAllowed?.();
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -748,6 +758,7 @@ export class MemoryExtractor {
       });
     }
 
+    await assertEffectAllowed?.();
     return this.writer.write({
       text: fact.text,
       type: fact.type,

@@ -5,8 +5,11 @@ import type { AdaptiveContextBudgetProfile } from '../../../shared/context-budge
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
-import type { ChannelMeta } from '../../../system/trust/policy.js';
+import type {
+  TurnRecord,
+  TurnRecordBackgroundWorkHandoff,
+} from '../../../shared/contracts/runtime.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
   parseEmotionAppraisalStateSnapshot,
   type EmotionAppraisalStateSnapshot,
@@ -50,6 +53,7 @@ export const BACKGROUND_WORK_REASON_CODES = [
   'superseded',
   'malformed_payload',
   'unknown_kind',
+  'effect_outcome_unknown',
 ] as const;
 
 export type BackgroundWorkReasonCode = typeof BACKGROUND_WORK_REASON_CODES[number];
@@ -89,8 +93,17 @@ export interface EmotionAppraisalBackgroundPayload {
   emotionSessionId: string;
   internalStateSnapshotRef: string;
   appraisalState: EmotionAppraisalStateSnapshot;
-  templateVariables: Record<string, string>;
+  /** Stable owner reference; personality prose is re-read from canonical identity config. */
+  personalityOwnerRef: 'character-card';
+  /** Audit binding only. The queue never persists the underlying personality prose. */
+  personalityProjectionHash: string;
   icpCorrelation?: IcpConversationCorrelation;
+}
+
+export interface BackgroundChannelProjection {
+  isDirectMessage?: boolean;
+  privacyLevel?: ChannelPrivacy;
+  disclosureConsentGranted?: boolean;
 }
 
 export interface AutoCompactionBackgroundPayload {
@@ -102,8 +115,7 @@ export interface AutoCompactionBackgroundPayload {
   adaptiveProfile: AdaptiveContextBudgetProfile;
   turnBudgetCharacteristics: Omit<ContextBudgetTurnCharacteristics, 'messageText'>;
   userId?: string;
-  channelMeta?: ChannelMeta;
-  compactionPromptText?: string;
+  channelMeta?: BackgroundChannelProjection;
   icpCorrelation?: IcpConversationCorrelation;
 }
 
@@ -149,6 +161,8 @@ export interface StoredBackgroundWorkJob {
   leaseExpiresAtMs?: number;
   completedAtMs?: number;
   revision: number;
+  deferredFromState?: 'queued' | 'retry_wait';
+  deferredFromAvailableAtMs?: number;
 }
 
 export interface ClaimedBackgroundWorkJob extends StoredBackgroundWorkJob {
@@ -156,9 +170,6 @@ export interface ClaimedBackgroundWorkJob extends StoredBackgroundWorkJob {
   leaseOwner: string;
   leaseExpiresAtMs: number;
 }
-
-const MAX_EMOTION_TEMPLATE_VARIABLES = 64;
-const MAX_EMOTION_TEMPLATE_VALUE_CHARS = 16_384;
 
 export function isEmotionAppraisalTemplateVariableKey(key: string): boolean {
   return key === 'personality'
@@ -169,17 +180,14 @@ export function isEmotionAppraisalTemplateVariableKey(key: string): boolean {
     || key.startsWith('character.hexaco_');
 }
 
-/** Select only the static personality inputs consumed by emotion appraisal. */
-export function selectEmotionAppraisalTemplateVariables(
+/** Hash the canonical personality projection without persisting its prose. */
+export function fingerprintEmotionAppraisalPersonalityProjection(
   templateVariables: Record<string, string>,
-): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(templateVariables)
-      .filter(([key]) => isEmotionAppraisalTemplateVariableKey(key))
-      .sort(([left], [right]) => left.localeCompare(right))
-      .slice(0, MAX_EMOTION_TEMPLATE_VARIABLES)
-      .map(([key, value]) => [key, value.slice(0, MAX_EMOTION_TEMPLATE_VALUE_CHARS)]),
-  );
+): string {
+  const selected = Object.fromEntries(Object.entries(templateVariables)
+    .filter(([key]) => isEmotionAppraisalTemplateVariableKey(key))
+    .sort(([left], [right]) => left.localeCompare(right)));
+  return createHash('sha256').update(stableBackgroundWorkStringify(selected)).digest('hex');
 }
 
 function requireString(value: unknown, field: string): string {
@@ -187,6 +195,14 @@ function requireString(value: unknown, field: string): string {
     throw new Error(`${field} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function requireSha256(value: unknown, field: string): string {
+  const normalized = requireString(value, field);
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new Error(`${field} must be a lowercase SHA-256 digest`);
+  }
+  return normalized;
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
@@ -240,7 +256,7 @@ function parseSourceRef(value: unknown): BackgroundWorkSourceRef {
     channelId: requireString(value.channelId, 'source.channelId'),
     turnId: requireString(value.turnId, 'source.turnId'),
     requestId: requireString(value.requestId, 'source.requestId'),
-    turnRecordFingerprint: requireString(
+    turnRecordFingerprint: requireSha256(
       value.turnRecordFingerprint,
       'source.turnRecordFingerprint',
     ),
@@ -254,53 +270,30 @@ function parseSourceRef(value: unknown): BackgroundWorkSourceRef {
   };
 }
 
-function parseTemplateVariables(value: unknown): Record<string, string> {
-  if (!isRecord(value)) throw new Error('emotion templateVariables must be an object');
-  const entries = Object.entries(value);
-  if (entries.length > MAX_EMOTION_TEMPLATE_VARIABLES) {
-    throw new Error(`emotion templateVariables supports at most ${String(MAX_EMOTION_TEMPLATE_VARIABLES)} entries`);
-  }
-  const parsed: Record<string, string> = {};
-  for (const [key, entry] of entries) {
-    if (!isEmotionAppraisalTemplateVariableKey(key)) {
-      throw new Error(`emotion templateVariables contains unsupported key ${key}`);
-    }
-    if (typeof entry !== 'string') {
-      throw new Error(`emotion templateVariables.${key} must be a string`);
-    }
-    if (entry.length > MAX_EMOTION_TEMPLATE_VALUE_CHARS) {
-      throw new Error(
-        `emotion templateVariables.${key} must be ${String(MAX_EMOTION_TEMPLATE_VALUE_CHARS)} characters or fewer`,
-      );
-    }
-    parsed[key] = entry;
-  }
-  return parsed;
-}
-
 function parseOptionalIcpCorrelation(value: unknown): IcpConversationCorrelation | undefined {
   return value === undefined ? undefined : parseIcpConversationCorrelation(value);
 }
 
-function parseChannelMeta(value: unknown): ChannelMeta | undefined {
+function parseChannelMeta(value: unknown): BackgroundChannelProjection | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error('compaction channelMeta must be an object');
   assertOnlyKeys(value, [
     'isDirectMessage',
-    'broadcastApprovalToken',
     'privacyLevel',
     'disclosureConsentGranted',
   ], 'compaction channelMeta');
-  const result: ChannelMeta = {};
+  const result: BackgroundChannelProjection = {};
   if (value.isDirectMessage !== undefined) {
     if (typeof value.isDirectMessage !== 'boolean') {
       throw new Error('compaction channelMeta.isDirectMessage must be boolean');
     }
     result.isDirectMessage = value.isDirectMessage;
   }
-  for (const field of ['broadcastApprovalToken', 'privacyLevel'] as const) {
-    const normalized = optionalString(value[field], `compaction channelMeta.${field}`);
-    if (normalized !== undefined) Object.assign(result, { [field]: normalized });
+  if (value.privacyLevel !== undefined) {
+    if (!['direct', 'private_group', 'public'].includes(String(value.privacyLevel))) {
+      throw new Error('compaction channelMeta.privacyLevel is invalid');
+    }
+    result.privacyLevel = value.privacyLevel as ChannelPrivacy;
   }
   if (value.disclosureConsentGranted !== undefined) {
     if (typeof value.disclosureConsentGranted !== 'boolean') {
@@ -421,8 +414,7 @@ export function parseBackgroundWorkPayload(
     case 'emotion_appraisal':
       assertOnlyKeys(value, [
         'schemaVersion', 'kind', 'source', 'emotionSessionId', 'internalStateSnapshotRef',
-        'appraisalState',
-        'templateVariables', 'icpCorrelation',
+        'appraisalState', 'personalityOwnerRef', 'personalityProjectionHash', 'icpCorrelation',
       ], 'emotion appraisal payload');
       return {
         schemaVersion: 1,
@@ -434,14 +426,18 @@ export function parseBackgroundWorkPayload(
           'emotion internalStateSnapshotRef',
         ),
         appraisalState: parseEmotionAppraisalStateSnapshot(value.appraisalState),
-        templateVariables: parseTemplateVariables(value.templateVariables),
+        personalityOwnerRef: requirePersonalityOwnerRef(value.personalityOwnerRef),
+        personalityProjectionHash: requireSha256(
+          value.personalityProjectionHash,
+          'emotion personalityProjectionHash',
+        ),
         ...(icpCorrelation ? { icpCorrelation } : {}),
       };
     case 'auto_compaction':
       assertOnlyKeys(value, [
         'schemaVersion', 'kind', 'source', 'systemPromptTokenCount', 'memoriesTokenCount',
         'adaptiveProfile', 'turnBudgetCharacteristics', 'userId', 'channelMeta',
-        'compactionPromptText', 'icpCorrelation',
+        'icpCorrelation',
       ], 'auto-compaction payload');
       return {
         schemaVersion: 1,
@@ -461,13 +457,38 @@ export function parseBackgroundWorkPayload(
           ? { userId: optionalString(value.userId, 'compaction userId') }
           : {}),
         ...(parseChannelMeta(value.channelMeta) ? { channelMeta: parseChannelMeta(value.channelMeta) } : {}),
-        ...(optionalString(value.compactionPromptText, 'compaction compactionPromptText')
-          ? { compactionPromptText: optionalString(value.compactionPromptText, 'compaction compactionPromptText') }
-          : {}),
         ...(icpCorrelation ? { icpCorrelation } : {}),
       };
     default:
       throw new Error(`unknown background work kind: ${kind || '(empty)'}`);
+  }
+}
+
+function requirePersonalityOwnerRef(value: unknown): 'character-card' {
+  if (value !== 'character-card') throw new Error('emotion personalityOwnerRef is invalid');
+  return value;
+}
+
+/** Recompute every persisted binding at claim time, not just at enqueue time. */
+export function assertClaimedBackgroundWorkBinding(
+  job: ClaimedBackgroundWorkJob,
+  payload: BackgroundWorkPayload,
+): void {
+  const expectedIdentity = createBackgroundWorkIdentity({
+    logicalSessionId: job.logicalSessionId,
+    turnId: job.sourceTurnId,
+    kind: payload.kind,
+  });
+  if (job.jobId !== expectedIdentity.jobId
+    || job.idempotencyKey !== expectedIdentity.idempotencyKey
+    || job.payloadSchemaVersion !== payload.schemaVersion
+    || fingerprintBackgroundWorkPayload(payload) !== job.payloadFingerprint
+    || payload.source.logicalSessionId !== job.logicalSessionId
+    || payload.source.turnId !== job.sourceTurnId
+    || payload.source.requestId !== job.sourceRequestId
+    || payload.source.channelId !== job.sourceChannelId
+    || payload.source.createdAtMs !== job.createdAtMs) {
+    throw new Error('claimed background work payload binding mismatch');
   }
 }
 
@@ -484,6 +505,15 @@ export function stableBackgroundWorkStringify(value: unknown): string {
 
 export function fingerprintBackgroundWorkPayload(payload: BackgroundWorkPayload): string {
   return createHash('sha256').update(stableBackgroundWorkStringify(payload)).digest('hex');
+}
+
+export function fingerprintBackgroundWorkHandoff(
+  jobs: readonly EnqueueBackgroundWorkInput[],
+): string {
+  const canonicalJobs = [...jobs].sort((left, right) => left.kind.localeCompare(right.kind));
+  return createHash('sha256')
+    .update(stableBackgroundWorkStringify({ schemaVersion: 1, jobs: canonicalJobs }))
+    .digest('hex');
 }
 
 /** Hash-only binding to the canonical turn record; the queue never copies its content. */
@@ -513,6 +543,80 @@ export function fingerprintBackgroundWorkTurnRecord(record: TurnRecord): string 
     icpCorrelation: record.icpCorrelation,
   };
   return createHash('sha256').update(stableBackgroundWorkStringify(sourceBinding)).digest('hex');
+}
+
+/** Build the replay marker written atomically with the canonical TurnRecord. */
+export function createTurnRecordBackgroundWorkHandoff(
+  jobs: readonly EnqueueBackgroundWorkInput[],
+): TurnRecordBackgroundWorkHandoff {
+  if (jobs.length < 1 || jobs.length > BACKGROUND_WORK_KINDS.length) {
+    throw new Error('Background work handoff must contain 1-4 jobs');
+  }
+  return {
+    schemaVersion: 1,
+    jobs: jobs.map(job => ({ ...job })),
+  };
+}
+
+/**
+ * Re-validate the whole handoff at its replay boundary. A TurnRecord parser
+ * protects the outer shape; this owner additionally proves queue identities,
+ * payload fingerprints, and source-row bindings before any enqueue occurs.
+ */
+export function parseTurnRecordBackgroundWorkHandoff(
+  record: TurnRecord,
+): EnqueueBackgroundWorkInput[] {
+  const handoff = record.backgroundWorkHandoff;
+  if (!handoff) return [];
+  if (record.status !== 'completed'
+    || handoff.jobs.length < 1 || handoff.jobs.length > BACKGROUND_WORK_KINDS.length) {
+    throw new Error('TurnRecord background work handoff is malformed');
+  }
+  const logicalSessionId = record.sessionId ?? record.channelId;
+  const expectedTurnFingerprint = fingerprintBackgroundWorkTurnRecord(record);
+  const seenKinds = new Set<BackgroundWorkKind>();
+  return handoff.jobs.map((job) => {
+    if (!BACKGROUND_WORK_KINDS.includes(job.kind) || seenKinds.has(job.kind)) {
+      throw new Error(`TurnRecord background work kind is invalid or duplicated: ${job.kind}`);
+    }
+    seenKinds.add(job.kind);
+    const payload = parseBackgroundWorkPayload(job.kind, job.payload);
+    const identity = createBackgroundWorkIdentity({
+      logicalSessionId,
+      turnId: record.turnId,
+      kind: job.kind,
+    });
+    const bindingMismatches: string[] = [];
+    if (job.jobId !== identity.jobId) bindingMismatches.push('job_id');
+    if (job.idempotencyKey !== identity.idempotencyKey) bindingMismatches.push('idempotency_key');
+    if (job.logicalSessionId !== logicalSessionId) bindingMismatches.push('logical_session_id');
+    if (job.sourceTurnId !== record.turnId) bindingMismatches.push('source_turn_id');
+    if (job.sourceRequestId !== record.requestId) bindingMismatches.push('source_request_id');
+    if (job.sourceChannelId !== record.channelId) bindingMismatches.push('source_channel_id');
+    if (job.createdAtMs !== record.completedAt) bindingMismatches.push('created_at_ms');
+    if (!Number.isSafeInteger(job.maxAttempts) || job.maxAttempts < 1) bindingMismatches.push('max_attempts');
+    if (payload.source.logicalSessionId !== logicalSessionId) bindingMismatches.push('payload.logical_session_id');
+    if (payload.source.turnId !== record.turnId) bindingMismatches.push('payload.turn_id');
+    if (payload.source.requestId !== record.requestId) bindingMismatches.push('payload.request_id');
+    if (payload.source.channelId !== record.channelId) bindingMismatches.push('payload.channel_id');
+    if (payload.source.createdAtMs !== record.completedAt) bindingMismatches.push('payload.created_at_ms');
+    if (payload.source.turnRecordFingerprint !== expectedTurnFingerprint) {
+      bindingMismatches.push('payload.turn_record_fingerprint');
+    }
+    if (job.payloadFingerprint !== fingerprintBackgroundWorkPayload(payload)) {
+      bindingMismatches.push('payload_fingerprint');
+    }
+    if (bindingMismatches.length > 0) {
+      throw new Error(
+        `TurnRecord background work binding mismatch for ${job.kind}: ${bindingMismatches.join(', ')}`,
+      );
+    }
+    return {
+      ...job,
+      kind: job.kind,
+      payload,
+    };
+  });
 }
 
 export function createBackgroundWorkIdentity(input: {

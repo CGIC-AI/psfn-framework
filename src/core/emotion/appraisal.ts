@@ -75,6 +75,8 @@ export interface EmotionAppraisalInput {
   turnId?: string;
   now?: number;
   icpCorrelation?: IcpConversationCorrelation;
+  /** Durable background lease fence, checked immediately before state writes. */
+  assertEffectAllowed?: () => Promise<void>;
 }
 
 export interface EmotionAppraisalResult {
@@ -419,7 +421,6 @@ export class EmotionAppraisal {
       ? maxAbsoluteVadDelta(state.lastAppraisedVad, currentVad)
       : maxAbsoluteVadComponent(currentVad);
     const turnsSinceLast = state.turnsSinceLast + 1;
-    state.turnsSinceLast = turnsSinceLast;
 
     const telemetryTrusted = !appraisalState
       || appraisalState.emotional.telemetry.status === 'trusted';
@@ -434,6 +435,8 @@ export class EmotionAppraisal {
       vadDelta: telemetryTrusted ? delta : -1,
     });
     if (!gate.open) {
+      await input.assertEffectAllowed?.();
+      state.turnsSinceLast = turnsSinceLast;
       this.emitGateEvent(sessionId, 'skipped', gate.reason, gateInputs, now);
       return {
         appraised: false,
@@ -443,7 +446,6 @@ export class EmotionAppraisal {
     }
 
     const trigger: EmotionAppraisalTrigger = shouldTriggerVadShift ? 'vad_shift' : 'periodic';
-    this.emitGateEvent(sessionId, 'ran', trigger, gateInputs, now);
     const context: LLMContextLike = {
       systemPrompt: this.systemPrompt,
       messages: [
@@ -492,9 +494,11 @@ export class EmotionAppraisal {
       vad: { ...currentVad },
       ...(input.turnId ? { turnId: input.turnId } : {}),
     };
+    await input.assertEffectAllowed?.();
     state.chain = [...state.chain, entry].slice(-this.maxChainEntries);
     state.lastAppraisedVad = { ...currentVad };
     state.turnsSinceLast = 0;
+    this.emitGateEvent(sessionId, 'ran', trigger, gateInputs, now);
     log.debug('Emotion appraisal updated', {
       sessionId,
       trigger,

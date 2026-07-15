@@ -4,6 +4,7 @@ import {
   createBackgroundWorkIdentity,
   fingerprintBackgroundWorkPayload,
   type AutoCompactionBackgroundPayload,
+  type BackgroundWorkPayload,
   type EnqueueBackgroundWorkInput,
   type MemoryExtractionBackgroundPayload,
 } from '../../core/agent/background-work/types.js';
@@ -29,7 +30,7 @@ function makeInput(
       channelId: logicalSessionId,
       turnId,
       requestId: `request-${turnId}`,
-      turnRecordFingerprint: `record-${turnId}`,
+      turnRecordFingerprint: 'a'.repeat(64),
       createdAtMs: 100,
     },
   };
@@ -62,7 +63,7 @@ function makeCompactionInput(
       channelId: logicalSessionId,
       turnId,
       requestId: `request-${turnId}`,
-      turnRecordFingerprint: `record-${turnId}`,
+      turnRecordFingerprint: 'a'.repeat(64),
       createdAtMs,
     },
     systemPromptTokenCount: 10,
@@ -88,6 +89,61 @@ function makeCompactionInput(
     createdAtMs,
     maxAttempts: 3,
   };
+}
+
+function makeFourJobBatch(
+  logicalSessionId: string,
+  turnId: string,
+): EnqueueBackgroundWorkInput[] {
+  const memory = makeInput(logicalSessionId, turnId);
+  const source = (memory.payload as MemoryExtractionBackgroundPayload).source;
+  const payloads: BackgroundWorkPayload[] = [
+    memory.payload,
+    {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source,
+    },
+    {
+      schemaVersion: 1,
+      kind: 'emotion_appraisal',
+      source,
+      emotionSessionId: logicalSessionId,
+      internalStateSnapshotRef: 'internal-state-v1:test',
+      appraisalState: {
+        schemaVersion: 1,
+        emotional: {
+          vad: { valence: 0, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discreteEmotions: {},
+          confidence: 1,
+          telemetry: { status: 'trusted', source: 'runtime_state', reasons: [], weight: 1 },
+        },
+        cognitive: { certaintyLevel: 1, topicEngagement: 1, processingQuality: 'fluent' },
+        attention: {
+          activeConcernCount: 0,
+          salientEntityCount: 0,
+          conversationTrajectory: 'casual',
+        },
+        relational: { contactId: null, trustLevel: 'regular', moodDrift: 0 },
+      },
+      personalityOwnerRef: 'character-card',
+      personalityProjectionHash: 'b'.repeat(64),
+    },
+    makeCompactionInput(logicalSessionId, turnId, source.createdAtMs).payload,
+  ];
+  return payloads.map(payload => ({
+    ...createBackgroundWorkIdentity({ logicalSessionId, turnId, kind: payload.kind }),
+    logicalSessionId,
+    kind: payload.kind,
+    payload,
+    payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+    sourceTurnId: turnId,
+    sourceRequestId: source.requestId,
+    sourceChannelId: source.channelId,
+    createdAtMs: source.createdAtMs,
+    maxAttempts: 3,
+  }));
 }
 
 describe('PostgresBackgroundWorkStore', () => {
@@ -150,7 +206,7 @@ describe('PostgresBackgroundWorkStore', () => {
         [input.jobId],
       );
       const serialized = JSON.stringify(row.rows[0]?.payload);
-      expect(serialized).toContain('record-turn-a');
+      expect(serialized).toContain('a'.repeat(64));
       expect(serialized).not.toContain('partner transcript');
       expect(serialized).not.toContain('messageText');
 
@@ -191,6 +247,296 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(claims.filter(Boolean)).toHaveLength(1);
     } finally {
       await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('atomically rolls back the TurnRecord handoff after failures at job 1 and job 4', async () => {
+    const database = await harness.createDatabase();
+    for (const failAt of [1, 4]) {
+      const schema = `failure_${String(failAt)}`;
+      const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema });
+      const inspectionPool = createPostgresPool(database.databaseUrl, { schema, max: 1 });
+      try {
+        await inspectionPool.query(`
+          CREATE FUNCTION fail_background_insert_${String(failAt)}() RETURNS trigger AS $$
+          BEGIN
+            IF (SELECT COUNT(*) FROM agent_background_work_jobs) >= ${String(failAt - 1)} THEN
+              RAISE EXCEPTION 'injected failure after job ${String(failAt)}';
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+        await inspectionPool.query(`
+          CREATE TRIGGER fail_background_insert_${String(failAt)}
+          BEFORE INSERT ON agent_background_work_jobs
+          FOR EACH ROW EXECUTE FUNCTION fail_background_insert_${String(failAt)}()
+        `);
+        await expect(store.enqueueBatch(makeFourJobBatch('session-a', `turn-${String(failAt)}`)))
+          .rejects.toThrow(`injected failure after job ${String(failAt)}`);
+        const counts = await inspectionPool.query<{ jobs: string; handoffs: string }>(`
+          SELECT
+            (SELECT COUNT(*)::text FROM agent_background_work_jobs) AS jobs,
+            (SELECT COUNT(*)::text FROM agent_background_work_handoffs) AS handoffs
+        `);
+        expect(counts.rows[0]).toEqual({ jobs: '0', handoffs: '0' });
+      } finally {
+        await Promise.all([inspectionPool.end(), store.close()]);
+      }
+    }
+  });
+
+  it('serializes concurrent schema migration startup under one advisory lock', async () => {
+    const database = await harness.createDatabase();
+    const stores = await Promise.all(Array.from({ length: 8 }, async () => (
+      PostgresBackgroundWorkStore.connect(database.databaseUrl, { schema: 'migration_race' })
+    )));
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'migration_race',
+      max: 1,
+    });
+    try {
+      const tables = await inspectionPool.query<{ count: string }>(`
+        SELECT COUNT(*)::text AS count
+        FROM information_schema.tables
+        WHERE table_schema = 'migration_race'
+          AND table_name IN (
+            'agent_background_work_jobs',
+            'agent_background_work_foreground_leases',
+            'agent_background_work_handoffs',
+            'agent_background_work_effect_receipts'
+          )
+      `);
+      expect(tables.rows[0]?.count).toBe('4');
+    } finally {
+      await inspectionPool.end();
+      await Promise.all(stores.map(store => store.close()));
+    }
+  });
+
+  it('holds a replica-visible foreground fence until the owning turn ends', async () => {
+    const database = await harness.createDatabase();
+    const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const second = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      await first.enqueue(input);
+      await first.beginForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 100,
+        leaseDurationMs: 1_000,
+      });
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 200,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      expect(await first.endForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 300,
+      })).toBe(true);
+      await first.resumeDeferredForSession({
+        logicalSessionId: input.logicalSessionId,
+        nowMs: 300,
+      });
+      expect((await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 300,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      }))?.jobId).toBe(input.jobId);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('preserves the original retry deadline across foreground defer and resume', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      await store.enqueue(input);
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 100,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      });
+      await store.failOrRetry({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 110,
+        retryAtMs: 500,
+      });
+      await store.beginForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 200,
+        leaseDurationMs: 1_000,
+      });
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'deferred',
+        availableAtMs: 1_200,
+        deferredFromState: 'retry_wait',
+        deferredFromAvailableAtMs: 500,
+      });
+      await store.endForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 300,
+      });
+      await store.resumeDeferredForSession({ logicalSessionId: input.logicalSessionId, nowMs: 300 });
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'retry_wait',
+        availableAtMs: 500,
+      });
+      expect(await store.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 499,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      expect((await store.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 500,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      }))?.jobId).toBe(input.jobId);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('fences an effect while worker A is held after the sink and makes a crash outcome terminal', async () => {
+    const database = await harness.createDatabase();
+    const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const second = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      let sinkWrites = 0;
+      const input = makeInput('session-a', 'turn-a');
+      await first.enqueue(input);
+      const claim = await first.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 100,
+        leaseDurationMs: 50,
+        excludedLogicalSessionIds: [],
+      });
+      expect(await first.beginEffect({
+        jobId: claim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 100,
+      })).toBe('execute');
+      sinkWrites += 1;
+      expect(await first.renewClaims({
+        leaseOwner: claim!.leaseOwner,
+        jobIds: [claim!.jobId],
+        nowMs: 140,
+        leaseDurationMs: 50,
+      })).toEqual([claim!.jobId]);
+      expect(await second.recoverExpired({ nowMs: 151 })).toBe(0);
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 151,
+        leaseDurationMs: 50,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      await first.completeEffect({
+        jobId: claim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 160,
+      });
+      await first.complete({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 160,
+      });
+      expect(sinkWrites).toBe(1);
+
+      const crashedInput = makeInput('session-b', 'turn-b');
+      await first.enqueue(crashedInput);
+      const crashedClaim = await first.claimNext({
+        leaseOwner: 'crashed-worker',
+        nowMs: 200,
+        leaseDurationMs: 10,
+        excludedLogicalSessionIds: [],
+      });
+      expect(await first.beginEffect({
+        jobId: crashedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crashedClaim!.leaseOwner,
+        expectedRevision: crashedClaim!.revision,
+        nowMs: 200,
+      })).toBe('execute');
+      sinkWrites += 1;
+      expect(await second.recoverExpired({ nowMs: 211 })).toBe(1);
+      expect(await second.get(crashedInput.jobId)).toMatchObject({
+        state: 'failed',
+        reasonCode: 'effect_outcome_unknown',
+      });
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 211,
+        leaseDurationMs: 10,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      expect(sinkWrites).toBe(2);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('keeps a permanent accepted-handoff ledger after terminal job cleanup', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      expect((await store.enqueueBatch([input]))[0]?.outcome).toBe('enqueued');
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 100,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      });
+      await store.complete({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 200,
+      });
+      expect(await store.purgeTerminal({ completedBeforeMs: 200, limit: 10 })).toBe(1);
+      expect((await store.enqueueBatch([input]))[0]).toEqual({
+        outcome: 'already_accepted',
+        jobId: input.jobId,
+        staleDiscardedJobIds: [],
+      });
+      expect(await store.get(input.jobId)).toBeNull();
+    } finally {
+      await store.close();
     }
   });
 

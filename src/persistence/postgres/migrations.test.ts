@@ -28,6 +28,11 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('payload_fingerprint TEXT NOT NULL');
     expect(sql).toContain("'emotion_appraisal'");
     expect(sql).toContain("'stale_discarded'");
+    expect(sql).toContain("'effect_outcome_unknown'");
+    expect(sql).toContain('deferred_from_available_at_ms BIGINT');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_foreground_leases');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_handoffs');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_effect_receipts');
     expect(sql).toContain("state = 'running' AND lease_owner IS NOT NULL");
     expect(sql).toContain("state <> 'running' AND lease_owner IS NULL");
     expect(sql).toContain('idx_agent_background_work_one_running_per_session');

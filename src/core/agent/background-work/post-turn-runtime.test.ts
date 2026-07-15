@@ -11,6 +11,7 @@ import {
 import {
   fingerprintBackgroundWorkPayload,
   fingerprintBackgroundWorkTurnRecord,
+  fingerprintEmotionAppraisalPersonalityProjection,
   type ClaimedBackgroundWorkJob,
   type EmotionAppraisalBackgroundPayload,
   type MemoryExtractionBackgroundPayload,
@@ -45,6 +46,13 @@ function makeTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
 function makeExecution(record: TurnRecord): {
   job: ClaimedBackgroundWorkJob;
   payload: MemoryExtractionBackgroundPayload;
+  effects: {
+    assertOwned: () => Promise<void>;
+    run: (
+      effectKey: string,
+      operation: (assertOwned: () => Promise<void>) => Promise<void>,
+    ) => Promise<void>;
+  };
 } {
   const payload: MemoryExtractionBackgroundPayload = {
     schemaVersion: 1,
@@ -61,8 +69,13 @@ function makeExecution(record: TurnRecord): {
     canonicalContactId: 'contact-1',
     placeId: 'living-room',
   };
+  const assertOwned = vi.fn(async () => undefined);
   return {
     payload,
+    effects: {
+      assertOwned,
+      run: vi.fn(async (_effectKey, operation) => operation(assertOwned)),
+    },
     job: {
       jobId: 'background-job-1',
       idempotencyKey: 'background-idempotency-1',
@@ -94,20 +107,24 @@ function makeDependencies(input: {
   maybeExtract?: ReturnType<typeof vi.fn>;
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
+  const isSourceRecordedTurnEligible = vi.fn(() => true);
   const maybeExtract = input.maybeExtract ?? vi.fn(async () => undefined);
   const triggerEmotionAppraisal = vi.fn(async () => undefined);
   return {
     dependencies: {
       sessionManager: {
         findSourceRecordedTurn,
+        isSourceRecordedTurnEligible,
       } as unknown as SessionManager,
       llmProvider: {} as LLMProviderPort,
       getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
       runIntentionPostTurnHooks: vi.fn(async () => undefined),
       emotionRuntime: { triggerEmotionAppraisal },
+      getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
       now: () => input.now ?? 100,
     },
     findSourceRecordedTurn,
+    isSourceRecordedTurnEligible,
     maybeExtract,
     triggerEmotionAppraisal,
   };
@@ -132,6 +149,7 @@ describe('executePostTurnBackgroundWork', () => {
       record.turnId,
       'living-room',
       undefined,
+      expect.any(Function),
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);
@@ -200,10 +218,14 @@ describe('executePostTurnBackgroundWork', () => {
         },
         relational: { contactId: 'contact-1', trustLevel: 'regular', moodDrift: 0.1 },
       },
-      templateVariables: { personality: 'warm' },
+      personalityOwnerRef: 'character-card',
+      personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection({
+        personality: 'old queued personality',
+      }),
     };
     const execution = {
       payload,
+      effects: base.effects,
       job: {
         ...base.job,
         kind: payload.kind,
@@ -219,6 +241,7 @@ describe('executePostTurnBackgroundWork', () => {
       sessionChannelId: record.sessionId,
       turnId: record.turnId,
       appraisalState: payload.appraisalState,
+      templateVariables: { personality: 'current canonical personality' },
     }));
     expect(fixture.triggerEmotionAppraisal.mock.calls[0]?.[0]).not.toHaveProperty('internalState');
 
@@ -228,6 +251,7 @@ describe('executePostTurnBackgroundWork', () => {
     } satisfies EmotionAppraisalBackgroundPayload;
     await expect(executePostTurnBackgroundWork({
       payload: mismatchedPayload,
+      effects: execution.effects,
       job: {
         ...execution.job,
         payload: mismatchedPayload,
@@ -239,5 +263,21 @@ describe('executePostTurnBackgroundWork', () => {
         reasonCode: 'source_mismatch',
       }),
     );
+  });
+
+  it('checks the source tombstone/uniqueness gate before reading raw turn content', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const fixture = makeDependencies({ record });
+    fixture.isSourceRecordedTurnEligible.mockReturnValue(false);
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkPermanentError>>({
+        name: 'BackgroundWorkPermanentError',
+        reasonCode: 'source_missing',
+      }));
+
+    expect(fixture.findSourceRecordedTurn).not.toHaveBeenCalled();
+    expect(fixture.maybeExtract).not.toHaveBeenCalled();
   });
 });

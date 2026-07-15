@@ -453,6 +453,7 @@ export class EmotionSelfModelRuntime {
     conversationScope?: ConversationScope;
     maxSessionEntryId?: number;
     icpCorrelation?: IcpConversationCorrelation;
+    assertEffectAllowed?: () => Promise<void>;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -494,6 +495,9 @@ export class EmotionSelfModelRuntime {
       appraisalState: params.appraisalState,
       recentMessages,
       personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
+      ...(params.assertEffectAllowed
+        ? { assertEffectAllowed: params.assertEffectAllowed }
+        : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {

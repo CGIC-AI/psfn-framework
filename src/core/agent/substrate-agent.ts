@@ -160,6 +160,7 @@ import {
   type TurnDeliveryLifecycle,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
+import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
@@ -274,6 +275,8 @@ export class SubstrateAgent {
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
+  private backgroundWorkHandoffsRecovered = false;
+  private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
@@ -522,8 +525,10 @@ export class SubstrateAgent {
           sessionManager: this.sessionManager,
           llmProvider: this.llmClient,
           getMemoryExtractor: () => this.memoryExtractor,
-          runIntentionPostTurnHooks: (context) => this.turnSupportRuntime.runIntentionPostTurnHooks(context),
+          runIntentionPostTurnHooks: (context, runOptions) => this.turnSupportRuntime
+            .runIntentionPostTurnHooks(context, runOptions),
           emotionRuntime: this.emotionSelfModelRuntime,
+          getEmotionTemplateVariables: () => this.resolveCharacterPromptVariables(),
         }),
       })
       : null;
@@ -1201,7 +1206,24 @@ export class SubstrateAgent {
     if (!this.backgroundWorkSupervisor) {
       throw new Error('Durable background work supervisor is not configured');
     }
+    await this.recoverBackgroundWorkHandoffs();
     await this.backgroundWorkSupervisor.tick();
+  }
+
+  private async recoverBackgroundWorkHandoffs(): Promise<void> {
+    if (this.backgroundWorkHandoffsRecovered) return;
+    if (!this.backgroundWorkHandoffRecoveryPromise) {
+      this.backgroundWorkHandoffRecoveryPromise = (async () => {
+        for (const record of this.sessionManager.listRecoverableBackgroundWorkTurnRecords()) {
+          const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+          if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+        }
+        this.backgroundWorkHandoffsRecovered = true;
+      })().finally(() => {
+        this.backgroundWorkHandoffRecoveryPromise = null;
+      });
+    }
+    await this.backgroundWorkHandoffRecoveryPromise;
   }
 
   async stopBackgroundWork(): Promise<void> {

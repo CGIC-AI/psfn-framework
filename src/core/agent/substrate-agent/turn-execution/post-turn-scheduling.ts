@@ -28,9 +28,10 @@ import type { TurnExecutionObservability } from './observability.js';
 import { resolveMessagePlaceId } from '../message-location.js';
 import {
   createBackgroundWorkIdentity,
+  createTurnRecordBackgroundWorkHandoff,
   fingerprintBackgroundWorkPayload,
   fingerprintBackgroundWorkTurnRecord,
-  selectEmotionAppraisalTemplateVariables,
+  fingerprintEmotionAppraisalPersonalityProjection,
   type BackgroundWorkKind,
   type BackgroundWorkPayload,
   type BackgroundWorkSourceRef,
@@ -288,6 +289,17 @@ export async function schedulePostTurnWork(input: {
       ? { modelSelection: turnBudgetCharacteristics.modelSelection }
       : {}),
   };
+  const persistedChannelMeta = {
+    ...(channelMeta.isDirectMessage !== undefined
+      ? { isDirectMessage: channelMeta.isDirectMessage }
+      : {}),
+    ...(channelMeta.privacyLevel !== undefined
+      ? { privacyLevel: channelMeta.privacyLevel }
+      : {}),
+    ...(channelMeta.disclosureConsentGranted !== undefined
+      ? { disclosureConsentGranted: channelMeta.disclosureConsentGranted }
+      : {}),
+  };
   const icpCorrelation = message.routing?.icpCorrelation;
   const placeId = resolveMessagePlaceId(message);
   const payloads: BackgroundWorkPayload[] = [];
@@ -315,7 +327,8 @@ export async function schedulePostTurnWork(input: {
       emotionSessionId,
       internalStateSnapshotRef,
       appraisalState: projectEmotionAppraisalState(internalState),
-      templateVariables: selectEmotionAppraisalTemplateVariables(templateVariables),
+      personalityOwnerRef: 'character-card',
+      personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection(templateVariables),
       ...(icpCorrelation ? { icpCorrelation } : {}),
     },
     {
@@ -327,20 +340,19 @@ export async function schedulePostTurnWork(input: {
       adaptiveProfile: resolveAdaptiveContextBudgetProfile(runtime.config, turnBudgetCharacteristics),
       turnBudgetCharacteristics: persistedTurnBudgetCharacteristics,
       ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
-      ...(Object.keys(channelMeta).length > 0 ? { channelMeta } : {}),
-      ...(turnSnapshot.sessionContext?.compactionPromptText
-        ? { compactionPromptText: turnSnapshot.sessionContext.compactionPromptText }
-        : {}),
+      ...(Object.keys(persistedChannelMeta).length > 0 ? { channelMeta: persistedChannelMeta } : {}),
       ...(icpCorrelation ? { icpCorrelation } : {}),
     },
   );
-  await runtime.enqueuePostTurnBackgroundWork(payloads.map(payload => createBackgroundWorkInput({
+  const backgroundWorkInputs = payloads.map(payload => createBackgroundWorkInput({
     kind: payload.kind,
     payload,
     source,
-  })));
-  // This is the durable completion marker for post-turn scheduling. Keep it
-  // last: a recovery may skip this whole scheduler only after every awaited
-  // effect ran and every background task was handed to the runtime owner.
+  }));
+  turnRecord.backgroundWorkHandoff = createTurnRecordBackgroundWorkHandoff(backgroundWorkInputs);
+  // Record first, then atomically enqueue the complete manifest. A crash on
+  // either side is recoverable: no queue row can outlive its canonical source,
+  // and delivery/startup replay can safely re-enqueue the stable turn IDs.
   runtime.sessionManager.recordTurn(turnRecord);
+  await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
 }

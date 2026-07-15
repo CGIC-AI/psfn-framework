@@ -48,20 +48,25 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
       return runtime.dispatchHandleMessage(params.message);
     },
   },
+  // mmo9.8.6: the inbound transcript-chunking RPC family was renamed
+  // voice.stream.* -> voice.transcript.* (reserving the "reply stream" name for
+  // the future OUTPUT stream, mmo9.8.4/.5). Each handler is registered under
+  // BOTH the legacy and the transcript name so a gateway/agent version skew
+  // during rollout keeps dispatching; the legacy names must NOT be removed.
   {
-    names: ['voice.stream.start'],
+    names: ['voice.stream.start', 'voice.transcript.begin'],
     handler: (params: unknown, runtime) => runtime.handleVoiceStreamStart(params),
   },
   {
-    names: ['voice.stream.chunk'],
+    names: ['voice.stream.chunk', 'voice.transcript.chunk'],
     handler: (params: VoiceStreamChunkParams, runtime) => runtime.handleVoiceStreamChunk(params),
   },
   {
-    names: ['voice.stream.end'],
+    names: ['voice.stream.end', 'voice.transcript.end'],
     handler: (params: VoiceStreamEndParams, runtime) => runtime.handleVoiceStreamEnd(params),
   },
   {
-    names: ['voice.stream.cancel'],
+    names: ['voice.stream.cancel', 'voice.transcript.cancel'],
     handler: (params: VoiceStreamCancelParams, runtime) => runtime.handleVoiceStreamCancel(params),
   },
   {

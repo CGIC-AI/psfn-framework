@@ -1514,6 +1514,146 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(getRpcResponse(conn.sent, 103).result.content).toBe('assembled response');
   });
 
+  it('dispatches the renamed voice.transcript.begin/chunk/end names to the same handlers (mmo9.8.6)', async () => {
+    // mmo9.8.6: the inbound transcript-chunking family was renamed
+    // voice.stream.* -> voice.transcript.*. The agent registers BOTH names on the
+    // same handlers for version-skew safety. The legacy names are covered by the
+    // test above; this asserts the new names reach the identical handler.
+    const handler = vi.fn().mockResolvedValue({
+      content: 'assembled response',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 10, outputTokens: 4, durationMs: 250 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 110,
+      method: 'voice.transcript.begin',
+      params: {
+        correlationId: 'corr-t1',
+        streamId: 'stream-t1',
+        sequence: 0,
+        metadata: { format: 'text' },
+        message: {
+          id: 'voice-t1',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
+        },
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 111,
+      method: 'voice.transcript.chunk',
+      params: {
+        correlationId: 'corr-t1',
+        streamId: 'stream-t1',
+        sequence: 1,
+        text: 'hello ',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 112,
+      method: 'voice.transcript.chunk',
+      params: {
+        correlationId: 'corr-t1',
+        streamId: 'stream-t1',
+        sequence: 2,
+        text: 'voice',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 113,
+      method: 'voice.transcript.end',
+      params: {
+        correlationId: 'corr-t1',
+        streamId: 'stream-t1',
+        sequence: 3,
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].content).toBe('hello voice');
+    expect(handler.mock.calls[0][0].timestamp).toBeInstanceOf(Date);
+
+    expect(getRpcResponse(conn.sent, 110).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 111).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 112).result.accepted).toBe(true);
+    expect(getRpcResponse(conn.sent, 113).result.content).toBe('assembled response');
+  });
+
+  it('cancels a voice stream under the renamed voice.transcript.cancel name (mmo9.8.6 barge-in)', async () => {
+    // The barge-in cancel path must be identical after the rename: a
+    // voice.transcript.cancel keyed off correlationId+streamId aborts the
+    // in-flight turn exactly as voice.stream.cancel did.
+    const handler = vi.fn().mockResolvedValue({
+      content: 'should not happen',
+      channelId: 'discord-voice:123',
+      metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 210,
+      method: 'voice.transcript.begin',
+      params: {
+        correlationId: 'corr-t-cancel',
+        streamId: 'stream-t-cancel',
+        sequence: 0,
+        message: {
+          id: 'voice-t2',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 211,
+      method: 'voice.transcript.chunk',
+      params: {
+        correlationId: 'corr-t-cancel',
+        streamId: 'stream-t-cancel',
+        sequence: 1,
+        text: 'partial',
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 212,
+      method: 'voice.transcript.cancel',
+      params: {
+        correlationId: 'corr-t-cancel',
+        streamId: 'stream-t-cancel',
+        sequence: 2,
+        reason: 'interrupted',
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(getRpcResponse(conn.sent, 212).result.cancelled).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(0);
+  });
+
   it('supports voice stream cancellation', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'should not happen',

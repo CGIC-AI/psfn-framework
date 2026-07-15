@@ -305,11 +305,11 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
  * host-side `requestAgentVoiceStream` to a REAL agent-side `GatewayClient` over
  * an in-memory JSON-RPC bridge (mirroring the gateway server's client wiring),
  * so a barge-in that aborts the turn signal DURING model generation is driven
- * end-to-end: abort -> voice.stream.cancel -> GatewayClient.handleVoiceStreamCancel
+ * end-to-end: abort -> voice.transcript.cancel -> GatewayClient.handleVoiceStreamCancel
  * -> the in-flight dispatch's AbortSignal is aborted (the exact seam
  * SubstrateAgent.cancelTurn trips in production, mmo9.6.1). Pre-fix,
  * `requestAgentVoiceStream` ignored the abort while blocked awaiting
- * voice.stream.end, so no cancel was sent and the model kept generating.
+ * voice.transcript.end, so no cancel was sent and the model kept generating.
  */
 class BridgeGatewayConnection extends EventEmitter implements GatewayRpcConnection {
   private messageHandler: ((message: unknown) => void) | undefined;
@@ -403,7 +403,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1_00
 }
 
 describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production composition)', () => {
-  it('sends voice.stream.cancel and cancels the in-flight agent turn when aborted mid-generation', async () => {
+  it('sends voice.transcript.cancel and cancels the in-flight agent turn when aborted mid-generation', async () => {
     const { gatewayClient, hostClient, sentMethods } = createBridgedGateway();
 
     const dispatchedSignals: Array<AbortSignal | undefined> = [];
@@ -460,13 +460,13 @@ describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production com
     // The agent turn is dispatched (model "generating") and NOT yet aborted.
     await waitFor(() => dispatchedSignals.length === 1, 'agent turn dispatched');
     expect(dispatchedSignals[0]?.aborted).toBe(false);
-    expect(sentMethods).not.toContain('voice.stream.cancel');
+    expect(sentMethods).not.toContain('voice.transcript.cancel');
     // The turn carries a cancellation identity, so it is addressable by cancelTurn.
     expect(typeof dispatchedCancellationIds[0]).toBe('string');
     expect(dispatchedCancellationIds[0]).toBeTruthy();
 
     // Barge-in: abort the turn signal WHILE the model is generating (pre-fix this
-    // was ignored — the request stayed blocked on voice.stream.end).
+    // was ignored — the request stayed blocked on voice.transcript.end).
     controller.abort();
 
     const outcome = await turnOutcome;
@@ -474,7 +474,7 @@ describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production com
     expect(String((outcome as { error: unknown }).error)).toMatch(/abort/i);
 
     // The caller sent the cancel frame, and it propagated to cancel the agent turn.
-    await waitFor(() => sentMethods.includes('voice.stream.cancel'), 'voice.stream.cancel sent');
+    await waitFor(() => sentMethods.includes('voice.transcript.cancel'), 'voice.transcript.cancel sent');
     await waitFor(() => dispatchedSignals[0]?.aborted === true, 'agent dispatch signal aborted');
     await waitFor(() => turnOneSettled, 'in-flight agent turn torn down');
 

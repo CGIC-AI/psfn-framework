@@ -894,7 +894,7 @@ describe('GatewayServer', () => {
       const { server } = await setupServerConnection(options, (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
         methods.push(msg.method);
-        if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.begin' || msg.method === 'voice.transcript.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -908,7 +908,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.end') {
+        if (msg.method === 'voice.transcript.end') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -949,9 +949,9 @@ describe('GatewayServer', () => {
             dataBase64: Buffer.from('streamed-image').toString('base64'),
           }],
         });
-        expect(methods[0]).toBe('voice.stream.start');
-        expect(methods[methods.length - 1]).toBe('voice.stream.end');
-        expect(methods.filter(m => m === 'voice.stream.chunk').length).toBeGreaterThan(1);
+        expect(methods[0]).toBe('voice.transcript.begin');
+        expect(methods[methods.length - 1]).toBe('voice.transcript.end');
+        expect(methods.filter(m => m === 'voice.transcript.chunk').length).toBeGreaterThan(1);
       } finally {
         rmSync(workspace, { recursive: true, force: true });
       }
@@ -966,7 +966,7 @@ describe('GatewayServer', () => {
       options.policyConfig.workspacePath = workspace;
       const { server } = await setupServerConnection(options, (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.begin' || msg.method === 'voice.transcript.chunk') {
           emit({
             jsonrpc: '2.0', id: msg.id,
             result: {
@@ -977,7 +977,7 @@ describe('GatewayServer', () => {
               queueDepth: 0,
             },
           });
-        } else if (msg.method === 'voice.stream.end') {
+        } else if (msg.method === 'voice.transcript.end') {
           emit({
             jsonrpc: '2.0', id: msg.id,
             result: {
@@ -1009,7 +1009,7 @@ describe('GatewayServer', () => {
       options.policyConfig.workspacePath = workspace;
       const { server } = await setupServerConnection(options, (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'voice.stream.start') {
+        if (msg.method === 'voice.transcript.begin') {
           emit({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
         } else if (msg.method === 'voice.handleMessage') {
           emit({
@@ -1033,11 +1033,44 @@ describe('GatewayServer', () => {
       }
     });
 
+    it('falls back to voice.handleMessage when the agent predates the transcript rename (mmo9.8.6 skew)', async () => {
+      // mmo9.8.6: the sender now emits voice.transcript.begin. A gateway/agent
+      // that predates the rename answers method-not-found; the existing
+      // method-not-found -> voice.handleMessage fallback must still carry the turn.
+      const methods: string[] = [];
+      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        methods.push(msg.method);
+        if (msg.method === 'voice.transcript.begin') {
+          emit({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
+          return;
+        }
+        if (msg.method === 'voice.handleMessage') {
+          emit({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: {
+              content: 'fallback voice response',
+              channelId: 'discord-voice:123',
+              model: 'voice-model',
+              durationMs: 7,
+            },
+          });
+        }
+      });
+
+      const result = await server.requestAgentVoiceStream(makeVoiceMessage('skew hello'));
+
+      expect(result.content).toBe('fallback voice response');
+      expect(methods[0]).toBe('voice.transcript.begin');
+      expect(methods).toContain('voice.handleMessage');
+    });
+
     it('marks Wyoming shard delegation ineligible by default-safe policy', async () => {
       let routedMessage: Record<string, unknown> | null = null;
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'voice.stream.start') {
+        if (msg.method === 'voice.transcript.begin') {
           routedMessage = msg.params.message as Record<string, unknown>;
           emit({
             jsonrpc: '2.0',
@@ -1052,7 +1085,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1066,7 +1099,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.end') {
+        if (msg.method === 'voice.transcript.end') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1118,7 +1151,7 @@ describe('GatewayServer', () => {
         },
       }, (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'voice.stream.start') {
+        if (msg.method === 'voice.transcript.begin') {
           routedMessage = msg.params.message as Record<string, unknown>;
           emit({
             jsonrpc: '2.0',
@@ -1133,7 +1166,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1147,7 +1180,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.end') {
+        if (msg.method === 'voice.transcript.end') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1183,7 +1216,7 @@ describe('GatewayServer', () => {
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
         methods.push(msg.method);
-        if (msg.method === 'voice.stream.start') {
+        if (msg.method === 'voice.transcript.begin') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1197,7 +1230,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.chunk') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1205,7 +1238,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.cancel') {
+        if (msg.method === 'voice.transcript.cancel') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1221,7 +1254,7 @@ describe('GatewayServer', () => {
       await expect(
         server.requestAgentVoiceStream(makeVoiceMessage('fail me please'), { chunkSize: 4 }),
       ).rejects.toBeTruthy();
-      expect(methods).toContain('voice.stream.cancel');
+      expect(methods).toContain('voice.transcript.cancel');
     });
 
     it('applies drop_newest queue policy for chunk backpressure', async () => {
@@ -1229,7 +1262,7 @@ describe('GatewayServer', () => {
       let endDroppedChunks = -1;
       const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
-        if (msg.method === 'voice.stream.start') {
+        if (msg.method === 'voice.transcript.begin') {
           emit({
             jsonrpc: '2.0',
             id: msg.id,
@@ -1243,7 +1276,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.chunk') {
+        if (msg.method === 'voice.transcript.chunk') {
           chunkPayloads.push(msg.params.text);
           emit({
             jsonrpc: '2.0',
@@ -1258,7 +1291,7 @@ describe('GatewayServer', () => {
           });
           return;
         }
-        if (msg.method === 'voice.stream.end') {
+        if (msg.method === 'voice.transcript.end') {
           endDroppedChunks = msg.params.metadata?.droppedChunks ?? -1;
           emit({
             jsonrpc: '2.0',

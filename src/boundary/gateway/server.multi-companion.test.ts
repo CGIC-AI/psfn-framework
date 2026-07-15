@@ -272,8 +272,8 @@ function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'termi
 function voiceStreamResponder(routed: { messages: any[] }) {
   return (msg: any, emit: (response: unknown) => void) => {
     if (!msg.id || typeof msg.method !== 'string') return;
-    if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
-      if (msg.method === 'voice.stream.start') {
+    if (msg.method === 'voice.transcript.begin' || msg.method === 'voice.transcript.chunk') {
+      if (msg.method === 'voice.transcript.begin') {
         routed.messages.push(msg.params.message);
       }
       emit({
@@ -289,7 +289,7 @@ function voiceStreamResponder(routed: { messages: any[] }) {
       });
       return;
     }
-    if (msg.method === 'voice.stream.end') {
+    if (msg.method === 'voice.transcript.end') {
       emit({
         jsonrpc: '2.0',
         id: msg.id,
@@ -1162,8 +1162,8 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
 
     const result = await server.requestAgentVoiceStream(makeChannelMessage('telegram'));
     expect(result.content).toBe('voice response');
-    expect(methodFrames(connA, 'voice.stream.start')).toHaveLength(0);
-    expect(methodFrames(connB, 'voice.stream.start')).toHaveLength(1);
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
+    expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
   });
 
   it('stamps the routed companionId on wyoming-tagged api voice streams', async () => {
@@ -1190,7 +1190,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     };
     await server.requestAgentVoiceStream(message as any);
 
-    expect(methodFrames(connA, 'voice.stream.start')).toHaveLength(0);
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(routed.messages[0]?.routing?.gateway).toEqual({
       schemaVersion: 1,
       companionId: 'comp-b',

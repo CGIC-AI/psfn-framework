@@ -215,9 +215,17 @@ quality gate). When the verdict is unhealthy the pipeline fails at the
 The verdict (`healthy`, `recommendedAction`, per-check results, and bounded,
 already-sanitized log context for rollback debugging) is written to
 `<system-data>/state/post-rollout-validation-latest.json` (bounded JSONL history
-alongside) on **both** the healthy and unhealthy paths — the stable
-cross-workstream contract the Helm-rollback surface reads to decide whether to
-roll back.
+alongside) on the healthy and unhealthy verdict paths **when the operator-job
+composition supplies the `persist` callback** — the stable cross-workstream
+contract the Helm-rollback surface reads to decide whether to roll back.
+Persistence is opt-in: if the `post_rollout_validation` stage is not composed, or
+the gate itself errors before producing a verdict, no fresh verdict is written
+and `latest.json` retains the **prior** rollout's verdict. The Helm-rollback
+surface must therefore bind on `(release, helmRevision, sourceCommit)` before
+trusting a `healthy` verdict, and treat an absent/stale verdict as "no verdict
+for this rollout — do not suppress rollback." An `overall: 'waived'` verdict is
+an operator emergency assertion with no probe evidence and means "do not
+auto-rollback," not "healthy."
 
 ## Host-Specific Storage Validation
 

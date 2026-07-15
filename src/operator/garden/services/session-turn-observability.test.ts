@@ -277,7 +277,7 @@ describe('promptLoom renders the PromptPlan (E2.3)', () => {
     await eventBus.emit('agent.turn.snapshot', { snapshot });
     const data = store.buildTurnData(minimalRecord('turn-wire-none', 'discord:dm:contact-1'));
 
-    expect(data.promptLoom.providerWire.capturedWirePayload).toBeNull();
+    expect(data.promptLoom.providerWire.capturedWirePayload).toBeUndefined();
   });
 
   it('degrades to the recorded wire capture for legacy pre-plan records', async () => {

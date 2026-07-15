@@ -365,9 +365,9 @@ function derivePromptLoomPromptStrings(
  */
 function resolveCapturedWirePayload(
   snapshot: AdminTurnSnapshotData | null,
-): LLMCapturedProviderWirePayload | null {
+): LLMCapturedProviderWirePayload | undefined {
   const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
-  if (!captured) return null;
+  if (!captured) return undefined;
   return {
     ...captured,
     ...(captured.body !== undefined ? { body: cloneUnknownValue(captured.body) } : {}),
@@ -390,7 +390,7 @@ function buildProviderWireData(
       systemPrompt: payload.systemPrompt,
       messages: payload.providerWireMessages.map(message => ({ ...message })),
       toolDefinitions: requireResolvedPlanToolDefinitions(plan).map(tool => cloneUnknownValue(tool)),
-      capturedWirePayload,
+      ...(capturedWirePayload ? { capturedWirePayload } : {}),
     };
   }
   return {
@@ -400,7 +400,7 @@ function buildProviderWireData(
     systemPrompt: legacyFinalSystemPrompt,
     messages: resolveProviderMessages(snapshot),
     toolDefinitions: resolveActiveTools(snapshot),
-    capturedWirePayload,
+    ...(capturedWirePayload ? { capturedWirePayload } : {}),
   };
 }
 

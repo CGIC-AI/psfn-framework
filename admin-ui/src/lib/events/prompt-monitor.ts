@@ -537,6 +537,7 @@ function buildProviderWireFromSnapshot(
       ...tool,
       inputSchema: cloneJsonObject(tool.inputSchema),
     })) ?? [];
+  const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
   return {
     source: 'recorded_snapshot',
     legacy: plan === null,
@@ -544,6 +545,9 @@ function buildProviderWireFromSnapshot(
     systemPrompt: planStrings.finalSystemPrompt,
     messages: cloneProviderMessagesForLoom(snapshot?.promptContext?.providerObservability?.providerWireMessages),
     toolDefinitions,
+    // Raw-wire view captured as-sent (bead hgw3-80f6); clone so live-bus mutation
+    // cannot reach back into the observed snapshot. Preserve absence.
+    ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
   } as AdminPromptLoomData['providerWire'];
 }
 

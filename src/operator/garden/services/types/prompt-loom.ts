@@ -113,9 +113,10 @@ export interface AdminPromptLoomProviderWireData {
    * tool schemas (each once), `cache_control`, and provider transforms that the
    * plan-derived `messages`/`toolDefinitions` "cleaned" view above omit. Absent
    * on legacy records and turn shapes (e.g. MoA) that do not stream through the
-   * agent loop; the plan-derived view is then the only wire projection.
+   * agent loop; the plan-derived view is then the only wire projection. Absent
+   * (not null) when no capture was recorded — preserve absence.
    */
-  capturedWirePayload: LLMCapturedProviderWirePayload | null;
+  capturedWirePayload?: LLMCapturedProviderWirePayload;
 }
 
 export interface AdminPromptLoomData {

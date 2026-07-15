@@ -263,7 +263,7 @@ function withCapturedWirePayload(record: TurnRecord, captured: Record<string, un
             ...providerObservability,
             capturedWirePayload: captured,
           },
-        } as NonNullable<typeof snapshot.promptContext>,
+        } as unknown as NonNullable<typeof snapshot.promptContext>,
       },
     },
   };

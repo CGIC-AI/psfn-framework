@@ -8,7 +8,7 @@ This document summarizes where PSFN stands today. It is not the issue tracker. T
 
 ## Current State
 
-PSFN is an early-alpha companion substrate with a real split runtime, Postgres-backed memory/state, owner-file configuration, Garden operator UI, and several autonomy surfaces. The project is past the original SQLite-centered prototype shape: the live runtime now fails closed unless PostgreSQL and `pgvector` are available through `POSTGRES_DATABASE_URL`.
+PSFN is an early-alpha companion substrate with a real split runtime, Postgres-backed memory/state, owner-file configuration, Garden operator UI, and several autonomy surfaces. The project is past the original SQLite-centered prototype shape: SQLite implementations and packages are removed, and the live runtime fails closed unless PostgreSQL and `pgvector` are available through `POSTGRES_DATABASE_URL`.
 
 Current operational shape:
 
@@ -29,7 +29,7 @@ Current operational shape:
 | --- | --- | --- |
 | Split runtime hardening | Gateway/agent/operator responsibilities separated; gateway owns provider secrets, external network, and guarded host tools. | Shipped |
 | Owner-file configuration | Runtime/admin settings moved out of env sprawl into JSON owner files with startup verification and Garden editing paths. | Shipped |
-| PostgreSQL cutover | Runtime persistence moved to Postgres + pgvector; SQLite is retained for legacy migration utilities and adapter tests only. | Shipped |
+| PostgreSQL cutover | Runtime and persistence-aware maintenance use Postgres + pgvector exclusively; tests use Postgres fixtures or port fakes. | Shipped |
 | L0.1 episodic memory | Episode landmarks, spans, arcs, lineage, watermarks, synthesis, dream pass, and Garden visibility landed. | Shipped core |
 | Group-room memory | Direct/group/auto extraction modes, attribution, salience gates, backfill controls, telemetry, and Garden diagnostics landed. | Shipped |
 | Backup/restore coverage | Backups now include pg_dump, companion tree, system owner files, workspace tree, encrypted retention, and restore verification. | Shipped |
@@ -42,7 +42,7 @@ Current operational shape:
 | Durable scheduled prompts | Scheduled/one-shot prompts persist in Postgres (`scheduler_scheduled_prompts`) and rehydrate at startup, so they survive frequent agent restarts; completion is recorded only after successful delivery. | Shipped |
 | Deliberate trust ratchet | Nightly contact trust-drift review lane derives behavior signals; trusted-tier promotions require human-in-the-loop approval; social-graph edges are backed by persisted memory provenance. | Shipped |
 | Tool-call reliability | Fail-closed retry on corrupt-empty tool-call args, fix for streamed args lost on interleaved reasoning, GLM-5.2 via OpenRouter `:exacto`, backed by a per-provider tool-call eval harness. | Shipped |
-| SQLite retirement | SQLite-only maintenance/importer commands retired and dead SQLite bridges severed; SQLite remains only for migration tooling and adapter tests. | Shipped |
+| SQLite retirement | SQLite implementations, migration readers, native packages, and dead adapter tests are removed; a repository gate prevents reintroduction. | Shipped |
 
 ## Active Risks And Near-Term Work
 
@@ -56,7 +56,6 @@ These are representative open beads from the current graph, not a replacement fo
 | P2 | `psfn-framework-z6z` | Memory retrieval | Implement controlled `recall_expand`/projection expansion work from the memory projection spec. |
 | P2 | `psfn-framework-3eh` | Satellite Hub | Continue satellite protocol compatibility and remote shard/channel work. |
 | P2 | `psfn-framework-57m` | Reasoning/model control | Extend reasoning-parameter support and model invocation knobs. |
-| P2 | `psfn-framework-3c2.*` | Persistence cleanup | Retire leftover SQLite migration debt once Postgres parity and restore paths are proven. |
 | P2 | `psfn-framework-1xb.4` | Proactivity | Add weighted-thought lifecycle and contextual decay. |
 | P2 | `psfn-framework-m58.*` | Memory schema | Continue episodic consolidation, projection, and arc work. |
 | P2 | `psfn-framework-w9hj` | Companion client | Build the companion PWA/runtime client path. |
@@ -71,7 +70,7 @@ The project does not currently publish calendar deadlines. The practical timelin
 | Memory continuation | Projection profiles, motif/occasion/callback schema work, and controlled recall expansion. | Landmark-first recall can expand evidence in bounded, trust-gated steps. |
 | Proactivity and self-state | Weighted thoughts, durable outbox provenance, personal-time work, and companion-readable internal-state rendering. | The companion can safely initiate and explain selected actions from internal state. |
 | Shard/satellite maturation | Remote shard compatibility, ARM64/K3s work, lifecycle visibility, and fold-back review polish. | Long-horizon/distributed work can run and return artifacts without confusing bounded subagents. |
-| Beta cleanup | Remove alpha migration boundary paths, retire stale SQLite defaults, close stale epics, and tighten docs/tests around the final contracts. | Production has no silent legacy fallbacks and docs match code without caveats. |
+| Beta cleanup | Remove remaining alpha migration boundary paths, close stale epics, and tighten docs/tests around final contracts. | Production has no silent legacy fallbacks and docs match code without caveats. |
 
 ## Validation Baseline
 

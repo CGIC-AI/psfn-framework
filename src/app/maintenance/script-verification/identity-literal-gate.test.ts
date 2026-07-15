@@ -11,8 +11,9 @@ describe('identity literal gate wiring', () => {
 
     expect(scripts['verify:identity-literals']).toBe('node scripts/identity-literal-scan.mjs');
     expect(scripts['verify:model-usage-capture']).toBe('node scripts/verify-model-usage-capture.mjs');
+    expect(scripts['verify:postgres-only']).toBe('node scripts/verify-postgres-only.mjs');
     expect(scripts['verify:repository-hygiene']).toBe(
-      'npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture',
+      'npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles && npm run verify:shared-type-guards && npm run verify:model-usage-capture && npm run verify:postgres-only',
     );
   });
 });

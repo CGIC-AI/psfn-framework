@@ -24,7 +24,6 @@ const DIAGNOSTIC_LOG_CONTEXT_KEYS = new Set([
   'provider',
   'reason',
   'restoreVerified',
-  'sqliteCaptured',
   'taskId',
   'taskName',
   'toolName',

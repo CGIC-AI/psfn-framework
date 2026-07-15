@@ -4,7 +4,7 @@ PSFN memory is not a single store. The runtime combines an append-only lived
 session archive, typed long-term memories, continuity artifacts, contact state,
 and a few small high-priority ledgers.
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-15.
 
 ## Layers That Exist Today
 
@@ -39,9 +39,9 @@ Last updated: 2026-07-12.
 - Embedded with the configured embeddings provider and indexed/searchable through `pgvector`
 - Retrieved by `MemoryRetriever`
 - Written through `MemoryWriter` and `MemoryExtractor`
-- The storage contract stays async-safe at the port level so tests, repair utilities, and legacy migration code can exercise adapters without leaking storage details into callers.
+- The storage contract stays async-safe at the port level so tests and repair utilities can exercise active adapters without leaking storage details into callers.
 - The supported memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
-- SQLite/sqlite-vec code remains only for legacy migration utilities and adapter tests; it is not a runtime default.
+- SQLite and sqlite-vec implementations, dependencies, and migration readers are removed. Tests use Postgres fixtures or focused port-backed fakes.
 
 ### Parallel memory/state artifacts
 

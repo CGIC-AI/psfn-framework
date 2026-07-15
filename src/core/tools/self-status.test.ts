@@ -76,7 +76,7 @@ function makeRuntime(overrides: Partial<SelfStatusToolRuntime> = {}): SelfStatus
     extractionMaxTokens: 1024,
     characterCardPath: '/secret/card.json',
     dataDir: '/secret/data',
-    databasePath: '/secret/db.sqlite',
+    databasePath: '/secret/companion.db',
     postgresDatabaseUrl: 'postgres://secret-user:secret-pass@db/psfn',
     discordToken: 'discord-secret-token',
     openRouterApiKeyRef: { kind: 'env', envName: 'OPENROUTER_API_KEY' },

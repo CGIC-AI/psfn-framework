@@ -39,7 +39,7 @@ function edgeToWriteFields(edge: SocialRelationshipEdge): SocialEdgeWriteFields 
   };
 }
 
-/** Canonical endpoint ordering for undirected edges (parity with the sqlite store). */
+/** Canonical endpoint ordering for undirected edges across every caller. */
 function normalizeUndirectedSocialEndpoints(
   sourceEntityId: string,
   targetEntityId: string,
@@ -375,7 +375,7 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
     const classification = classifySocialRelationship(relationshipType);
     // E4.3: classification governs the stored directional flag (fail-closed
     // normalization) — symmetric => undirected, inverse_pair => directional,
-    // genuinely_directional => respect caller. Parity with the sqlite store.
+    // genuinely_directional => respect the caller-provided direction.
     const directional = effectiveEdgeDirectional(relationshipType, input.directional);
     const endpoints = normalizeUndirectedSocialEndpoints(sourceEntityId, targetEntityId, directional);
 

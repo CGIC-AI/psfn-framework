@@ -85,7 +85,7 @@ k8s/ docker/ proxy/ deployment/   Kubernetes/Helm manifests, container config, L
 docs/             This map + design docs; CHANGELOG.md at repo root
 ```
 
-**Scale**: ~977 non-test + ~581 test TypeScript files under `src/`, ~498k source lines. Postgres-only runtime; SQLite (`better-sqlite3`/`sqlite-vec`) is retained **only** for migration tooling and adapter tests. Built on `@mariozechner/pi-agent-core` + `pi-ai` `0.62.0` (Node ≥22, ESM).
+**Scale**: ~977 non-test + ~581 test TypeScript files under `src/`, ~498k source lines. Postgres-only runtime and maintenance; SQLite (`better-sqlite3`/`sqlite-vec`) implementations and packages are removed. Built on `@mariozechner/pi-agent-core` + `pi-ai` `0.73.1` (Node ≥22, ESM).
 
 ## Module Guide
 
@@ -121,7 +121,7 @@ Conversational timeline, turn observability, and relationship/trust modeling.
 
 - **Session**: `manager.ts` (`SessionManager`), `manager/context-builder.ts` (assembles `LLMContext` + a parallel `ContextManifest` audit record), `entry-attribution.ts` (group-chat speaker-attribution grammar — `stableId` is the trust anchor, display names sanitized/forgery-escaped), `conversation-scope.ts` (resolved once per turn), `session-routes.ts` (fresh-split/quarantine), compaction + continuity.
 - **Turns**: contracts only — branded `TurnID` (UUIDv7), `TurnSnapshot`/`TurnObservabilityRecord` (sanitized clones for replay). No orchestrator class.
-- **Contacts**: `contact-store-port.ts` (async seam; SQLite `store.ts` + Postgres `postgres-adapter/*`), a **three-tier trust ratchet** — low-tier drift (deterministic, agent-confirmed), high-tier mutation (manual/`operator:`/`admin:` actor only), and `propose_trust` (human-in-the-loop `ApprovalQueuePort`, only ever proposes `trusted`); trust-drift review lane; social-relationship edge classification; contact-tracking privacy gate; machine-intelligence auto-tagging.
+- **Contacts**: `contact-store-port.ts` (async seam) + Postgres `postgres-adapter/*`, a **three-tier trust ratchet** — low-tier drift (deterministic, agent-confirmed), high-tier mutation (manual/`operator:`/`admin:` actor only), and `propose_trust` (human-in-the-loop `ApprovalQueuePort`, only ever proposes `trusted`); trust-drift review lane; social-relationship edge classification; contact-tracking privacy gate; machine-intelligence auto-tagging.
 
 ### `src/core/identity` + `scheduler` + `cogsec`
 
@@ -145,7 +145,7 @@ Postgres/pgvector-backed, split into lanes (see `docs/memory.md`). **L0** = appe
 - **Write/extraction** (`extraction/`, `extraction.ts`): near-turn deterministic pre-LLM gate → chunk → LLM parse → fail-closed speaker routing → group write-caps. `NearTurnMemoryLane` gates per-turn extraction.
 - **Read/retrieval** (`retrieval.ts` + `retrieval/`): landmark-first episodic + semantic/lexical candidate merge → trust/visibility access gate (withheld surfaced honestly, not dropped) → scoring/budget → prompt block. E5.5 cached **active-memory context** never blocks a turn.
 - **Consolidation** (`sleeptime-agent.ts`, `episodic/sleep-consolidation.ts`, `arc-formation.ts`, `dream-meaning-pass.ts`): nightly rest-window chain (candidate→canonical episode consolidation, claim transfer with supersede-not-delete, audited mutable arcs). Only reachable via the scheduler's `memory.sleeptime.rest-window` task (test-enforced).
-- **Stores**: `postgres-store.ts` (runtime default, pgvector fail-closed) vs legacy `store.ts` + `store/*` (SQLite, migration/test only). Typed evolution/abstraction links beside rows, never in-place mutation.
+- **Stores**: `postgres-store.ts` (runtime authority, pgvector fail-closed) behind `MemoryStorePort`; focused tests use `test-support/in-memory-memory-store.ts`. Typed evolution/abstraction links sit beside rows, never in-place mutation.
 - **Social graph** (`social-graph/`): pure-heuristic worker mines room memories for evidence → **proposals** (file-backed, quarantined from the live edge table); only operator acceptance in Garden writes live edges; both contacts must be tracked.
 
 ### `src/faculties` — other faculties
@@ -164,7 +164,7 @@ Postgres/pgvector-backed, split into lanes (see `docs/memory.md`). **L0** = appe
 Host-side process holding all secrets. **Fail-closed policy**: `evaluatePolicy()` is a `switch` whose `default` is `DENY`; decisions are `ALLOW`/`DENY`/`NEEDS_APPROVAL` (approval auto-executes only at `autonomous` tier, else queues + pings operator).
 
 - **RPC**: `gateway/protocol.ts` (JSON-RPC contract), bidirectional — forward (agent→gateway: `llm.*`, `fs.*`, `git.*`, `shell.exec`, `web.*`, `vault.*`, `beads.*`, `image.*`, `discord.*`, `notify.*`) and reverse (gateway→agent: `voice.*`, `api.chat.*`). Transport: Unix socket or WSS+mTLS+SPIFFE (split-host shards).
-- **Defenses**: `url-policy.ts` (SSRF: private/metadata IP blocks + **post-DNS re-validation pinned to the resolved IP** to defeat rebinding), streamed response-body byte caps in `methods/web.ts` (8 MiB text/binary, socket destroyed on overrun), path allowlist with `realpath` canonicalization (defeats symlink escape), `sanitize.ts` (prompt-injection stripping of fetched content), append-only SQLite/Postgres audit.
+- **Defenses**: `url-policy.ts` (SSRF: private/metadata IP blocks + **post-DNS re-validation pinned to the resolved IP** to defeat rebinding), streamed response-body byte caps in `methods/web.ts` (8 MiB text/binary, socket destroyed on overrun), path allowlist with `realpath` canonicalization (defeats symlink escape), `sanitize.ts` (prompt-injection stripping of fetched content), append-only Postgres audit.
 - **Intake screeners** (`gateway/intake/`): the gateway-side classifier layers of the cognition intake firewall — `compose-screening.ts` (builds the gateway `IntakeScreeningService` from `intake-policy.json`; missing ONNX weights = loud skip, broken weights = fail closed), `injection-classifier.ts` (L1.5 in-process ONNX DeBERTa-v3, provisioned via `npm run provision:injection-model`), `l2-screener.ts`/`l3-screener.ts` (tool-less OpenRouter escalation screeners over the shared `screener-transport.ts`, invoked gateway-side through the `IntakeEscalationPort` in `escalation.ts`; the agent process holds no escalation port and stays L1-only), `vision-screener.ts` (VLM OCR+description per inbound image, exposed as the `intake.screen_image` RPC; transcript re-screened as `image_ocr`, hostile tier). See `docs/cognitive-security.md`.
 - **Adapters** (`integrations/*`): each repeats `ops.ts` (contract) → `local-ops.ts`/`gateway-ops.ts` → `tools.ts` → `runtime-wiring.ts`. Note two unrelated "vaults": `custody/credential-vault.ts` (secrets, env/OpenBao) vs `integrations/vault` (Obsidian notes).
 - **Sandbox**: `analysis_workbench` code runs in a locked-down child (`--permission`, empty env, no code-gen-from-strings); `shell-runner.ts` uses a curated PATH and reserved-var denylist (`PATH`/`NODE_OPTIONS`/`LD_*`).
@@ -173,7 +173,7 @@ Host-side process holding all secrets. **Fail-closed policy**: `evaluatePolicy()
 
 - **Layout** (`layout.ts`): two-root topology (`system-data` vs `companion-data`); production mode rejects overlapping/duplicate mutable roots and forbids the legacy shared `DATA_DIR`. The most widely imported file in the module.
 - **Runtime factory** (`runtime-factory.ts`): composes the Postgres store bundle; throws if `persistenceBackend !== 'postgres'`.
-- **Migrations**: idempotent `CREATE/ALTER ... IF NOT EXISTS` statement arrays (`postgres/migrations.ts`), re-run every boot; `postgres/parity-matrix.ts` codifies the Postgres-only + migration-only-SQLite contract.
+- **Migrations**: idempotent `CREATE/ALTER ... IF NOT EXISTS` statement arrays (`postgres/migrations.ts`), re-run every boot; `postgres/parity-matrix.ts` codifies active ownership, integrity, and validation contracts.
 - **Sessions**: append-only JSONL with HMAC integrity chaining and quarantine-on-corruption; Postgres transcript projection (rebuildable from JSONL).
 - **Backups** (`backups/`): pg_dump + companion/workspace/system-config tree snapshots, tiered rotation, **mandatory** at-rest encryption, and restore verification that actually restores into a scratch DB and asserts pgvector + critical-table fidelity. `pg_dump` credentials go via `PGPASSWORD` env, never argv.
 - **Repair/cutover**: JSONL/attribution/projection/participant-name/provenance repair; legacy→two-root migration with signed manifest.
@@ -243,7 +243,7 @@ graph LR
 Patterns that recur across nearly every module:
 
 - **Fail closed, no silent fallback.** Default-deny policy, `persistenceBackend !== 'postgres'` throws, missing pgvector/backup-key/config throws, network-isolation guard, unknown providers rejected. Absence is an explicit typed state, never a silent skip.
-- **Port/adapter split, Postgres-primary.** Every store has a `*StorePort` interface with a Postgres runtime implementation and a legacy SQLite one selected at composition time. SQLite files look like runtime stores but are migration/test-only (`postgres/parity-matrix.ts` is the contract).
+- **Port/adapter split, Postgres-only runtime.** Durable stores expose `*StorePort` interfaces with Postgres runtime implementations. Tests use Postgres fixtures or focused port fakes; composition never selects an alternate database adapter (`postgres/parity-matrix.ts` is the contract).
 - **Deterministic pre-LLM gating.** Recurring nondeterministic passes check `evaluateDeterministicGate` first and emit a typed skip/ran event — zero LLM spend when nothing changed.
 - **Owner-file config.** One JSON file owns each mutable subsystem; `.env` is bootstrap/secrets only; cross-domain keys in `settings.json` hard-throw.
 - **`compose*` builds and returns; `wire*` mutates/attaches.** `SubstrateAgent` uses null-until-wired provider fields attached after construction.

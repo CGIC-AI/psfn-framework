@@ -27,7 +27,7 @@ import { normalizeAuditActor, rowToContact } from './mapping.js';
 import { queryOne, queryRows } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
-// ── Room roster (E4.1) ── bound helpers, mirrored with the SQLite adapter.
+// ── Room roster (E4.1) ── bound helpers for the Postgres adapter.
 function clampRoomLimit(limit: number | undefined, fallback: number, max: number): number {
   if (limit === undefined || !Number.isFinite(limit)) return fallback;
   const floored = Math.floor(limit);

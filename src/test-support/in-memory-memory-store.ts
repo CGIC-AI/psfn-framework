@@ -102,7 +102,7 @@ function lexicalSimilarity(text: string, query: string): number {
  *
  * Production tests for the Postgres adapter live beside postgres-store.ts. This
  * fixture intentionally models the port's observable behavior so unrelated
- * feature suites do not need a retired SQLite database just to arrange memory
+ * feature suites do not need a database process just to arrange memory
  * state. Its synchronous methods remain await-compatible, matching the port's
  * historical backend contract and making transaction rollback deterministic.
  */

@@ -877,12 +877,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/intention/sqlite-stores/pending-follow-up-store.ts",
-      "contains": "psfn-amica",
-      "reason": "Legacy pending follow-up store preserves the psfn-amica external channel type in its schema contract.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
       "contains": "psfn-framework-mdxu",
       "reason": "Scheduler comment cites the bead that owns post-turn continuation delivery.",

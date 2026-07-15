@@ -1,6 +1,6 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-07-12
+Last updated: 2026-07-15
 Package version: `0.1.0`
 Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for baseline milestones and [`CHANGELOG.md`](./CHANGELOG.md) for the current foundation branch delta.
 
@@ -14,7 +14,7 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 
 ## Current Foundation Highlights
 
-- **Postgres operational state + canonical L0**: PostgreSQL/pgvector backs runtime memory, episodes, contacts, intentions, concerns, internal state, scratchpad rows, and searchable projections; append-only JSONL remains the canonical lived conversation archive. SQLite remains only for legacy migration tooling.
+- **Postgres operational state + canonical L0**: PostgreSQL/pgvector backs runtime memory, episodes, contacts, intentions, concerns, internal state, scratchpad rows, and searchable projections; append-only JSONL remains the canonical lived conversation archive. SQLite runtime implementations, readers, and packages have been removed.
 - **Scoped prompt assembly**: turns build a single `PromptPlan` from a registered prompt-variable namespace, section producers, volatility rules, and provider-cache-aware prompt rendering.
 - **Context Envelope privacy**: each turn carries channel privacy, audience size, audience knowledge, broadcast status, delivery style, and contact-tracking policy before any prompt or memory gate runs.
 - **L0.1 memory maturation**: daytime candidate episodes, hard message claims, topic cutting, nightly sleep consolidation, dream meaning, and audited cross-day arc membership are wired as separate lanes.
@@ -425,7 +425,7 @@ sibling `../psfn-eval-toolkit` repository.
 | Language | TypeScript (strict mode) |
 | Runtime | Node.js 22+ |
 | LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
-| Database | PostgreSQL 17 + pgvector (runtime persistence); better-sqlite3 retained for legacy migration tooling |
+| Database | PostgreSQL 17 + pgvector; no SQLite runtime or migration-reader dependency |
 | Discord | discord.js |
 | Garden UI | Svelte 5 |
 | Companion PWA | React + Vite |

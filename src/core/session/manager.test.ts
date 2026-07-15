@@ -2501,6 +2501,25 @@ describe('SessionManager', () => {
     expect(captured.every(entry => entry.id <= sourceEntryId!)).toBe(true);
   });
 
+  it('does not replace an explicitly captured empty compaction snapshot with live history', async () => {
+    const mgr = new SessionManager(store, makeConfig({ compactionThresholdPct: 1 }));
+    mgr.recordUserMessage('ch1', 'Live turn A must not be compacted.', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'Live turn C must not be compacted.');
+    const capture = vi.spyOn(mgr, 'captureAutoCompactionRecentEntries');
+    const mockLLM = makeMockLLM();
+
+    await mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'System prompt',
+      memoriesBlock: '',
+      llmProvider: mockLLM,
+      capturedRecentEntries: [],
+    });
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(mockLLM.complete).not.toHaveBeenCalled();
+  });
+
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);

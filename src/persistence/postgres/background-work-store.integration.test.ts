@@ -35,6 +35,10 @@ import {
   recoveryResponse as icpRecoveryResponse,
 } from '../../core/session/icp-recovery.test-fixtures.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  runExtractionOrchestration,
+  type ExtractionRunOptions,
+} from '../../faculties/memory/extraction/orchestrator.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -1404,6 +1408,174 @@ describe('PostgresBackgroundWorkStore', () => {
         content: 'successful B input|successful B output',
       }]);
       expect(JSON.stringify(effects.rows)).not.toContain(failedContent);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await Promise.all([
+        consumerPool.end(),
+        writerPool.end(),
+        inspectionPool.end(),
+      ]);
+    }
+  }, 30_000);
+
+  it('keeps an empty bounded snapshot authoritative while live A/C history is redacted', async () => {
+    const database = await harness.createDatabase();
+    const consumerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const writerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-empty-snapshot-'));
+    const consumer = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+        consumerPool,
+        'companion_a',
+      ),
+    });
+    const writer = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+        writerPool,
+        'companion_a',
+      ),
+    });
+    const logicalSessionId = 'api:empty-bounded-snapshot';
+    const turnA = createTurnId();
+    const sourceTurnB = createTurnId();
+    const turnC = createTurnId();
+    const privateTurnA = 'PRIVATE-TURN-A-MUST-NOT-REACH-THE-MEMORY-SINK';
+
+    const appendTurn = async (
+      turnId: TurnRecord['turnId'],
+      content: string,
+      timestamp: number,
+    ): Promise<void> => {
+      consumer.append({
+        channelId: logicalSessionId,
+        role: 'user',
+        content,
+        timestamp,
+        authorName: 'Partner',
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId,
+          requestId: `request-${turnId}`,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      });
+      await consumer.appendTurnRecord(makeCanonicalTurnRecord(
+        logicalSessionId,
+        turnId,
+        `response-${turnId}`,
+      ));
+    };
+
+    try {
+      await inspectionPool.query(`
+        CREATE TABLE empty_snapshot_memory_effects (
+          id BIGSERIAL PRIMARY KEY,
+          content TEXT NOT NULL
+        )
+      `);
+      await appendTurn(turnA, privateTurnA, 50);
+      await appendTurn(sourceTurnB, 'Authoritative source turn B has no recovered content.', 60);
+      await appendTurn(turnC, 'Newer live turn C must remain outside the B fence.', 70);
+      expect(consumer.getRecent(logicalSessionId, 10).map(entry => entry.content)).toEqual([
+        privateTurnA,
+        'Authoritative source turn B has no recovered content.',
+        'Newer live turn C must remain outside the B fence.',
+      ]);
+
+      const liveHistoryRead = deferred();
+      const redactionFinished = deferred();
+      const getRecentMessages = vi.fn(() => {
+        const entries = consumer.getRecent(logicalSessionId, 10);
+        liveHistoryRead.resolve();
+        return entries;
+      });
+      const complete = vi.fn(async () => {
+        await redactionFinished.promise;
+        return {
+          content: `<response>
+<fact>
+<text>${privateTurnA}</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+        };
+      });
+      const processFact = vi.fn(async (fact: { text: string }) => {
+        await inspectionPool.query(
+          'INSERT INTO empty_snapshot_memory_effects (content) VALUES ($1)',
+          [fact.text],
+        );
+        return { action: 'created', memory: { id: 'memory-from-empty-snapshot' } };
+      }) as ExtractionRunOptions['processFact'];
+
+      const extraction = consumer.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        [sourceTurnB],
+        () => [],
+        async entries => runExtractionOrchestration({
+          channelId: logicalSessionId,
+          triggerReason: 'interval',
+          turnId: sourceTurnB,
+          sourceSessionId: logicalSessionId,
+          recoveredEntries: [...entries],
+          llmClient: { complete } as ExtractionRunOptions['llmClient'],
+          sessionManager: {
+            getRecentMessages,
+            characterName: 'Purrsephone',
+          } as ExtractionRunOptions['sessionManager'],
+          memoryStore: {
+            getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+          } as ExtractionRunOptions['memoryStore'],
+          promptRegistry: null,
+          gateConfig: { minImportance: 0, minConfidence: 0, minNovelty: 0 },
+          maxWrites: 3,
+          telemetryEnabled: true,
+          useCompositionalExtraction: false,
+          isAcceptingExtractions: () => true,
+          processFact,
+          emitExtractionStart: async () => undefined,
+          emitExtractionEnd: async () => undefined,
+          resolveCoveredUpToMessageId: (_channelId, entriesToCover) =>
+            entriesToCover.at(-1)?.id ?? null,
+          recordExtractionMarker: () => undefined,
+          maybePersistEmotionalState: () => undefined,
+          maybeRefreshContactProfile: () => undefined,
+        }),
+      );
+
+      const firstOutcome = await Promise.race([
+        liveHistoryRead.promise.then(() => 'live_history_read' as const),
+        extraction.then(() => 'bounded_extraction_completed' as const),
+      ]);
+      await writer.redactTurn(logicalSessionId, turnA, {
+        actor: 'operator:test',
+        reason: 'privacy revocation during empty-snapshot extraction',
+      });
+      redactionFinished.resolve();
+      await extraction;
+
+      expect(firstOutcome).toBe('bounded_extraction_completed');
+      expect(getRecentMessages).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      expect(processFact).not.toHaveBeenCalled();
+      const effects = await inspectionPool.query<{ content: string }>(
+        'SELECT content FROM empty_snapshot_memory_effects ORDER BY id',
+      );
+      expect(effects.rows).toEqual([]);
+      expect(consumer.getRecent(logicalSessionId, 10).map(entry => entry.content))
+        .not.toContain(privateTurnA);
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
       await Promise.all([

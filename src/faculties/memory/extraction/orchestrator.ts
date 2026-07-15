@@ -224,9 +224,10 @@ export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId?: string;
-	  turnId?: TurnID;
-	  sourceSessionId?: string;
-	  recoveredEntries?: SessionEntry[];
+  turnId?: TurnID;
+  sourceSessionId?: string;
+  /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
+  recoveredEntries?: SessionEntry[];
   icpCorrelation?: IcpConversationCorrelation;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
@@ -282,7 +283,7 @@ export interface ExtractionRunOptions {
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
-    const recoveredEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
+    const recoveredEntries = (options.recoveredEntries !== undefined
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
     )

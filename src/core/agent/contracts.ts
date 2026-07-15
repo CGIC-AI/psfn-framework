@@ -135,6 +135,7 @@ export interface MemoryExtractor {
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
+    /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
     recoveredEntries?: readonly SessionEntry[],
   ): Promise<void>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;

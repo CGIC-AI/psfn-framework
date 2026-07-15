@@ -2480,6 +2480,7 @@ describe('MemoryExtractor interval watermark coverage', () => {
   function buildWatermarkHarness(channelId: string, options: {
     llmClient?: any;
     entryCount?: number;
+    extractionInterval?: number;
   } = {}) {
     const entries = buildWatermarkEntries(channelId, options.entryCount ?? 10);
     const llmClient = options.llmClient ?? {
@@ -2507,7 +2508,7 @@ describe('MemoryExtractor interval watermark coverage', () => {
       memoryStore,
       embeddingService,
       eventBus,
-      { extractionInterval: 5 },
+      { extractionInterval: options.extractionInterval ?? 5 },
     );
 
     return { extractor, entries, llmClient, sessionManager, eventBus };
@@ -2590,6 +2591,49 @@ describe('MemoryExtractor interval watermark coverage', () => {
     // The recovered range is covered; the interval trigger does not re-send it.
     await extractor.maybeExtract(channelId);
     expect(llmClient.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('evaluates and advances delayed bounded snapshots without consuming live-through-J coverage', async () => {
+    const channelId = 'api:watermark-delayed-b';
+    const { extractor, entries, llmClient, sessionManager } = buildWatermarkHarness(
+      channelId,
+      { entryCount: 20, extractionInterval: 4 },
+    );
+
+    // The durable B job was delayed while the live session advanced through J.
+    // Its fenced snapshot covers only A-B, so it must neither read nor mark
+    // C-J as extracted.
+    await extractor.maybeExtract(
+      channelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      entries.slice(0, 4),
+    );
+
+    // A later exact snapshot through D adds four genuinely uncovered entries.
+    // It must still trigger even though live history was already at J when B ran.
+    await extractor.maybeExtract(
+      channelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      entries.slice(0, 8),
+    );
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(sessionManager.getMessageCount).not.toHaveBeenCalled();
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    const prompts = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls
+      .map(([context]) => context.systemPrompt as string);
+    expect(prompts[0]).toContain('detail 4');
+    expect(prompts[0]).not.toContain('detail 5');
+    expect(prompts[1]).toContain('detail 8');
+    expect(prompts[1]).not.toContain('detail 9');
   });
 });
 

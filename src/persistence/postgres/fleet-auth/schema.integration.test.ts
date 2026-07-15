@@ -1513,6 +1513,32 @@ describe('fleet_auth Postgres authority boundary', () => {
         at: '2026-07-15T12:00:00.000Z',
       })).rejects.toThrow(/exact scope/);
 
+      // Even an otherwise exact ceremony becomes unusable after the authority
+      // epoch advances. The caller cannot replay a trusted-host decision from
+      // a stale floor projection.
+      const staleCeremonyId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb, 2,
+                 clock_timestamp() + interval '5 minutes')`,
+        [staleCeremonyId, 'c'.repeat(64), subjectId, companionId, JSON.stringify(exactScope)],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: staleCeremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:00:00.000Z',
+      })).rejects.toThrow(/stale auth epoch/);
+
       // Expiry is database-owned. Backdating the caller-provided event time
       // cannot revive an already expired ceremony.
       const expiredCeremonyId = randomUUID();

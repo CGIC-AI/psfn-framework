@@ -291,6 +291,10 @@ export class FakeIntentionPool {
       row.merged_from_ids = mergedFromIds;
       row.split_from_id = splitFromId;
       row.origin_icp_root_initiation_id = originIcpRootInitiationId;
+      if (normalized.includes('resolved_at = NULL')) {
+        row.resolved_at = null;
+        row.resolution_outcome = null;
+      }
       return { rows: [row as Row] };
     }
 
@@ -403,9 +407,11 @@ export class FakeIntentionPool {
     if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('ORDER BY created_at ASC, id ASC')) {
       const [maybeContactId] = values as [string | undefined];
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
+      const pendingOnly = normalized.includes('activated_at IS NULL');
+      const excludesDampened = normalized.includes('dampened_at IS NULL');
       const rows = [...this.pendingFollowUps.values()]
-        .filter(row => row.activated_at === null)
-        .filter(row => row.dampened_at === null)
+        .filter(row => !pendingOnly || row.activated_at === null)
+        .filter(row => !excludesDampened || row.dampened_at === null)
         .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
         .map(row => row as Row);

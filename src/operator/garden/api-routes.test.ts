@@ -45,7 +45,7 @@ import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.j
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
-import { saveSchedulerConfig } from '../../system/config/scheduler-config.js';
+import { loadSchedulerConfig, saveSchedulerConfig } from '../../system/config/scheduler-config.js';
 import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -3377,7 +3377,9 @@ describe('AdminServer JSON API routes', () => {
     const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
     expect(typeof persistedPrimaryModel).toBe('string');
     expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
-    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.salienceDecayIntervalMs);
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(
+      loadSchedulerConfig(tempDir).salienceDecayIntervalMs,
+    );
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -4372,6 +4374,7 @@ describe('AdminServer JSON API routes', () => {
         maxArcsPerRun: 12,
         maxEpisodesPerRun: 60,
       },
+      icpAutonomy: loadSchedulerConfig(tempDir).icpAutonomy,
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

@@ -43,6 +43,7 @@ import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminConcernService,
@@ -257,6 +258,7 @@ export function buildAdminApiRoutes(options: {
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  chargeCostReconciliationService?: AdminChargeCostReconciliationService | null;
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
@@ -309,6 +311,7 @@ export function buildAdminApiRoutes(options: {
     imagesService,
     auditHistoryService,
     chargeLedgerService,
+    chargeCostReconciliationService,
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
@@ -421,6 +424,7 @@ export function buildAdminApiRoutes(options: {
       dashboardService,
       auditHistoryService,
       chargeLedgerService,
+      chargeCostReconciliationService,
       modelUsageService,
       observerEvalSidecarService,
       actionPipeService,

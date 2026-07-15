@@ -3,9 +3,11 @@
 
 import type {
   Attachment,
+  ChannelType,
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMCallAccountingContext,
   LLMSystemPromptCacheBoundaries,
   LLMUsageDetails,
   ModelThinkingEffort,
@@ -13,6 +15,10 @@ import type {
   SubstrateMessage,
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
+import type {
+  ChargePolicyRuntimeLane,
+  ChargePolicySurface,
+} from '../../shared/contracts/charge-policy.js';
 import type {
   ImageGenerationResult,
   ImageCreateParams as PrimitiveImageCreateParams,
@@ -60,15 +66,31 @@ export interface GatewayCorrelationParams {
    * connection's identified companionId and disconnects on mismatch.
    */
   companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   callType?: ObservabilityCallType;
   originType?: ObservabilityCallType;
   originStage?: string;
   toolName?: string;
   toolCallId?: string;
   purpose?: string;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  chargeEventId?: string;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
 }
 
 export interface LLMChatParams extends GatewayCorrelationParams {
@@ -90,6 +112,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   repetitionPenalty?: number;
   frequencyPenalty?: number;
   tools?: ToolSchema[];
+  accounting?: LLMCallAccountingContext;
 }
 
 export interface LLMCompleteParams extends GatewayCorrelationParams {
@@ -112,7 +135,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   frequencyPenalty?: number;
 }
 
-export interface LLMEmbedParams {
+export interface LLMEmbedParams extends GatewayCorrelationParams {
   texts: string[];
 }
 
@@ -881,4 +904,5 @@ export const GatewayErrors = {
   // leaked into egress (prompt leak / hijack tripwire). The error message is
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
+  MODEL_BUDGET_BLOCKED: -32015,
 } as const;

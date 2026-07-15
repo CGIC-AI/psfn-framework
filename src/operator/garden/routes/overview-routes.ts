@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../../../channels/backplane/http/primitives.js';
+import { sendJson, sendText } from '../../../channels/backplane/http/primitives.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { MODEL_USAGE_CALL_KINDS, type ModelUsageCallKind } from '../../../shared/telemetry/model-usage.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import { buildAdminSatelliteRegistryView } from '../services/satellite-registry-service.js';
@@ -16,6 +15,7 @@ import {
 import type {
   AdminActionPipeService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminDashboardService,
   AdminModelUsageService,
@@ -34,9 +34,12 @@ import type {
 import { parseAdminJsonBody } from '../request-body.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
+import { parseModelUsageQuery } from './model-usage-query.js';
+import { parseChargeCostQuery } from './charge-cost-query.js';
 
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
+const CHARGE_COST_UNAVAILABLE_ERROR = 'Charge-cost reconciliation unavailable';
 const MODEL_USAGE_UNAVAILABLE_ERROR = 'Model usage telemetry backend unavailable';
 const OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR = 'Observer eval sidecar backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
@@ -130,20 +133,6 @@ function parseAuditSourceQuery(
   };
 }
 
-function parseModelUsageCallKindQuery(
-  value: string | null,
-): { ok: true; value?: ModelUsageCallKind } | { ok: false; error: string } {
-  if (value === null || value.trim() === '') return { ok: true };
-  const normalized = value.trim();
-  if (MODEL_USAGE_CALL_KINDS.includes(normalized as ModelUsageCallKind)) {
-    return { ok: true, value: normalized as ModelUsageCallKind };
-  }
-  return {
-    ok: false,
-    error: `Invalid callKind query parameter. Expected one of: ${MODEL_USAGE_CALL_KINDS.join(', ')}.`,
-  };
-}
-
 function parseObserverEvalPrivacyClassQuery(
   value: string | null,
 ): { ok: true; value?: typeof OBSERVER_EVAL_PRIVACY_CLASSES[number] } | { ok: false; error: string } {
@@ -205,6 +194,7 @@ export function buildAdminOverviewRoutes(options: {
   dashboardService: AdminDashboardService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  chargeCostReconciliationService?: AdminChargeCostReconciliationService | null;
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
@@ -215,6 +205,7 @@ export function buildAdminOverviewRoutes(options: {
     dashboardService,
     auditHistoryService,
     chargeLedgerService,
+    chargeCostReconciliationService,
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
@@ -351,18 +342,23 @@ export function buildAdminOverviewRoutes(options: {
         const url = parseRequestUrl(req, '/api/admin/dashboard');
         const costWindowParam = url.searchParams.get('costWindow');
         if (costWindowParam !== null && !isDashboardCostWindow(costWindowParam)) {
-          sendJson(res, 400, { error: 'Invalid costWindow query parameter. Expected today, week, or month.' });
+          sendJson(
+            res,
+            400,
+            { error: 'Invalid costWindow query parameter. Expected today, week, or month.' },
+            ADMIN_DYNAMIC_JSON_HEADERS,
+          );
           return;
         }
         const costWindow = resolveDashboardCostWindow(costWindowParam);
         dashboardService.getDashboardData({ costWindow }).then(
           (payload) => {
-            sendJson(res, 200, payload);
+            sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS);
           },
           (error) => {
             sendJson(res, 500, {
               error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
-            });
+            }, ADMIN_DYNAMIC_JSON_HEADERS);
           },
         );
       },
@@ -477,6 +473,36 @@ export function buildAdminOverviewRoutes(options: {
     },
     {
       method: 'GET',
+      match: exactPath('/api/admin/charge-costs'),
+      handle: (req, res) => {
+        if (!chargeCostReconciliationService) {
+          sendJson(res, 503, { error: CHARGE_COST_UNAVAILABLE_ERROR });
+          return;
+        }
+        const url = parseRequestUrl(req, '/api/admin/charge-costs');
+        const query = parseChargeCostQuery(url.searchParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
+          return;
+        }
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Charge-cost query is outside this Garden tenant.' });
+          return;
+        }
+        chargeCostReconciliationService.getChargeCostReconciliation(query.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to reconcile charge and model-usage telemetry'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'GET',
       match: exactPath('/api/admin/model-usage'),
       handle: (req, res) => {
         if (!modelUsageService) {
@@ -485,44 +511,66 @@ export function buildAdminOverviewRoutes(options: {
         }
 
         const url = parseRequestUrl(req, '/api/admin/model-usage');
-        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
-        if (!limit.ok) {
-          sendJson(res, 400, { error: limit.error });
+        const query = parseModelUsageQuery(url.searchParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
           return;
         }
-        const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
-        if (!sinceMs.ok) {
-          sendJson(res, 400, { error: sinceMs.error });
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Model usage query is outside this Garden tenant.' });
           return;
         }
-        const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
-        if (!untilMs.ok) {
-          sendJson(res, 400, { error: untilMs.error });
-          return;
-        }
-        const callKind = parseModelUsageCallKindQuery(url.searchParams.get('callKind'));
-        if (!callKind.ok) {
-          sendJson(res, 400, { error: callKind.error });
-          return;
-        }
-        const provider = url.searchParams.get('provider')?.trim() || undefined;
-        const model = url.searchParams.get('model')?.trim() || undefined;
-        const toolName = url.searchParams.get('toolName')?.trim() || undefined;
-        const runId = url.searchParams.get('runId')?.trim() || undefined;
 
-        modelUsageService.getModelUsageData({
-          ...(limit.value !== undefined ? { limit: limit.value } : {}),
-          ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
-          ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-          ...(toolName ? { toolName } : {}),
-          ...(callKind.value !== undefined ? { callKind: callKind.value } : {}),
-          ...(runId ? { runId } : {}),
-        }).then(
+        modelUsageService.getModelUsageData(query.value).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/model-usage/export'),
+      handle: (req, res) => {
+        if (!modelUsageService?.exportModelUsageData) {
+          sendJson(res, 503, { error: MODEL_USAGE_UNAVAILABLE_ERROR });
+          return;
+        }
+        const url = parseRequestUrl(req, '/api/admin/model-usage/export');
+        const formats = url.searchParams.getAll('format');
+        if (formats.length !== 1 || (formats[0] !== 'csv' && formats[0] !== 'json')) {
+          sendJson(res, 400, { error: 'format query parameter must be exactly one of: csv, json.' });
+          return;
+        }
+        const queryParams = new URLSearchParams(url.searchParams);
+        queryParams.delete('format');
+        const query = parseModelUsageQuery(queryParams);
+        if (!query.ok) {
+          sendJson(res, 400, { error: query.error });
+          return;
+        }
+        if (
+          query.value.companionId
+          && config.companionId
+          && query.value.companionId !== config.companionId
+        ) {
+          sendJson(res, 403, { error: 'Model usage export is outside this Garden tenant.' });
+          return;
+        }
+        modelUsageService.exportModelUsageData(query.value, formats[0]).then(
+          payload => sendText(res, 200, payload.body, {
+            ...ADMIN_DYNAMIC_JSON_HEADERS,
+            'Content-Type': payload.contentType,
+            'Content-Disposition': `attachment; filename="${payload.filename}"`,
+            'X-Model-Usage-Row-Count': String(payload.rowCount),
+          }),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to export model usage telemetry'),
           }),
         );
       },

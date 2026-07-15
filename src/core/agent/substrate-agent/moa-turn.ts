@@ -1,5 +1,5 @@
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
-import type { LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { CorrelationMetadata, LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyReferenceModelClass } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
@@ -183,6 +183,7 @@ export async function runMoaTurn(input: {
   turnId: TurnID;
   requestId: string;
   callType: ObservabilityCallType;
+  correlation?: CorrelationMetadata;
   contextWindow: number;
   emitTelemetry: (eventName: string, payload: Record<string, unknown>) => void;
 }): Promise<{
@@ -192,6 +193,17 @@ export async function runMoaTurn(input: {
   rounds: number;
   stopReason: string;
 }> {
+  const correlation: CorrelationMetadata = {
+    ...(input.correlation ?? {}),
+    turnId: input.turnId,
+    requestId: input.requestId,
+    channelId: input.message.channelId,
+    callType: input.callType,
+    originType: input.callType,
+    originStage: 'agent.moa.turn',
+    purpose: 'agent.moa.turn',
+    chargeSurface: 'externalModelConsult',
+  };
   const activeChargeContext = getRunChargeContext();
   if (!activeChargeContext && input.config?.chargePolicy) {
     return runWithChargeContext({
@@ -203,15 +215,7 @@ export async function runMoaTurn(input: {
       },
       lane: 'interactive',
       runId: input.requestId,
-      correlation: {
-        turnId: input.turnId,
-        requestId: input.requestId,
-        channelId: input.message.channelId,
-        callType: input.callType,
-        originType: input.callType,
-        originStage: 'agent.moa.turn',
-        purpose: 'agent.moa.turn',
-      },
+      correlation,
     }, async () => runMoaTurn(input));
   }
 
@@ -229,15 +233,7 @@ export async function runMoaTurn(input: {
     input.llmClient,
     input.prompt,
     {
-      correlation: {
-        turnId: input.turnId,
-        requestId: input.requestId,
-        channelId: input.message.channelId,
-        callType: input.callType,
-        originType: input.callType,
-        originStage: 'agent.moa.turn',
-        purpose: 'agent.moa.turn',
-      },
+      correlation,
       ...(input.settings.referenceModels.length > 0 ? { referenceModels: input.settings.referenceModels } : {}),
       ...(input.settings.aggregatorModel ? { aggregatorModel: input.settings.aggregatorModel } : {}),
       caps,

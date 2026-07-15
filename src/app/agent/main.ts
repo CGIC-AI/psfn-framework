@@ -163,6 +163,16 @@ async function main(): Promise<void> {
     ...(config.gatewaySessionIntegrityAuthToken
       ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
       : {}),
+    onModelBudgetBlocked: (event) => {
+      eventBus.emit('model.budget.blocked', event).catch((error) => {
+        log.error('Failed to bridge gateway model budget telemetry', {
+          error: error instanceof Error ? error.message : String(error),
+          provider: event.provider,
+          model: event.model,
+          reason: event.reason,
+        });
+      });
+    },
   });
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.

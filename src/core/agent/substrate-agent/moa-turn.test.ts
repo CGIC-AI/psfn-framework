@@ -126,6 +126,15 @@ describe('runMoaTurn', () => {
       turnId: 'turn-1',
       requestId: 'req-1',
       callType: 'chat' as ObservabilityCallType,
+      correlation: {
+        sessionId: 'logical-session-1',
+        channelId: 'api:test',
+        channelType: 'api',
+        callType: 'chat',
+        purpose: 'agent.turn',
+        conversationId: 'logical-session-1',
+        rootInitiationId: 'root-initiation-1',
+      },
       contextWindow: 1_000,
       emitTelemetry,
     });
@@ -134,6 +143,16 @@ describe('runMoaTurn', () => {
     expect(prompt).toContain('user:\nHello');
     expect(prompt).toContain('assistant:\nHi');
     expect(prompt).toContain('Current turn:\nuser:\ncurrent turn');
+    expect(mockedRunDeliberation.mock.calls[0]?.[2]).toMatchObject({
+      correlation: {
+        sessionId: 'logical-session-1',
+        channelId: 'api:test',
+        channelType: 'api',
+        conversationId: 'logical-session-1',
+        rootInitiationId: 'root-initiation-1',
+        chargeSurface: 'externalModelConsult',
+      },
+    });
   });
 
   it('emits base round and consult charge events for MoA deliberation', async () => {

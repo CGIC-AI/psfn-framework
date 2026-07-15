@@ -1,10 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { listSessions, getSessionMessages, SESSION_MESSAGE_PAGE_SIZE } from '$lib/api/endpoints/sessions';
+  import {
+    listSessions,
+    getSessionMessages,
+    getSessionTurnDetail,
+    SESSION_MESSAGE_PAGE_SIZE,
+  } from '$lib/api/endpoints/sessions';
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import type {
     ChannelInfo,
     AdminSessionMessagesData,
+    AdminSessionTurnDetailData,
     SessionEntry,
   } from '$lib/types';
 
@@ -24,6 +30,10 @@
   let messageScrollContainer = $state<HTMLDivElement | null>(null);
 
   let expandedToolCall = $state<number | null>(null);
+  let expandedTurnId = $state<string | null>(null);
+  let turnDetail = $state<AdminSessionTurnDetailData | null>(null);
+  let turnDetailLoading = $state(false);
+  let turnDetailError = $state('');
   let channelLastActivity = $state<Map<string, number>>(new Map());
   let channelSearch = $state('');
   let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
@@ -142,8 +152,14 @@
     messageOntologyViews = [];
     compactionAudits = [];
     expandedToolCall = null;
+    resetTurnDetail();
     try {
-      const data = await getSessionMessages(sessionId, { limit: SESSION_MESSAGE_PAGE_SIZE });
+      // Initial page: keep compaction summaries but drop the up-to-50 full turn
+      // snapshots — turn detail is fetched lazily on expand (bead t5z7.1).
+      const data = await getSessionMessages(sessionId, {
+        limit: SESSION_MESSAGE_PAGE_SIZE,
+        includeTurns: false,
+      });
       if (selectedSessionId !== requestSessionId) return;
       messages = data.messages;
       messageOntologyViews = data.messageOntologyViews ?? [];
@@ -179,9 +195,12 @@
     const previousScrollHeight = scrollContainer?.scrollHeight ?? 0;
     loadingOlderMessages = true;
     try {
+      // Pagination pages carry messages + ontology only (no turns, previews, or
+      // compaction) so deep scrolling stays cheap over WAN (bead t5z7.1).
       const data = await getSessionMessages(requestSessionId, {
         limit: SESSION_MESSAGE_PAGE_SIZE,
         beforeId: oldestLoadedMessageId,
+        messagesOnly: true,
       });
       if (selectedSessionId !== requestSessionId) return;
 
@@ -208,6 +227,52 @@
   function handleMessagesScroll() {
     if (!messageScrollContainer || messageScrollContainer.scrollTop > 48) return;
     void loadOlderMessages();
+  }
+
+  // Turn identity lives on the message metadata envelope ({ turn: { turnId } }).
+  // Malformed metadata simply yields no turn-detail affordance for that row.
+  function extractTurnId(msg: SessionEntry): string | null {
+    if (!msg.metadata) return null;
+    try {
+      const parsed = JSON.parse(msg.metadata) as { turn?: { turnId?: unknown } };
+      const turnId = parsed?.turn?.turnId;
+      return typeof turnId === 'string' && turnId.trim() ? turnId.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resetTurnDetail() {
+    expandedTurnId = null;
+    turnDetail = null;
+    turnDetailError = '';
+    turnDetailLoading = false;
+  }
+
+  async function toggleTurnDetail(turnId: string) {
+    if (expandedTurnId === turnId) {
+      resetTurnDetail();
+      return;
+    }
+    if (!selectedSessionId) return;
+    const requestSessionId = selectedSessionId;
+    expandedTurnId = turnId;
+    turnDetail = null;
+    turnDetailError = '';
+    turnDetailLoading = true;
+    try {
+      const data = await getSessionTurnDetail(requestSessionId, turnId);
+      if (selectedSessionId !== requestSessionId || expandedTurnId !== turnId) return;
+      turnDetail = data;
+    } catch (e) {
+      if (selectedSessionId === requestSessionId && expandedTurnId === turnId) {
+        turnDetailError = e instanceof Error ? e.message : 'Failed to load turn detail';
+      }
+    } finally {
+      if (selectedSessionId === requestSessionId && expandedTurnId === turnId) {
+        turnDetailLoading = false;
+      }
+    }
   }
 
   function roleColor(role: string): string {
@@ -558,6 +623,27 @@
                     </button>
                     {#if expandedToolCall === i}
                       <pre class="mt-1 text-sm bg-bark-100 p-2 rounded overflow-x-auto text-shadow-700 border border-bark-300">{JSON.stringify(msg.toolCalls, null, 2)}</pre>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if extractTurnId(msg)}
+                  {@const turnId = extractTurnId(msg)}
+                  <div class="mt-2">
+                    <button
+                      onclick={() => turnId && void toggleTurnDetail(turnId)}
+                      class="text-sm text-gold-700 hover:text-gold-600"
+                    >
+                      {expandedTurnId === turnId ? 'Hide turn detail' : 'Show turn detail'}
+                    </button>
+                    {#if expandedTurnId === turnId}
+                      {#if turnDetailLoading}
+                        <p class="mt-1 text-sm text-shadow-600">Loading turn detail...</p>
+                      {:else if turnDetailError}
+                        <p class="mt-1 text-sm text-wilt-600">{turnDetailError}</p>
+                      {:else if turnDetail}
+                        <pre class="mt-1 max-h-96 text-sm bg-bark-100 p-2 rounded overflow-auto text-shadow-700 border border-bark-300">{JSON.stringify(turnDetail.turn, null, 2)}</pre>
+                      {/if}
                     {/if}
                   </div>
                 {/if}

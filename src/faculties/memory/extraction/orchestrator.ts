@@ -12,6 +12,8 @@ import {
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
 import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
@@ -115,6 +117,36 @@ function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, numb
     ambiguous_speaker: 0,
     write_cap: 0,
   };
+}
+
+const CHANNEL_PRIVACY_RESTRICTIVENESS: Record<ChannelPrivacy, number> = {
+  public: 0,
+  invite_only: 1,
+  private: 2,
+};
+
+/**
+ * Resolve memory policy from the visibility persisted with the source turns.
+ * Companion room ids do not encode public/private status, so classifying the
+ * id alone would silently collapse both room kinds to the same default.
+ * Mixed historical rows fail closed to the most restrictive valid value.
+ */
+export function resolveExtractionChannelVisibility(
+  channelId: string,
+  entries: readonly SessionEntry[],
+): ChannelPrivacy {
+  let resolved: ChannelPrivacy | undefined;
+  for (const entry of entries) {
+    const decoded = decodeStoredChannelVisibility(entry.channelVisibility);
+    if (
+      decoded
+      && (!resolved
+        || CHANNEL_PRIVACY_RESTRICTIVENESS[decoded] > CHANNEL_PRIVACY_RESTRICTIVENESS[resolved])
+    ) {
+      resolved = decoded;
+    }
+  }
+  return resolved ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
 // ── Intake sink-gate index (htm9.3) ──
@@ -258,7 +290,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
-    const channelVisibility = classifyChannelDisclosure(options.channelId).channelPrivacy;
+    const channelVisibility = resolveExtractionChannelVisibility(options.channelId, recentEntries);
     // The low-signal pre-LLM gate runs unconditionally, including for tracked
     // contacts (psfn-framework-2tmg). The former `if (!options.canonicalContactId)`
     // exemption had no documented rationale (introduced without comment or test

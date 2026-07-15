@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
@@ -17,21 +18,26 @@ import { SatelliteHubClient } from '../lib/api/client.js';
 import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
 import {
+  getServiceWorkerUpdateReady,
+  subscribeToServiceWorkerUpdates,
+} from '../lib/service-worker-updates.js';
+import {
   createInitialHubStreamState,
   HubStreamStore,
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
+import { HeadpatCoalescer } from '../lib/touch-interactions.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
+import { readCompanionUiRuntimeConfig } from './config.js';
 import { AttachmentTray, ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
 import { SettingsDrawer } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
-import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
@@ -47,11 +53,33 @@ export function App() {
   const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
+  const [spritePetted, setSpritePetted] = useState(false);
+  const [touchError, setTouchError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
+  const updateReady = useSyncExternalStore(
+    subscribeToServiceWorkerUpdates,
+    getServiceWorkerUpdateReady,
+    () => false,
+  );
   const storeRef = useRef<HubStreamStore | null>(null);
+  const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
+  const headpatReactionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const coalescer = new HeadpatCoalescer({
+      emit: (interaction) => {
+        try {
+          const store = storeRef.current;
+          if (!store) throw new Error('Satellite Hub is not connected');
+          store.sendTouchInteraction(interaction);
+          setTouchError(null);
+        } catch (error) {
+          setTouchError(error instanceof Error ? error.message : 'Headpat delivery failed');
+        }
+      },
+    });
+    headpatCoalescerRef.current = coalescer;
     try {
       const config = readCompanionUiRuntimeConfig();
       setHubUrl(config.hubWsUrl);
@@ -60,6 +88,11 @@ export function App() {
     }
 
     return () => {
+      coalescer.destroy();
+      headpatCoalescerRef.current = null;
+      if (headpatReactionTimerRef.current !== null) {
+        window.clearTimeout(headpatReactionTimerRef.current);
+      }
       storeRef.current?.destroy();
       storeRef.current = null;
     };
@@ -157,6 +190,20 @@ export function App() {
     storeRef.current?.sendUserText(text, { interrupt: true });
   }
 
+  function giveHeadpat() {
+    setSpritePetted(true);
+    if (headpatReactionTimerRef.current !== null) {
+      window.clearTimeout(headpatReactionTimerRef.current);
+    }
+    headpatReactionTimerRef.current = window.setTimeout(() => {
+      setSpritePetted(false);
+      headpatReactionTimerRef.current = null;
+    }, 900);
+    if (canSend) {
+      headpatCoalescerRef.current?.tap();
+    }
+  }
+
   function stopGeneration() {
     storeRef.current?.interrupt();
   }
@@ -216,16 +263,19 @@ export function App() {
           state={spriteState}
           animated={spriteAnimations}
           label={identityLabel}
+          onHeadpat={giveHeadpat}
+          petted={spritePetted}
         />
       )}
 
       <ToastLayer
         approvals={approvals}
         artifacts={artifacts}
-        error={streamState.failure?.message ?? configError}
+        error={streamState.failure?.message ?? touchError ?? configError}
         onApprovalDecision={decideApproval}
         onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}
+        updateReady={updateReady}
         voiceNotice={composer.voiceNotice}
       />
 

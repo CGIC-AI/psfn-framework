@@ -17,6 +17,7 @@ import {
 } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
+  isStrictSubpath,
   resolveGeneratedImagesDir,
   resolveResearchLibraryDir,
   resolveResearchLibraryEntriesDir,
@@ -41,11 +42,6 @@ const PREVIEW_MAX_CHARS = 12_000;
 export interface ResearchLibraryStoreOptions {
   companionDataDir: string;
   workspacePath?: string;
-}
-
-function isStrictSubpath(path: string, root: string): boolean {
-  const relativePath = relative(resolve(root), resolve(path));
-  return relativePath.length > 0 && !relativePath.startsWith('..');
 }
 
 function assertNonEmpty(value: string | undefined, field: string): string {

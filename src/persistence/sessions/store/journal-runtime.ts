@@ -225,11 +225,16 @@ export class SessionJournalRuntime {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
+      archiveFingerprint: null,
       recentEntriesByLimit: new Map(),
     };
 
     if (!existsSync(filePath)) return cache;
 
+    // Fingerprint BEFORE reading: an append that races the read leaves the
+    // fingerprint older than the file, so the next staleness check reloads
+    // (fail closed) instead of serving a cache missing the racing entry.
+    cache.archiveFingerprint = this.archivePort.fingerprintArchive(archive);
     const { entries, maxId, quarantined } = this.archivePort.readJournalFile(archive);
     if (quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
@@ -389,6 +394,9 @@ export class SessionJournalRuntime {
     this.archivePort.appendJournalEntry(params.archive, signed);
     applyJournalState(params.cache, signed);
     params.cache.lastHmac = nextHmac;
+    // Every caller holds the cross-process journal write lock here, so the
+    // refreshed fingerprint cannot absorb a concurrent foreign append.
+    params.cache.archiveFingerprint = this.archivePort.fingerprintArchive(params.archive);
     try {
       params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
     } catch (error) {

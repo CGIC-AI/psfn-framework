@@ -80,6 +80,14 @@ export interface AdminSettingsData {
   voiceProviders: AdminVoiceProviderData;
   status: AdminSettingsStatus;
   effectiveChargeQuota: EffectiveChargeQuotaState;
+  workspaceLayout?: {
+    mode: 'single' | 'fleet';
+    personalWorkspacePath: string | null;
+    sharedWorkspacePath: string | null;
+    companionSharedAccess: 'none' | 'read_only';
+    executableAutoLoad: false;
+    promptAutoLoad: false;
+  };
 }
 
 export interface SettingsValidationError {

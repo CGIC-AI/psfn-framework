@@ -1,7 +1,9 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import type { LLMProviderWireMessage } from '../../../../shared/contracts/runtime.js';
+import type { LLMProviderWireMessage, LLMSystemPromptTransport } from '../../../../shared/contracts/runtime.js';
 import { isObjectRecord as isRecord } from '../../../../shared/utils/types.js';
+import { contextMessagesToPiMessages } from '../../../../primitives/llm/message-conversion.js';
 import { convertToLlm } from '../../messages.js';
+import { serializePromptPlanForProvider, type PromptPlan } from './prompt-plan.js';
 
 function serializeMessageContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -39,4 +41,33 @@ export function rebuildProviderWireMessagesForPrompt(
     ...systemMessages,
     ...serializedTranscript,
   ];
+}
+
+/**
+ * Reconstruct the provider wire messages from a persisted turn snapshot's
+ * canonical fields, exactly the way the runtime captured them at write time
+ * (agent-invocation.ts): serialize the plan for the recorded transport to seed
+ * the system lane, convert plan.messages into the provider history, and append
+ * the current turn from promptContext.currentTurnInput.
+ *
+ * SINGLE SOURCE for both sides of the slimming contract (bead hgw3.3):
+ *   - the Garden read path derives the wire view for slim records from this;
+ *   - the persist path drops the embedded copy only when it is byte-equal to
+ *     this derivation (so group-attribution, system-speaker, MoA, and vision
+ *     turn shapes — where the shipped current message diverges from
+ *     currentTurnInput — keep the embedded capture).
+ */
+export function deriveProviderWireMessagesForTurnSnapshot(input: {
+  plan: Pick<PromptPlan, 'blocks' | 'messages'>;
+  transport: LLMSystemPromptTransport;
+  currentTurnInput: string | undefined;
+}): LLMProviderWireMessage[] {
+  const seededWireMessages = serializePromptPlanForProvider(input.plan, input.transport).providerWireMessages;
+  const historyMessages = contextMessagesToPiMessages(input.plan.messages);
+  const currentPromptMessage: AgentMessage = {
+    role: 'user',
+    content: input.currentTurnInput ?? '',
+    timestamp: 0,
+  };
+  return rebuildProviderWireMessagesForPrompt(seededWireMessages, historyMessages, currentPromptMessage);
 }

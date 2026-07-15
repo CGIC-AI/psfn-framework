@@ -1,11 +1,11 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { Attachment } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
+import { isStrictSubpath, resolvePersonalImagesDir } from '../../persistence/layout.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import type {
   ImageGenerationResult,
@@ -456,7 +456,8 @@ export function mergeChargedImageDeliverableSummaries(
 
 export async function collectGeneratedImageAttachments(params: {
   turnMessages: AgentMessage[];
-  companionDataDir: string;
+  /** Authenticated companion Personal Workspace, never companion runtime data. */
+  personalFilesDir: string;
   fetchImpl?: typeof fetch;
   galleryContext?: GeneratedImageGalleryContext;
   paidDeliverables?: readonly PendingPaidDeliverable[];
@@ -506,16 +507,36 @@ export async function collectGeneratedImageAttachments(params: {
       (now.getUTCMonth() + 1).toString().padStart(2, '0'),
       now.getUTCDate().toString().padStart(2, '0'),
     ].join('-');
-    storageDir = join(resolveGeneratedImagesDir(params.companionDataDir), dateDir);
+    storageDir = join(resolvePersonalImagesDir(params.personalFilesDir), dateDir);
     await mkdir(storageDir, { recursive: true });
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
+  const personalImagesRoot = resolvePersonalImagesDir(params.personalFilesDir);
   const attachments: Attachment[] = [];
   for (const { message, result } of imageResults) {
     for (const [index, asset] of result.images.entries()) {
+      let verifiedAsset = asset;
+      if (asset.localPath?.trim()) {
+        let canonicalRoot: string;
+        let canonicalAsset: string;
+        try {
+          [canonicalRoot, canonicalAsset] = await Promise.all([
+            realpath(personalImagesRoot),
+            realpath(asset.localPath.trim()),
+          ]);
+        } catch (error) {
+          throw new Error(`Generated image localPath must be an existing Personal Workspace image: ${String(error)}`);
+        }
+        if (!isStrictSubpath(canonicalAsset, canonicalRoot)) {
+          throw new Error('Generated image localPath escapes the authenticated companion Personal Workspace image root');
+        }
+        // Never pass a mutable symlink alias to downstream channel delivery or
+        // metadata writers after validating its target.
+        verifiedAsset = { ...asset, localPath: canonicalAsset };
+      }
       const attachment = await persistImageAsset({
-        asset,
+        asset: verifiedAsset,
         requestId: result.requestId,
         index,
         storageDir,
@@ -526,7 +547,7 @@ export async function collectGeneratedImageAttachments(params: {
         try {
           await writeGeneratedImageGalleryMetadata({
             localPath: attachment.localPath,
-            asset,
+            asset: verifiedAsset,
             attachment,
             result,
             message,

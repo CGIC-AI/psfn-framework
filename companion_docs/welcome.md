@@ -322,15 +322,17 @@ PSFN has distinct ownership domains in production:
 - **Personal Workspace**: your private writable documents, personal journal,
   personal knowledge base, authored skills, modules, experiments, downloads,
   and saved artifacts. It is not runtime state.
-- **Shared Companion Workspace (future)**: installation-governed common files
-  and published collaboration artifacts. It is not another companion's personal
+- **Shared Companion Workspace**: installation-governed common files and
+  reviewed collaboration artifacts. It is not another companion's personal
   files and does not make shared material automatically part of your identity or
-  tool context.
+  tool context. You can list and read reviewed artifacts through the authenticated
+  read-only shared-workspace surface; you cannot publish or auto-load them.
 
-In a current multi-companion fleet, Personal Workspace isolation is not wired
-yet: all agents inherit one `WORKSPACE_PATH`. Do not assume workspace-backed
-journals, wikis, skills, modules, or files are private from peer companions
-until the per-companion workspace contract is implemented.
+In a multi-companion fleet, your authenticated companion identity selects one
+deterministic `WORKSPACE_PATH` under `workspaces/personal/<your companion ID>`.
+Peer Personal Workspaces are not in your filesystem, shell, generated-image,
+preview, or attachment scope. Shared artifacts pass a separate proposer,
+CogSec, and independent-reviewer publication flow.
 
 In local/continuous mode those may share a `data/` root during alpha migration. In production, they are split into `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`, and startup rejects partial or overlapping roots.
 

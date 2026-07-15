@@ -53,6 +53,7 @@ import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
+import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
@@ -186,6 +187,7 @@ export interface GardenAdminDomainServices {
   subsystemHealth?: AdminSubsystemHealthService | null;
   toolConformance?: AdminToolConformanceService | null;
   settings: AdminSettingsService;
+  sharedWorkspace?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11 Cognitive Security tab). */
   intakeQuarantine: AdminIntakeQuarantineService;
   /** Slow-poisoning drift review cards (htm9.14 Cognitive Security tab). */

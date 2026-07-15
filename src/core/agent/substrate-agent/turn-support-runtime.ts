@@ -4,7 +4,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -640,6 +640,7 @@ export class TurnSupportRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
+    runtimeFallbackProvenance?: RuntimeFallbackProvenance,
   ): number | null {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
@@ -650,6 +651,7 @@ export class TurnSupportRuntime {
       trustLevel,
       continuityUserId,
       emotionSnapshot,
+      runtimeFallbackProvenance,
     });
   }
 

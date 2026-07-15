@@ -150,7 +150,7 @@ Postgres/pgvector-backed, split into lanes (see `docs/memory.md`). **L0** = appe
 
 ### `src/faculties` — other faculties
 
-- **wiki**: durable authored/imported reference knowledge under a companion's `WORKSPACE_PATH/knowledge/wiki` (markdown+JSON is canonical), pgvector projection is a rebuildable mirror; nightly `sleeptime-wiki-pass.ts` proposes entries with hard personal-vs-world guardrails; independent RAG budget subordinate to memory. In a current fleet, the workspace root is not yet per-companion isolated.
+- **wiki**: durable authored/imported reference knowledge under a companion's isolated `WORKSPACE_PATH/knowledge/wiki` (markdown+JSON is canonical), pgvector projection is a rebuildable mirror; nightly `sleeptime-wiki-pass.ts` proposes entries with hard personal-vs-world guardrails; independent RAG budget subordinate to memory.
 - **shards**: internal long-horizon worker plane. `ShardManager` implements both `ShardExecutionPort` and `SubagentExecutionPort`; it has lineage and fold-review building blocks, but is not an isolated full-companion clone or remote executor. Staged fold returns are reviewable; direct shard `memory.write` remains a documented limitation rather than evidence that all output is gated.
 - **subagents**: bounded short-horizon `subagent` tool (`spawn`/`message`/`wait`/`cancel`/`status`), `maxConcurrent`, recursion-blocked toolsets.
 - **skills**: file-based workflow-guidance docs, eligibility-filtered (binaries/env/config), budgeted XML prompt block, unified `skill` tool; self-authoring `SkillStore`.

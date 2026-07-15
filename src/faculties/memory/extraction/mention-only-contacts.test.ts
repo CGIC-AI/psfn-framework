@@ -95,7 +95,7 @@ describe('resolveMentionOnlyContactForFact', () => {
     contactStore = new ContactStore(db, PRIMARY_USER_ID);
   });
 
-  it('promotes an existing contact relationship from stronger recurring evidence', async () => {
+  it('does not bypass HITL by promoting an existing contact to family from extracted facts', async () => {
     const primary = contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
@@ -117,7 +117,7 @@ describe('resolveMentionOnlyContactForFact', () => {
 
     expect(resolved).toBeDefined();
     expect(resolved!.id).toBe(alex.id);
-    expect(contactStore.getById(alex.id)?.relationshipType).toBe('family');
+    expect(contactStore.getById(alex.id)?.relationshipType).toBe('stranger');
   });
 
   it('does not mint a duplicate contact when the canonical contact goes by a nickname', async () => {
@@ -238,7 +238,7 @@ describe('MemoryExtractor mention-only contacts', () => {
     expect(alexContacts).toHaveLength(1);
 
     const alex = alexContacts[0];
-    expect(alex.relationshipType).toBe('family');
+    expect(alex.relationshipType).toBe('stranger');
     expect(secondWrite.action).not.toBe('skipped');
 
     const alexMemories = memoryStore.getMemoriesByContact(alex.id, 10);
@@ -410,15 +410,15 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
       companionName: 'Aster',
     });
 
-    expect(result).toBe('friend');
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('friend');
+    expect(result).toBe('acquaintance');
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('acquaintance');
   });
 
   it('never downgrades an interlocutor with a stronger existing relationship', async () => {
     const juno = contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'family',
-    });
+    }, { actor: 'operator:test-setup' });
 
     const result = await resolveInterlocutorRelationshipRatchet({
       fact: makeFact("You're my best friend, Aster"),
@@ -468,7 +468,7 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
   });
 
-  it('never ratchets to family/partner from single weak evidence (ceiling is friend)', async () => {
+  it('never ratchets to friend/family/partner from single weak evidence (ceiling is acquaintance)', async () => {
     const juno = contactStore.upsert({
       displayName: 'Juno',
       relationshipType: 'stranger',
@@ -486,12 +486,12 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
     expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
   });
 
-  it('respects the primary-contact guard (primary interlocutor unchanged)', async () => {
+  it('allows relationship progression independently from primary trust', async () => {
     const primary = contactStore.upsert({
       displayName: 'Juno',
       discordUserId: PRIMARY_USER_ID,
     });
-    expect(contactStore.getById(primary.id)?.relationshipType).toBe('partner');
+    expect(contactStore.getById(primary.id)?.relationshipType).toBe('stranger');
 
     const result = await resolveInterlocutorRelationshipRatchet({
       fact: makeFact('Juno considers Aster their closest friend'),
@@ -501,8 +501,9 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
       companionName: 'Aster',
     });
 
-    expect(result).toBeUndefined();
-    expect(contactStore.getById(primary.id)?.relationshipType).toBe('partner');
+    expect(result).toBe('acquaintance');
+    expect(contactStore.getById(primary.id)?.trustLevel).toBe('primary');
+    expect(contactStore.getById(primary.id)?.relationshipType).toBe('acquaintance');
   });
 
   it('returns undefined and reports no promotion when the store refuses the update', async () => {
@@ -527,7 +528,7 @@ describe('resolveInterlocutorRelationshipRatchet', () => {
 
     expect(updateRelationshipType).toHaveBeenCalledWith(
       'contact-stub',
-      'friend',
+      'acquaintance',
       'system:memory_extraction:interlocutor',
     );
     expect(result).toBeUndefined();
@@ -583,7 +584,7 @@ describe('MemoryExtractor interlocutor relationship ratchet', () => {
       'Aster',
     );
 
-    expect(contactStore.getById(juno.id)?.relationshipType).toBe('friend');
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('acquaintance');
   });
 
   it('does not ratchet the interlocutor from a third-party mention on the live path', async () => {

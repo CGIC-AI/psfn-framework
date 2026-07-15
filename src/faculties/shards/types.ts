@@ -2,6 +2,10 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { ShardCreationMode as RoutingShardCreationMode } from '../../shared/routing/envelope.js';
 import type { ShardResultLineageEnvelope, ShardSourceContext } from './lineage-contracts.js';
 import type { ArtifactReturnBatch } from './artifact-return-port.js';
+import type {
+  CompanionId,
+  ShardCompanionId,
+} from '../../shared/routing/companion-id.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -52,8 +56,8 @@ export type ShardTaggedOutputKind = 'l0_output' | 'l2_memory';
 export type ShardTaggedOutputReviewState = 'pending' | 'approved' | 'blocked' | 'rejected';
 
 export interface ShardTaggedOutputProvenance {
-  coreCompanionId: string;
-  shardCompanionId: string;
+  coreCompanionId: CompanionId;
+  shardCompanionId: ShardCompanionId;
   shardId: string;
   channelId: string;
   task: string;

@@ -50,13 +50,11 @@ const RELATIONSHIP_PRIORITY: Readonly<Record<RelationshipType, number>> = {
 // Relationship ceiling for the deliberate interlocutor auto-ratchet
 // (psfn-framework-kada.1). A single extracted relational fact about the
 // conversation partner's OWN bond with the companion may raise their
-// relationshipType up to 'friend', but never beyond. 'family', 'partner', and
-// 'ai_companion' are deliberately excluded: a single weak keyword/tag inference
-// is not strong enough to justify them, and 'ai_companion' is never inferred
-// from human relational language. Reaching those tiers stays a deliberate human
-// action (admin API) or the primary-user promotion to 'partner' handled inside
-// the contact store.
-const INTERLOCUTOR_AUTO_RATCHET_TYPES: ReadonlySet<RelationshipType> = new Set([
+// relationshipType up to 'acquaintance', but never beyond. An explicit friend
+// claim can supply the low-friction signal, but its persisted target is still
+// acquaintance; a single extracted fact can never assign friend/family/partner.
+// Reaching those tiers stays on the recorded-evidence or operator-gated paths.
+const INTERLOCUTOR_AUTO_RATCHET_SOURCE_TYPES: ReadonlySet<RelationshipType> = new Set([
   'acquaintance',
   'friend',
 ]);
@@ -92,7 +90,7 @@ interface ResolveMentionOnlyContactParams {
   canonicalContactId?: string;
   canonicalContactName?: string;
   companionName?: string;
-  contactStore: Pick<ContactStorePort, 'listAll' | 'upsert' | 'updateRelationshipType'> | null;
+  contactStore: Pick<ContactStorePort, 'listAll' | 'upsert'> | null;
   memoryStore: Pick<MemoryStorePort, 'getMemoriesByChannel' | 'updateMemory'>;
 }
 
@@ -353,16 +351,6 @@ export async function resolveMentionOnlyContactForFact(
   const channelMemories = await params.memoryStore.getMemoriesByChannel(params.channelId, 50);
 
   if (existing) {
-    if (
-      typeof params.contactStore.updateRelationshipType === 'function'
-      && shouldPromoteRelationship(existing.relationshipType, candidate.relationshipType)
-    ) {
-      await params.contactStore.updateRelationshipType(
-        existing.id,
-        candidate.relationshipType,
-        'system:memory_extraction:mention_contact',
-      );
-    }
     await relinkRecurringMemories({
       memoryStore: params.memoryStore,
       candidate,
@@ -388,7 +376,11 @@ export async function resolveMentionOnlyContactForFact(
   const created = await params.contactStore.upsert(
     {
       displayName: candidate.name,
-      relationshipType: candidate.relationshipType,
+      // Contact.relationshipType describes this companion's own bond with the
+      // contact. A fact such as "Avery's sister Alex" remains a family edge in
+      // memory/social-graph evidence; it does not make Alex the companion's
+      // family and must not bypass the family/partner approval boundary.
+      relationshipType: 'stranger',
     },
     {
       actor: 'system:memory_extraction:mention_contact',
@@ -469,8 +461,8 @@ export interface InterlocutorRelationshipRatchetParams {
  *  1. the fact is relational;
  *  2. inferRelationshipTypeFromFact yields a type (same keyword/tag inference
  *     quality as the mention path);
- *  3. that type is within INTERLOCUTOR_AUTO_RATCHET_TYPES (never family/partner/
- *     ai_companion from single weak evidence);
+ *  3. that type is within INTERLOCUTOR_AUTO_RATCHET_SOURCE_TYPES and is capped to
+ *     acquaintance (never friend/family/partner/ai_companion from one fact);
  *  4. (guard #5) the fact names NO third party — if the relationship keyword is
  *     attached to a named third party ("my brother Marcus"), we defer to the
  *     mention path and never touch the interlocutor;
@@ -479,9 +471,9 @@ export interface InterlocutorRelationshipRatchetParams {
  *  6. the new type strictly outranks the current one.
  *
  * Uses a distinct actor string so the audit trail separates it from the mention
- * path. The primary-contact guard (a primary contact may only become 'partner')
- * is enforced inside ContactStore.updateRelationshipType / the Postgres adapter,
- * so a primary interlocutor is simply a no-op here — never fought.
+ * path. Monotonic rank and the store's gated-current policy keep an existing
+ * family/partner relationship unchanged. Trust remains an independent axis, so
+ * primary trust neither forces nor blocks relationship progression.
  */
 export async function resolveInterlocutorRelationshipRatchet(
   params: InterlocutorRelationshipRatchetParams,
@@ -498,7 +490,8 @@ export async function resolveInterlocutorRelationshipRatchet(
 
   const inferred = inferRelationshipTypeFromFact(params.fact);
   if (!inferred) return undefined;
-  if (!INTERLOCUTOR_AUTO_RATCHET_TYPES.has(inferred)) return undefined;
+  if (!INTERLOCUTOR_AUTO_RATCHET_SOURCE_TYPES.has(inferred)) return undefined;
+  const ratchetTarget: RelationshipType = 'acquaintance';
 
   const contact = await contactStore.getById(params.interlocutorContactId);
   if (!contact) return undefined;
@@ -519,14 +512,14 @@ export async function resolveInterlocutorRelationshipRatchet(
   // companion, not generic relational chatter.
   if (!factStatesInterlocutorBond(params.fact, params.companionName)) return undefined;
 
-  if (!shouldPromoteRelationship(contact.relationshipType, inferred)) return undefined;
+  if (!shouldPromoteRelationship(contact.relationshipType, ratchetTarget)) return undefined;
 
   const updated = await contactStore.updateRelationshipType(
     contact.id,
-    inferred,
+    ratchetTarget,
     'system:memory_extraction:interlocutor',
   );
-  return updated ? inferred : undefined;
+  return updated ? ratchetTarget : undefined;
 }
 
 export const __test = {

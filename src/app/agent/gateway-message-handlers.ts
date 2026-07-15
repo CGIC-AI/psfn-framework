@@ -49,7 +49,12 @@ export interface GatewayMessageGateway {
   discordSendMedia(channelId: string, media: Attachment): Promise<void>;
   /** Inter-companion lane (sprint 10, W6): inbound peer messages + outbound replies. */
   onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
-  companionSend(channelId: string, content: string, authorName?: string): Promise<unknown>;
+  companionSend(
+    channelId: string,
+    content: string,
+    authorName?: string,
+    replyToMessageId?: string,
+  ): Promise<unknown>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
@@ -349,6 +354,25 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
 
     const processMessage = async (): Promise<AgentResponse> => {
       trackSessionActivity(message);
+      if (message.routing?.responseMode === 'observe') {
+        await agentLoop.observeMessage(message);
+        safeguardAuditTrail.append('gateway.message.observed', {
+          route: 'handle',
+          channelId: message.channelId,
+          messageId: message.id,
+          authorId: message.authorId,
+        });
+        return {
+          content: '',
+          channelId: message.channelId,
+          metadata: {
+            model: 'observation-only',
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          },
+        };
+      }
       log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
       const routingDecision = satelliteRouting.evaluateDelegation(
         message,
@@ -626,7 +650,12 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           }
           if (response.content.trim()) {
             failureReason = 'reply_delivery_failed';
-            await gateway.companionSend(message.channelId, response.content, companionAuthorName);
+            await gateway.companionSend(
+              message.channelId,
+              response.content,
+              companionAuthorName,
+              message.id,
+            );
           }
           completed = true;
         } catch (err) {

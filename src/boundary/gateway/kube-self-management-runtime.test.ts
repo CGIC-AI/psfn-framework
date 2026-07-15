@@ -105,4 +105,50 @@ describe('resolveKubeSelfManagementController', () => {
     }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain('reason');
   });
+
+  it('composes the deploy pipeline executor only when an operator-job runner is supplied', () => {
+    const baseEnv = {
+      PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
+      PSFN_HELM_NAMESPACE: 'psfn-test',
+      PSFN_HELM_RELEASE_NAME: 'psfn',
+      PSFN_KUBE_RESOURCE_PREFIX: 'psfn-runtime',
+      PSFN_HELM_REVISION: '7',
+      PSFN_GIT_COMMIT: 'a'.repeat(40),
+      PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+    } as const;
+    const createApi = () => ({ getDeployment: vi.fn(), listPods: vi.fn() });
+
+    // Agent path (no operator-job runner): diagnose-only, credential-free.
+    const diagnoseOnly = resolveKubeSelfManagementController({
+      env: { ...baseEnv }, audit: vi.fn(async () => 1), createApi,
+    });
+    expect(diagnoseOnly).toBeDefined();
+
+    // Operator-job composition: rebuild/deploy become available.
+    const withPipeline = resolveKubeSelfManagementController({
+      env: { ...baseEnv },
+      audit: vi.fn(async () => 1),
+      createApi,
+      deployPipeline: {
+        runner: {
+          verifyPreconditions: vi.fn(),
+          archiveSource: vi.fn(),
+          runGate: vi.fn(),
+          buildImage: vi.fn(),
+          importImage: vi.fn(),
+          validateOnK3d: vi.fn(),
+          captureLiveValues: vi.fn(),
+          helmUpgrade: vi.fn(),
+        },
+        resolvePlan: () => ({
+          sourceBranch: 'feat/kube-self-management',
+          sourceCommit: 'a'.repeat(40),
+          imageRepository: 'localhost/psfn-framework',
+          imageTag: '0.1.0-kube-aaaaaaaa',
+          k3dValidation: { mode: 'skip', reason: 'no k3d' },
+        }),
+      },
+    });
+    expect(withPipeline).toBeDefined();
+  });
 });

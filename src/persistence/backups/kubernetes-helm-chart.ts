@@ -88,11 +88,11 @@ function toManifestPath(path: string): string {
   return path.split(sep).join('/');
 }
 
-function normalizeSensitiveKey(key: string): string {
+export function normalizeSensitiveKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
 }
 
-function isSensitiveValueKey(key: string): boolean {
+export function isSensitiveValueKey(key: string): boolean {
   const normalizedKey = normalizeSensitiveKey(key);
   return SENSITIVE_VALUE_KEYS.has(normalizedKey)
     || SENSITIVE_VALUE_KEY_SUFFIXES.some(suffix => normalizedKey.endsWith(suffix));

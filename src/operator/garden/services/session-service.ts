@@ -29,6 +29,13 @@ import {
   toOperatorVisibleCogSecEvent,
 } from '../../../core/cogsec/safe-log.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import { sanitizeObservedMemory, type ObservedMemory } from '../../../core/turns/observability.js';
+import {
+  resolveTurnRecordMemoryCandidates,
+  collectTurnRecordMemoryRefIds,
+  type ObservedMemoryResolver,
+} from '../../../persistence/sessions/turn-record-memory-refs.js';
+import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
@@ -723,7 +730,7 @@ export class AdminSessionDataService implements AdminSessionService {
   ): Promise<AdminSessionMessagesData> {
     const beforeId = normalizeBeforeId(options.beforeId);
     if (beforeId !== null) {
-      return this.getSessionMessages(sessionId, options);
+      return await this.getSessionMessages(sessionId, options);
     }
 
     const pageLimit = normalizePageLimit(options.limit);
@@ -735,21 +742,59 @@ export class AdminSessionDataService implements AdminSessionService {
     const authenticatedMessages = tailMessages
       ? mergeAuthenticatedJournalWithSessionTail(authenticatedJournalMessages, tailMessages).slice(-pageLimit)
       : authenticatedJournalMessages;
-    return this.buildSessionMessages(sessionId, options, authenticatedMessages);
+    return await this.buildSessionMessages(sessionId, options, authenticatedMessages);
   }
 
-  getSessionMessages(
+  async getSessionMessages(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions = {},
-  ): AdminSessionMessagesData {
-    return this.buildSessionMessages(sessionId, options);
+  ): Promise<AdminSessionMessagesData> {
+    return await this.buildSessionMessages(sessionId, options);
   }
 
-  private buildSessionMessages(
+  /**
+   * Resolve retrieved-memory candidate refs (bead psfn-framework-jsi9) against
+   * the live memory store for a batch of turn records, before their snapshots
+   * are cloned into the Loom view. This is the ONLY read boundary that resolves
+   * these refs — the live-agent hot path never reads `snapshot.memory`. A memory
+   * that is gone or has been soft-deleted at read time heals (its candidate is
+   * dropped), which is how memory deletion/redaction propagates into old turn
+   * records. Records without a ref (old fat records) pass through untouched, so
+   * no memory-store round-trip happens for them.
+   */
+  private async resolveTurnRecordMemoryRefs(records: TurnRecord[]): Promise<TurnRecord[]> {
+    const ids = new Set<string>();
+    for (const record of records) {
+      for (const id of collectTurnRecordMemoryRefIds(record)) ids.add(id);
+    }
+    if (ids.size === 0) return records;
+    const memoryStore = this.deps.memoryStore;
+    if (!memoryStore) {
+      throw new Error(
+        'Cannot resolve turn-record memory candidate refs: no memoryStore is configured on the session service',
+      );
+    }
+    const resolved = new Map<string, ObservedMemory>();
+    await Promise.all(
+      [...ids].map(async (id) => {
+        const memory = await memoryStore.getById(id);
+        // A soft-deleted memory (deletedAt set) is treated as absent so that a
+        // deletion after the turn suppresses the memory instead of resurrecting
+        // it from the frozen turn record.
+        if (memory && memory.deletedAt === undefined) {
+          resolved.set(id, sanitizeObservedMemory(memory));
+        }
+      }),
+    );
+    const resolve: ObservedMemoryResolver = (id) => resolved.get(id);
+    return records.map(record => resolveTurnRecordMemoryCandidates(record, resolve));
+  }
+
+  private async buildSessionMessages(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions,
     firstPageMessages?: readonly SessionEntry[],
-  ): AdminSessionMessagesData {
+  ): Promise<AdminSessionMessagesData> {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
     const totalMessages = this.deps.sessionStore.count(sessionId);
@@ -785,22 +830,23 @@ export class AdminSessionDataService implements AdminSessionService {
         return preview ? [{ sessionEntryId: entry.id, preview }] : [];
       })
       : [];
-    const turns = includeTurnDetail
-      ? this.deps.sessionStore
-        .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
-        .map((record) => {
-          const turnData = this.turnObservability.buildTurnData(record);
-          return {
-            ...turnData,
-            continuityProvenance: buildContinuityProvenanceViews(
-              record.turnId,
-              record.channelId,
-              currentVisibility,
-              turnData.snapshot?.sessionContext?.continuityEntries ?? [],
-            ),
-          };
-        })
+    const turnRecords = includeTurnDetail
+      ? await this.resolveTurnRecordMemoryRefs(
+        this.deps.sessionStore.getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT),
+      )
       : [];
+    const turns = turnRecords.map((record) => {
+      const turnData = this.turnObservability.buildTurnData(record);
+      return {
+        ...turnData,
+        continuityProvenance: buildContinuityProvenanceViews(
+          record.turnId,
+          record.channelId,
+          currentVisibility,
+          turnData.snapshot?.sessionContext?.continuityEntries ?? [],
+        ),
+      };
+    });
     const compactionAuditViews = options.messagesOnly
       ? []
       : this.deps.sessionStore
@@ -835,7 +881,7 @@ export class AdminSessionDataService implements AdminSessionService {
    * unknown one) fails closed with AdminSessionTurnNotFoundError so the route
    * can answer 404 rather than silently returning an empty turn.
    */
-  getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData {
+  async getSessionTurnDetail(sessionId: string, turnId: string): Promise<AdminSessionTurnDetailData> {
     const normalizedTurnId = turnId.trim();
     if (!normalizedTurnId) {
       throw new AdminSessionTurnNotFoundError(sessionId, turnId);
@@ -851,7 +897,8 @@ export class AdminSessionDataService implements AdminSessionService {
     const recentEntry = this.deps.sessionStore.getRecent(sessionId, 1).at(0);
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
       ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
-    const turnData = this.turnObservability.buildTurnData(record);
+    const [resolvedRecord] = await this.resolveTurnRecordMemoryRefs([record]);
+    const turnData = this.turnObservability.buildTurnData(resolvedRecord!);
     const turn: AdminSessionTurnData = {
       ...turnData,
       continuityProvenance: buildContinuityProvenanceViews(

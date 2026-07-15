@@ -15,9 +15,6 @@ import {
   tokenizeForExplicitMatch,
 } from './scoring.js';
 
-const RECENT_MEMORY_AUGMENT_MIN_OVERLAP = 2;
-const RECENT_MEMORY_AUGMENT_BASE_SIMILARITY = 0.62;
-
 export function mergeScoredMemoryCandidates(
   primary: Array<PurrMemory & { similarity: number }>,
   augment: Array<PurrMemory & { similarity: number }>,
@@ -82,14 +79,14 @@ export async function collectRecentLexicalMemoryCandidates(input: {
           longOverlap = true;
         }
       }
-      if (overlap < RECENT_MEMORY_AUGMENT_MIN_OVERLAP || !longOverlap) continue;
+      if (overlap < policy.lexicalAugment.minOverlap || !longOverlap) continue;
 
       const overlapWeight = Math.min(0.24, overlap * 0.035);
       const salienceWeight = clamp(memory.salience, 0, 1) * 0.08;
       const importanceWeight = clamp(memory.importance, 0, 1) * 0.06;
       const similarity = Math.min(
         0.92,
-        RECENT_MEMORY_AUGMENT_BASE_SIMILARITY + overlapWeight + salienceWeight + importanceWeight,
+        policy.lexicalAugment.baseSimilarity + overlapWeight + salienceWeight + importanceWeight,
       );
       candidates.push({ ...cloneMemory(memory), similarity });
     }

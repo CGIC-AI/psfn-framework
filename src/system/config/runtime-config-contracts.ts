@@ -266,6 +266,30 @@ export interface SubstrateConfig {
   observerEvalSidecar?: ObserverEvalSidecarSettings;
   sessionTailCache?: SessionTailCacheSettings;
   shardToolsets?: ShardToolsetConfig;
+  /** Concurrency cap on simultaneously active subagent tasks (zet.7). */
+  subagentMaxConcurrent?: number;
+  /** Concurrency cap on simultaneously active shards (zet.7). */
+  shardMaxConcurrent?: number;
+  /** Shard heartbeat silence (ms) before a shard is marked degraded/stale (zet.7). */
+  shardHeartbeatStaleAfterMs?: number;
+  /** Shard heartbeat silence (ms) before a shard is marked offline (zet.7). */
+  shardHeartbeatDisconnectAfterMs?: number;
+  /** Max document attachment size accepted by file ingest (bytes, zet.7). */
+  documentIngestMaxBytes?: number;
+  /** Max plain-text attachment size accepted by file ingest (bytes, zet.7). */
+  documentIngestTextMaxBytes?: number;
+  /** Char cap on parsed attachment text injected into the prompt (zet.7). */
+  documentIngestPromptChars?: number;
+  /** Char cap on parsed attachment text written to the sidecar file (zet.7). */
+  documentIngestSidecarChars?: number;
+  /** Overall wait cap (ms) for FAL image queue results (zet.7). */
+  imageFalTimeoutMs?: number;
+  /** Poll cadence (ms) for FAL image queue status (zet.7). */
+  imageFalPollIntervalMs?: number;
+  /** Overall wait cap (ms) for ComfyUI workflow completion (zet.7). */
+  imageComfyTimeoutMs?: number;
+  /** Poll cadence (ms) for ComfyUI workflow history (zet.7). */
+  imageComfyPollIntervalMs?: number;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
   discordTriggerWords?: string[];
@@ -285,6 +309,12 @@ export interface SubstrateConfig {
   voiceReadyCueText?: string;
   voiceDaveEncryption?: boolean;
   voiceDecryptionFailureTolerance?: number;
+  /** Idle-connection timeout for the voice websocket session before force-close. */
+  voiceSessionTimeoutMs?: number;
+  /** Maximum inbound voice websocket frame size (bytes) before rejection. */
+  voiceMaxFrameBytes?: number;
+  /** Backpressure cap on queued inbound voice frames before overflow close. */
+  voiceMaxPendingFrames?: number;
   sttProvider?: StreamingSttProvider | 'disabled';
   ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
@@ -305,6 +335,10 @@ export interface SubstrateConfig {
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  /** Per-code-block sandbox execution timeout (ms) for the analysis workbench. */
+  analysisWorkbenchExecutionTimeoutMs?: number;
+  /** Character cap on a single analysis-workbench code execution's output. */
+  analysisWorkbenchOutputTruncation?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];

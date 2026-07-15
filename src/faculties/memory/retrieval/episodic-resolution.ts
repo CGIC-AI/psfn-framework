@@ -1,5 +1,6 @@
 import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import type { MemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import type { MemoryScopeQuery } from '../types.js';
 import {
   cloneEpisodicRetrievalChain,
@@ -22,6 +23,7 @@ export async function resolveEpisodicChains(input: {
     channelDisclosure: ChannelDisclosureContext;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
+    memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   };
   wrapError(error: unknown): Error;
 }): Promise<EpisodicRetrievalChain[]> {

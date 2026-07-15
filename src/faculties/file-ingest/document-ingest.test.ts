@@ -6,6 +6,7 @@ import {
   appendDocumentIngestToContent,
   ingestDocumentAttachments,
   parseDocumentBytes,
+  resolveDocumentIngestLimits,
   toDocumentAttachmentCandidate,
 } from './document-ingest.js';
 import { classifyAttachmentQuarantineRisk } from './quarantine.js';
@@ -576,5 +577,95 @@ describe('document file ingest faculty (extracted from Discord, htm9.9)', () => 
     });
     expect(executableDecision.quarantined).toBe(true);
     expect(executableDecision.reasons).toContain('executable_mode_bits');
+  });
+
+  // ── zet.7: owner-file backed ingest caps ──
+  describe('document ingest limits (zet.7 settings wiring)', () => {
+    it('resolves operator settings and preserves compiled defaults exactly', () => {
+      const resolved = resolveDocumentIngestLimits({
+        documentIngestMaxBytes: 1_048_576,
+        documentIngestTextMaxBytes: 65_536,
+        documentIngestPromptChars: 5_000,
+        documentIngestSidecarChars: 50_000,
+      });
+      expect(resolved).toEqual({
+        documentMaxBytes: 1_048_576,
+        textDocumentMaxBytes: 65_536,
+        parsedPromptChars: 5_000,
+        parsedSidecarChars: 50_000,
+      });
+
+      // Compiled defaults preserved exactly when unset.
+      expect(resolveDocumentIngestLimits()).toEqual({
+        documentMaxBytes: 16 * 1024 * 1024,
+        textDocumentMaxBytes: 4 * 1024 * 1024,
+        parsedPromptChars: 24_000,
+        parsedSidecarChars: 240_000,
+      });
+    });
+
+    it('enforces an operator-lowered byte cap at ingest (wiring proof)', async () => {
+      const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-ingest-limits-'));
+      try {
+        const text = Buffer.from('short but over the tiny operator cap', 'utf8');
+        const summary = await ingestDocumentAttachments([{
+          id: 'att-capped',
+          name: 'notes.txt',
+          url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
+          contentType: 'text/plain',
+          declaredContentType: 'text/plain',
+          sizeBytes: text.byteLength,
+          bytes: text,
+        }], {
+          channel: 'discord' as const,
+          personalFilesDir,
+          channelId: 'discord-channel',
+          messageId: 'message-capped',
+          authorId: 'user-1',
+          createdAt: new Date('2026-06-29T12:00:00.000Z'),
+          limits: resolveDocumentIngestLimits({
+            documentIngestMaxBytes: 8_192,
+            documentIngestTextMaxBytes: 16,
+          }),
+        });
+
+        expect(summary.results).toHaveLength(0);
+        expect(summary.failures).toHaveLength(1);
+        expect(summary.failures[0]!.reason).toContain('max 16');
+      } finally {
+        rmSync(personalFilesDir, { recursive: true, force: true });
+      }
+    });
+
+    it('applies an operator-lowered prompt char cap to parsed text (wiring proof)', async () => {
+      const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-ingest-prompt-cap-'));
+      try {
+        const text = Buffer.from(`long parsed body ${'x'.repeat(200)}`, 'utf8');
+        const summary = await ingestDocumentAttachments([{
+          id: 'att-prompt-cap',
+          name: 'notes.txt',
+          url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
+          contentType: 'text/plain',
+          declaredContentType: 'text/plain',
+          sizeBytes: text.byteLength,
+          bytes: text,
+        }], {
+          channel: 'discord' as const,
+          personalFilesDir,
+          channelId: 'discord-channel',
+          messageId: 'message-prompt-cap',
+          authorId: 'user-1',
+          createdAt: new Date('2026-06-29T12:00:00.000Z'),
+          limits: resolveDocumentIngestLimits({ documentIngestPromptChars: 32 }),
+        });
+
+        expect(summary.failures).toHaveLength(0);
+        expect(summary.results).toHaveLength(1);
+        expect(summary.results[0]!.truncatedForPrompt).toBe(true);
+        expect(summary.results[0]!.promptText).toContain('[Parsed attachment truncated for prompt');
+      } finally {
+        rmSync(personalFilesDir, { recursive: true, force: true });
+      }
+    });
   });
 });

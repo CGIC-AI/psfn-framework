@@ -159,7 +159,7 @@ function cloneShallowRecord(value: Record<string, unknown>): Record<string, unkn
   return cloneUnknownValue(value);
 }
 
-function sanitizeObservedMemory(memory: PurrMemory): ObservedMemory {
+export function sanitizeObservedMemory(memory: PurrMemory): ObservedMemory {
   const { embedding: _embedding, ...rest } = memory;
   return {
     ...rest,

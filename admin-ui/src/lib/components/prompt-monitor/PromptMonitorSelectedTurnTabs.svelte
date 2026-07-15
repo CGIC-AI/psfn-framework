@@ -664,6 +664,39 @@
           {/if}
         </p>
 
+        {#if promptLoom.providerWire.capturedWirePayload}
+          <div class="mt-3 rounded-lg border border-moss-300 bg-moss-50 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <h4 class="text-sm font-medium text-shadow-900">Raw Wire Body (captured as sent)</h4>
+              <span class="rounded-full border border-moss-300 bg-moss-100 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
+                onPayload capture
+              </span>
+              <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">
+                {promptLoom.providerWire.capturedWirePayload.toolCount} tools · {promptLoom.providerWire.capturedWirePayload.byteLength} bytes · {promptLoom.providerWire.capturedWirePayload.api}
+              </span>
+            </div>
+            <p class="mt-2 text-xs text-shadow-600">
+              The exact JSON body pi-ai sent to the provider — tool schemas included and counted once,
+              cache_control and provider transforms intact. This is byte-identical to what shipped.
+            </p>
+            <div class="mt-2">
+              {#if promptLoom.providerWire.capturedWirePayload.body !== undefined}
+                <PromptMonitorTextBlock
+                  title="Provider Request Body (raw)"
+                  value={formatJson(promptLoom.providerWire.capturedWirePayload.body)}
+                  emptyText="Captured body is empty."
+                  maxHeightClass="max-h-[36rem]"
+                />
+              {:else}
+                <p class="text-xs text-shadow-600">
+                  Body offloaded to the content-addressed sidecar and not resolved for this view (ref:
+                  {promptLoom.providerWire.capturedWirePayload.bodyRef ?? 'unknown'}). Summary above still attests what shipped.
+                </p>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
         <div class="mt-3 rounded-lg border border-bark-200 bg-bark-50 p-3">
           <h4 class="text-sm font-medium text-shadow-900">System Role Transport</h4>
           <div class="mt-2 grid grid-cols-2 gap-3 text-sm">

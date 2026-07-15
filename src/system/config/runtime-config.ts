@@ -8,18 +8,27 @@ import {
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 import { loadCapabilityTierConfig } from './capability-tier-config.js';
 import { loadChargePolicyConfig } from './charge-policy-config.js';
+import { resolveEffectiveRuntimeSettings } from './settings-overlay.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 
 export function hydrateJsonBackedRuntimeConfig(
   config: SubstrateConfig,
   options: { seedDir?: string } = {},
 ): SubstrateConfig {
   const dataDir = config.dataDir;
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR;
   const loadOptions = seedDir ? { seedDir } : undefined;
 
   const savedSettings = loadSettings(dataDir, loadOptions);
   const settingsDomains = splitSettingsByDomain(savedSettings);
-  applySettings(config, settingsDomains.runtime);
+  // Per-companion overlay (dnll.1): merge companion-data/settings.overlay.json
+  // over the global runtime settings. Absent overlay = byte-identical behavior.
+  const effectiveRuntimeSettings = resolveEffectiveRuntimeSettings(
+    settingsDomains.runtime,
+    companionDataDir,
+  );
+  applySettings(config, effectiveRuntimeSettings);
 
   const modelsConfig = loadModelsConfig(dataDir, {
     ...loadOptions,
@@ -28,11 +37,18 @@ export function hydrateJsonBackedRuntimeConfig(
   applySettings(config, modelsConfig);
   applyProvidersRuntimeConfig(config, loadProvidersConfig(dataDir, loadOptions));
 
+  // scheduler.json is a per-companion owner file (dnll.3): root it at the
+  // companion data dir so fleet companions can hold distinct circadian schedules.
+  // Salience decay cadence is decoupled from config (origin/main): the scheduler
+  // owns that cadence directly, so we no longer copy it onto the runtime config.
   resolveRuntimeSchedulerConfig({
-    dataDir,
+    dataDir: companionDataDir,
     ...(seedDir ? { seedDir } : {}),
   });
-  config.capabilityTier = loadCapabilityTierConfig(dataDir, loadOptions).tier;
+
+  // capability-tier.json is a per-companion owner file (dnll.2): root it at the
+  // companion data dir so fleet companions can hold distinct maturation tiers.
+  config.capabilityTier = loadCapabilityTierConfig(companionDataDir, loadOptions).tier;
   config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
 
   return config;

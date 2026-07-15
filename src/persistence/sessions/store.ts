@@ -48,6 +48,12 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import {
+  slimTurnRecordSessionEntriesForAppend,
+  resolveTurnRecordSessionEntries,
+  type TurnRecordRecentEntryHealDrop,
+} from './turn-record-session-refs.js';
+import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -109,6 +115,25 @@ import {
   uniqueStrings,
 } from './store/cogsec-journal-helpers.js';
 const log = createComponentLogger('SessionStore');
+
+/**
+ * Process-lifetime count of turn-record `recentEntries` heal-drops (an id-backed
+ * entry that was dropped on read because its L0 row is gone). Emitted as a stable
+ * structured event with a running counter — mirroring the turn-record quarantine
+ * telemetry in turn-records.ts, since no telemetry port is reachable from the
+ * persistence layer. Lets operators distinguish legitimate redaction/rolloff
+ * drops (this signal, expected) from structural ref corruption (fails closed
+ * upstream and throws, never reaching here). See bead psfn-framework-hgw3.10.
+ */
+let recentEntryHealDropCount = 0;
+function emitRecentEntryHealDrop(drop: TurnRecordRecentEntryHealDrop): void {
+  recentEntryHealDropCount += 1;
+  log.info('turn_record_recent_entry_heal_drop', {
+    ...drop,
+    healDropsThisProcess: recentEntryHealDropCount,
+  });
+}
+
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
@@ -1073,11 +1098,37 @@ export class SessionStore implements TranscriptSearchPort {
     );
   }
   appendTurnRecord(record: TurnRecord): void {
-    this.turnRecordStore.appendTurnRecord(record);
+    // Diet the record before it is persisted (all pure projections):
+    // - session-entry arrays → L0 id references (bead psfn-framework-9ree); the
+    //   journal stays the durable source and redaction can never be resurrected.
+    // - retrieved-memory candidate arrays → memory id references (bead
+    //   psfn-framework-jsi9); the memory store stays the durable source and a
+    //   deleted/redacted memory can never be resurrected. Memory refs are
+    //   resolved at the Garden read boundary (the only reader of these arrays),
+    //   NOT at the store read boundary — see turn-record-memory-refs.ts.
+    this.turnRecordStore.appendTurnRecord(
+      slimTurnRecordMemoryCandidatesForAppend(slimTurnRecordSessionEntriesForAppend(record)),
+    );
+  }
+  /**
+   * Reconstruct L0-referenced session entries and redaction-gate the rendered
+   * view (bead psfn-framework-9ree) at the persistence read boundary, so every
+   * consumer above the store sees fully inline, journal-current records. Pre-9ree
+   * "old fat" records (inline recentEntries, no ref) are redaction-gated against
+   * L0 here too (bead psfn-framework-hgw3.10); id-backed heal-drops emit
+   * structured telemetry via emitRecentEntryHealDrop.
+   */
+  private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
+    return resolveTurnRecordSessionEntries(
+      record,
+      (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
+      emitRecentEntryHealDrop,
+    );
   }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    return this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    const record = this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    return record ? this.resolveTurnRecordSessionRefs(record) : null;
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
@@ -1092,7 +1143,8 @@ export class SessionStore implements TranscriptSearchPort {
       }
       : null);
     if (!resolved) {
-      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
     }
     const indexEntry = this.ensureChannelIndexEntry(
       resolved.sessionId,
@@ -1108,8 +1160,12 @@ export class SessionStore implements TranscriptSearchPort {
       filePaths: resolved.filePaths,
       cache: cached ?? undefined,
     });
-    if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
-    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
+    if (tombstones.size === 0) {
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
+    }
+    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   /**
    * Bounded iterative overscan for tombstone-filtered turn-record reads:
@@ -1156,7 +1212,8 @@ export class SessionStore implements TranscriptSearchPort {
     });
     const end = Math.max(0, filtered.length - offset);
     const start = Math.max(0, end - limit);
-    return filtered.slice(start, end);
+    return filtered.slice(start, end)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   isSourceTurnRecordEligible(
     sourceChannelId: string,

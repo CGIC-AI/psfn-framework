@@ -179,6 +179,8 @@ export interface AgentCoreRuntime {
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
+  /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
+  getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
 }
 
@@ -590,6 +592,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     fatigueLedger: fatigueRuntime.fatigueLedger,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
+    // Durable model-usage query handle (b0yl.5): shared lazy store also used by
+    // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
+    // so the two do not open separate pools.
+    getModelUsageQuery,
     ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
   };
 }

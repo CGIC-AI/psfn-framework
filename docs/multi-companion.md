@@ -78,6 +78,67 @@ var. The manifest owns identity, data location, tenant schema, and Garden port;
 the runtime deterministically derives `workspaces/personal/<companionId>` from
 the validated runtime root rather than accepting another path override.
 
+## Per-companion settings overlay
+
+The single-release fleet shares one `settings.json` on the system-data root, so
+every setting is cluster-global by default. A companion can override a scoped
+whitelist of keys with an **optional** `settings.overlay.json` in its own
+`companionDataDir` (`src/system/config/settings-overlay.ts`).
+
+- **Whitelist only.** The overlay may set `activeTimezone`, the `voice*` block
+  (`voiceEnabled`, `ttsProvider`, `voiceId`, `voiceTargetGuildId`,
+  `voiceTargetUserId`, `voiceReadyCueText`, `echoTts*`, `sttProvider`,
+  `deepgram*`, `elevenLabs*`), `observerEvalSidecar`, `emotionScoping`,
+  `uiThemeId`, and `discordTrigger*`. `COMPANION_SETTINGS_OVERLAY_WHITELIST` is
+  the single source of truth; the settings contract derives a `scope`
+  (`global` | `perCompanion`) per field from it.
+- **Fail closed.** Any key outside the whitelist, malformed JSON, or a non-object
+  overlay aborts startup — the runtime never silently drops the offending key or
+  falls back to global settings for a broken overlay.
+- **Deep-merged, re-validated.** Whitelisted keys are deep-merged over the global
+  runtime settings (nested objects merge; arrays/scalars replace) and the result
+  is re-validated through the existing settings normalizer. This is how two fleet
+  companions hold, e.g., different `observerEvalSidecar.adapter.sessionLabel`
+  values (fixing the shared emo_sim session) or different `activeTimezone` clocks.
+- **Absent overlay = byte-identical** to today's global-only behavior. The merge
+  runs in both startup config-hydration paths (`hydrateCanonicalStartupConfig` in
+  `src/app/startup/support/bootstrap-helpers.ts` and `hydrateJsonBackedRuntimeConfig`
+  in `src/system/config/runtime-config.ts`).
+
+Whole owner files that are semantically per-companion are relocated to
+`companionDataDir` rather than overlaid. `capability-tier.json` is relocated
+(dnll.2): each companion's maturation tier is loaded from its own
+`companionDataDir/capability-tier.json`, so a nursery and a mature companion can
+run side by side under one release. A missing per-companion tier file fails
+startup closed (no fallback to a shared file), the settings contract marks the
+`capabilities` subsystem `perCompanion`, and the file rides the per-companion
+`companion-tree` backup slice, not the cluster-global `system-config` slice.
+`scheduler.json` is relocated the same way (dnll.3): each companion's circadian
+configuration — heartbeat/tick cadence, the episodic rest window,
+`temporalWakeup.morningWake.localTime`, `freeTime`, and `sleepConsolidation` — is
+loaded from its own `companionDataDir/scheduler.json`, so two fleet companions
+can hold distinct wake/rest schedules under one release. A missing per-companion
+scheduler file fails startup closed, the settings contract marks the `scheduler`
+subsystem `perCompanion`, and the file rides the `companion-tree` backup slice,
+not the cluster-global `system-config` slice. Both files are enumerated in
+`PER_COMPANION_OWNER_FILES` (`src/system/config/settings-contract.ts`), which the
+owner-file config store and startup verification consult to root them at
+`companionDataDir`.
+
+Separately, the Garden admin surface owns several per-companion state files that
+must resolve under `companionDataDir` to match the runtime and avoid fleet
+collisions (`src/operator/garden/local-admin-contract.ts`,
+`src/operator/garden/services/scheduler-service.ts`): `garden-audit-history.jsonl`,
+the Garden-side `heartbeat-policy.json` (already runtime-rooted under companion
+state via `resolveHeartbeatPolicyPath`), and the reflection-metacognition journal.
+These were previously mis-rooted at the shared system-data root (`config.dataDir`);
+correcting them is a pure path fix. Any pre-existing shared file at the old
+system-data location is left frozen — its mixed-companion contents are not split
+or migrated, and no dual-read fallback is added; each companion's file simply
+starts fresh at the correct root. Model-usage accounting is already per-companion
+through the Postgres `model_usage_events` store (schema-per-companion +
+`companion_id` attribution), so there is no shared JSONL usage ledger to re-root.
+
 ## Postgres tenancy: schema-per-companion + one shared schema
 
 Each agent process pins its runtime persistence to its own schema; there is one

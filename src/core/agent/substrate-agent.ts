@@ -203,6 +203,7 @@ export type {
 export type {
   PostTurnActionInferer,
   IntentionPostTurnHookContext,
+  IntentionPostTurnHookEffects,
   IntentionPostTurnHook,
 } from './substrate-agent/post-turn-actions.js';
 export type {

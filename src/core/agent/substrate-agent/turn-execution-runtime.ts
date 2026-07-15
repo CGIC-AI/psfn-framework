@@ -1551,10 +1551,21 @@ export async function handleMessageForTurn(
       : turnId;
     const recoveredTurnRecord = recoveredResponse === undefined
       ? null
-      : runtime.sessionManager.findRecordedTurn(message.channelId, recoveredSourceTurnId);
+      : runtime.sessionManager.findSourceRecordedTurn(
+          message.channelId,
+          logicalSessionId,
+          recoveredSourceTurnId,
+        );
     if (recoveredTurnRecord?.status === 'completed') {
       const replayJobs = parseTurnRecordBackgroundWorkHandoff(recoveredTurnRecord);
-      if (replayJobs.length > 0) await runtime.enqueuePostTurnBackgroundWork(replayJobs);
+      if (replayJobs.length > 0) {
+        try {
+          await runtime.enqueuePostTurnBackgroundWork(replayJobs);
+        } catch (error) {
+          runtime.sessionManager.deferBackgroundWorkHandoffRecovery(recoveredTurnRecord);
+          throw error;
+        }
+      }
       return agentResponse;
     }
 
@@ -1699,7 +1710,12 @@ export async function handleMessageForTurn(
     // before the Postgres batch. If that batch fails, delivery recovery must
     // replay the manifest; appending a second failed record for the same turn
     // would destroy the source uniqueness gate and make recovery impossible.
-    if (!runtime.sessionManager.hasRecordedTurn(message.channelId, turnId)) {
+    const completedSourceRecord = runtime.sessionManager.findSourceRecordedTurn(
+      message.channelId,
+      logicalSessionId,
+      turnId,
+    );
+    if (completedSourceRecord?.status !== 'completed') {
       await runtime.sessionManager.recordTurn(runtime.buildTurnRecord({
         message,
         turnId,

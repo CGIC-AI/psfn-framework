@@ -122,6 +122,7 @@ import {
   type FocusSessionContextSnapshot,
   type FocusSessionSnapshot,
 } from './manager/focus-session-runtime.js';
+import { BackgroundWorkHandoffRecovery } from './manager/background-work-handoff-recovery.js';
 import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
@@ -283,6 +284,7 @@ export class SessionManager {
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
+  private backgroundWorkHandoffRecovery: BackgroundWorkHandoffRecovery;
   private continuityStoreRef: UserContinuityStore | null = null;
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
@@ -302,6 +304,7 @@ export class SessionManager {
     transcriptSearch?: TranscriptSearchPort,
   ) {
     this.store = store;
+    this.backgroundWorkHandoffRecovery = new BackgroundWorkHandoffRecovery(store);
     this.transcriptSearch = transcriptSearch ?? store;
     this.deliveryProjectionStore = createIcpDeliveryProjectionStore(store);
     this.compactionBoundaryStore = createCompactionBoundaryStore(this.deliveryProjectionStore);
@@ -1041,6 +1044,23 @@ export class SessionManager {
 
   async recordTurn(record: TurnRecord): Promise<void> {
     await this.store.appendTurnRecord(record);
+  }
+
+  deferBackgroundWorkHandoffRecovery(record: TurnRecord): void {
+    this.backgroundWorkHandoffRecovery.defer(record);
+  }
+
+  /**
+   * Drain at most `limit` live enqueue failures. Each candidate is re-read
+   * from the canonical TurnRecord store while the same cross-process fence
+   * used by redaction and duplicate-source mutations is held. Invalid sources
+   * are retired without enqueue; failed enqueue attempts remain indexed.
+   */
+  async recoverPendingBackgroundWorkHandoffs(
+    limit: number,
+    operation: (record: TurnRecord) => Promise<void>,
+  ): Promise<number> {
+    return this.backgroundWorkHandoffRecovery.recover(limit, operation);
   }
 
   hasRecordedTurn(channelId: string, turnId: string): boolean {

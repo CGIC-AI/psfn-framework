@@ -354,5 +354,10 @@ export async function schedulePostTurnWork(input: {
   // either side is recoverable: no queue row can outlive its canonical source,
   // and delivery/startup replay can safely re-enqueue the stable turn IDs.
   await runtime.sessionManager.recordTurn(turnRecord);
-  await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
+  try {
+    await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
+  } catch (error) {
+    runtime.sessionManager.deferBackgroundWorkHandoffRecovery(turnRecord);
+    throw error;
+  }
 }

@@ -547,6 +547,24 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('fails closed when a recovered turn reuses an accepted handoff with a different fingerprint', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const accepted = makeFourJobBatch('session-a', 'turn-fingerprint');
+      await store.enqueueBatch(accepted);
+      await expect(store.enqueueBatch(accepted.map((input, index) => (
+        index === 0 ? { ...input, maxAttempts: input.maxAttempts + 1 } : input
+      )))).rejects.toThrow('Background work handoff replay fingerprint mismatch');
+      expect((await Promise.all(accepted.map(input => store.get(input.jobId))))
+        .filter((job) => job !== null)).toHaveLength(4);
+    } finally {
+      await store.close();
+    }
+  });
+
   it('serializes concurrent schema migration startup under one advisory lock', async () => {
     const database = await harness.createDatabase();
     const stores = await Promise.all(Array.from({ length: 8 }, async () => (

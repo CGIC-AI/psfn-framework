@@ -925,9 +925,14 @@ export function wirePostTurnActionRuntime(
 
     try {
       const registeredHandlers = [...registrations.values()];
-      const requiresForegroundIdle = registeredHandlers.some(
-        ({ executionMode }) => executionMode !== 'background',
-      );
+      // Foreground-idle overlap is owned solely by the lane profile
+      // (RuntimeLaneBudgetProfile.requiresForegroundIdle in worker-lanes.ts),
+      // resolved from the queued action's runtime class. executionMode is a
+      // handler self-declaration checked at registration time and must never
+      // drive this decision (Law 12.4 single-home).
+      const requiresForegroundIdle = resolveRuntimeLaneBudgetProfile(
+        entry.runtimeClass,
+      ).requiresForegroundIdle;
       if (requiresForegroundIdle) {
         await agentLoop.waitForIdle?.();
       }
@@ -1330,10 +1335,30 @@ export function wirePostTurnActionRuntime(
         throw new Error('Deferred action handler kind must be non-empty');
       }
       const handlerSet = handlers.get(normalizedKind) ?? new Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>();
+      // 'background' is the safe default: a handler makes no foreground-idle
+      // claim unless it explicitly opts in. executionMode no longer drives the
+      // runtime overlap decision (the lane profile does); it is retained for
+      // other wiring and validated for consistency below.
+      const executionMode: PostTurnActionExecutionMode =
+        options.executionMode === 'foreground' ? 'foreground' : 'background';
+      const runtimeClass = options.runtimeClass ?? resolveRuntimeClassForKind(normalizedKind);
+      // Consistency guard against silent re-drift: a handler that declares it
+      // needs foreground idle must map to a lane whose profile actually
+      // requires foreground idle. Fail closed at registration otherwise.
+      if (
+        executionMode === 'foreground'
+        && !resolveRuntimeLaneBudgetProfile(runtimeClass).requiresForegroundIdle
+      ) {
+        throw new Error(
+          `Post-turn action handler for "${normalizedKind}" declares executionMode 'foreground' but runtime `
+          + `lane '${runtimeClass}' has requiresForegroundIdle=false. A foreground-idle handler must map to a `
+          + `lane whose RuntimeLaneBudgetProfile.requiresForegroundIdle is true (worker-lanes.ts).`,
+        );
+      }
       handlerSet.set(handler, {
         callback: handler,
-        executionMode: options.executionMode === 'background' ? 'background' : 'foreground',
-        runtimeClass: options.runtimeClass ?? resolveRuntimeClassForKind(normalizedKind),
+        executionMode,
+        runtimeClass,
       });
       handlers.set(normalizedKind, handlerSet);
       return () => {

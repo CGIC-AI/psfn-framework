@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey } from "node:crypto";
 import test from "node:test";
 import WebSocket from "ws";
 
@@ -8,8 +8,20 @@ import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { RealtimeHubServer } from "./server.js";
 import type { HubConfig } from "../shared/env.js";
 import type { HubToClientMessage } from "../shared/protocol.js";
+import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
 
 const credential = "office-satellite-secret";
+const DEVICE_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
+  issuer: "psfn-satellite-hub",
+  kid: "hub-test",
+  audience: "https://fleet.example.test",
+  privateKeyPem: createPrivateKey({
+    key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+    format: "der",
+    type: "pkcs8",
+  }).export({ format: "pem", type: "pkcs8" }).toString(),
+  ttlSeconds: 30,
+});
 
 test("realtime hub requires registry authentication before accepting messages", async () => {
   const server = new RealtimeHubServer(config(), { agent: agent() });
@@ -55,6 +67,31 @@ test("authenticated hello uses registry-owned identity and bounded capabilities"
   socket.close();
   await new Promise<void>((resolve) => socket.once("close", () => resolve()));
   await server.close();
+});
+
+test("authenticated hello rejects browser-authored place, companion, contact, or human authority", async () => {
+  for (const forbidden of [
+    { placeId: "kitchen" },
+    { companionId: "22222222-2222-4222-8222-222222222222" },
+    { contactId: "owner" },
+    { humanPrincipalId: "browser-user" },
+  ]) {
+    const server = new RealtimeHubServer(config(), { agent: agent() });
+    await server.start();
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const messages: HubToClientMessage[] = [];
+    socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello", deviceId: "office-device", deviceName: "Office Device", credential, ...forbidden,
+    }));
+    await new Promise<void>(resolve => socket.once("close", () => resolve()));
+    assert.equal(messages.some(message => message.type === "hello.ack"), false);
+    assert.equal(messages.at(-1)?.type, "error-event");
+    await server.close();
+  }
 });
 
 test("authenticated user.text forwards an explicit text reply mode", async () => {
@@ -232,7 +269,7 @@ function config(options: { allowInterrupt?: boolean; streamingAudio?: boolean } 
     elevenlabsApiKey: options.streamingAudio ? "test-elevenlabs" : null,
     elevenlabsVoiceId: options.streamingAudio ? "test-voice" : null,
     elevenlabsModelId: "eleven_flash_v2_5", artifactsRoot: ".artifacts/test-auth",
-    psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", satelliteClaim: {
+    psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", deviceAssertionIssuer: DEVICE_ASSERTION_ISSUER, satelliteClaim: {
       namespace: "satellite.endpoint", type: "text-only", channelType: "satellite.endpoint",
       capabilityProfile: "text-only", satelliteId: "hub", endpointId: "hub", displayName: "Hub",
       endpointClass: "text", locationMode: "static", telemetry: { mode: "disabled", categories: [] },
@@ -243,6 +280,11 @@ function config(options: { allowInterrupt?: boolean; streamingAudio?: boolean } 
       deviceId: "office-device", deviceName: "Office Device", satelliteId: "office",
       satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
       credentialSha256: createHash("sha256").update(credential).digest("hex"),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
       homeAssistantEntityIds: [],
       maxCapabilities: {
         input: ["text"],

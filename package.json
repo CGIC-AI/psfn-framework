@@ -11,6 +11,7 @@
     "firmware:prepare:waveshare-bedroom": "node scripts/prepare-waveshare-bedroom-firmware.mjs",
     "firmware:validate:waveshare-bedroom": "npm run firmware:prepare:waveshare-bedroom && uvx --from esphome==2026.6.5 esphome config satellites/waveshare-bedroom/esphome/bedroom-satellite.yaml",
     "hub:ts": "tsx src/ts/hub/main.ts",
+    "lint": "npm run check:ts",
     "pi:ts": "tsx src/ts/pi-client/main.ts",
     "smoke:ts": "node scripts/smoke-ts-hub.mjs",
     "shell:psfn": "node scripts/psfn-thin-shell.mjs",

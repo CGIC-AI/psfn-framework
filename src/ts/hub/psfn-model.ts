@@ -348,6 +348,15 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       config: this.runtime.satelliteClaim,
       satelliteClaim,
     }));
+    if (channel.deviceAuthority) {
+      if (!this.runtime.deviceAssertionIssuer) {
+        throw new Error("Authenticated Hub device traffic requires the device assertion signing authority");
+      }
+      headers["X-PSFN-Hub-Device-Assertion"] = this.runtime.deviceAssertionIssuer.issue({
+        device: channel.deviceAuthority,
+        sessionId: channel.sessionId,
+      });
+    }
     headers["X-PSFN-Satellite-Claim"] = JSON.stringify(sanitizeHeaderJsonValue(satelliteClaim));
     headers["X-PSFN-Channel-Metadata"] = JSON.stringify(sanitizeHeaderJsonValue(channelMetadata));
     return sanitizeHttpHeaders(headers);

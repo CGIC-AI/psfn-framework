@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createPrivateKey } from "node:crypto";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -10,6 +11,13 @@ import type { PsfnChannelContext } from "./embodied-session.js";
 import { PsfnModelAdapter, type PsfnReplyTelemetry } from "./psfn-model.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
+import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+
+const HUB_ASSERTION_PRIVATE_KEY = createPrivateKey({
+  key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+  format: "der",
+  type: "pkcs8",
+}).export({ format: "pem", type: "pkcs8" }).toString();
 
 const TEST_REPLY_BUDGETS = {
   voiceReplyDeadlineMs: 8_000,
@@ -151,6 +159,67 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     };
     assert.deepEqual(capturedBody.channel_metadata, expectedChannelMetadata);
     assert.deepEqual(JSON.parse(capturedHeaders["X-PSFN-Channel-Metadata"] || "{}"), expectedChannelMetadata);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter mints a fresh Hub assertion only from authenticated device authority", async () => {
+  const originalFetch = globalThis.fetch;
+  const capturedHeaders: Array<Record<string, string>> = [];
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders.push(init?.headers as Record<string, string>);
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"ok"}}]}');
+  };
+  const runtime = buildRuntimeConfig({
+    deviceAssertionIssuer: createHubDeviceAssertionIssuer({
+      issuer: "psfn-satellite-hub",
+      kid: "hub-2026-07",
+      audience: "https://fleet.example.test",
+      privateKeyPem: HUB_ASSERTION_PRIVATE_KEY,
+      ttlSeconds: 30,
+    }),
+  });
+  const channel: PsfnChannelContext = {
+    sessionId: "realtime:office-device:session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:office",
+    sourceSatelliteId: "office",
+    sourceSatelliteName: "Office",
+    deviceAuthority: {
+      deviceId: "office-device",
+      enrollmentVersion: 7,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
+    },
+    activeSatellites: [],
+  };
+  const adapter = new PsfnModelAdapter(runtime);
+  try {
+    await drainReply(adapter, {
+      inputMode: "text", userText: "first", conversationId: channel.sessionId, channel,
+    });
+    await drainReply(adapter, {
+      inputMode: "text", userText: "second", conversationId: channel.sessionId, channel,
+    });
+    const first = capturedHeaders[0]?.["X-PSFN-Hub-Device-Assertion"];
+    const second = capturedHeaders[1]?.["X-PSFN-Hub-Device-Assertion"];
+    assert.ok(first);
+    assert.ok(second);
+    assert.notEqual(first, second, "each Framework request must get a unique replay id");
+    const claims = JSON.parse(Buffer.from(first.split(".")[1]!, "base64url").toString("utf8"));
+    assert.deepEqual({
+      deviceId: claims.device_id,
+      companionId: claims.companion_id,
+      placeId: claims.place_id,
+    }, {
+      deviceId: "office-device",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
+    });
+    assert.equal(JSON.stringify(capturedHeaders).includes("PRIVATE KEY"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }

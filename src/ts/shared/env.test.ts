@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createPrivateKey } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,7 +66,18 @@ const HUB_ENV_KEYS = [
   "HUB_CONTROL_TOKEN",
   "HUB_CONTROL_MAX_BODY_BYTES",
   "HUB_DEVICE_REGISTRY_PATH",
+  "HUB_DEVICE_ASSERTION_ISSUER",
+  "HUB_DEVICE_ASSERTION_KID",
+  "HUB_DEVICE_ASSERTION_AUDIENCE",
+  "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+  "HUB_DEVICE_ASSERTION_TTL_SECONDS",
 ] as const;
+
+const HUB_ASSERTION_PRIVATE_KEY = createPrivateKey({
+  key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+  format: "der",
+  type: "pkcs8",
+}).export({ format: "pem", type: "pkcs8" }).toString();
 
 test("loadPsfnRuntime reads registry claim identity and certificate paths", () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-runtime-"));
@@ -232,6 +244,7 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
 
 test("loadHubConfig loads paired Home Assistant and private control config", () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+  fs.writeFileSync(path.join(projectRoot, "hub-assertion.key"), HUB_ASSERTION_PRIVATE_KEY, { mode: 0o600 });
   fs.writeFileSync(path.join(projectRoot, "devices.json"), JSON.stringify({
     schemaVersion: 1,
     devices: [{
@@ -242,6 +255,11 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
       endpointId: "bedroom-pi",
       claimType: "room-satellite",
       credentialSha256: "d8e7fca2dc7d6155537b49964e4b01c8b5d4c7fd18d75e1376e1e0f8f460f7a5",
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "bedroom",
       maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
     }],
   }));
@@ -255,12 +273,40 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     HUB_CONTROL_PORT: "8788",
     HUB_CONTROL_TOKEN: "0123456789abcdef",
     HUB_DEVICE_REGISTRY_PATH: "devices.json",
+    HUB_DEVICE_ASSERTION_ISSUER: "psfn-satellite-hub",
+    HUB_DEVICE_ASSERTION_KID: "hub-test",
+    HUB_DEVICE_ASSERTION_AUDIENCE: "https://fleet.example.test",
+    HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH: "hub-assertion.key",
+    HUB_DEVICE_ASSERTION_TTL_SECONDS: "30",
   }, () => {
     const config = loadHubConfig(projectRoot);
     assert.equal(config.homeAssistant?.baseUrl, "http://192.168.1.205:8123");
     assert.equal(config.homeAssistant?.token, "ha-secret");
     assert.equal(config.control?.bindHost, "127.0.0.1");
     assert.equal(config.control?.port, 8788);
+    assert.ok(config.psfn.deviceAssertionIssuer);
+  });
+});
+
+test("loadHubConfig fails closed when an enrolled registry lacks complete signing authority", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+  fs.writeFileSync(path.join(projectRoot, "devices.json"), JSON.stringify({
+    schemaVersion: 1,
+    devices: [{
+      deviceId: "office-device", deviceName: "Office", satelliteId: "office",
+      satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
+      credentialSha256: "0".repeat(64), enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential", enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111", placeId: "office",
+      maxCapabilities: { input: [], output: [], control: [], safety: [] },
+    }],
+  }));
+  withEnv(HUB_ENV_KEYS, {
+    HUB_TEXT_ONLY: "true",
+    PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
+    HUB_DEVICE_REGISTRY_PATH: "devices.json",
+  }, () => {
+    assert.throws(() => loadHubConfig(projectRoot), /requires complete Hub device assertion signing authority/);
   });
 });
 

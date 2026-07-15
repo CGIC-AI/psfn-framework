@@ -85,6 +85,9 @@ export class RealtimeHubServer {
       companion?: CompanionBridge | null;
     } = {},
   ) {
+    if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
+      throw new Error("Hub device registry requires the device assertion signing authority");
+    }
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createFrameworkAgent(config);
@@ -304,6 +307,14 @@ class RealtimeConnection {
     switch (message.type) {
       case "hello":
         if (this.deviceRegistry) {
+          if (hasBrowserAuthoredAuthority(message)) {
+            await this.send({
+              type: "error-event",
+              data: { message: "Browser-authored satellite authority is forbidden" },
+            });
+            this.socket.close(1008, "browser-authored authority forbidden");
+            return;
+          }
           const device = authenticateHubDevice(this.deviceRegistry, message.credential);
           if (!device || message.deviceId !== device.deviceId) {
             await this.send({
@@ -329,6 +340,7 @@ class RealtimeConnection {
               undefined,
               intersectCapabilities(message.capabilities, device.maxCapabilities),
               this.claimIdentity,
+              device,
             );
           } catch {
             await this.send({
@@ -1089,6 +1101,7 @@ class RealtimeConnection {
     channelId?: string,
     capabilities?: SatelliteCapabilities,
     claimIdentity?: PsfnChannelContext["claimIdentity"],
+    deviceAuthority?: PsfnChannelContext["deviceAuthority"],
   ): void {
     const attachment = this.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
@@ -1097,10 +1110,24 @@ class RealtimeConnection {
       satelliteName: this.satelliteName,
       capabilities,
       ...(claimIdentity ? { claimIdentity } : {}),
+      ...(deviceAuthority ? { deviceAuthority } : {}),
     });
     this.channelId = attachment.session.channelId;
     this.capabilities = attachment.satellite.capabilities;
   }
+}
+
+function hasBrowserAuthoredAuthority(message: ClientToHubMessage): boolean {
+  if (message.type !== "hello") return false;
+  const untrusted = message as unknown as Record<string, unknown>;
+  return [
+    "placeId",
+    "companionId",
+    "contactId",
+    "humanPrincipalId",
+    "humanSessionId",
+    "channelId",
+  ].some(field => Object.hasOwn(untrusted, field));
 }
 
 function deriveAuthenticatedSessionId(deviceId: string, requested: string | undefined): string {

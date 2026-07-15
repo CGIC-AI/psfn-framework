@@ -1,4 +1,5 @@
 import type { SatelliteCapabilities } from "../shared/protocol.js";
+import type { HubDeviceAssertionAuthority } from "./device-assertion.js";
 
 export const DEFAULT_PSFN_CHANNEL_TYPE = "satellite.endpoint";
 
@@ -38,6 +39,7 @@ export interface EmbodiedSession {
   channelId: string;
   satellites: AttachedSatellite[];
   claimIdentities?: Record<string, NonNullable<PsfnChannelContext["claimIdentity"]>>;
+  deviceAuthorities?: Record<string, HubDeviceAssertionAuthority>;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +56,7 @@ export interface PsfnChannelContext {
     claimType: string;
     displayName: string;
   };
+  deviceAuthority?: HubDeviceAssertionAuthority;
   activeSatellites: Array<{
     id: string;
     name: string;
@@ -90,6 +93,7 @@ export interface AttachSatelliteInput {
   satelliteName: string;
   capabilities?: SatelliteCapabilities;
   claimIdentity?: PsfnChannelContext["claimIdentity"];
+  deviceAuthority?: HubDeviceAssertionAuthority;
 }
 
 export class EmbodiedSessionRegistry {
@@ -124,6 +128,12 @@ export class EmbodiedSessionRegistry {
         claimIdentities: {
           ...(current?.claimIdentities ?? {}),
           ...(input.claimIdentity ? { [satelliteId]: input.claimIdentity } : {}),
+        },
+      } : {}),
+      ...((current?.deviceAuthorities || input.deviceAuthority) ? {
+        deviceAuthorities: {
+          ...(current?.deviceAuthorities ?? {}),
+          ...(input.deviceAuthority ? { [satelliteId]: input.deviceAuthority } : {}),
         },
       } : {}),
       createdAt: current?.createdAt ?? now,
@@ -204,6 +214,9 @@ function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedS
     sourceSatelliteName: sourceSatellite.name,
     ...(session.claimIdentities?.[sourceSatellite.id]
       ? { claimIdentity: session.claimIdentities[sourceSatellite.id] }
+      : {}),
+    ...(session.deviceAuthorities?.[sourceSatellite.id]
+      ? { deviceAuthority: session.deviceAuthorities[sourceSatellite.id] }
       : {}),
     activeSatellites: session.satellites.map((satellite) => ({
       id: satellite.id,

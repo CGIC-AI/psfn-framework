@@ -26,6 +26,11 @@ test("device registry authenticates a credential without storing plaintext", () 
       endpointId: "bedroom-pi",
       claimType: "room-satellite",
       credentialSha256: createHash("sha256").update(credential).digest("hex"),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "bedroom",
       maxCapabilities: {
         input: ["text", "microphone_pcm"],
         output: ["text", "streamed_audio"],
@@ -44,6 +49,10 @@ test("device registry authenticates a credential without storing plaintext", () 
     "fan.main_bedroom_2",
   ]);
   assert.equal(authenticateHubDevice(registry, "wrong"), null);
+  assert.equal(authenticateHubDevice({
+    ...registry,
+    devices: registry.devices.map(device => ({ ...device, enrollmentStatus: "revoked" as const })),
+  }, credential), null);
   assert.equal(JSON.stringify(registry).includes(credential), false);
 });
 
@@ -84,6 +93,10 @@ test("device registry preserves explicit empty maximum capability lists", () => 
       endpointId: "sensor",
       claimType: "room-sensor",
       credentialSha256: "0".repeat(64),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
       maxCapabilities: { input: [], output: [], control: [], safety: [] },
     }],
   }));

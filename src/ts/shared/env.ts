@@ -4,6 +4,10 @@ import path from "node:path";
 
 import dotenv from "dotenv";
 import { loadHubDeviceRegistry, type HubDeviceRegistry } from "../hub/device-registry.js";
+import {
+  createHubDeviceAssertionIssuer,
+  type HubDeviceAssertionIssuer,
+} from "../hub/device-assertion.js";
 
 import {
   CAPABILITY_PROFILE_DEFAULTS,
@@ -31,6 +35,7 @@ export interface PsfnRuntimeConfig {
   apiKey?: string;
   channelType: string;
   satelliteClaim: PsfnSatelliteClaimConfig;
+  deviceAssertionIssuer?: HubDeviceAssertionIssuer;
   /**
    * Total wall-clock budget for producing a voice-turn reply, across all
    * attempts. When an attempt returns an empty completion the adapter may
@@ -288,6 +293,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
       ? resolveExistingFile(projectRoot, required("HUB_DEVICE_REGISTRY_PATH"), "HUB_DEVICE_REGISTRY_PATH")
       : undefined,
   );
+  const deviceAssertionIssuer = loadHubDeviceAssertionIssuer(projectRoot, deviceRegistry !== null);
   if (homeAssistant && !deviceRegistry) {
     throw new Error("HOME_ASSISTANT_ENABLED=true requires HUB_DEVICE_REGISTRY_PATH for trusted room identity");
   }
@@ -302,7 +308,10 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     elevenlabsVoiceId: textOnlyMode ? optional("ELEVENLABS_VOICE_ID") ?? null : required("ELEVENLABS_VOICE_ID"),
     elevenlabsModelId: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
     artifactsRoot: resolvePath(projectRoot, process.env.ARTIFACT_ROOT || ".artifacts/runtime-ts"),
-    psfn,
+    psfn: {
+      ...psfn,
+      ...(deviceAssertionIssuer ? { deviceAssertionIssuer } : {}),
+    },
     companion,
     homeAssistant,
     control,
@@ -310,6 +319,44 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };
+}
+
+function loadHubDeviceAssertionIssuer(
+  projectRoot: string,
+  deviceRegistryConfigured: boolean,
+): HubDeviceAssertionIssuer | undefined {
+  const names = [
+    "HUB_DEVICE_ASSERTION_ISSUER",
+    "HUB_DEVICE_ASSERTION_KID",
+    "HUB_DEVICE_ASSERTION_AUDIENCE",
+    "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+    "HUB_DEVICE_ASSERTION_TTL_SECONDS",
+  ] as const;
+  const configured = names.filter(name => optional(name) !== undefined);
+  if (!deviceRegistryConfigured) {
+    if (configured.length > 0) {
+      throw new Error("Hub device assertion signing authority requires HUB_DEVICE_REGISTRY_PATH");
+    }
+    return undefined;
+  }
+  if (configured.length !== names.length) {
+    throw new Error("HUB_DEVICE_REGISTRY_PATH requires complete Hub device assertion signing authority configuration");
+  }
+  const privateKeyPath = resolveExistingFile(
+    projectRoot,
+    required("HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH"),
+    "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
+  );
+  if ((fs.statSync(privateKeyPath).mode & 0o077) !== 0) {
+    throw new Error("HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH must not be group/world accessible");
+  }
+  return createHubDeviceAssertionIssuer({
+    issuer: required("HUB_DEVICE_ASSERTION_ISSUER"),
+    kid: required("HUB_DEVICE_ASSERTION_KID"),
+    audience: required("HUB_DEVICE_ASSERTION_AUDIENCE"),
+    privateKeyPem: fs.readFileSync(privateKeyPath, "utf8"),
+    ttlSeconds: parsePositiveIntegerEnv("HUB_DEVICE_ASSERTION_TTL_SECONDS", 0),
+  });
 }
 
 export function loadHomeAssistantConfig(): HomeAssistantConfig | null {

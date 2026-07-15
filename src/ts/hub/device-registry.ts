@@ -19,6 +19,11 @@ export interface HubDeviceIdentity {
   endpointId: string;
   claimType: string;
   credentialSha256: string;
+  enrollmentVersion: number;
+  enrollmentAssurance: "device_credential";
+  enrollmentStatus: "active" | "revoked";
+  companionId: string;
+  placeId?: string;
   maxCapabilities: Required<SatelliteCapabilities>;
   homeAssistantEntityIds: string[];
 }
@@ -48,6 +53,7 @@ export function authenticateHubDevice(
   if (!credential) return null;
   const digest = createHash("sha256").update(credential, "utf8").digest();
   for (const device of registry.devices) {
+    if (device.enrollmentStatus !== "active") continue;
     const expected = Buffer.from(device.credentialSha256, "hex");
     if (expected.length === digest.length && timingSafeEqual(expected, digest)) return device;
   }
@@ -86,9 +92,52 @@ function parseDevice(value: unknown, index: number): HubDeviceIdentity {
     endpointId: field("endpointId"),
     claimType: field("claimType"),
     credentialSha256,
+    enrollmentVersion: requiredPositiveInteger(
+      value.enrollmentVersion,
+      `devices[${index}].enrollmentVersion`,
+    ),
+    enrollmentAssurance: parseEnrollmentAssurance(
+      value.enrollmentAssurance,
+      `devices[${index}].enrollmentAssurance`,
+    ),
+    enrollmentStatus: parseEnrollmentStatus(
+      value.enrollmentStatus,
+      `devices[${index}].enrollmentStatus`,
+    ),
+    companionId: requiredUuid(value.companionId, `devices[${index}].companionId`),
+    ...(value.placeId === undefined
+      ? {}
+      : { placeId: requiredString(value.placeId, `devices[${index}].placeId`) }),
     maxCapabilities: parseMaximumCapabilities(value.maxCapabilities, index),
     homeAssistantEntityIds: parseEntityIds(value.homeAssistantEntityIds, index),
   };
+}
+
+function requiredPositiveInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return Number(value);
+}
+
+function parseEnrollmentAssurance(value: unknown, field: string): "device_credential" {
+  if (value !== "device_credential") throw new Error(`${field} must be device_credential`);
+  return value;
+}
+
+function parseEnrollmentStatus(value: unknown, field: string): "active" | "revoked" {
+  if (value !== "active" && value !== "revoked") {
+    throw new Error(`${field} must be active or revoked`);
+  }
+  return value;
+}
+
+function requiredUuid(value: unknown, field: string): string {
+  const parsed = requiredString(value, field);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(parsed)) {
+    throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
+  }
+  return parsed;
 }
 
 function parseEntityIds(value: unknown, index: number): string[] {

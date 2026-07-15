@@ -959,7 +959,7 @@ export class LLMClient {
     }
   }
 
-  async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
+  async stream(context: LLMContext, callbacks?: StreamCallbacks, signal?: AbortSignal): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
@@ -995,11 +995,19 @@ export class LLMClient {
             return await this.runTransportWithCircuitBreaker(
               'llm.stream',
               candidateTarget,
-              async () => await transport.stream(transportContext, callbacks),
+              // mmo9.6.1: only pass the abort signal when present so the
+              // no-cancellation call path stays byte-identical for transports
+              // that assert exact stream() arity.
+              async () => signal
+                ? await transport.stream(transportContext, callbacks, signal)
+                : await transport.stream(transportContext, callbacks),
             );
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
-          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, { correlation });
+          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
+            correlation,
+            ...(signal ? { signal } : {}),
+          });
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
             promptCacheStrategy: candidateTarget.promptCacheStrategy,

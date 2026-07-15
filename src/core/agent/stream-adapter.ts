@@ -60,7 +60,14 @@ export interface StreamTerminalFailureEvent {
 }
 
 export interface SubstrateStreamTransport {
-  stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
+  /**
+   * mmo9.6.1: `signal` aborts the in-flight provider request mid-generation.
+   * The scheduled agent loop forwards the run's AbortController signal into the
+   * streamFn options; this adapter threads it to the transport so
+   * `SubstrateAgent.abort()`/`cancelTurn()` tears down the upstream stream
+   * rather than only halting local iteration.
+   */
+  stream(context: LLMContext, callbacks?: StreamCallbacks, signal?: AbortSignal): Promise<LLMResponse>;
 }
 
 export interface SubstrateStreamRuntimeOptions {
@@ -199,6 +206,10 @@ interface ExecuteStreamCandidateParams {
 
 function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGenerator<AssistantMessageEvent, void, unknown> {
   const { candidate } = params;
+  // mmo9.6.1: the scheduled agent loop forwards the run's AbortController signal
+  // as options.signal; extract it here so it can be threaded to the provider
+  // transport (it must not leak into the serialized model-hint requestOptions).
+  const streamSignal = extractAbortSignal(params.options);
   const requestOptions = buildStreamRequestOptions(
     candidate,
     params.options,
@@ -232,6 +243,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
             retryOwner: 'caller',
           },
           onProviderFirstOutput: params.onProviderFirstOutput,
+          ...(streamSignal ? { signal: streamSignal } : {}),
         });
 
         for await (const rawEvent of stream) {
@@ -318,6 +330,8 @@ interface TransportEventStreamParams {
   transport: SubstrateStreamTransport;
   accounting: NonNullable<LLMContext['accounting']>;
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
+  /** mmo9.6.1: run-scoped abort signal threaded to the provider transport. */
+  signal?: AbortSignal;
 }
 
 function createTransportEventStream(
@@ -342,34 +356,38 @@ function createTransportEventStream(
     let reportedProviderFirstOutput = false;
     const runTransport = (async () => {
       try {
-        const response = await params.transport.stream(
-          buildTransportContext(
-            params.candidate,
-            params.context,
-            params.requestContext,
-            params.requestOptions,
-            params.accounting,
-          ),
-          {
-            onText: (delta) => {
-              enqueueTextDelta(queue, state, delta);
-            },
-            onFirstOutput: (observation) => {
-              if (!params.onProviderFirstOutput || reportedProviderFirstOutput) return;
-              reportedProviderFirstOutput = true;
-              void Promise.resolve(params.onProviderFirstOutput({
-                ...observation,
-                ...(params.requestContext ?? {}),
-                provider: params.candidate.provider,
-                model: params.candidate.model,
-              })).catch(error => log.warn('Provider first-output observer failed', {
-                error: error instanceof Error ? error.message : String(error),
-                provider: params.candidate.provider,
-                model: params.candidate.model,
-              }));
-            },
-          },
+        const transportContext = buildTransportContext(
+          params.candidate,
+          params.context,
+          params.requestContext,
+          params.requestOptions,
+          params.accounting,
         );
+        const transportCallbacks: StreamCallbacks = {
+          onText: (delta) => {
+            enqueueTextDelta(queue, state, delta);
+          },
+          onFirstOutput: (observation) => {
+            if (!params.onProviderFirstOutput || reportedProviderFirstOutput) return;
+            reportedProviderFirstOutput = true;
+            void Promise.resolve(params.onProviderFirstOutput({
+              ...observation,
+              ...(params.requestContext ?? {}),
+              provider: params.candidate.provider,
+              model: params.candidate.model,
+            })).catch(error => log.warn('Provider first-output observer failed', {
+              error: error instanceof Error ? error.message : String(error),
+              provider: params.candidate.provider,
+              model: params.candidate.model,
+            }));
+          },
+        };
+        // mmo9.6.1: only pass the abort signal when one is present so the
+        // no-cancellation call path stays byte-identical for transports/tests
+        // that assert exact stream() arity.
+        const response = params.signal
+          ? await params.transport.stream(transportContext, transportCallbacks, params.signal)
+          : await params.transport.stream(transportContext, transportCallbacks);
 
         applyTerminalResponse(state, response);
         enqueueThinkingEvents(queue, state, response.reasoning);
@@ -400,6 +418,16 @@ function createTransportEventStream(
       throw error;
     }
   })();
+}
+
+/**
+ * mmo9.6.1: pull a run-scoped AbortSignal out of the streamFn options bag. The
+ * pi-agent-core scheduled loop passes the run's AbortController signal as
+ * `options.signal`; everything else in the bag is model-hint/config data.
+ */
+function extractAbortSignal(options: Record<string, unknown> | undefined): AbortSignal | undefined {
+  const candidate = options?.signal;
+  return candidate instanceof AbortSignal ? candidate : undefined;
 }
 
 function buildTransportContext(

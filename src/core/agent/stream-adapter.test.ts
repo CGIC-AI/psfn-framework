@@ -288,6 +288,68 @@ describe('createSubstrateStreamFn', () => {
     ]);
   });
 
+  it('threads the run abort signal to the provider transport so a cancel tears down the upstream stream (mmo9.6.1)', async () => {
+    const config = makeConfig();
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const transport = {
+      stream: vi.fn(async (_context, _callbacks, signal?: AbortSignal) => {
+        receivedSignal = signal;
+        return {
+          content: 'ok',
+          toolCalls: [],
+          model: 'gateway-model',
+          inputTokens: 1,
+          outputTokens: 1,
+          stopReason: 'stop',
+        };
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport });
+    const model = resolveModel(config, 'chat');
+
+    const stream = await streamFn(
+      model,
+      { systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] } as any,
+      { signal: controller.signal } as any,
+    );
+    await collectStreamEvents(stream);
+
+    // The scheduled agent loop forwards the run's AbortController signal as
+    // options.signal; the adapter must hand the SAME signal to the provider
+    // transport (verify-first: without this the abort is local-only).
+    expect(transport.stream).toHaveBeenCalledTimes(1);
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort(new Error('barge-in'));
+    expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  it('omits the signal argument entirely when no cancellation signal is supplied (byte-identical path)', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn(async () => ({
+        content: 'ok',
+        toolCalls: [],
+        model: 'gateway-model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport });
+    const model = resolveModel(config, 'chat');
+
+    const stream = await streamFn(
+      model,
+      { systemPrompt: 'System', messages: [{ role: 'user', content: 'hello' }] } as any,
+      {},
+    );
+    await collectStreamEvents(stream);
+
+    expect(transport.stream).toHaveBeenCalledTimes(1);
+    expect(transport.stream.mock.calls[0]).toHaveLength(2);
+  });
+
   it('reports the provider first output from the transport boundary with request correlation', async () => {
     const config = makeConfig();
     const onProviderFirstOutput = vi.fn();

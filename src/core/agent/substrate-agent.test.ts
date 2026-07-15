@@ -6565,3 +6565,178 @@ describe('SubstrateAgent internal state persistence', () => {
     expect(agent.getCurrentInternalState()).toBeNull();
   });
 });
+
+describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
+  beforeEach(() => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+  });
+
+  // Hang the mocked inner prompt so the turn stays "active" while we probe
+  // cancelTurn; returns a gate to release it and let handleMessage settle.
+  function hangNextPrompt(): { started: Promise<void>; release: () => void } {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const releaseGate = new Promise<void>((resolve) => { release = resolve; });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      entered();
+      await releaseGate;
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text' as const, text: 'ok' }],
+        api: '' as any,
+        provider: '' as any,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop' as any,
+        timestamp: Date.now(),
+      });
+    });
+    return { started, release };
+  }
+
+  it('aborts the active turn IFF its cancellationId matches; a stale/mismatched id never aborts it', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+
+    // No active turn: cancel is a deliberate no-op.
+    expect(agent.cancelTurn('cancel-A')).toEqual({ status: 'not_active' });
+    expect(abortSpy).not.toHaveBeenCalled();
+
+    const gate = hangNextPrompt();
+    const turn = agent.handleMessage(
+      makeMessage({ id: 'turn-A' }),
+      undefined,
+      { cancellationId: 'cancel-A' },
+    );
+    await gate.started;
+
+    // Stale/mismatched id must NOT abort the running turn (mmo9.8 rapid segments).
+    expect(agent.cancelTurn('cancel-STALE')).toEqual({ status: 'owner_mismatch' });
+    expect(agent.cancelTurn('')).toEqual({ status: 'owner_mismatch' });
+    expect(abortSpy).not.toHaveBeenCalled();
+
+    // The matching id aborts THIS turn, exactly once.
+    expect(agent.cancelTurn('cancel-A')).toEqual({ status: 'signaled' });
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await turn;
+
+    // Identity is cleared once the turn ends: a late cancel cannot kill the next turn.
+    abortSpy.mockClear();
+    expect(agent.cancelTurn('cancel-A')).toEqual({ status: 'not_active' });
+    expect(abortSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not let a concurrent ordinary turn (no cancellationId) null the active voice turn identity', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+
+    // Voice turn Y is the active run: its prompt hangs (blocked provider) so it
+    // stays mid-generation while a concurrent turn is dispatched.
+    const gate = hangNextPrompt();
+    const voiceTurn = agent.handleMessage(
+      makeMessage({ id: 'turn-voice-Y' }),
+      undefined,
+      { cancellationId: 'cancel-Y' },
+    );
+    await gate.started;
+
+    // A scheduler/heartbeat/API turn fires while Y is generating. handleMessage
+    // dispatches it through `runShared`, which grants it as a CONCURRENT shared
+    // reader alongside Y. It carries NO cancellationId and — because Y owns the
+    // pi-agent activeRun — throws 'Agent is already processing'. Its entry and
+    // finally must not touch Y's registered cancellation identity.
+    promptSpy.mockImplementationOnce(async () => {
+      throw new Error('Agent is already processing.');
+    });
+    await agent
+      .handleMessage(makeMessage({ id: 'turn-ordinary-concurrent' }))
+      .catch(() => undefined);
+
+    // Barge-in: Y's identity survived the concurrent throw-away, so cancelTurn
+    // still aborts Y. Pre-fix the concurrent turn reset the field to null and
+    // this returned { status: 'not_active' } — Y ran straight through the interrupt.
+    expect(agent.cancelTurn('cancel-Y')).toEqual({ status: 'signaled' });
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await voiceTurn;
+  });
+
+  it('does not let a late cancel for a finished turn abort a newer turn with a different id', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+
+    // Turn A runs to completion.
+    await agent.handleMessage(makeMessage({ id: 'turn-A' }), undefined, { cancellationId: 'cancel-A' });
+
+    // Turn B (different id) is now the active turn.
+    const gate = hangNextPrompt();
+    const turnB = agent.handleMessage(makeMessage({ id: 'turn-B' }), undefined, { cancellationId: 'cancel-B' });
+    await gate.started;
+
+    // A late cancel naming the FINISHED turn A must not abort turn B.
+    expect(agent.cancelTurn('cancel-A')).toEqual({ status: 'owner_mismatch' });
+    expect(abortSpy).not.toHaveBeenCalled();
+
+    // The active turn's own id still cancels it.
+    expect(agent.cancelTurn('cancel-B')).toEqual({ status: 'signaled' });
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await turnB;
+  });
+
+  it('routes a dispatch AbortSignal through the identity guard so aborting it cancels the named turn', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+    const controller = new AbortController();
+
+    const gate = hangNextPrompt();
+    const turn = agent.handleMessage(
+      makeMessage({ id: 'turn-sig' }),
+      undefined,
+      { cancellationId: 'cancel-sig', signal: controller.signal },
+    );
+    await gate.started;
+    expect(abortSpy).not.toHaveBeenCalled();
+
+    controller.abort(new Error('barge-in'));
+    await Promise.resolve();
+
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await turn;
+  });
+
+  it('reads the cancellation identity from message routing when no explicit option is given', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const abortSpy = vi.spyOn(agent, 'abort').mockReturnValue({ status: 'signaled' });
+
+    const gate = hangNextPrompt();
+    const turn = agent.handleMessage(
+      makeMessage({ id: 'turn-routing', routing: { cancellationId: 'cancel-routing' } }),
+    );
+    await gate.started;
+
+    expect(agent.cancelTurn('cancel-other')).toEqual({ status: 'owner_mismatch' });
+    expect(agent.cancelTurn('cancel-routing')).toEqual({ status: 'signaled' });
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+
+    gate.release();
+    await turn;
+  });
+});

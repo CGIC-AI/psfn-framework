@@ -1,7 +1,23 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 
-export type MessageHandler = (message: SubstrateMessage) => Promise<AgentResponse>;
+/**
+ * mmo9.6.1: in-process turn-control options threaded alongside a dispatched
+ * message. `cancellationId` is the transport-agnostic turn identity (also
+ * carried on {@link SubstrateMessage.routing} for serialized hops); `signal`
+ * is a non-serializable AbortSignal that, when aborted, cancels the specific
+ * in-flight turn it was dispatched with. Both are optional and additive: a
+ * handler that ignores them behaves exactly as before.
+ */
+export interface MessageHandlerOptions {
+  signal?: AbortSignal;
+  cancellationId?: string;
+}
+
+export type MessageHandler = (
+  message: SubstrateMessage,
+  options?: MessageHandlerOptions,
+) => Promise<AgentResponse>;
 export type ChannelChatType = 'direct' | 'channel' | 'thread';
 
 export interface ChannelAdapterMeta {

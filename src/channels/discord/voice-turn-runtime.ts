@@ -312,6 +312,11 @@ export async function handleVoiceUtterance(
     assertActiveVoiceTurn(runtime, turn);
 
     const member = turn.channel.members.get(runtime.targetUserId);
+    // mmo9.6.1: the per-turn AbortController is the barge-in/timeout signal;
+    // give the turn a transport-agnostic cancellation identity (the turnId) and
+    // thread both into the handler so aborting the controller cancels the
+    // in-flight model turn — not just the local stage-budget wrapper.
+    const cancellationId = turnId;
     const message: SubstrateMessage = {
       id: turnId,
       channelId: `discord-voice:${turn.channel.id}`,
@@ -321,7 +326,10 @@ export async function handleVoiceUtterance(
       authorName: member?.displayName ?? member?.user.username ?? 'Voice User',
       content: effectiveTranscript,
       timestamp: new Date(),
-      ...(intakeEnvelopes ? { routing: { intakeEnvelopes } } : {}),
+      routing: {
+        ...(intakeEnvelopes ? { intakeEnvelopes } : {}),
+        cancellationId,
+      },
     };
 
     await runtime.eventBus.emit('message.received', { message });
@@ -329,7 +337,10 @@ export async function handleVoiceUtterance(
       stage: 'llm',
       budgets: runtime.reliabilityBudgets,
       signal: turn.abortController.signal,
-      task: () => handler(message),
+      task: () => handler(message, {
+        signal: turn.abortController.signal,
+        cancellationId,
+      }),
     });
     assertActiveVoiceTurn(runtime, turn);
     await runtime.eventBus.emit('message.sent', { response });

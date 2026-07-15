@@ -1100,6 +1100,11 @@ describe('GatewayServer', () => {
         eligible: false,
         reason: 'policy_disabled',
       });
+      // mmo9.6.1: a transport-agnostic cancellation identity is minted onto the
+      // streamed message routing so the agent turn is addressable by cancelTurn.
+      const mintedCancellationId = (routedMessage?.routing as Record<string, unknown> | undefined)?.cancellationId;
+      expect(typeof mintedCancellationId).toBe('string');
+      expect(mintedCancellationId).toBeTruthy();
     });
 
     it('marks Wyoming shard delegation eligible when policy allowlists match', async () => {

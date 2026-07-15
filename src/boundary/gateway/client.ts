@@ -6,7 +6,7 @@ import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorExcep
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
-import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcEndpoint,
@@ -21,6 +21,7 @@ import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogse
 import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
+import type { MessageHandler, MessageHandlerOptions } from '../../channels/backplane/types.js';
 const log = createComponentLogger('GatewayClient');
 
 /**
@@ -360,6 +361,15 @@ interface VoiceStreamState {
   chunks: string[];
   droppedChunks: number;
   cancelled: boolean;
+  /**
+   * mmo9.6.1: turn-cancellation identity carried on the streamed message's
+   * routing, and a per-stream AbortController threaded into the in-flight model
+   * turn. `voice.stream.cancel` aborts this controller so a barge-in that lands
+   * AFTER dispatch actually cancels the running turn instead of only flagging
+   * state for a future (never-dispatched) end frame.
+   */
+  cancellationId?: string;
+  abortController: AbortController;
 }
 
 export interface GatewayConnectionCloseEvent {
@@ -383,7 +393,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   >();
   private requestCounter = 0;
   private reverseMethodsRegistered = false;
-  private handleMessageHandler: ((message: SubstrateMessage) => Promise<AgentResponse>) | null = null;
+  private handleMessageHandler: MessageHandler | null = null;
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
@@ -534,7 +544,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   // ── LLMProviderPort interface ──
 
-  async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
+  async stream(
+    context: LLMContext,
+    callbacks?: StreamCallbacks,
+    signal?: AbortSignal,
+  ): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
     const requestId = context.correlation?.requestId?.trim()
       || context.correlation?.icpCorrelation?.requestId.trim()
@@ -594,7 +608,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       };
       let result: LLMChatResult;
       try {
-        result = await this.rpcInstance.request('llm.chat', requestParams) as LLMChatResult;
+        // mmo9.6.1: route through the abort-aware request path so a barge-in
+        // AbortSignal tears down the in-flight streaming turn rather than only
+        // dropping locally-consumed chunks.
+        result = await this.requestWithAbortSignal<LLMChatResult>('llm.chat', requestParams, signal);
       } catch (error) {
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
         this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
@@ -602,10 +619,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
           requestId,
           imageCount: referencedMessages.usedHintKeys.length,
         });
-        result = await this.rpcInstance.request('llm.chat', {
+        result = await this.requestWithAbortSignal<LLMChatResult>('llm.chat', {
           ...requestParams,
           messages: context.messages,
-        }) as LLMChatResult;
+        }, signal);
       }
 
       const response: LLMResponse = {
@@ -1462,7 +1479,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   }
 
   /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
-  onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void {
+  onHandleMessage(handler: MessageHandler): void {
     this.handleMessageHandler = handler;
     this.registerReverseMethods();
   }
@@ -1533,13 +1550,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
-  private async dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult> {
+  private async dispatchHandleMessage(
+    message: unknown,
+    options?: MessageHandlerOptions,
+  ): Promise<VoiceHandleMessageResult> {
     if (!this.handleMessageHandler) {
       throw new Error('No voice.handleMessage handler registered');
     }
 
     const substrateMessage = this.deserializeMessage(message);
-    const response = await this.handleMessageHandler(substrateMessage);
+    const response = await this.handleMessageHandler(substrateMessage, options);
     return {
       content: response.content,
       channelId: response.channelId,
@@ -1630,6 +1650,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw this.rpcError('Voice stream already exists', GatewayErrors.VOICE_STREAM_SEQUENCE);
     }
 
+    const cancellationId = typeof message.routing?.cancellationId === 'string'
+      && message.routing.cancellationId.trim()
+      ? message.routing.cancellationId
+      : undefined;
     const state: VoiceStreamState = {
       correlationId,
       streamId,
@@ -1642,6 +1666,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       chunks: [],
       droppedChunks: 0,
       cancelled: false,
+      ...(cancellationId ? { cancellationId } : {}),
+      abortController: new AbortController(),
     };
     this.voiceStreams.set(key, state);
 
@@ -1687,10 +1713,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.drainQueuedChunks(state);
 
     try {
-      const result = await this.dispatchHandleMessage({
-        ...state.baseMessage,
-        content: state.baseMessage.content + state.chunks.join(''),
-      });
+      const result = await this.dispatchHandleMessage(
+        {
+          ...state.baseMessage,
+          content: state.baseMessage.content + state.chunks.join(''),
+        },
+        {
+          signal: state.abortController.signal,
+          ...(state.cancellationId ? { cancellationId: state.cancellationId } : {}),
+        },
+      );
       return {
         ...result,
         correlationId: state.correlationId,
@@ -1715,7 +1747,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       };
     }
 
+    // mmo9.6.1 barge-in order: abort the in-flight model turn FIRST, then clear
+    // transport stream state. Aborting the per-stream controller trips the
+    // AbortSignal threaded into `handleVoiceStreamEnd`'s dispatch, which the
+    // SubstrateAgent resolves through its identity-guarded `cancelTurn` — so a
+    // cancel that lands after dispatch cancels the running turn, and a stale
+    // cancel for an already-finished stream (deleted above) is a safe no-op.
     state.cancelled = true;
+    if (!state.abortController.signal.aborted) {
+      state.abortController.abort(new Error('voice.stream.cancel'));
+    }
     state.chunkQueue.clear();
     this.voiceStreams.delete(key);
 

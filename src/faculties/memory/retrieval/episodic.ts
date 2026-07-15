@@ -10,6 +10,10 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import { trustAtLeast, type TrustLevel } from '../../../system/trust/types.js';
 import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  type MemoryRetrievalPolicy,
+} from '../../../system/config/memory-retrieval-policy.js';
 import type {
   EpisodicStorePort,
 } from '../episodic/store-port.js';
@@ -58,6 +62,7 @@ export interface EpisodicRetrievalInput {
   maxChains?: number;
   maxDepth?: number;
   maxEpisodesPerChain?: number;
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy;
 }
 
 export interface EpisodicTimelineInput {
@@ -72,6 +77,7 @@ export interface EpisodicTimelineInput {
   scanLimit?: number;
   maxDepth?: number;
   maxEpisodesPerRoot?: number;
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy;
 }
 
 interface EpisodeCandidate {
@@ -80,17 +86,6 @@ interface EpisodeCandidate {
   matchedTerms: string[];
 }
 
-const DEFAULT_SCAN_LIMIT = 1000;
-const DEFAULT_MAX_CHAINS = 3;
-const DEFAULT_MAX_DEPTH = 2;
-const DEFAULT_MAX_EPISODES_PER_CHAIN = 5;
-const DEFAULT_TIMELINE_LIMIT = 8;
-const DEFAULT_TIMELINE_SCAN_LIMIT = 200;
-const DEFAULT_TIMELINE_MAX_DEPTH = 1;
-const DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT = 3;
-const ARC_SCAN_LIMIT = 8;
-const MIN_ROOT_MATCH_SCORE = 0.18;
-const MIN_RELATED_MATCH_SCORE = 0.08;
 const QUERY_STOP_WORDS = new Set([
   'about',
   'again',
@@ -166,14 +161,15 @@ export async function retrieveEpisodicChains(
     return [];
   }
 
-  const maxChains = normalizePositiveInteger(input.maxChains, DEFAULT_MAX_CHAINS);
-  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, DEFAULT_MAX_DEPTH);
+  const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
+  const maxChains = normalizePositiveInteger(input.maxChains, episodicPolicy.maxChains);
+  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.maxDepth);
   const maxEpisodesPerChain = normalizePositiveInteger(
     input.maxEpisodesPerChain,
-    DEFAULT_MAX_EPISODES_PER_CHAIN,
+    episodicPolicy.maxEpisodesPerChain,
   );
   const episodes = (await store.listEpisodes({
-    limit: normalizePositiveInteger(input.scanLimit, DEFAULT_SCAN_LIMIT),
+    limit: normalizePositiveInteger(input.scanLimit, episodicPolicy.scanLimit),
   })).map(cloneEpisode);
   const episodeIndex = new Map<string, Episode>();
   const roots = episodes
@@ -181,7 +177,7 @@ export async function retrieveEpisodicChains(
     .filter(episode => isEpisodeVisibleForTurn(episode, input))
     .map(episode => scoreEpisode(episode, queryTokens, normalizedQuery, input.scopeQuery))
     .filter((candidate): candidate is EpisodeCandidate => (
-      candidate !== null && candidate.score >= MIN_ROOT_MATCH_SCORE
+      candidate !== null && candidate.score >= episodicPolicy.minRootMatchScore
     ))
     .sort(compareEpisodeCandidates);
 
@@ -203,6 +199,8 @@ export async function retrieveEpisodicChains(
       episodeIndex,
       maxDepth,
       maxEpisodesPerChain,
+      arcScanLimit: episodicPolicy.arcScanLimit,
+      minRelatedMatchScore: episodicPolicy.minRelatedMatchScore,
     });
     if (chain.episodes.length === 0) continue;
     chains.push(chain);
@@ -222,15 +220,16 @@ export async function retrieveEpisodicTimeline(
   store: EpisodicTimelineStore,
   input: EpisodicTimelineInput,
 ): Promise<EpisodicTimelineEntry[]> {
-  const limit = normalizePositiveInteger(input.limit, DEFAULT_TIMELINE_LIMIT);
+  const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
+  const limit = normalizePositiveInteger(input.limit, episodicPolicy.timelineLimit);
   const scanLimit = normalizePositiveInteger(
     input.scanLimit,
-    Math.max(DEFAULT_TIMELINE_SCAN_LIMIT, limit * 4),
+    Math.max(episodicPolicy.timelineScanLimit, limit * 4),
   );
-  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, DEFAULT_TIMELINE_MAX_DEPTH);
+  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, episodicPolicy.timelineMaxDepth);
   const maxEpisodesPerRoot = Math.max(
     2,
-    normalizePositiveInteger(input.maxEpisodesPerRoot, DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT),
+    normalizePositiveInteger(input.maxEpisodesPerRoot, episodicPolicy.timelineMaxEpisodesPerRoot),
   );
   const visibilityInput: EpisodicRetrievalInput = {
     contextText: '',
@@ -282,6 +281,8 @@ export async function retrieveEpisodicTimeline(
       episodeIndex,
       maxDepth,
       maxEpisodesPerChain: maxEpisodesPerRoot,
+      arcScanLimit: episodicPolicy.arcScanLimit,
+      minRelatedMatchScore: episodicPolicy.minRelatedMatchScore,
     });
 
     for (const episode of chain.episodes.slice(1).sort(compareEpisodesChronological)) {
@@ -406,6 +407,8 @@ async function buildEpisodeChain(input: {
   episodeIndex: Map<string, Episode>;
   maxDepth: number;
   maxEpisodesPerChain: number;
+  arcScanLimit: number;
+  minRelatedMatchScore: number;
 }): Promise<EpisodicRetrievalChain> {
   const episodes: Episode[] = [cloneEpisode(input.root.episode)];
   const arcs: EpisodeArc[] = [];
@@ -421,7 +424,7 @@ async function buildEpisodeChain(input: {
 
     const relatedArcs = (await input.store.listEpisodeArcsForEpisode(current.episode.id, {
       direction: 'both',
-      limit: ARC_SCAN_LIMIT,
+      limit: input.arcScanLimit,
     }))
       .map(arc => parseEpisodeArc(cloneEpisodeArc(arc)))
       .sort(compareArcs);
@@ -445,7 +448,13 @@ async function buildEpisodeChain(input: {
         input.normalizedQuery,
         input.input.scopeQuery,
       );
-      if (!isRelatedEpisodeUseful(input.root, arc, candidate, input.queryTokens)) {
+      if (!isRelatedEpisodeUseful(
+        input.root,
+        arc,
+        candidate,
+        input.queryTokens,
+        input.minRelatedMatchScore,
+      )) {
         continue;
       }
 
@@ -557,8 +566,9 @@ function isRelatedEpisodeUseful(
   arc: EpisodeArc,
   related: EpisodeCandidate | null,
   queryTokens: readonly string[],
+  minRelatedMatchScore: number,
 ): boolean {
-  if (related && related.score >= MIN_RELATED_MATCH_SCORE) {
+  if (related && related.score >= minRelatedMatchScore) {
     return true;
   }
   const queryThemeMatch = arc.themes.some(theme => (

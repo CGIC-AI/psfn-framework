@@ -28,6 +28,31 @@ export interface MemoryTypeRetrievalPolicy {
   retrievalPrior: number;
 }
 
+export interface EpisodicRetrievalPolicy {
+  /** Landmark-chain scan: episodes fetched from the store per query. */
+  scanLimit: number;
+  /** Landmark-chain: maximum distinct chains returned. */
+  maxChains: number;
+  /** Landmark-chain: maximum breadth-first arc-follow depth. */
+  maxDepth: number;
+  /** Landmark-chain: maximum episodes accreted into a single chain. */
+  maxEpisodesPerChain: number;
+  /** Timeline: maximum root entries returned. */
+  timelineLimit: number;
+  /** Timeline: episodes fetched from the store per query. */
+  timelineScanLimit: number;
+  /** Timeline: maximum arc-follow depth from each root. */
+  timelineMaxDepth: number;
+  /** Timeline: maximum linked episodes accreted per root. */
+  timelineMaxEpisodesPerRoot: number;
+  /** Per-episode arc fan-out scanned while walking a chain. */
+  arcScanLimit: number;
+  /** Minimum score for an episode to seed a chain root. */
+  minRootMatchScore: number;
+  /** Minimum score for a linked episode to stay in a chain. */
+  minRelatedMatchScore: number;
+}
+
 export interface MemoryRetrievalPolicy {
   typePolicies: Record<MemoryPolicyType, MemoryTypeRetrievalPolicy>;
   proceduralTaskRetrievalPrior: number;
@@ -40,7 +65,19 @@ export interface MemoryRetrievalPolicy {
     pageSize: number;
     maxScan: number;
     selectedLimit: number;
+    /** Minimum shared-token overlap for a recent memory to augment. */
+    minOverlap: number;
+    /** Base similarity assigned to a lexical-augment match. */
+    baseSimilarity: number;
   };
+  /**
+   * Minimum count of top-similarity memories the score guarantee rescues
+   * when the scored set would otherwise fall below it.
+   */
+  scoreGuaranteeMinK: number;
+  /** Similarity multiplier applied to score-guaranteed rescues. */
+  scoreGuaranteeFloor: number;
+  episodic: EpisodicRetrievalPolicy;
   emotionalIntensityPersistenceMaxMultiplier: number;
 }
 
@@ -54,6 +91,7 @@ function freezeMemoryRetrievalPolicy(
   Object.freeze(policy.typePolicies);
   Object.freeze(policy.selectionCaps);
   Object.freeze(policy.lexicalAugment);
+  Object.freeze(policy.episodic);
   return Object.freeze(policy);
 }
 
@@ -114,6 +152,23 @@ const DEFAULT_POLICY: MemoryRetrievalPolicy = freezeMemoryRetrievalPolicy({
     pageSize: 256,
     maxScan: 2_048,
     selectedLimit: 12,
+    minOverlap: 2,
+    baseSimilarity: 0.62,
+  },
+  scoreGuaranteeMinK: 3,
+  scoreGuaranteeFloor: 0.01,
+  episodic: {
+    scanLimit: 1_000,
+    maxChains: 3,
+    maxDepth: 2,
+    maxEpisodesPerChain: 5,
+    timelineLimit: 8,
+    timelineScanLimit: 200,
+    timelineMaxDepth: 1,
+    timelineMaxEpisodesPerRoot: 3,
+    arcScanLimit: 8,
+    minRootMatchScore: 0.18,
+    minRelatedMatchScore: 0.08,
   },
   emotionalIntensityPersistenceMaxMultiplier: 6,
 });
@@ -302,6 +357,9 @@ export function normalizeMemoryRetrievalPolicy(
     'selectionCaps',
     'nonTemporalRecencyFloor',
     'lexicalAugment',
+    'scoreGuaranteeMinK',
+    'scoreGuaranteeFloor',
+    'episodic',
     'emotionalIntensityPersistenceMaxMultiplier',
   ], fieldPath);
 
@@ -318,7 +376,7 @@ export function normalizeMemoryRetrievalPolicy(
   const lexicalAugment = requireRecord(record.lexicalAugment, `${fieldPath}.lexicalAugment`);
   assertExactKeys(
     lexicalAugment,
-    ['pageSize', 'maxScan', 'selectedLimit'],
+    ['pageSize', 'maxScan', 'selectedLimit', 'minOverlap', 'baseSimilarity'],
     `${fieldPath}.lexicalAugment`,
   );
   const pageSize = requireInteger(
@@ -338,6 +396,23 @@ export function normalizeMemoryRetrievalPolicy(
     `${fieldPath}.lexicalAugment.selectedLimit`,
     1,
     maxScan,
+  );
+  const minOverlap = requireInteger(
+    lexicalAugment.minOverlap,
+    `${fieldPath}.lexicalAugment.minOverlap`,
+    1,
+    100,
+  );
+  const baseSimilarity = requireFiniteNumber(
+    lexicalAugment.baseSimilarity,
+    `${fieldPath}.lexicalAugment.baseSimilarity`,
+    0,
+    1,
+  );
+
+  const episodic = normalizeEpisodicRetrievalPolicy(
+    record.episodic,
+    `${fieldPath}.episodic`,
   );
 
   return {
@@ -368,12 +443,92 @@ export function normalizeMemoryRetrievalPolicy(
       0,
       1,
     ),
-    lexicalAugment: { pageSize, maxScan, selectedLimit },
+    lexicalAugment: { pageSize, maxScan, selectedLimit, minOverlap, baseSimilarity },
+    scoreGuaranteeMinK: requireInteger(
+      record.scoreGuaranteeMinK,
+      `${fieldPath}.scoreGuaranteeMinK`,
+      0,
+      100,
+    ),
+    scoreGuaranteeFloor: requireFiniteNumber(
+      record.scoreGuaranteeFloor,
+      `${fieldPath}.scoreGuaranteeFloor`,
+      0,
+      1,
+    ),
+    episodic,
     emotionalIntensityPersistenceMaxMultiplier: requireFiniteNumber(
       record.emotionalIntensityPersistenceMaxMultiplier,
       `${fieldPath}.emotionalIntensityPersistenceMaxMultiplier`,
       1,
       100,
+    ),
+  };
+}
+
+function normalizeEpisodicRetrievalPolicy(
+  value: unknown,
+  fieldPath: string,
+): EpisodicRetrievalPolicy {
+  const record = requireRecord(value, fieldPath);
+  assertExactKeys(
+    record,
+    [
+      'scanLimit',
+      'maxChains',
+      'maxDepth',
+      'maxEpisodesPerChain',
+      'timelineLimit',
+      'timelineScanLimit',
+      'timelineMaxDepth',
+      'timelineMaxEpisodesPerRoot',
+      'arcScanLimit',
+      'minRootMatchScore',
+      'minRelatedMatchScore',
+    ],
+    fieldPath,
+  );
+  return {
+    scanLimit: requireInteger(record.scanLimit, `${fieldPath}.scanLimit`, 1, 100_000),
+    maxChains: requireInteger(record.maxChains, `${fieldPath}.maxChains`, 1, 1_000),
+    maxDepth: requireInteger(record.maxDepth, `${fieldPath}.maxDepth`, 0, 100),
+    maxEpisodesPerChain: requireInteger(
+      record.maxEpisodesPerChain,
+      `${fieldPath}.maxEpisodesPerChain`,
+      1,
+      1_000,
+    ),
+    timelineLimit: requireInteger(record.timelineLimit, `${fieldPath}.timelineLimit`, 1, 1_000),
+    timelineScanLimit: requireInteger(
+      record.timelineScanLimit,
+      `${fieldPath}.timelineScanLimit`,
+      1,
+      100_000,
+    ),
+    timelineMaxDepth: requireInteger(
+      record.timelineMaxDepth,
+      `${fieldPath}.timelineMaxDepth`,
+      0,
+      100,
+    ),
+    timelineMaxEpisodesPerRoot: requireInteger(
+      record.timelineMaxEpisodesPerRoot,
+      `${fieldPath}.timelineMaxEpisodesPerRoot`,
+      1,
+      1_000,
+    ),
+    arcScanLimit: requireInteger(record.arcScanLimit, `${fieldPath}.arcScanLimit`, 1, 1_000),
+    minRootMatchScore: requireFiniteNumber(
+      record.minRootMatchScore,
+      `${fieldPath}.minRootMatchScore`,
+      0,
+      1,
+    ),
+    minRelatedMatchScore: requireFiniteNumber(
+      record.minRelatedMatchScore,
+      `${fieldPath}.minRelatedMatchScore`,
+      0,
+      1,
     ),
   };
 }

@@ -571,7 +571,13 @@ describe('postgres memory store unit coverage', () => {
     const store = await createPostgresMemoryStore('postgres://unused', 4);
     const listSpy = vi.spyOn(store, 'listActiveMemories');
     const policy = createDefaultMemoryRetrievalPolicy();
-    policy.lexicalAugment = { pageSize: 50, maxScan: 120, selectedLimit: 12 };
+    policy.lexicalAugment = {
+      pageSize: 50,
+      maxScan: 120,
+      selectedLimit: 12,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
 
     const candidates = await collectRecentLexicalMemoryCandidates({
       memoryStore: store,

@@ -83,7 +83,24 @@
     "lexicalAugment": {
       "pageSize": 256,
       "maxScan": 2048,
-      "selectedLimit": 12
+      "selectedLimit": 12,
+      "minOverlap": 2,
+      "baseSimilarity": 0.62
+    },
+    "scoreGuaranteeMinK": 3,
+    "scoreGuaranteeFloor": 0.01,
+    "episodic": {
+      "scanLimit": 1000,
+      "maxChains": 3,
+      "maxDepth": 2,
+      "maxEpisodesPerChain": 5,
+      "timelineLimit": 8,
+      "timelineScanLimit": 200,
+      "timelineMaxDepth": 1,
+      "timelineMaxEpisodesPerRoot": 3,
+      "arcScanLimit": 8,
+      "minRootMatchScore": 0.18,
+      "minRelatedMatchScore": 0.08
     },
     "emotionalIntensityPersistenceMaxMultiplier": 6
   },

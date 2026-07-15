@@ -39,6 +39,8 @@ import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
+import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -73,6 +75,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   intakeScreening?: IntakeScreeningService | null;
   /** Companion event relay surface (w9hj.1); `/v1/companion/*` 503s without it. */
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
+  /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
+  fleetAuthBroker?: GatewayFleetAuthBroker;
 }
 
 /**
@@ -299,6 +303,7 @@ export async function startOptionalGatewayApiServer(
     fleetAuthEnabled: options.config.fleetAuth !== undefined,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },
+    principalAuthenticationWired: options.fleetAuthBroker !== undefined,
   });
   const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
@@ -400,6 +405,15 @@ export async function startOptionalGatewayApiServer(
             cancelForCompanion: async companionId => await options.gateway
               .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
           },
+        }
+      : {}),
+    ...(options.fleetAuthBroker && options.config.fleetAuth
+      ? {
+          fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
+            broker: options.fleetAuthBroker,
+            canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+            callbackPath: options.config.fleetAuth.callbackPath,
+          }),
         }
       : {}),
   });

@@ -7,6 +7,11 @@ import {
   FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES,
   FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
 } from './reapproval-sql.js';
+import {
+  FLEET_AUTH_FIRST_OWNER_DDL_SQL,
+  FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME,
+} from './first-owner-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -240,6 +245,9 @@ async function applyRoleGrants(
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(${FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
 }
 
 /**
@@ -253,6 +261,7 @@ async function applyFleetAuthReapprovalBoundary(
   client: import('pg').PoolClient,
 ): Promise<void> {
   await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
+  await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {

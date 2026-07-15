@@ -483,9 +483,34 @@ CREATE UNIQUE INDEX contact_binding_one_live_principal
   WHERE state IN ('active', 'pending');
 `;
 
+const OAUTH_BROKER_SESSION_SQL = `
+ALTER TABLE oauth_transactions
+  ADD COLUMN pkce_verifier_ciphertext BYTEA,
+  ADD COLUMN completed_session_id UUID
+    REFERENCES browser_sessions(record_id);
+
+-- Transactions created before the broker could retain its PKCE verifier only
+-- contain a digest and can never complete a code exchange. Revoke them rather
+-- than attempting a compatibility fallback or accepting PKCE-less callbacks.
+UPDATE oauth_transactions
+SET status = 'revoked'
+WHERE pkce_verifier_ciphertext IS NULL
+  AND status = 'pending';
+
+ALTER TABLE browser_sessions
+  ADD CONSTRAINT browser_sessions_replacement_fk
+  FOREIGN KEY (replaced_by) REFERENCES browser_sessions(record_id);
+
+CREATE INDEX oauth_transactions_expiry_idx
+  ON oauth_transactions (status, expires_at);
+CREATE INDEX browser_sessions_token_lookup_idx
+  ON browser_sessions (token_digest, revoked_at);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
   { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
+  { version: 5, name: 'oauth_broker_sessions', sql: OAUTH_BROKER_SESSION_SQL },
 ] as const;

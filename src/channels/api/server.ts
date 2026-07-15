@@ -100,6 +100,7 @@ import {
 import { handleCompanionTouchStimulus } from './server/companion-touch-stimulus-route.js';
 import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -411,6 +412,8 @@ export interface ApiServerConfig {
   companionRelay?: CompanionRelayHttpDeps;
   /** ADMIN_TOKEN-only lifecycle surface for cancelling outstanding ICP permits. */
   icpAutonomyOperator?: IcpAutonomyOperatorPort;
+  /** Gateway-only OAuth/session routes. Never constructed in operator/agent processes. */
+  fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -455,6 +458,7 @@ export class ApiServer implements ChannelAdapterPort {
   private satelliteRegistry?: SatelliteRegistryConfig;
   private companionRelay?: CompanionRelayHttpDeps;
   private icpAutonomyOperator?: IcpAutonomyOperatorPort;
+  private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -485,6 +489,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.satelliteRegistry = config.satelliteRegistry;
     this.companionRelay = config.companionRelay;
     this.icpAutonomyOperator = config.icpAutonomyOperator;
+    this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -595,6 +600,10 @@ export class ApiServer implements ChannelAdapterPort {
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+    if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
+      void this.fleetAuthHttpRoutes.handle(req, res, url);
+      return;
+    }
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const companionRoute = matchCompanionRelayRoute(req.method, path);
     const icpOperatorCancelMatch = req.method === 'POST'

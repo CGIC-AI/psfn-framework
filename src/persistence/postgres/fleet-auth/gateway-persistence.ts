@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
+import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import { resolveGatewayFleetAuthSecrets } from '../../../system/config/fleet-auth-config.js';
 import { createPostgresPool } from '../../postgres.js';
@@ -21,6 +22,7 @@ import {
   type AccountReapprovalResult,
 } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -30,6 +32,7 @@ import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
  */
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
+  broker: GatewayFleetAuthBroker;
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
@@ -174,10 +177,12 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   for (const table of [
     'jit_authorization_grants',
     'step_up_challenges',
+    // Completed OAuth rows reference their minted browser session. Remove the
+    // transaction receipt before the session while fencing the whole epoch.
+    'oauth_transactions',
     'browser_sessions',
     'provider_token_custody',
     'discord_evidence_snapshots',
-    'oauth_transactions',
     'trusted_host_ceremonies',
   ]) {
     await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}."${table}"`);
@@ -270,8 +275,19 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lineageId,
       floor.trustedHost.lastLifecycleTransitionId,
     );
+    const broker = new GatewayFleetAuthBroker({
+      config: options.config,
+      store: new PostgresFleetAuthBrokerStore({
+        pool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+      }),
+      oauthClientSecret: secrets.oauthClientSecret,
+      sessionPepper: secrets.sessionPepper,
+    });
     return {
       authorityFloors,
+      broker,
       reapproveAccountAuthority: request => executeAccountReapproval(pool, request),
       close: async () => await pool.end(),
     };

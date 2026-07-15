@@ -34,4 +34,20 @@ describe('fleet auth legacy surface startup guard', () => {
     })).not.toThrow();
     expect(env).toEqual(before);
   });
+
+  it('permits the gateway API only after gateway-owned principal authentication is wired', () => {
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787', API_KEY: 'machine-api-key' },
+      principalAuthenticationWired: true,
+    })).not.toThrow();
+
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787', ADMIN_TOKEN: 'legacy-admin-token' },
+      principalAuthenticationWired: true,
+    })).toThrow(/legacy/i);
+  });
 });

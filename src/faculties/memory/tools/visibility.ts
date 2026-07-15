@@ -188,8 +188,9 @@ export function resolveMemoryVisibility(
     params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelPrivacy,
     action,
   );
-  const canonicalContactId = normalizeOptionalToolString(params.canonical_contact_id)
-    ?? normalizeOptionalToolString(params.canonicalContactId);
+  // Contact identity is an ingress-owned authorization fact. Tool arguments
+  // are model-controlled and must never select the memory subject.
+  const canonicalContactId = normalizeOptionalToolString(requestContext?.viewerMemorySubjectContactId);
 
   if (!channelId) {
     return { ok: false, error: `Error: channel_id is required for action=${action} when no request context channel is available` };

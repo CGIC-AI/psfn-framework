@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createPostgresPool } from '../postgres.js';
 import {
-  DEFAULT_POSTGRES_TEST_IMAGE,
+  PGVECTOR_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
@@ -19,11 +19,14 @@ import {
   type FleetBackupCompanionUnit,
 } from './service.js';
 import {
+  backfillRestoredMemorySubjectProjections,
   invalidateRestoredMemorySubjectProjections,
   restoreFleetClusterArtifact,
   restoreFleetCompanionSlice,
   restoreFleetGroupArtifact,
 } from './fleet-restore.js';
+import { createPostgresMemoryStoreFromPool } from '../../faculties/memory/postgres-store.js';
+import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
 import {
   inspectFleetRestoreDatabaseMarker,
   prepareFleetRestoreDatabaseMarker,
@@ -38,7 +41,7 @@ const roots: string[] = [];
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
+  harness = await startPostgresTestHarness({ image: PGVECTOR_POSTGRES_TEST_IMAGE });
 }, INTEGRATION_TIMEOUT_MS);
 
 afterEach(() => {
@@ -163,6 +166,58 @@ describe('fleet restore against real Postgres', () => {
       });
     } finally {
       await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('finishes restored subject reclassification before the corpus is accepted', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const admin = createPostgresPool(databaseUrl, { max: 1 });
+    const pool = createPostgresPool(databaseUrl, { schema: 'companion_alpha', max: 2 });
+    try {
+      await admin.query('CREATE SCHEMA companion_alpha');
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory({
+        id: 'restored-subject-memory',
+        text: 'restored private memory',
+        type: 'semantic',
+        importance: 0.8,
+        confidence: 0.9,
+        emotionalValence: 0,
+        salience: 0.7,
+        sourceRef: 'restore:test',
+        extractedAt: 1,
+        lastAccessed: 1,
+        accessCount: 0,
+        tags: [],
+        sensitivity: 'low',
+        consentFlags: {},
+        provenance: { subjectContactId: 'contact-a' },
+      }, new Float32Array([0.9, 0.1, 0.1, 0.1]));
+
+      await invalidateRestoredMemorySubjectProjections({ databaseUrl }, ['companion_alpha']);
+      expect(await store.getMemorySubjectClassification('restored-subject-memory')).toMatchObject({
+        status: 'invalidated',
+      });
+
+      await backfillRestoredMemorySubjectProjections({ databaseUrl }, ['companion_alpha']);
+
+      expect(await store.getMemorySubjectClassification('restored-subject-memory')).toMatchObject({
+        status: 'current',
+        subjectClass: 'single_contact',
+      });
+      expect((await store.queryAuthorizedMemorySubjects({
+        authorization: {
+          action: 'detail',
+          viewerContactIds: ['contact-a'],
+          allowedSubjectClasses: ['single_contact'],
+          allowedViewerRelations: ['self'],
+          classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
+          grantBindings: [],
+        },
+        selector: { kind: 'detail', memoryId: 'restored-subject-memory' },
+      })).total).toBe(1);
+    } finally {
+      await Promise.all([pool.end(), admin.end()]);
     }
   }, INTEGRATION_TIMEOUT_MS);
 

@@ -38,6 +38,10 @@ import { summarizeRecentSessionEntries } from '../../core/session/manager/compac
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  memorySubjectAccessContextFromCorrelation,
+} from '../../faculties/memory/subject-authorized-store.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
@@ -706,9 +710,17 @@ async function main(): Promise<void> {
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
-  registerMemoryTools(agentLoop, {
-    writer: memoryWriter,
+  const toolMemoryStore = createSubjectAuthorizedMemoryStore(
     memoryStore,
+    () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+  );
+  const toolMemoryWriter = new MemoryWriter(toolMemoryStore, gateway, {
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+  });
+  toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  registerMemoryTools(agentLoop, {
+    writer: toolMemoryWriter,
+    memoryStore: toolMemoryStore,
     episodicStore,
     contactStore,
     // Same config authority the MemoryWriter and retrieval faculty resolve

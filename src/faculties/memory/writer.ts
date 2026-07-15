@@ -1039,9 +1039,9 @@ export class MemoryWriter {
     };
     const patchEventId = uuidv7();
 
-    await this.memoryStore.runInTransaction(() => {
-      this.memoryStore.updateMemory(memoryId, updates);
-      this.memoryStore.recordPatchEvent({
+    await this.memoryStore.runInTransaction(async () => {
+      await this.memoryStore.updateMemory(memoryId, updates);
+      await this.memoryStore.recordPatchEvent({
         id: patchEventId,
         memoryId,
         sourceRef: auditContext.sourceRef,
@@ -1145,12 +1145,12 @@ export class MemoryWriter {
       deleteReason: undefined,
     };
 
-    await this.memoryStore.runInTransaction(() => {
-      this.memoryStore.updateMemory(existing.id, {
+    await this.memoryStore.runInTransaction(async () => {
+      await this.memoryStore.updateMemory(existing.id, {
         supersededBy: replacementId,
         provenanceRefs: sourceProvenanceRefs,
       });
-      this.memoryStore.insertMemory(replacementMemory, embedding);
+      await this.memoryStore.insertMemory(replacementMemory, embedding);
     });
     await this.memoryStore.recordEvolutionLink({
       sourceMemoryId: replacementMemory.id,

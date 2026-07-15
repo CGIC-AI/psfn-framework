@@ -19,7 +19,7 @@ export async function persistMemorySubjectProjection(
   let validSubjectContactIds: ReadonlySet<string> | undefined;
   if (contactTable?.rows[0]?.table_name) {
     const rows = await client.query<{ id: string }>(
-      'SELECT id FROM contacts WHERE id = ANY($1::text[])',
+      'SELECT id FROM contacts WHERE id = ANY($1::text[]) FOR KEY SHARE',
       [provisional.subjectContactIds],
     );
     validSubjectContactIds = new Set(rows.rows.map(row => row.id));
@@ -63,7 +63,10 @@ export async function persistMemorySubjectProjection(
     'DELETE FROM l2_memory_subject_contacts WHERE memory_id = $1',
     [classification.memoryId],
   );
-  for (const contactId of classification.subjectContactIds) {
+  const projectedSubjectContactIds = validSubjectContactIds === undefined
+    ? classification.subjectContactIds
+    : classification.subjectContactIds.filter(contactId => validSubjectContactIds.has(contactId));
+  for (const contactId of projectedSubjectContactIds) {
     await client.query(`
       INSERT INTO l2_memory_subject_contacts (memory_id, contact_id)
       VALUES ($1, $2)

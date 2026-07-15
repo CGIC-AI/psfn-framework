@@ -17,6 +17,7 @@ import {
 import type { MemoryEmbeddingSearchRow } from './rows.js';
 import { clampLimit } from './utils.js';
 import { buildMemorySubjectAuthorizationPredicate } from './subject-policy.js';
+import { normalizeMemoryScopeQuery } from '../types.js';
 
 export const MEMORY_SUBJECT_SELECT_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
@@ -104,6 +105,30 @@ function buildSelector(
   let limit = 50;
   let offset = 0;
   let countOnly = false;
+  if ('scopeQuery' in selector) {
+    const scopeQuery = normalizeMemoryScopeQuery(selector.scopeQuery);
+    if (scopeQuery) {
+      const refConditions = (scopeQuery.refs ?? []).map(ref => {
+        values.push(ref.kind, ref.id);
+        return `(memory.scope_ref_kind = $${values.length - 1} AND memory.scope_ref_id = $${values.length})`;
+      });
+      const tags = scopeQuery.tags ?? [];
+      let tagCondition: string | undefined;
+      if (tags.length > 0) {
+        values.push(tags);
+        tagCondition = `memory.scope_tags ?| $${values.length}::text[]`;
+      }
+      const refCondition = refConditions.length > 0 ? `(${refConditions.join(' OR ')})` : undefined;
+      if (scopeQuery.mode === 'only') {
+        if (refCondition) where.push(refCondition);
+        if (tagCondition) where.push(tagCondition);
+      } else if (refCondition && tagCondition) {
+        where.push(`(${refCondition} OR ${tagCondition})`);
+      } else if (refCondition || tagCondition) {
+        where.push((refCondition ?? tagCondition)!);
+      }
+    }
+  }
   switch (selector.kind) {
     case 'list':
       limit = clampLimit(selector.limit, 50, 1, 500);

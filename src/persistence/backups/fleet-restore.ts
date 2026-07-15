@@ -64,6 +64,7 @@ import {
   verifyFleetAuthBackupManifest,
 } from './fleet-auth-coordinator.js';
 import type { FleetAuthRestoreResult } from './fleet-auth-restore.js';
+import { runMemorySubjectBackfillToCompletion } from '../../faculties/memory/postgres-store/subject-backfill.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -305,6 +306,10 @@ export async function invalidateRestoredMemorySubjectProjections(
         `, [`${schema}.l2_memories`, `${schema}.l2_memory_subject_classifications`]);
         if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
         const qualified = quotePostgresIdentifier(schema);
+        // The subject-evidence invalidation trigger intentionally addresses
+        // companion-local projection tables without schema qualification.
+        // Pin its lookup to the restored schema for this transaction.
+        await client.query(`SET LOCAL search_path TO ${qualified}, public`);
         await client.query(`
           UPDATE ${qualified}.l2_memories
           SET authorization_revision = authorization_revision + 1,
@@ -330,6 +335,32 @@ export async function invalidateRestoredMemorySubjectProjections(
     });
   } finally {
     await pool.end().catch(() => undefined);
+  }
+}
+
+/** Reclassify each restored schema before restore success can make the corpus reachable. */
+export async function backfillRestoredMemorySubjectProjections(
+  postgres: FleetRestorePostgresOptions,
+  schemas: readonly string[],
+): Promise<void> {
+  for (const rawSchema of schemas) {
+    const schema = assertValidPostgresSchemaName(rawSchema);
+    const pool = createPostgresPool(postgres.databaseUrl, {
+      applicationName: 'fleet-restore-memory-subject-backfill',
+      allowExitOnIdle: true,
+      max: 1,
+      schema,
+    });
+    try {
+      const tables = await pool.query<{ memories: string | null; classifications: string | null }>(`
+        SELECT to_regclass('l2_memories')::text AS memories,
+               to_regclass('l2_memory_subject_classifications')::text AS classifications
+      `);
+      if (!tables.rows[0]?.memories || !tables.rows[0]?.classifications) continue;
+      await runMemorySubjectBackfillToCompletion(pool);
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
   }
 }
 
@@ -462,6 +493,13 @@ export async function restoreFleetAuthConsistentFamily(options: {
     });
     restoredSchemas.push(artifact.postgresSchema);
   }
+
+  const restoredPostgres = {
+    databaseUrl: options.backupRestoreDatabaseUrl,
+    ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+  };
+  await invalidateRestoredMemorySubjectProjections(restoredPostgres, restoredSchemas);
+  await backfillRestoredMemorySubjectProjections(restoredPostgres, restoredSchemas);
 
   const fleetAuth = await restoreFleetAuthSnapshot({
     manifestPath: options.manifestPath,
@@ -619,6 +657,7 @@ async function commitRestore(options: {
     restoreDatabase: async () => {
       await restorePostgresDump(options.dumpPath, options.postgres);
       await invalidateRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
+      await backfillRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
     },
     rollbackDatabase: async operation => await rollbackFleetRestoreDatabaseSchemas(
       options.postgres,

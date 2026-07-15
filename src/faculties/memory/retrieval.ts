@@ -166,6 +166,11 @@ import {
 import {
   captureTurnMemorySnapshot as captureTurnMemorySnapshotWithDeps,
 } from './retrieval/turn-snapshot.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  memorySubjectAccessContextFromCorrelation,
+} from './subject-authorized-store.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type {
   RetrievalContactContext,
   RetrievalDecisionDiagnostics,
@@ -258,6 +263,7 @@ export class MemoryRetriever implements MemoryProvider {
   private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
   private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
   private fallbackMemoryRetrievalPolicy: MemoryRetrievalPolicy | undefined;
+  private enforceSubjectAuthorization: boolean;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -268,6 +274,7 @@ export class MemoryRetriever implements MemoryProvider {
     llmProvider?: LLMProviderPort | null,
     episodicStore?: EpisodicRetrievalStore | null,
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
+    enforceSubjectAuthorization = false,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -303,10 +310,21 @@ export class MemoryRetriever implements MemoryProvider {
     this.llmProvider = llmProvider ?? null;
     this.episodicStore = episodicStore ?? null;
     this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
+    this.enforceSubjectAuthorization = enforceSubjectAuthorization;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
+  }
+
+  private productMemoryStore(canonicalContactId?: string): MemoryStorePort {
+    if (!this.enforceSubjectAuthorization) return this.memoryStore;
+    const context = memorySubjectAccessContextFromCorrelation(getRequestContext());
+    return createSubjectAuthorizedMemoryStore(this.memoryStore, {
+      ...context,
+      ...(canonicalContactId ? { viewerContactId: canonicalContactId } : {}),
+      companionInternal: !canonicalContactId && context.companionInternal === true,
+    });
   }
 
   /**
@@ -336,7 +354,10 @@ export class MemoryRetriever implements MemoryProvider {
       };
     }
     return computeSharedBackground(
-      { memoryStore: this.memoryStore, contactStore: this.contactStore },
+      {
+        memoryStore: this.productMemoryStore(input.access.canonicalContactId),
+        contactStore: this.contactStore,
+      },
       {
         contactAId: input.contactAId,
         contactBId: input.contactBId,
@@ -721,9 +742,10 @@ export class MemoryRetriever implements MemoryProvider {
       operatorApproval?: boolean;
       roomVisibility?: RetrievalRoomVisibilityContext;
     },
+    memoryStore: MemoryStorePort = this.memoryStore,
   ): Promise<ContactProfileAccessResult> {
     return resolveContactProfileAccessWithDeps({
-      memoryStore: this.memoryStore,
+      memoryStore,
       sessionQuarantineFilter: this.sessionQuarantineFilter,
       profile,
       options,
@@ -748,6 +770,7 @@ export class MemoryRetriever implements MemoryProvider {
     },
     roomVisibility?: RetrievalRoomVisibilityContext,
   ): Promise<TurnMemorySnapshot> {
+    const productMemoryStore = this.productMemoryStore(canonicalContactId);
     return captureTurnMemorySnapshotWithDeps(
       {
         contextText,
@@ -763,7 +786,7 @@ export class MemoryRetriever implements MemoryProvider {
         ...(roomVisibility ? { roomVisibility } : {}),
       },
       {
-        memoryStore: this.memoryStore,
+        memoryStore: productMemoryStore,
         embeddingService: this.embeddingService,
         ...(this.runtimeConfig
           ? {
@@ -779,11 +802,13 @@ export class MemoryRetriever implements MemoryProvider {
         resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
           this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
         ),
-        resolveContactProfileAccess: (profile, options) => this.resolveContactProfileAccess(profile, options),
+        resolveContactProfileAccess: (profile, options) => (
+          this.resolveContactProfileAccess(profile, options, productMemoryStore)
+        ),
         resolveEmotionalSnapshot: contactId => resolveEmotionalSnapshot(this.contactStore, contactId),
-        collectContactEmotionalMemories: contactId => collectContactEmotionalMemories(this.memoryStore, contactId),
+        collectContactEmotionalMemories: contactId => collectContactEmotionalMemories(productMemoryStore, contactId),
         collectProactiveRecallCandidates: (proactiveChannelId, proactiveContactId) => (
-          collectProactiveRecallCandidates(this.memoryStore, proactiveChannelId, proactiveContactId)
+          collectProactiveRecallCandidates(productMemoryStore, proactiveChannelId, proactiveContactId)
         ),
         resolveEpisodicChains: episodicInput => this.resolveEpisodicChains(episodicInput),
         filterQuarantinedMemories: memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories),
@@ -842,6 +867,7 @@ export class MemoryRetriever implements MemoryProvider {
     activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
     const retrievalStartedAt = performance.now();
+    const productMemoryStore = this.productMemoryStore(canonicalContactId);
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
     const effectiveCallerContext = hasDirectRetrievalContext
       ? callerContext
@@ -907,7 +933,7 @@ export class MemoryRetriever implements MemoryProvider {
     const rawProfile = turnSnapshot?.profile
       ? cloneContactProfileArtifact(turnSnapshot.profile)
       : canonicalContactId
-        ? await this.memoryStore.getContactProfile(canonicalContactId)
+        ? await productMemoryStore.getContactProfile(canonicalContactId)
         : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
       trustLevel: effectiveTrust,
@@ -917,7 +943,7 @@ export class MemoryRetriever implements MemoryProvider {
       canonicalContactId,
       operatorApproval,
       roomVisibility,
-    });
+    }, productMemoryStore);
     const profile = profileAccess.profile;
     telemetry.profileIncluded = !!profile;
     telemetry.provenanceRefs = collectContactProfileProvenanceRefs(profile);
@@ -930,7 +956,7 @@ export class MemoryRetriever implements MemoryProvider {
       const contactQuarantine = filterQuarantinedMemories(
         this.sessionQuarantineFilter,
         turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
-        ?? (canonicalContactId ? await collectContactEmotionalMemories(this.memoryStore, canonicalContactId) : []),
+        ?? (canonicalContactId ? await collectContactEmotionalMemories(productMemoryStore, canonicalContactId) : []),
       );
       const contactEmotionalSource = contactQuarantine.memories;
       const proactiveQuarantine = filterQuarantinedMemories(
@@ -963,7 +989,7 @@ export class MemoryRetriever implements MemoryProvider {
     const emptySelectedIds = new Set<string>();
     const fallbackEmotionalContinuity = canonicalContactId
       ? await collectEmotionalContinuityMemories(
-        this.memoryStore,
+        productMemoryStore,
         canonicalContactId,
         effectiveTrust,
         channelDisclosure,
@@ -1022,7 +1048,7 @@ export class MemoryRetriever implements MemoryProvider {
         const candidateLimit = Math.max(40, limit * 4);
         const vectorSearchStartedAt = performance.now();
         telemetry.searchCalls += 1;
-        semanticMemories = await this.memoryStore.searchByEmbedding(
+        semanticMemories = await productMemoryStore.searchByEmbedding(
           embedding,
           this.retrievalThreshold,
           candidateLimit,
@@ -1037,7 +1063,7 @@ export class MemoryRetriever implements MemoryProvider {
           const recentLexicalStartedAt = performance.now();
           telemetry.searchCalls += 1;
           const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
-            memoryStore: this.memoryStore,
+            memoryStore: productMemoryStore,
             contextText,
             existingIds: new Set(semanticMemories.map(memory => memory.id)),
             scopeQuery: normalizedScopeQuery,
@@ -1060,7 +1086,7 @@ export class MemoryRetriever implements MemoryProvider {
           const lexicalSearchStartedAt = performance.now();
           if (!turnSnapshot) telemetry.searchCalls += 1;
           const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
-            ?? await this.memoryStore.searchByText(
+            ?? await productMemoryStore.searchByText(
               contextText,
             Math.max(40, limit * 4),
               normalizedScopeQuery,
@@ -1483,7 +1509,7 @@ export class MemoryRetriever implements MemoryProvider {
       const selectedIds = new Set(selected.map(item => item.memory.id));
       const emotionalContinuityMemories = canonicalContactId
         ? await collectEmotionalContinuityMemories(
-          this.memoryStore,
+          productMemoryStore,
           canonicalContactId,
           effectiveTrust,
           channelDisclosure,
@@ -1505,7 +1531,7 @@ export class MemoryRetriever implements MemoryProvider {
         collectEpisodicChainProvenanceRefs(episodicChains),
       );
       const selectedForPrompt = await attachEvolutionChains(
-        this.memoryStore,
+        productMemoryStore,
         selected,
         {
           contextText,
@@ -1530,7 +1556,7 @@ export class MemoryRetriever implements MemoryProvider {
       const accessUpdateStartedAt = performance.now();
       for (const s of selected) {
         try {
-          await this.memoryStore.updateMemory(s.memory.id, {
+          await productMemoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
             accessCount: s.memory.accessCount + 1,
           });
@@ -1596,8 +1622,9 @@ export class MemoryRetriever implements MemoryProvider {
     _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     _scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
+    const productMemoryStore = this.productMemoryStore(canonicalContactId);
     return retrieveProactiveRecallWithDeps({
-      memoryStore: this.memoryStore,
+      memoryStore: productMemoryStore,
       sessionQuarantineFilter: this.sessionQuarantineFilter,
       proactiveRecallProbability: this.proactiveRecallProbability,
       proactiveRecallMinTurnsBetween: this.proactiveRecallMinTurnsBetween,

@@ -157,12 +157,26 @@ export class InMemoryMemoryStore {
       previousValues: { ...event.previousValues },
       nextValues: { ...event.nextValues },
     }));
-    try {
-      return handler();
-    } catch (error) {
+    const rollback = (): void => {
       this.memories.clear();
       for (const [id, stored] of memoriesSnapshot) this.memories.set(id, stored);
       this.patchEvents.splice(0, this.patchEvents.length, ...patchEventsSnapshot);
+    };
+    try {
+      const result = handler();
+      if (
+        result !== null
+        && typeof result === 'object'
+        && typeof (result as { then?: unknown }).then === 'function'
+      ) {
+        return Promise.resolve(result).catch((error: unknown) => {
+          rollback();
+          throw error;
+        }) as T;
+      }
+      return result;
+    } catch (error) {
+      rollback();
       throw error;
     }
   }

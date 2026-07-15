@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../../shared/contracts/memory-subject.js';
 import type {
   MemorySubjectBackfillOptions,
@@ -54,7 +54,7 @@ function result(
 
 export async function backfillMemorySubjectClassifications(
   client: PoolClient,
-  embeddingDims: number,
+  embeddingDims: number | undefined,
   options: MemorySubjectBackfillOptions = {},
 ): Promise<MemorySubjectBackfillResult> {
   const startedAt = performance.now();
@@ -111,7 +111,9 @@ export async function backfillMemorySubjectClassifications(
   for (const row of rows.rows) {
     const memory = fromMemoryRow(row);
     const embedding = row.embedding ? decodeEmbedding(row.embedding) : undefined;
-    if (embedding) validateEmbeddingDimensions(embedding, embeddingDims, 'subject backfill');
+    if (embedding && embeddingDims !== undefined) {
+      validateEmbeddingDimensions(embedding, embeddingDims, 'subject backfill');
+    }
     const classification = await persistMemorySubjectProjection(
       client,
       memory,
@@ -131,4 +133,40 @@ export async function backfillMemorySubjectClassifications(
     WHERE classifier_version = $1
   `, [MEMORY_SUBJECT_CLASSIFIER_VERSION, cursor, completed, totalProcessedCount, now]);
   return result(processedCount > 0 ? 'processed' : 'complete', processedCount, totalProcessedCount, reasonCounts, startedAt);
+}
+
+/**
+ * Drain the resumable classifier before a restored or upgraded corpus can be
+ * consumed. Each batch owns a short transaction; a competing classifier is a
+ * startup/restore failure, never a reason to expose an incompletely gated
+ * corpus.
+ */
+export async function runMemorySubjectBackfillToCompletion(
+  pool: Pool,
+  embeddingDims?: number,
+  options: MemorySubjectBackfillOptions = {},
+): Promise<MemorySubjectBackfillResult> {
+  let nextOptions = options;
+  for (;;) {
+    const client = await pool.connect();
+    let batch: MemorySubjectBackfillResult;
+    try {
+      await client.query('BEGIN');
+      batch = await backfillMemorySubjectClassifications(client, embeddingDims, nextOptions);
+      if (batch.state === 'busy') {
+        throw new Error('Memory subject backfill is already running');
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (batch.state === 'complete') return batch;
+    nextOptions = {
+      ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+    };
+  }
 }

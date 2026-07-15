@@ -12,6 +12,7 @@ import type { PurrMemory } from './types.js';
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
 import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
+import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const DEFAULT_EMBEDDING = new Float32Array([0.9, 0.1, 0.1, 0.1]);
@@ -276,6 +277,8 @@ describe('postgres memory store integration', () => {
         id: 'authorized-a',
         text: 'private alpha subject marker',
         provenance: { subjectContactId: 'contact-a' },
+        scopeRef: { kind: 'project', id: 'alpha' },
+        scopeTags: ['private-alpha'],
       }), DEFAULT_EMBEDDING);
       await store.insertMemory(makeMemory({
         id: 'unauthorized-b',
@@ -313,6 +316,15 @@ describe('postgres memory store integration', () => {
         selector: { kind: 'count' },
       });
       expect(count).toEqual({ memories: [], total: 1 });
+
+      expect(await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'search'),
+        selector: {
+          kind: 'text_search',
+          query: 'subject marker',
+          scopeQuery: { mode: 'only', refs: [{ kind: 'project', id: 'other' }] },
+        },
+      })).toEqual({ memories: [], total: 0 });
 
       const hiddenDetail = await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'detail'),
@@ -426,6 +438,104 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('keeps subject-authorized replacement writes atomic inside an existing transaction', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'replace-a',
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'replace-b',
+        provenance: { subjectContactId: 'contact-b' },
+      }), DEFAULT_EMBEDDING);
+
+      await expect(store.persistAuthorizedMemoryWrite({
+        authorization: subjectAuthorization('contact-a', 'bulk_mutation'),
+        memory: makeMemory({
+          id: 'replacement-denied',
+          provenance: { subjectContactId: 'contact-a' },
+        }),
+        embedding: DEFAULT_EMBEDDING,
+        supersededMemoryIds: ['replace-a', 'replace-b'],
+      })).rejects.toThrow('Memory subject authorization denied');
+      expect(await store.getById('replacement-denied')).toBeUndefined();
+      expect((await store.getById('replace-a'))?.supersededBy).toBeUndefined();
+      expect((await store.getById('replace-b'))?.supersededBy).toBeUndefined();
+
+      await store.runInTransaction(async () => {
+        await store.persistAuthorizedMemoryWrite({
+          authorization: subjectAuthorization('contact-a', 'bulk_mutation'),
+          memory: makeMemory({
+            id: 'replacement-allowed',
+            provenance: { subjectContactId: 'contact-a' },
+          }),
+          embedding: DEFAULT_EMBEDDING,
+          supersededMemoryIds: ['replace-a'],
+        });
+      });
+      expect((await store.getById('replace-a'))?.supersededBy).toBe('replacement-allowed');
+      expect(await store.getById('replacement-allowed')).toBeDefined();
+
+      await store.runInTransaction(async () => {
+        await store.mutateAuthorizedMemorySubjects({
+          authorization: subjectAuthorization('contact-a', 'update'),
+          memoryIds: ['replacement-allowed'],
+          updates: { sensitivity: 'confidential' },
+        });
+      });
+      expect((await store.getById('replacement-allowed'))?.sensitivity).toBe('confidential');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('authorizes soft-delete and restore checkpoints without exposing known inaccessible ids', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'delete-authorized-a',
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'delete-unauthorized-b',
+        provenance: { subjectContactId: 'contact-b' },
+      }), DEFAULT_EMBEDDING);
+
+      expect(await store.softDeleteAuthorizedMemorySubject({
+        authorization: subjectAuthorization('contact-a', 'update'),
+        memoryId: 'delete-unauthorized-b',
+      })).toBeNull();
+      expect((await store.getById('delete-unauthorized-b'))?.deletedAt).toBeUndefined();
+
+      const deleted = await store.softDeleteAuthorizedMemorySubject({
+        authorization: subjectAuthorization('contact-a', 'update'),
+        memoryId: 'delete-authorized-a',
+        options: { deleteId: 'authorized-delete-version', deletedAt: 1_800_000_000_000 },
+      });
+      expect(deleted).toMatchObject({
+        deleteId: 'authorized-delete-version',
+        memoryId: 'delete-authorized-a',
+        deletedAt: 1_800_000_000_000,
+      });
+      expect((await store.getById('delete-authorized-a'))?.deletedAt).toBe(1_800_000_000_000);
+
+      expect(await store.undoAuthorizedMemorySubjectDelete({
+        authorization: subjectAuthorization('contact-b', 'update'),
+        deleteId: 'authorized-delete-version',
+      })).toBeNull();
+      expect((await store.getById('delete-authorized-a'))?.deletedAt).toBe(1_800_000_000_000);
+
+      expect(await store.undoAuthorizedMemorySubjectDelete({
+        authorization: subjectAuthorization('contact-a', 'update'),
+        deleteId: 'authorized-delete-version',
+        options: { restoredAt: 1_800_000_000_100 },
+      })).toMatchObject({
+        deleteId: 'authorized-delete-version',
+        restoredAt: 1_800_000_000_100,
+      });
+      expect((await store.getById('delete-authorized-a'))?.deletedAt).toBeUndefined();
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('backfills historical rows in bounded resumable batches and records ambiguity without guessing', async () => {
     await withMemoryDatabase(async (pool) => {
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
@@ -443,7 +553,7 @@ describe('postgres memory store integration', () => {
         SET provenance_json = '{"subjectContactId":"contact-c"}'::jsonb
         WHERE id = 'legacy-c'
       `);
-      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const store = await createPostgresMemoryStoreFromPool(pool, 4, { subjectBackfill: false });
 
       const first = await store.backfillMemorySubjectClassifications({ batchSize: 2, now: 1000 });
       expect(first).toMatchObject({
@@ -476,6 +586,33 @@ describe('postgres memory store integration', () => {
         subjectClass: 'single_contact',
         subjectContactIds: ['contact-c'],
       });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('finishes the resumable subject backfill before exposing a historical corpus', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      await seedMemoryRow(pool, makeMemory({
+        id: 'startup-backfill-memory',
+        provenance: { subjectContactId: 'contact-a' },
+      }), [0.9, 0.1, 0.1, 0.1]);
+      await pool.query(`
+        UPDATE l2_memories
+        SET provenance_json = '{"subjectContactId":"contact-a"}'::jsonb
+        WHERE id = 'startup-backfill-memory'
+      `);
+
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+
+      expect(await store.getMemorySubjectClassification('startup-backfill-memory')).toMatchObject({
+        subjectClass: 'single_contact',
+        status: 'current',
+        subjectContactIds: ['contact-a'],
+      });
+      expect((await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'detail'),
+        selector: { kind: 'detail', memoryId: 'startup-backfill-memory' },
+      })).total).toBe(1);
     });
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -575,6 +712,142 @@ describe('postgres memory store integration', () => {
       });
     });
   }, INTEGRATION_TIMEOUT_MS);
+
+  it.each(['merge', 'delete'] as const)(
+    'reloads the locked SQL row before an access-stat update after contact %s',
+    async (operation) => {
+      await withMemoryDatabase(async (pool) => {
+        const databaseUrl = pool.options.connectionString;
+        if (!databaseUrl) throw new Error('Postgres test pool is missing its connection string');
+        const memoryStore = await createPostgresMemoryStoreFromPool(pool, 4);
+        const contactStore = await createPostgresContactStore(databaseUrl, undefined, { pool });
+        const source = await contactStore.upsert({
+          id: '00000000-0000-4000-8000-000000000011',
+          displayName: 'Access Source',
+          trustLevel: 'regular',
+        });
+        const target = await contactStore.upsert({
+          id: '00000000-0000-4000-8000-000000000012',
+          displayName: 'Access Target',
+          trustLevel: 'regular',
+        });
+        const memoryId = `access-after-${operation}`;
+        await memoryStore.insertMemory(makeMemory({
+          id: memoryId,
+          contactId: source.id,
+          provenance: { subjectContactId: source.id },
+        }), DEFAULT_EMBEDDING);
+
+        if (operation === 'merge') {
+          expect(await contactStore.mergeContacts(source.id, target.id)).toBe(true);
+        } else {
+          expect(await contactStore.deleteContact(source.id)).toBe(true);
+        }
+        await memoryStore.updateMemory(memoryId, { lastAccessed: 1_800_000_000_000, accessCount: 7 });
+
+        const row = await pool.query<{
+          contact_id: string | null;
+          last_accessed: string;
+          access_count: number;
+          status: string;
+          subject_class: string;
+          retired_subject_count: string;
+        }>(`
+          SELECT memory.contact_id, memory.last_accessed, memory.access_count,
+                 classification.status, classification.subject_class,
+                 COUNT(subject_contact.contact_id) FILTER (
+                   WHERE subject_contact.contact_id = $2
+                 ) AS retired_subject_count
+          FROM l2_memories memory
+          JOIN l2_memory_subject_classifications classification ON classification.memory_id = memory.id
+          LEFT JOIN l2_memory_subject_contacts subject_contact ON subject_contact.memory_id = memory.id
+          WHERE memory.id = $1
+          GROUP BY memory.id, classification.memory_id
+        `, [memoryId, source.id]);
+        expect(row.rows[0]).toMatchObject({
+          contact_id: operation === 'merge' ? target.id : null,
+          last_accessed: '1800000000000',
+          access_count: 7,
+        });
+        expect(row.rows[0]).toMatchObject({
+          status: 'current',
+          subject_class: 'ambiguous',
+          retired_subject_count: '0',
+        });
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it.each(['merge', 'delete'] as const)(
+    'serializes subject contact validation against concurrent contact %s',
+    async (operation) => {
+      await withMemoryDatabase(async (pool) => {
+        const databaseUrl = pool.options.connectionString;
+        if (!databaseUrl) throw new Error('Postgres test pool is missing its connection string');
+        const memoryStore = await createPostgresMemoryStoreFromPool(pool, 4);
+        const contactStore = await createPostgresContactStore(databaseUrl, undefined, { pool });
+        const source = await contactStore.upsert({
+          id: '00000000-0000-4000-8000-000000000021',
+          displayName: 'Concurrent Source',
+          trustLevel: 'regular',
+        });
+        const target = await contactStore.upsert({
+          id: '00000000-0000-4000-8000-000000000022',
+          displayName: 'Concurrent Target',
+          trustLevel: 'regular',
+        });
+        const memory = makeMemory({
+          id: `concurrent-${operation}`,
+          provenance: { subjectContactId: source.id },
+        });
+        await memoryStore.insertMemory(memory, DEFAULT_EMBEDDING);
+        const revision = await pool.query<{ authorization_revision: string }>(
+          'SELECT authorization_revision FROM l2_memories WHERE id = $1',
+          [memory.id],
+        );
+        const classifier = await pool.connect();
+        try {
+          await classifier.query('BEGIN');
+          await persistMemorySubjectProjection(
+            classifier,
+            memory,
+            Number(revision.rows[0]?.authorization_revision),
+            DEFAULT_EMBEDDING,
+          );
+          let settled = false;
+          const mutation = (operation === 'merge'
+            ? contactStore.mergeContacts(source.id, target.id)
+            : contactStore.deleteContact(source.id)).then((value) => {
+            settled = true;
+            return value;
+          });
+          await new Promise(resolve => setTimeout(resolve, 50));
+          expect(settled).toBe(false);
+          await classifier.query('COMMIT');
+          expect(await mutation).toBe(true);
+        } catch (error) {
+          await classifier.query('ROLLBACK').catch(() => undefined);
+          throw error;
+        } finally {
+          classifier.release();
+        }
+
+        const projection = await pool.query<{ current_projection_count: string }>(`
+          SELECT COUNT(*) AS current_projection_count
+          FROM l2_memory_subject_classifications classification
+          JOIN l2_memories memory ON memory.id = classification.memory_id
+          JOIN l2_memory_subject_contacts subject_contact ON subject_contact.memory_id = memory.id
+          WHERE memory.id = $1
+            AND classification.status = 'current'
+            AND classification.memory_revision = memory.authorization_revision
+            AND subject_contact.contact_id = $2
+        `, [memory.id, source.id]);
+        expect(projection.rows[0]?.current_projection_count).toBe('0');
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
 
   it('invalidates the subject projection in the same transaction as direct evidence mutation', async () => {
     await withMemoryDatabase(async (pool) => {

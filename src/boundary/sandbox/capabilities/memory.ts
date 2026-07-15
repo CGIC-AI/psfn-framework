@@ -16,6 +16,11 @@ import {
   type SessionSearchResult,
   type SessionSearchViewerContext,
 } from '../../../core/session/search-runtime.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  memorySubjectAccessContextFromCorrelation,
+} from '../../../faculties/memory/subject-authorized-store.js';
 
 export interface SessionSearchOptions {
   channelId?: SessionSearchViewerContext['channelId'];
@@ -192,7 +197,13 @@ function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): Memor
 }
 
 export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOptions): MemoryCapabilities {
-  const memoryStore = createCompatibleMemoryStore(options.memoryStore);
+  const subjectStore = options.memoryStore
+    ? createSubjectAuthorizedMemoryStore(
+      options.memoryStore,
+      () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+    )
+    : null;
+  const memoryStore = createCompatibleMemoryStore(subjectStore);
   const writer = (options.embeddingService && memoryStore)
     ? new MemoryWriter(memoryStore, options.embeddingService)
     : null;

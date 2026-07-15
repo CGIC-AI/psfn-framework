@@ -113,6 +113,141 @@ export function registerSalienceDecayOperation(input: {
   });
 }
 
+export interface RegisterAgentDatabaseBackupLaneOptions {
+  scheduler: Scheduler;
+  eventBus: EventBus;
+  config: Pick<
+    SubstrateConfig,
+    | 'fleetAuthVerifier'
+    | 'postgresDatabaseUrl'
+    | 'multiCompanion'
+    | 'companionFleet'
+    | 'companionId'
+    | 'characterCardPath'
+  >;
+  backupConfig: BackupRuntimeConfig;
+  pathSnapshot: RuntimePathSnapshot;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function registerAgentDatabaseBackupLane(
+  options: RegisterAgentDatabaseBackupLaneOptions,
+): void {
+  if (options.config.fleetAuthVerifier !== undefined) {
+    log.warn(
+      'Fleet auth is enabled: database backups are owned by the gateway consistent-backup lane; this agent registers no database backup task',
+    );
+    return;
+  }
+
+  const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
+  if (!postgresDatabaseUrl) {
+    throw new Error(
+      'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to run without a database backup source',
+    );
+  }
+  const onBackupFailure = (error: unknown): void => {
+    void options.eventBus.emit('backup.failed', {
+      taskId: SCHEDULED_BACKUP_TASK_ID,
+      taskName: SCHEDULED_BACKUP_TASK_NAME,
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: Date.now(),
+    });
+  };
+  const kubernetesHelm = resolveKubernetesHelmBackupConfig(options.env ?? process.env);
+
+  const fleet = options.config.multiCompanion ? options.config.companionFleet : undefined;
+  if (options.config.multiCompanion && !fleet) {
+    throw new Error(
+      'Multi-companion mode is enabled but the resolved config carries no companion fleet — refusing to register a single-companion backup lane',
+    );
+  }
+  if (fleet) {
+    if (isFleetBackupLeader(options.config.companionId, fleet)) {
+      const fleetOptions = buildFleetBackupRunOptions({
+        fleet,
+        ownCompanionId: options.config.companionId,
+        ownResolvedCompanionDataDir: options.pathSnapshot.companionDataDir,
+        systemDataDir: options.pathSnapshot.systemDataDir,
+        postgres: { databaseUrl: postgresDatabaseUrl },
+        backupConfig: options.backupConfig,
+        ...(kubernetesHelm ? { kubernetesHelm } : {}),
+      });
+      registerScheduledFleetBackupTask({
+        scheduler: options.scheduler,
+        fleetOptions,
+        config: options.backupConfig,
+        onBackupFailure,
+      });
+      log.info('Fleet backups enabled (leader)', {
+        companionCount: fleet.companions.length,
+        mode: fleetOptions.groupMode ? 'group' : 'per-companion',
+        intervalMs: options.backupConfig.intervalMs,
+        backupRootDir: options.backupConfig.rootDir,
+        verifyRestore: options.backupConfig.verifyRestore,
+        encryption: options.backupConfig.encryption.mode,
+        kubernetesHelmRecovery: Boolean(kubernetesHelm),
+      });
+    } else {
+      log.info('Fleet backup delegated to leader companion; no backup lane registered in this follower process', {
+        companionId: options.config.companionId,
+        leaderCompanionId: fleet.companions[0].companionId,
+      });
+    }
+    return;
+  }
+
+  registerScheduledBackupTask({
+    scheduler: options.scheduler,
+    postgres: {
+      databaseUrl: postgresDatabaseUrl,
+      ...(options.backupConfig.verifyRestore
+        ? {
+          restoreVerifyDatabaseUrl: (() => {
+            const derived = deriveRestoreVerifyDatabaseUrl(postgresDatabaseUrl);
+            if (!derived) {
+              throw new Error(
+                'Backup verifyRestore is enabled but the restore-verify scratch database URL cannot be derived from config.postgresDatabaseUrl',
+              );
+            }
+            return derived;
+          })(),
+        }
+        : {}),
+    },
+    companionDataDir: options.pathSnapshot.companionDataDir,
+    systemDataDir: options.pathSnapshot.systemDataDir,
+    ...(kubernetesHelm ? { kubernetesHelm } : {}),
+    workspacePath: options.pathSnapshot.workspacePath,
+    workspaceProtectedPaths: [
+      options.pathSnapshot.systemDataDir,
+      options.pathSnapshot.companionDataDir,
+      options.pathSnapshot.runtimePathLayout.logsDir,
+      options.pathSnapshot.runtimePathLayout.tempDir,
+      options.pathSnapshot.runtimePathLayout.backupsDir,
+    ],
+    sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
+    memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
+    characterCardPath: options.config.characterCardPath,
+    characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
+    config: options.backupConfig,
+    onBackupFailure,
+  });
+  log.info('Scheduled backups enabled', {
+    intervalMs: options.backupConfig.intervalMs,
+    postgresSource: true,
+    maxRotatingBackups: options.backupConfig.maxRotatingBackups,
+    maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
+    maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
+    backupRootDir: options.backupConfig.rootDir,
+    mirrorDir: options.backupConfig.mirrorDir || '(none)',
+    verifyRestore: options.backupConfig.verifyRestore,
+    encryption: options.backupConfig.encryption.mode,
+    workspacePath: options.pathSnapshot.workspacePath,
+    kubernetesHelmRecovery: Boolean(kubernetesHelm),
+  });
+}
+
 export function buildAgentSchedulerRuntime(
   options: BuildAgentSchedulerRuntimeOptions,
 ): AgentSchedulerRuntime {
@@ -142,125 +277,14 @@ export function buildAgentSchedulerRuntime(
     config: options.config,
   });
 
-  const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
-  if (!postgresDatabaseUrl) {
-    throw new Error(
-      'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to run without a database backup source',
-    );
-  }
-  const onBackupFailure = (error: unknown): void => {
-    void options.eventBus.emit('backup.failed', {
-      taskId: SCHEDULED_BACKUP_TASK_ID,
-      taskName: SCHEDULED_BACKUP_TASK_NAME,
-      error: error instanceof Error ? error.message : String(error),
-      timestamp: Date.now(),
-    });
-  };
-  const kubernetesHelm = resolveKubernetesHelmBackupConfig(options.env ?? process.env);
-
-  // ── Backup lane selection (sprint 10, W2) ──
-  // Multi-companion: exactly ONE process — the fleet leader (first companion in
-  // companions.json order) — runs a single fleet backup capturing every
-  // companion slice (+ cluster/shared, or one whole-database family artifact in
-  // group mode). Follower processes register no backup lane. Flag-off, this
-  // whole branch is skipped and the single-companion path below runs
-  // byte-identically.
-  const fleet = options.config.multiCompanion ? options.config.companionFleet : undefined;
-  if (options.config.multiCompanion && !fleet) {
-    // Fail closed: multi-companion selects the fleet backup path; a missing
-    // fleet manifest here means config resolution is inconsistent. Never fall
-    // back silently to a single-companion backup that would miss siblings.
-    throw new Error(
-      'Multi-companion mode is enabled but the resolved config carries no companion fleet — refusing to register a single-companion backup lane',
-    );
-  }
-  if (fleet) {
-    if (isFleetBackupLeader(options.config.companionId, fleet)) {
-      const fleetOptions = buildFleetBackupRunOptions({
-        fleet,
-        ownCompanionId: options.config.companionId,
-        ownResolvedCompanionDataDir: options.pathSnapshot.companionDataDir,
-        systemDataDir: options.pathSnapshot.systemDataDir,
-        postgres: { databaseUrl: postgresDatabaseUrl },
-        backupConfig: options.backupConfig,
-        ...(kubernetesHelm ? { kubernetesHelm } : {}),
-      });
-      registerScheduledFleetBackupTask({
-        scheduler,
-        fleetOptions,
-        config: options.backupConfig,
-        onBackupFailure,
-      });
-      log.info('Fleet backups enabled (leader)', {
-        companionCount: fleet.companions.length,
-        mode: fleetOptions.groupMode ? 'group' : 'per-companion',
-        intervalMs: options.backupConfig.intervalMs,
-        backupRootDir: options.backupConfig.rootDir,
-        verifyRestore: options.backupConfig.verifyRestore,
-        encryption: options.backupConfig.encryption.mode,
-        kubernetesHelmRecovery: Boolean(kubernetesHelm),
-      });
-    } else {
-      log.info('Fleet backup delegated to leader companion; no backup lane registered in this follower process', {
-        companionId: options.config.companionId,
-        leaderCompanionId: fleet.companions[0].companionId,
-      });
-    }
-  } else {
-    registerScheduledBackupTask({
-      scheduler,
-      ...(postgresDatabaseUrl
-        ? {
-          postgres: {
-            databaseUrl: postgresDatabaseUrl,
-            ...(options.backupConfig.verifyRestore
-              ? {
-                restoreVerifyDatabaseUrl: (() => {
-                  const derived = deriveRestoreVerifyDatabaseUrl(postgresDatabaseUrl);
-                  if (!derived) {
-                    throw new Error(
-                      'Backup verifyRestore is enabled but the restore-verify scratch database URL cannot be derived from config.postgresDatabaseUrl',
-                    );
-                  }
-                  return derived;
-                })(),
-              }
-              : {}),
-          },
-        }
-        : {}),
-      companionDataDir: options.pathSnapshot.companionDataDir,
-      systemDataDir: options.pathSnapshot.systemDataDir,
-      ...(kubernetesHelm ? { kubernetesHelm } : {}),
-      workspacePath: options.pathSnapshot.workspacePath,
-      workspaceProtectedPaths: [
-        options.pathSnapshot.systemDataDir,
-        options.pathSnapshot.companionDataDir,
-        options.pathSnapshot.runtimePathLayout.logsDir,
-        options.pathSnapshot.runtimePathLayout.tempDir,
-        options.pathSnapshot.runtimePathLayout.backupsDir,
-      ],
-      sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
-      memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
-      characterCardPath: options.config.characterCardPath,
-      characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
-      config: options.backupConfig,
-      onBackupFailure,
-    });
-    log.info('Scheduled backups enabled', {
-      intervalMs: options.backupConfig.intervalMs,
-      postgresSource: Boolean(postgresDatabaseUrl),
-      maxRotatingBackups: options.backupConfig.maxRotatingBackups,
-      maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
-      maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
-      backupRootDir: options.backupConfig.rootDir,
-      mirrorDir: options.backupConfig.mirrorDir || '(none)',
-      verifyRestore: options.backupConfig.verifyRestore,
-      encryption: options.backupConfig.encryption.mode,
-      workspacePath: options.pathSnapshot.workspacePath,
-      kubernetesHelmRecovery: Boolean(kubernetesHelm),
-    });
-  }
+  registerAgentDatabaseBackupLane({
+    scheduler,
+    eventBus: options.eventBus,
+    config: options.config,
+    backupConfig: options.backupConfig,
+    pathSnapshot: options.pathSnapshot,
+    ...(options.env ? { env: options.env } : {}),
+  });
 
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();

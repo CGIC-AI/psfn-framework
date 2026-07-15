@@ -1057,6 +1057,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/persistence/backups/fleet-auth-cycle.ts",
+      "contains": "psfn-fleet-auth-backup-stage-",
+      "reason": "Fleet-auth consistent backup staging uses an established project-scoped temp directory prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/persistence/backups/kubernetes-helm-chart.ts",
       "contains": "include \"psfn.",
       "reason": "Backup verification preserves exact project-owned Helm helper names from the rendered chart contract.",

@@ -198,6 +198,9 @@ Secret key named by `secrets.keys.gatewaySessionIntegrityAuthToken` (default
 `COMPANION_ID` with the same gateway HMAC keyring used by the gateway, and
 provision it without logging the token. It is a distinct role-bound proof, not
 the raw `GATEWAY_SESSION_HMAC_KEY` and not the normal companion-agent proof.
+The agent derives a separate Garden audit opaque-ID key from this proof with a
+domain-separated one-way transform. Rotating the worker proof changes the
+opaque IDs returned by Garden but does not alter or discard the audit records.
 
 ## Common Launch Commands
 

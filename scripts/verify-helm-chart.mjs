@@ -234,11 +234,10 @@ assertNotIncludes(
   '- name: POSTGRES_DATABASE_URL\n',
   'agent raw Postgres credential env',
 );
-assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_HMAC_KEY', 'agent audit opaque-ID HMAC env');
-assertIncludes(
+assertNotIncludes(
   agentDeployment,
-  'key: GATEWAY_SESSION_HMAC_KEY',
-  'agent audit opaque-ID HMAC Secret key',
+  'name: GATEWAY_SESSION_HMAC_KEY',
+  'agent gateway root proof-signing credential',
 );
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');

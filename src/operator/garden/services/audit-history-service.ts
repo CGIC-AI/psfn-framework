@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
-import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
+import type { AuditOpaqueIdKeyring } from '../audit-opaque-id-keyring.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -247,7 +247,7 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     gatewayReader?: GatewayAuditHistoryReader | null;
     chargeLedger?: Pick<RunChargeLedger, 'getData'> | null;
     scopeId: string;
-    opaqueIdKeyring: SessionHmacKeyring;
+    opaqueIdKeyring: AuditOpaqueIdKeyring;
     now?: () => number;
   }) {
     if (!deps.scopeId.trim()) {

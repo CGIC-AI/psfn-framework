@@ -221,6 +221,7 @@ async function createHarness(options: {
     discordToken: '',
     discordBotId: '123',
     companionId: 'test-companion',
+    gatewaySessionIntegrityAuthToken: `v1.${'b'.repeat(64)}`,
     characterCardPath,
     dataDir: tempDir,
     databasePath: '',
@@ -332,7 +333,7 @@ async function createHarness(options: {
 
   const port = await allocatePort();
   const services = createInProcessGardenAdminContract({
-    env: { GATEWAY_SESSION_HMAC_KEY: 'garden-server-test-session-hmac-key' },
+    env: {},
     memoryStore,
     sessionStore,
     sessionManager,

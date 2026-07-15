@@ -1,46 +1,89 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import { parseAllDocuments } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
-const workloadsTemplate = readFileSync(
-  join(process.cwd(), 'deploy', 'helm', 'psfn', 'templates', 'workloads.yaml'),
-  'utf8',
-);
-
-function deploymentTemplate(component: 'agent' | 'garden' | 'gateway'): string {
-  const name = `name: {{ include "psfn.fullname" . }}-${component}`;
-  const document = workloadsTemplate
-    .split(/^---\s*$/mu)
-    .find(candidate => candidate.includes('kind: Deployment') && candidate.includes(name));
-
-  if (!document) {
-    throw new Error(`Missing Helm Deployment template for ${component}`);
-  }
-  return document;
+interface SecretKeyRefEnv {
+  name: string;
+  valueFrom?: {
+    secretKeyRef?: {
+      key?: string;
+      name?: string;
+      optional?: boolean;
+    };
+  };
+  value?: string;
 }
 
-const sessionHmacSecretRef = [
-  '- name: GATEWAY_SESSION_HMAC_KEY',
-  'valueFrom:',
-  'secretKeyRef:',
-  'name: {{ include "psfn.appSecretName" . }}',
-  'key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}',
-];
+interface DeploymentResource {
+  kind?: string;
+  metadata?: { name?: string };
+  spec?: {
+    template?: {
+      spec?: {
+        containers?: Array<{
+          env?: SecretKeyRefEnv[];
+          name?: string;
+        }>;
+      };
+    };
+  };
+}
+
+const renderedResources = parseAllDocuments(execFileSync(
+  'helm',
+  ['template', 'psfn', join(process.cwd(), 'deploy', 'helm', 'psfn'), '--namespace', 'psfn-test'],
+  { encoding: 'utf8' },
+)).map(document => document.toJS() as DeploymentResource);
+
+function containerEnv(component: 'agent' | 'garden' | 'gateway'): SecretKeyRefEnv[] {
+  const deploymentName = `psfn-${component}`;
+  const deployment = renderedResources.find(resource => (
+    resource.kind === 'Deployment' && resource.metadata?.name === deploymentName
+  ));
+  if (!deployment) {
+    throw new Error(`Missing rendered Helm Deployment ${deploymentName}`);
+  }
+  const container = deployment.spec?.template?.spec?.containers
+    ?.find(candidate => candidate.name === component);
+  if (!container) {
+    throw new Error(`Missing rendered ${component} container in ${deploymentName}`);
+  }
+  return container.env ?? [];
+}
+
+function envByName(component: 'agent' | 'garden' | 'gateway'): Map<string, SecretKeyRefEnv> {
+  const entries = containerEnv(component);
+  const result = new Map(entries.map(entry => [entry.name, entry]));
+  expect(result.size).toBe(entries.length);
+  return result;
+}
 
 describe('Helm runtime secret wiring', () => {
-  it.each(['gateway', 'agent'] as const)(
-    'provides the keyed audit/session HMAC dependency to %s through a Secret reference',
-    (component) => {
-      const deployment = deploymentTemplate(component);
-      for (const line of sessionHmacSecretRef) {
-        expect(deployment).toContain(line);
-      }
-      expect(deployment.match(/- name: GATEWAY_SESSION_HMAC_KEY/gu)).toHaveLength(1);
-      expect(deployment).not.toMatch(/- name: GATEWAY_SESSION_HMAC_KEY\s*\n\s*value:/u);
-    },
-  );
+  it('keeps the gateway root proof-signing key inside the gateway container', () => {
+    expect(envByName('gateway').get('GATEWAY_SESSION_HMAC_KEY')).toEqual({
+      name: 'GATEWAY_SESSION_HMAC_KEY',
+      valueFrom: {
+        secretKeyRef: {
+          key: 'GATEWAY_SESSION_HMAC_KEY',
+          name: 'psfn-app',
+        },
+      },
+    });
+    expect(envByName('agent').has('GATEWAY_SESSION_HMAC_KEY')).toBe(false);
+    expect(envByName('garden').has('GATEWAY_SESSION_HMAC_KEY')).toBe(false);
+  });
 
-  it('does not broaden the session HMAC secret into the network-only Garden container', () => {
-    expect(deploymentTemplate('garden')).not.toContain('GATEWAY_SESSION_HMAC_KEY');
+  it('gives only the role-bound worker proof to the agent audit-key derivation boundary', () => {
+    expect(envByName('agent').get('GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN')).toEqual({
+      name: 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
+      valueFrom: {
+        secretKeyRef: {
+          key: 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
+          name: 'psfn-app',
+        },
+      },
+    });
+    expect(envByName('garden').has('GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN')).toBe(false);
   });
 });

@@ -235,11 +235,6 @@ spec:
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
-            - name: GATEWAY_SESSION_HMAC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "psfn.appSecretName" . }}
-                  key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
               value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG

@@ -285,12 +285,13 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(agentAllowlist).toMatch(/\n\s*POSTGRES_DATABASE_URL_FD\s*\\/);
   });
 
-  it('hands the local split database credential to the agent outside its environment', () => {
+  it('scrubs root secrets while handing scoped dependencies to the local agent', () => {
     const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-postgres-credential-'));
     const scriptsDir = join(workDir, 'scripts');
     const systemDir = join(scriptsDir, 'system');
     const tsxDir = join(workDir, 'node_modules/.bin');
     const fakeBinDir = join(workDir, 'fake-bin');
+    const auditProbePath = join(workDir, 'audit-keyring-probe.ts');
     mkdirSync(systemDir, { recursive: true });
     mkdirSync(tsxDir, { recursive: true });
     mkdirSync(fakeBinDir, { recursive: true });
@@ -299,6 +300,18 @@ describe('start-gateway-agent launcher supervision', () => {
     writeFileSync(launcherPath, readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'), 'utf8');
     chmodSync(launcherPath, 0o755);
     writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'), 'utf8');
+    writeFileSync(
+      auditProbePath,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        `import { requireAuditOpaqueIdKeyring } from ${JSON.stringify(join(
+          repoRoot,
+          'src/operator/garden/audit-opaque-id-keyring.ts',
+        ))};`,
+        "writeFileSync('agent.audit-keyring', JSON.stringify(requireAuditOpaqueIdKeyring(process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN)));",
+      ].join('\n'),
+      'utf8',
+    );
 
     const fakeTsxPath = join(tsxDir, 'tsx');
     writeFileSync(
@@ -307,7 +320,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '#!/usr/bin/env bash',
         'case "$1" in',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
-        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
+        `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
         '  src/app/gateway/main.ts)',
         '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
         'import os, socket, sys, time',
@@ -322,6 +335,10 @@ describe('start-gateway-agent launcher supervision', () => {
         '  src/app/agent/main.ts)',
         '    env | sort > agent.env',
         '    cat "/proc/self/fd/${POSTGRES_DATABASE_URL_FD:-999}" > agent.database-url 2>/dev/null || true',
+        `    ${JSON.stringify(process.execPath)} ${JSON.stringify(join(
+          repoRoot,
+          'node_modules/tsx/dist/cli.mjs',
+        ))} ${JSON.stringify(auditProbePath)}`,
         '    kill -TERM "$PPID"',
         '    sleep 2',
         '    ;;',
@@ -359,6 +376,7 @@ describe('start-gateway-agent launcher supervision', () => {
             `export XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
             `export GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
             'export POSTGRES_DATABASE_URL=postgresql://psfn:split-secret@postgres/psfn',
+            'export GATEWAY_SESSION_HMAC_KEY=gateway-root-sentinel',
             'set +e',
             './scripts/start-gateway-agent.sh >launcher.out 2>&1',
             'status=$?',
@@ -374,6 +392,19 @@ describe('start-gateway-agent launcher supervision', () => {
       expect(agentEnv).not.toContain('POSTGRES_DATABASE_URL=');
       expect(agentEnv).not.toContain('split-secret');
       expect(agentEnv).toMatch(/^POSTGRES_DATABASE_URL_FD=[0-9]+$/m);
+      expect(agentEnv).toContain(`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN=v1.${'b'.repeat(64)}`);
+      expect(agentEnv).not.toContain('GATEWAY_SESSION_HMAC_KEY=');
+      expect(agentEnv).not.toContain('gateway-root-sentinel');
+      expect(
+        existsSync(join(workDir, 'agent.audit-keyring')),
+        readFileSync(join(workDir, 'launcher.out'), 'utf8'),
+      ).toBe(true);
+      expect(JSON.parse(readFileSync(join(workDir, 'agent.audit-keyring'), 'utf8'))).toEqual({
+        activeVersion: 'v1',
+        keys: {
+          v1: 'IHuMF5zXad9vrTAYLNI8o5El4ghNG4GVXjUL7wbhOfE',
+        },
+      });
       expect(readFileSync(join(workDir, 'agent.database-url'), 'utf8').trim())
         .toBe('postgresql://psfn:split-secret@postgres/psfn');
     } finally {

@@ -185,6 +185,10 @@ import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
 import type { BackgroundWorkStorePort } from './background-work/store-port.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
+import {
+  recoverHistoricalBackgroundWorkHandoffs,
+  runBackgroundWorkTick,
+} from './background-work/tick-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
@@ -1204,22 +1208,32 @@ export class SubstrateAgent {
   }
 
   async tickBackgroundWork(): Promise<void> {
-    if (!this.backgroundWorkSupervisor) {
+    const supervisor = this.backgroundWorkSupervisor;
+    if (!supervisor) {
       throw new Error('Durable background work supervisor is not configured');
     }
-    await this.recoverBackgroundWorkHandoffs();
-    await this.backgroundWorkSupervisor.tick();
+    await runBackgroundWorkTick({
+      recoverHandoffs: () => this.recoverBackgroundWorkHandoffs(),
+      tick: () => supervisor.tick(),
+    });
   }
 
   private async recoverBackgroundWorkHandoffs(): Promise<void> {
     if (!this.backgroundWorkHandoffRecoveryPromise) {
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
         if (!this.backgroundWorkHandoffsRecovered) {
-          for (const record of this.sessionManager.listRecoverableBackgroundWorkTurnRecords()) {
-            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
-          }
+          const records = this.sessionManager.listRecoverableBackgroundWorkTurnRecords();
+          // Enumeration is intentionally once per process. Enqueue failures move
+          // into the source-keyed retry index drained in bounded batches below.
           this.backgroundWorkHandoffsRecovered = true;
+          await recoverHistoricalBackgroundWorkHandoffs(
+            records,
+            async (record) => {
+              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+            },
+            (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
+          );
         }
         await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
           BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,

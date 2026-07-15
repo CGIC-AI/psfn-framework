@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../../shared/event-bus.js';
+import {
+  runIntentionPostTurnHooks,
+  type IntentionPostTurnHookContext,
+} from '../substrate-agent/post-turn-actions.js';
 import type {
   BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
@@ -57,6 +61,33 @@ function makeInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInpu
     sourceChannelId: sessionId,
     createdAtMs: 100,
     maxAttempts: 3,
+  };
+}
+
+function makeIntentionContext(): IntentionPostTurnHookContext {
+  return {
+    message: {
+      id: 'intention-source-1',
+      channelId: 'session-a',
+      channelType: 'api',
+      authorId: 'partner-1',
+      authorName: 'Partner',
+      content: 'hello',
+      timestamp: new Date(100),
+    },
+    response: {
+      content: 'hi',
+      channelId: 'session-a',
+      metadata: {
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+      },
+    },
+    turnMessages: [],
+    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+    completedAt: 100,
   };
 }
 
@@ -765,6 +796,93 @@ describe('BackgroundWorkSupervisor', () => {
     await supervisor.waitForIdle();
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
     expect(executor).toHaveBeenCalledTimes(2);
+  });
+
+  it('abandons a pre-write intention receipt and retries the hook once', async () => {
+    let now = 1_000;
+    let hookAttempts = 0;
+    let sinkWrites = 0;
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      retryBaseDelayMs: 100,
+      executor: async ({ effects }) => {
+        await runIntentionPostTurnHooks({
+          hooks: [async (_context, hookEffects) => {
+            hookAttempts += 1;
+            if (hookAttempts === 1) throw new Error('connection unavailable before write');
+            await hookEffects.crossBoundary();
+            sinkWrites += 1;
+          }],
+          context: makeIntentionContext(),
+          logger: { warn: vi.fn() },
+          options: {
+            propagateFailures: true,
+            assertOwned: effects.assertOwned,
+            runEffect: effects.run,
+          },
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'retry_wait' });
+    expect(sinkWrites).toBe(0);
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'succeeded' });
+    expect(hookAttempts).toBe(2);
+    expect(sinkWrites).toBe(1);
+  });
+
+  it('fails an ambiguous post-write intention outcome without replaying the sink', async () => {
+    let now = 1_000;
+    let sinkWrites = 0;
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      retryBaseDelayMs: 100,
+      executor: async ({ effects }) => {
+        await runIntentionPostTurnHooks({
+          hooks: [async (_context, hookEffects) => {
+            await hookEffects.crossBoundary();
+            sinkWrites += 1;
+            throw new Error('connection lost after write began');
+          }],
+          context: makeIntentionContext(),
+          logger: { warn: vi.fn() },
+          options: {
+            propagateFailures: true,
+            assertOwned: effects.assertOwned,
+            runEffect: effects.run,
+          },
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'retry_wait' });
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'effect_outcome_unknown',
+    });
+    expect(sinkWrites).toBe(1);
   });
 
   it('durably requeues pre-boundary work on shutdown and a fresh supervisor completes it once', async () => {

@@ -18,6 +18,7 @@ type IntentionPostTurnHook = Parameters<
   NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>
 >[0];
 type IntentionPostTurnContext = Parameters<IntentionPostTurnHook>[0];
+type IntentionPostTurnEffects = Parameters<IntentionPostTurnHook>[1];
 
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
@@ -231,6 +232,75 @@ describe('wireIntentionRuntimeStores', () => {
       responseContent: 'That makes sense, and your reaction is valid.',
       createdAt: '2026-03-06T12:00:00.000Z',
     });
+  });
+
+  it('hands the durable boundary to the response-strategy sink after hook validation', async () => {
+    const target = new FakeTarget();
+    const { runtime, providers, behavioralPatternTracker } = createRuntime();
+    const crossBoundary = vi.fn(async () => undefined);
+    behavioralPatternTracker.recordResponseStrategy.mockImplementationOnce(async (input, options) => {
+      expect(crossBoundary).not.toHaveBeenCalled();
+      await options?.crossEffectBoundary?.();
+      return {
+        id: 'sample-1',
+        contactId: input.contactId,
+        sourceMessageId: input.sourceMessageId,
+        strategy: 'direct',
+        responseExcerpt: input.responseContent,
+        createdAt: input.createdAt ?? new Date('2026-01-01T00:00:00.000Z').toISOString(),
+      };
+    });
+
+    wireIntentionRuntimeStores(target, runtime, providers);
+    await target.intentionHooks[0]!({
+      message: {
+        id: 'msg-turn-boundary',
+        channelId: 'api:test',
+      },
+      response: {
+        channelId: 'api:test',
+        content: 'The durable sink owns the crossing point.',
+      },
+      turnMessages: [],
+      turnId: 'turn-boundary',
+      completedAt: Date.parse('2026-03-06T12:00:00.000Z'),
+      canonicalContactKey: 'contact-a',
+    } as IntentionPostTurnContext, {
+      assertOwned: vi.fn(async () => undefined),
+      crossBoundary,
+    } satisfies IntentionPostTurnEffects);
+
+    expect(crossBoundary).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cross the durable boundary when response-strategy validation rejects', async () => {
+    const target = new FakeTarget();
+    const { runtime, providers, behavioralPatternTracker } = createRuntime();
+    const crossBoundary = vi.fn(async () => undefined);
+
+    wireIntentionRuntimeStores(target, runtime, providers);
+    await expect(target.intentionHooks[0]!({
+      message: {
+        id: '   ',
+        channelId: 'api:test',
+      },
+      response: {
+        channelId: 'api:test',
+        content: 'This must not reach the sink.',
+      },
+      turnMessages: [],
+      turnId: 'turn-invalid',
+      completedAt: Date.parse('2026-03-06T12:00:00.000Z'),
+      canonicalContactKey: 'contact-a',
+    } as IntentionPostTurnContext, {
+      assertOwned: vi.fn(async () => undefined),
+      crossBoundary,
+    } satisfies IntentionPostTurnEffects)).rejects.toThrow(
+      'Behavioral pattern turn recording requires sourceMessageId',
+    );
+
+    expect(behavioralPatternTracker.recordResponseStrategy).not.toHaveBeenCalled();
+    expect(crossBoundary).not.toHaveBeenCalled();
   });
 });
 

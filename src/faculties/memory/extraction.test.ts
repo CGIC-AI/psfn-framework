@@ -2797,3 +2797,35 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
     expect(secondResult).toBe(false);
   });
 });
+
+describe('MemoryExtractor bounded snapshot sizing (u5bv.10)', () => {
+  function makeExtractor(extractionInterval: number): MemoryExtractor {
+    return new MemoryExtractor(
+      { complete: vi.fn() } as any,
+      {} as any,
+      { getMemoriesByChannel: vi.fn().mockResolvedValue([]) } as any,
+      { embed: vi.fn(), embedBatch: vi.fn(), dims: 8 } as any,
+      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      { extractionInterval },
+    );
+  }
+
+  // The interval upper bound (50) equals the extraction recovery window by
+  // construction, so every accepted interval is snapshot one-for-one.
+  it.each([
+    [1, 1],
+    [10, 10],
+    [11, 11],
+    [50, 50],
+  ])('snapshots the exact configured interval %i as %i entries', (interval, expected) => {
+    expect(makeExtractor(interval).getBoundedExtractionSnapshotLimit()).toBe(expected);
+  });
+
+  it('fails safe by clamping an out-of-contract interval to the recovery window', () => {
+    // Above the recovery window: never snapshot more than the LLM prompt sees, or
+    // coverage would advance over unprocessed entries.
+    expect(makeExtractor(999).getBoundedExtractionSnapshotLimit()).toBe(50);
+    // Never below one — a durable no-op snapshot is not a valid extraction window.
+    expect(makeExtractor(0).getBoundedExtractionSnapshotLimit()).toBeGreaterThanOrEqual(1);
+  });
+});

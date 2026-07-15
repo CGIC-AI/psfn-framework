@@ -205,6 +205,7 @@ function makeDependencies(input: {
   beforeSourceEligibilityFence?: () => void;
   recentEntries?: SessionEntry[];
   liveRecentEntries?: SessionEntry[];
+  boundedSnapshotLimit?: number;
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
@@ -247,7 +248,10 @@ function makeDependencies(input: {
         characterName: 'Purrsephone',
       } as unknown as SessionManager,
       llmProvider: {} as LLMProviderPort,
-      getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
+      getMemoryExtractor: () => ({
+        maybeExtract,
+        getBoundedExtractionSnapshotLimit: () => input.boundedSnapshotLimit ?? 10,
+      } as unknown as MemoryExtractor),
       runIntentionPostTurnHooks,
       emotionRuntime: { triggerEmotionAppraisal },
       getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
@@ -325,6 +329,43 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       recentEntries,
     );
+  });
+
+  it('sizes the bounded memory snapshot to the configured interval so intervals above ten are reachable', async () => {
+    // Regression for psfn-framework-u5bv.10: the handler requested a fixed ten
+    // entries, so a configured interval of 11-50 could never accumulate enough
+    // uncovered entries in one bounded snapshot to interval-fire — every receipt
+    // completed as a durable no-op. The window must now follow the interval.
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: record.turnId,
+        requestId: record.requestId,
+        role: 'assistant',
+        actorKind: 'machine_intelligence',
+      }),
+    }];
+    const fixture = makeDependencies({ record, recentEntries, boundedSnapshotLimit: 25 });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(fixture.getRecentMessagesAtOrBefore).toHaveBeenCalledWith(
+      record.sessionId,
+      2,
+      25,
+    );
+    expect(fixture.getRecentMessagesAtOrBefore).not.toHaveBeenCalledWith(
+      record.sessionId,
+      2,
+      10,
+    );
+    expect(fixture.maybeExtract).toHaveBeenCalledOnce();
   });
 
   it('runs the real extraction orchestrator from the bounded post-turn snapshot only', async () => {
@@ -1036,7 +1077,10 @@ describe('executePostTurnBackgroundWork', () => {
       const dependencies = {
         sessionManager,
         llmProvider: { stream: vi.fn(), complete } as LLMProviderPort,
-        getMemoryExtractor: () => ({ maybeExtract } as unknown as MemoryExtractor),
+        getMemoryExtractor: () => ({
+          maybeExtract,
+          getBoundedExtractionSnapshotLimit: () => 10,
+        } as unknown as MemoryExtractor),
         runIntentionPostTurnHooks: vi.fn(async () => undefined),
         emotionRuntime: { triggerEmotionAppraisal },
         getEmotionTemplateVariables: () => ({ personality: 'canonical personality' }),

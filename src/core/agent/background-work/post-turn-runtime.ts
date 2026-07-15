@@ -181,20 +181,27 @@ export async function executePostTurnBackgroundWork(
   const { payload, job } = input;
   if (payload.kind === 'memory_extraction') {
     const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    const extractor = dependencies.getMemoryExtractor();
+    if (!extractor) throw new Error('Memory extraction background handler is not wired');
+    // Size the bounded snapshot to the configured extraction interval instead of
+    // a fixed ten entries. A snapshot capped at ten can never contain the 11-50
+    // uncovered entries a valid interval requires, so those configs would never
+    // interval-fire and every job receipt completed as a durable no-op. The
+    // extractor clamps this to its recovery window, keeping coverage aligned with
+    // the entries its LLM prompt actually consumes.
+    const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
     await withStableConsumedSnapshot(
       input,
       dependencies,
       () => dependencies.sessionManager.getRecentMessagesAtOrBefore(
         payload.source.logicalSessionId,
         maxSessionEntryId,
-        10,
+        snapshotLimit,
       ),
       async (recentEntries) => {
         await input.effects.assertOwned();
         const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
-        const extractor = dependencies.getMemoryExtractor();
-        if (!extractor) throw new Error('Memory extraction background handler is not wired');
         await input.effects.run('memory-extraction', async (assertOwned) => {
           await extractor.maybeExtract(
             payload.source.logicalSessionId,

@@ -138,5 +138,14 @@ export interface MemoryExtractor {
     /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
     recoveredEntries?: readonly SessionEntry[],
   ): Promise<void>;
+  /**
+   * How many most-recent bounded session entries a durable post-turn handler
+   * must snapshot for this extractor. Sized to the configured extraction
+   * interval so every accepted interval (1-50) is actually reachable — a fixed
+   * ten-entry window can never satisfy an interval above ten — and capped at the
+   * extraction recovery window so coverage never advances past entries the
+   * extractor's LLM prompt did not see.
+   */
+  getBoundedExtractionSnapshotLimit(): number;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }

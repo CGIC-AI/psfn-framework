@@ -12,6 +12,13 @@ import type { AppCache } from '../../../shared/cache/types.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
+import type { SessionTailCachePort } from '../../../persistence/sessions/session-tail-cache-port.js';
+import { RedisSessionTailCache } from '../../../persistence/sessions/redis-session-tail-cache.js';
+import {
+  buildRedisClientOptions,
+  createRedisClientFactoryFromPackage,
+  resolveRedisConnectionConfigFromEnv,
+} from '../../../shared/cache/redis-cache.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
 import {
@@ -67,6 +74,7 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
+import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
@@ -99,6 +107,8 @@ export interface SessionComposition {
   sessionManager: SessionManager;
   continuityStore: UserContinuityStore | null;
   internalRoleEnvelopeLedger: InternalRoleEnvelopeLedgerStore;
+  /** Non-null only when settings.json sessionTailCache.enabled=true (psfn-framework-hgw3.5). */
+  sessionTailCache: SessionTailCachePort | null;
 }
 
 export interface SessionCompositionOptions {
@@ -114,12 +124,47 @@ export interface SessionCompositionOptions {
   enableContinuity?: boolean;
   promptRegistry?: PromptRegistryStatePort | null;
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
+  /**
+   * Injected session tail cache (tests/harnesses). `undefined` builds the
+   * Redis-backed tail from settings.json + env when enabled; explicit `null`
+   * disables it regardless of config.
+   */
+  sessionTailCache?: SessionTailCachePort | null;
+}
+
+/**
+ * Build the Redis-backed session tail (psfn-framework-hgw3.5) when
+ * settings.json enables it. Fail closed at startup: enabled config with
+ * missing/invalid Redis env, a missing companion identity, or an unreachable
+ * Redis refuses to start — a silently absent tail would hide the shared-view
+ * guarantee. Tail/epoch keys are scoped by COMPANION_ID so multiple
+ * companions sharing one Redis (fleet topology) can never read each other's
+ * session tails.
+ */
+async function composeSessionTailCache(
+  config: SubstrateConfig,
+  override: SessionTailCachePort | null | undefined,
+): Promise<SessionTailCachePort | null> {
+  if (override !== undefined) return override;
+  const settings = config.sessionTailCache;
+  if (!settings?.enabled) return null;
+  const scope = resolveCompanionIdFromConfig(config);
+  const redisConfig = resolveRedisConnectionConfigFromEnv(process.env);
+  const clientFactory = await createRedisClientFactoryFromPackage();
+  const client = clientFactory(buildRedisClientOptions(redisConfig));
+  await client.connect();
+  return new RedisSessionTailCache({
+    client,
+    maxEntriesPerChannel: settings.maxEntriesPerChannel,
+    scope,
+  });
 }
 
 function createSessionComposition(
   options: SessionCompositionOptions,
   sessionAdapters: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
   sessionsDir: string,
+  sessionTailCache: SessionTailCachePort | null,
 ): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const sessionStore = new SessionStore(sessionsDir, {
@@ -127,6 +172,7 @@ function createSessionComposition(
     sessionArchivePort: sessionAdapters.sessionArchivePort,
     transcriptProjection: sessionAdapters.transcriptProjection,
     turnRecordStore: sessionAdapters.turnRecordStore,
+    tailCache: sessionTailCache,
   });
   const sessionManager = new SessionManager(
     sessionStore,
@@ -145,7 +191,7 @@ function createSessionComposition(
     sessionManager.crossChannelContinuity = createDisabledCrossChannelContinuityPort();
   }
 
-  return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger };
+  return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger, sessionTailCache };
 }
 
 export async function composeSessionRuntimeAsync(
@@ -166,7 +212,8 @@ export async function composeSessionRuntimeAsync(
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
   });
-  return createSessionComposition(options, sessionAdapters, sessionsDir);
+  const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
+  return createSessionComposition(options, sessionAdapters, sessionsDir, sessionTailCache);
 }
 
 export async function composeMemoryStoreAsync(
@@ -200,7 +247,7 @@ export function createEmbeddingProviderFromConfig(config: SubstrateConfig): Embe
 }
 
 export interface IdentityComposition {
-  companionId: string;
+  companionId: RuntimeCompanionId;
   card: CharacterCardV2;
   systemPrompt: string;
 }

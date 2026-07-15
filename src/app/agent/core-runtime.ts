@@ -15,6 +15,7 @@ import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
+import type { SessionTailCachePort } from '../../persistence/sessions/session-tail-cache-port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -160,6 +161,8 @@ export interface AgentCoreRuntime {
   personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
   appCache: AppCache;
+  /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
+  sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   toolConformanceRunner: ToolConformanceRunner;
@@ -541,6 +544,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     personaPreamble,
     imageVisionReviewer,
     appCache,
+    sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     toolConformanceRunner,

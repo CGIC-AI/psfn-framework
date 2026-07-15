@@ -162,7 +162,8 @@ stream, artifact previews, and approval decisions:
             "audio_output",
             "text_to_speech",
             "presence",
-            "telemetry"
+            "telemetry",
+            "touch"
           ],
           "telemetryScopes": [
             "presence",
@@ -183,6 +184,9 @@ Notes:
 - `claimTypes` must include the overlay's `satelliteHub.identity.claimType`
   (`text-only` for the initial text-only ship; keep `voice-only` listed so the
   voice flip is registry-compatible).
+- `maxCapabilities` must include `touch` for `POST /v1/companion/stimuli`;
+  each browser device that sends `touch.interaction` must also have `touch` in
+  its Hub device-registry `maxCapabilities.control` list.
 - The endpoint admits ONLY the listed principal; rotating the hub key means
   updating both the Secret (helm upgrade) and this list, then restarting the
   gateway (it reads `API_SATELLITE_KEYS` at startup).

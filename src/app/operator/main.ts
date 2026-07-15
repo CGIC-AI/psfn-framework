@@ -7,7 +7,7 @@ import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../st
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
-  assertCompanionAdminTransportSocketPath,
+  assertCompanionAdminTransportIsolation,
   resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
@@ -20,7 +20,7 @@ ensureActiveTimezone();
 async function main(): Promise<void> {
   const config = hydrateJsonBackedRuntimeConfig(loadOperatorConfig());
   if (config.multiCompanion === true) {
-    assertCompanionAdminTransportSocketPath(config.companionId ?? '', process.env);
+    assertCompanionAdminTransportIsolation(config.companionId ?? '', process.env);
   }
   const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (!adminPort) {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  resolveCoreCompanionIdFromConfig,
   resolveCompanionIdFromConfig,
   resolveCompanionNameFromCard,
   resolveCompanionNameFromConfig,
@@ -85,5 +86,14 @@ describe('resolveCompanionNameFromConfig', () => {
 describe('resolveCompanionIdFromConfig', () => {
   it('requires explicit companion id when unset', () => {
     expect(() => resolveCompanionIdFromConfig({})).toThrow('Missing COMPANION_ID');
+  });
+
+  it('preserves a derived shard id for shard runtimes while the core resolver rejects it', () => {
+    const shardCompanionId = 'companion-alpha::shard-42';
+
+    expect(resolveCompanionIdFromConfig({ companionId: shardCompanionId })).toBe(shardCompanionId);
+    expect(() => resolveCoreCompanionIdFromConfig({ companionId: shardCompanionId })).toThrow(
+      'Configured core companionId must be a 1-128 character companion-id token',
+    );
   });
 });

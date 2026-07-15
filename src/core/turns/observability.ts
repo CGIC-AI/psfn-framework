@@ -261,7 +261,11 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
     ...(snapshot.toolContext
       ? {
         toolContext: {
-          activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema),
+          // Preserve absence: slim persisted snapshots omit activeTools when
+          // byte-identical to plan.toolDefinitions (readers fall back to the plan).
+          ...(snapshot.toolContext.activeTools
+            ? { activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema) }
+            : {}),
           ...(snapshot.toolContext.adaptiveSnapshot
             ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
             : {}),
@@ -387,7 +391,10 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
     ...(snapshot.toolContext
       ? {
         toolContext: {
-          activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema),
+          // Preserve absence (see sanitizeTurnSnapshot above).
+          ...(snapshot.toolContext.activeTools
+            ? { activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema) }
+            : {}),
           ...(snapshot.toolContext.adaptiveSnapshot
             ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
             : {}),

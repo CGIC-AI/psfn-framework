@@ -53,7 +53,7 @@ import type {
   ShardFoldReviewResolveParams,
 } from './fold-review.js';
 import {
-  resolveCompanionIdFromConfig,
+  resolveCoreCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
 import {
@@ -236,7 +236,7 @@ export class ShardManager implements ShardExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -303,7 +303,7 @@ export class ShardManager implements ShardExecutionPort {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,

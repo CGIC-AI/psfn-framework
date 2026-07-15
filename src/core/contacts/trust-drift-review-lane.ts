@@ -4,21 +4,25 @@ import { evaluateRestWindowEligibility } from '../scheduler/rest-window.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import {
+  evaluateContactRelationshipProgressionCandidate,
   evaluateContactTrustDriftCandidate,
+  type ContactRelationshipProgressionReviewCandidate,
   type ContactTrustDriftReviewCandidate,
 } from './trust-drift-signals.js';
 
 const log = createComponentLogger('ContactTrustDriftReviewLane');
 
-// ── Nightly contact trust-drift review lane (bead kada.2) ──
+// ── Nightly contact trust + relationship review lane (bead kada.2, usye) ──
 //
 // Scheduler-owned nightly work, following the sleeptime pattern: a rest-window
 // poll infers at most one action per local calendar day; the executor derives
-// TrustDriftBehaviorSignals per low-tier contact from recorded evidence and,
-// when the drift evaluator produces suggestions, delivers a review to the
-// companion. The lane NEVER mutates trust: applying (or declining) a suggested
-// drift stays the companion's decision through the existing guarded
-// `contact` tool set_trust drift path. Its only write is the daily watermark.
+// TrustDriftBehaviorSignals per contact from recorded evidence and evaluates
+// the independent trust and relationship axes. Trust suggestions render first,
+// but a gated/unchanged trust axis never suppresses relationship progression.
+// The lane NEVER mutates either field: applying (or declining) a suggestion
+// stays the companion's decision through the guarded `contact` actions. Its
+// only write is the daily watermark. Existing constant/class names remain for
+// compatibility with the scheduler wiring and durable watermark.
 
 export const CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND = 'contacts.trust_drift.review';
 export const CONTACT_TRUST_DRIFT_REVIEW_PROCESSOR = 'contacts.trust_drift.review';
@@ -64,7 +68,9 @@ function localCalendarDay(epochMs: number, timeZone: string): string {
   }).format(epochMs);
 }
 
-function formatSignalsJson(candidate: ContactTrustDriftReviewCandidate): string {
+function formatSignalsJson(
+  candidate: ContactTrustDriftReviewCandidate | ContactRelationshipProgressionReviewCandidate,
+): string {
   return JSON.stringify({
     positiveInteractionCount: candidate.signals.positiveInteractionCount,
     negativeInteractionCount: candidate.signals.negativeInteractionCount ?? 0,
@@ -74,29 +80,52 @@ function formatSignalsJson(candidate: ContactTrustDriftReviewCandidate): string 
 }
 
 export function composeTrustDriftReviewContent(
-  candidates: readonly ContactTrustDriftReviewCandidate[],
+  trustCandidates: readonly ContactTrustDriftReviewCandidate[],
+  relationshipCandidates: readonly ContactRelationshipProgressionReviewCandidate[] = [],
 ): string {
   const lines: string[] = [
-    'Daily contact trust review. The nightly scan derived behavior signals from your recorded',
-    'interaction history and the trust policy produced these low-tier drift suggestions.',
+    'Daily contact trust and relationship review. The nightly scan derived behavior signals',
+    'from your recorded interaction history and evaluated both independent classifications.',
     'Nothing has been changed: each one is yours to apply or decline.',
-    '',
   ];
-  candidates.forEach((candidate, index) => {
+  if (trustCandidates.length > 0) {
+    lines.push('', 'Trust suggestions (higher-priority disclosure axis):');
+    trustCandidates.forEach((candidate, index) => {
+      lines.push(
+        `${index + 1}. ${candidate.displayName} (contactId: ${candidate.contactId}) — Trust: `
+        + `${candidate.suggestion.fromTrustLevel} -> ${candidate.suggestion.suggestedTrustLevel} `
+        + `(confidence ${candidate.suggestion.confidence})`,
+        `   Rationale: ${candidate.suggestion.rationale}`,
+        `   Signals: ${formatSignalsJson(candidate)}`,
+      );
+    });
     lines.push(
-      `${index + 1}. ${candidate.displayName} (contactId: ${candidate.contactId}) — `
-      + `${candidate.suggestion.fromTrustLevel} -> ${candidate.suggestion.suggestedTrustLevel} `
-      + `(confidence ${candidate.suggestion.confidence})`,
-      `   Rationale: ${candidate.suggestion.rationale}`,
-      `   Signals: ${formatSignalsJson(candidate)}`,
+      'To apply a trust suggestion: call `contact` with action=set_trust, contactId, the Signals',
+      'as behaviorSignals, and confirmSuggestion=true.',
     );
-  });
+  }
+  if (relationshipCandidates.length > 0) {
+    lines.push('', 'Relationship suggestions (separate from trust):');
+    relationshipCandidates.forEach((candidate, index) => {
+      const action = candidate.suggestion.requiresApproval
+        ? 'propose_relationship'
+        : 'set_relationship';
+      lines.push(
+        `${index + 1}. ${candidate.displayName} (contactId: ${candidate.contactId}) — Relationship: `
+        + `${candidate.suggestion.fromRelationshipType} -> ${candidate.suggestion.suggestedRelationshipType}`,
+        `   Rationale: ${candidate.suggestion.rationale}`,
+        `   Signals: ${formatSignalsJson(candidate)}`,
+        `   Apply with action=${action}, relationshipType=${candidate.suggestion.suggestedRelationshipType}, `
+        + `and contactId${candidate.suggestion.requiresApproval
+          ? '; include a rationale and wait for operator approval'
+          : ''}.`,
+      );
+    });
+  }
   lines.push(
     '',
-    'To apply one: call the `contact` tool with action=set_trust, the contactId, the Signals',
-    'JSON above as behaviorSignals, and confirmSuggestion=true. To hold, do nothing — the',
-    'scan will surface it again while the evidence still supports it. High-tier changes',
-    '(trusted/primary) are not part of this review and still require operator approval.',
+    'To hold any suggestion, do nothing; the scan can surface it again while evidence supports it.',
+    'Trusted/primary trust changes and family/partner relationships remain operator-gated.',
   );
   return lines.join('\n');
 }
@@ -168,22 +197,32 @@ export class ContactTrustDriftReviewLane {
     }
 
     const contacts = await this.contactStore.listAll();
-    const candidates: ContactTrustDriftReviewCandidate[] = [];
+    const trustCandidates: ContactTrustDriftReviewCandidate[] = [];
+    const relationshipCandidates: ContactRelationshipProgressionReviewCandidate[] = [];
     for (const contact of contacts) {
-      if (contact.trustLevel !== 'public' && contact.trustLevel !== 'regular') continue;
       const timeSeries = await this.contactStore.getEmotionalTimeSeries(contact.id, SIGNAL_TIME_SERIES_LIMIT);
       const verifiedIdentityLinkCount = await this.contactStore.countVerifiedIdentityLinks(contact.id);
-      const candidate = evaluateContactTrustDriftCandidate({
+      const evidence = { timeSeries, verifiedIdentityLinkCount };
+      const trustCandidate = evaluateContactTrustDriftCandidate({
         contact,
-        evidence: { timeSeries, verifiedIdentityLinkCount },
+        evidence,
       });
-      if (candidate) candidates.push(candidate);
+      if (trustCandidate) trustCandidates.push(trustCandidate);
+      const relationshipCandidate = evaluateContactRelationshipProgressionCandidate({
+        contact,
+        evidence,
+      });
+      if (relationshipCandidate) relationshipCandidates.push(relationshipCandidate);
     }
 
-    if (candidates.length > 0) {
+    if (trustCandidates.length > 0 || relationshipCandidates.length > 0) {
+      const candidateContactIds = new Set([
+        ...trustCandidates.map(candidate => candidate.contactId),
+        ...relationshipCandidates.map(candidate => candidate.contactId),
+      ]);
       this.deliverReview({
-        content: composeTrustDriftReviewContent(candidates),
-        candidateCount: candidates.length,
+        content: composeTrustDriftReviewContent(trustCandidates, relationshipCandidates),
+        candidateCount: candidateContactIds.size,
       });
     }
 
@@ -198,7 +237,8 @@ export class ContactTrustDriftReviewLane {
       actionId: action.id,
       localDay: today,
       contactsScanned: contacts.length,
-      driftCandidates: candidates.length,
+      trustCandidates: trustCandidates.length,
+      relationshipCandidates: relationshipCandidates.length,
     });
   }
 

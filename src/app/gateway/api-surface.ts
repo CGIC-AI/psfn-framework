@@ -31,6 +31,7 @@ import { buildExternalChannelProfiles, type RuntimeChannelsConfig } from '../../
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CompanionRelayHttpDeps } from '../../channels/api/server/companion-relay-routes.js';
+import { CompanionStimulusIngress } from '../../channels/api/server/companion-stimuli.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
@@ -40,6 +41,7 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
+const COMPANION_STIMULUS_COOLDOWN_MS = 3_000;
 
 export interface GatewayApiSurfaceBindings {
   apiHost?: string;
@@ -62,7 +64,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
    */
   intakeScreening?: IntakeScreeningService | null;
   /** Companion event relay surface (w9hj.1); `/v1/companion/*` 503s without it. */
-  companionRelay?: CompanionRelayHttpDeps;
+  companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
 }
 
 /**
@@ -80,6 +82,30 @@ async function screenVoiceTranscriptMessage(
     sourceClass: 'audio_transcript',
     origin: { ref: `api-voice:${message.channelId}:${message.id}`.slice(0, 2048) },
     scope: 'context',
+  });
+  return {
+    ...message,
+    content: screened.effectiveText,
+    routing: {
+      ...(message.routing ?? {}),
+      intakeEnvelopes: [screened.snapshot],
+    },
+  };
+}
+
+async function screenCompanionStimulusMessage(
+  message: SubstrateMessage,
+  intakeScreening: IntakeScreeningService | null | undefined,
+): Promise<SubstrateMessage> {
+  if (!intakeScreening) return message;
+  const screened = await intakeScreening.screen(message.content, {
+    sourceClass: 'primary_user',
+    origin: { ref: `companion-stimulus:${message.channelId}:${message.id}`.slice(0, 2048) },
+    scope: 'context',
+    ...(message.routing?.canonicalContactId
+      ? { canonicalContactId: message.routing.canonicalContactId }
+      : {}),
+    sourceChannelId: message.channelId,
   });
   return {
     ...message,
@@ -295,6 +321,20 @@ export async function startOptionalGatewayApiServer(
   const voiceWebSocketPath = voiceWebSocketRuntime
     ? undefined
     : DISABLED_VOICE_WEBSOCKET_PATH;
+  const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay
+    ? {
+        ...options.companionRelay,
+        stimuli: new CompanionStimulusIngress({
+          cooldownMs: COMPANION_STIMULUS_COOLDOWN_MS,
+          deliver: async (message) => {
+            const screened = await screenCompanionStimulusMessage(message, options.intakeScreening);
+            const result = await options.gateway.requestAgentVoiceStream(screened);
+            const response = result.content.trim();
+            return response ? { response } : {};
+          },
+        }),
+      }
+    : undefined;
 
   const inertEventBus = {
     on: () => () => {},
@@ -340,7 +380,7 @@ export async function startOptionalGatewayApiServer(
       ? buildExternalChannelProfiles(options.channelsConfig)
       : {},
     ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
-    ...(options.companionRelay ? { companionRelay: options.companionRelay } : {}),
+    ...(companionRelay ? { companionRelay } : {}),
   });
   await apiServer.start();
   return apiServer;

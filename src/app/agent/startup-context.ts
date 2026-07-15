@@ -45,7 +45,7 @@ import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
-import { assertCompanionAdminTransportSocketPath } from '../../operator/garden/transport-paths.js';
+import { assertCompanionAdminTransportIsolation } from '../../operator/garden/transport-paths.js';
 
 interface AgentStartupLogger {
   info(message: string, meta?: Record<string, unknown>): void;
@@ -96,7 +96,7 @@ export function prepareAgentStartupContext(input: {
 }): AgentStartupContext {
   const config = loadAgentConfig(input.env);
   if (config.multiCompanion === true) {
-    assertCompanionAdminTransportSocketPath(config.companionId ?? '', input.env);
+    assertCompanionAdminTransportIsolation(config.companionId ?? '', input.env);
   }
   const {
     lifecycleRuntimeContract,

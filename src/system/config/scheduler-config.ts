@@ -338,6 +338,15 @@ export interface TemporalWakeupWakeSummaryConfig {
  */
 export interface TemporalWakeupConfig {
   enabled: boolean;
+  /**
+   * Lookback window (hours) for wake-note fan-out (bead psfn-framework-2x37.3).
+   * A channel is "recently active" — and therefore a fan-out target for the
+   * morning wake / idle refresher internal notes — when it has partner
+   * (role 'user') activity within this window. Notes fan out to every such
+   * channel; outward delivery still targets only the single most-recent
+   * partner channel. Positive integer.
+   */
+  activeChannelLookbackHours: number;
   morningWake: TemporalWakeupMorningConfig;
   idleRefresher: TemporalWakeupIdleRefresherConfig;
   wakeSummary: TemporalWakeupWakeSummaryConfig;
@@ -345,6 +354,7 @@ export interface TemporalWakeupConfig {
 
 export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
   enabled: true,
+  activeChannelLookbackHours: 72,
   morningWake: {
     enabled: true,
     timing: 'fixed',
@@ -371,8 +381,8 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
   idleRefresher: {
     enabled: true,
     checkIntervalMs: 900_000,
-    minIdleMinutes: 240,
-    minNoteIntervalMinutes: 240,
+    minIdleMinutes: 120,
+    minNoteIntervalMinutes: 120,
   },
   wakeSummary: {
     sessionSummaryMaxTokens: 160,
@@ -1035,6 +1045,7 @@ function validateTemporalWakeupConfig(
   if (raw === undefined) {
     return {
       enabled: DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled,
+      activeChannelLookbackHours: DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
       morningWake: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake },
       idleRefresher: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher },
       wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
@@ -1061,6 +1072,11 @@ function validateTemporalWakeupConfig(
 
   return {
     enabled: toBoolean(raw.enabled ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled, 'temporalWakeup.enabled'),
+    activeChannelLookbackHours: toPositiveInteger(
+      raw.activeChannelLookbackHours ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
+      'temporalWakeup.activeChannelLookbackHours',
+      1,
+    ),
     morningWake: {
       enabled: toBoolean(morningRaw.enabled ?? morningDefaults.enabled, 'temporalWakeup.morningWake.enabled'),
       timing: toWakeTimingMode(morningRaw.timing ?? morningDefaults.timing, 'temporalWakeup.morningWake.timing'),

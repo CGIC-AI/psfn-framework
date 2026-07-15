@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsup",
+    "build": "npm run verify:companion-id-types && tsup",
     "postinstall": "patch-package && npm install --prefix admin-ui",
     "dev": "./scripts/start-gateway-agent.sh",
     "start": "./scripts/start-gateway-agent.sh",
@@ -73,6 +73,7 @@
     "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
     "verify:dependency-cycles": "tsx scripts/check-dependency-cycles.ts",
     "verify:shared-type-guards": "node scripts/verify-shared-type-guards.mjs",
+    "verify:companion-id-types": "tsc --noEmit -p tsconfig.companion-id-types.json",
     "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles && npm run verify:shared-type-guards",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
     "verify:supply-chain": "tsx scripts/verify-supply-chain.ts",

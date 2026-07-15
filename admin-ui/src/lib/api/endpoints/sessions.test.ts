@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSessionMessagesPath,
+  buildSessionTurnDetailPath,
   SESSION_MESSAGE_PAGE_SIZE,
 } from './sessions';
 
@@ -18,5 +19,32 @@ describe('session admin endpoint paths', () => {
       limit: SESSION_MESSAGE_PAGE_SIZE,
       beforeId: null,
     })).toBe('/api/admin/sessions/api%3Asession%20one?limit=100');
+  });
+
+  it('requests the lean initial page (compaction kept, turns dropped) via includeTurns=false', () => {
+    expect(buildSessionMessagesPath('api:session one', {
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+      includeTurns: false,
+    })).toBe('/api/admin/sessions/api%3Asession%20one?limit=100&includeTurns=false');
+  });
+
+  it('omits includeTurns when the caller keeps the default turns payload', () => {
+    expect(buildSessionMessagesPath('api:session one', {
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+      includeTurns: true,
+    })).toBe('/api/admin/sessions/api%3Asession%20one?limit=100');
+  });
+
+  it('sends messagesOnly for cheap pagination pages', () => {
+    expect(buildSessionMessagesPath('api:session one', {
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+      beforeId: 42,
+      messagesOnly: true,
+    })).toBe('/api/admin/sessions/api%3Asession%20one?limit=100&beforeId=42&messagesOnly=true');
+  });
+
+  it('builds a bounded per-turn detail path', () => {
+    expect(buildSessionTurnDetailPath('api:session one', 'turn 123'))
+      .toBe('/api/admin/sessions/api%3Asession%20one/turns/turn%20123');
   });
 });

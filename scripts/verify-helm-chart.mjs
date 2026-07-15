@@ -199,6 +199,13 @@ assertNotIncludes(
 );
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
+assertIncludes(agentDeployment, 'name: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof env');
+assertIncludes(agentDeployment, 'key: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof Secret key');
+assertIncludes(
+  agentDeployment,
+  'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
+  'agent companion role proof remains optional for single-companion installs',
+);
 for (const [name, value] of [
   ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
@@ -298,6 +305,17 @@ assertIncludes(
 
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');
+assertIncludes(
+  liteLlmConfig,
+  'model_name: "z-ai-glm-5.2-nitro"',
+  'LiteLLM colon-free GLM 5.2 Nitro alias',
+);
+assertIncludes(
+  liteLlmConfig,
+  'model: "openrouter/z-ai/glm-5.2:nitro"',
+  'LiteLLM GLM 5.2 Nitro upstream variant',
+);
+assertIncludes(liteLlmConfig, 'reasoning_effort: "none"', 'LiteLLM Nitro reasoning disabled');
 assertIncludes(liteLlmConfig, 'api_key: "os.environ/OPENROUTER_API_KEY"', 'LiteLLM provider key env reference');
 assertIncludes(liteLlmConfig, 'master_key: "os.environ/LITELLM_MASTER_KEY"', 'LiteLLM master key env reference');
 
@@ -348,6 +366,8 @@ const strictSecretRendered = render([
   '--set-string',
   'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
   '--set-string',
+  'secrets.values.gatewayCompanionAuthToken=verify-agent-proof',
+  '--set-string',
   'secrets.values.backupEncryptionKey=verify-backup-key',
 ]);
 
@@ -358,6 +378,11 @@ assertIncludes(
   strictSecretRendered,
   'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN: "verify-worker-proof"',
   'strict app secret isolated session-integrity proof',
+);
+assertIncludes(
+  strictSecretRendered,
+  'GATEWAY_COMPANION_AUTH_TOKEN: "verify-agent-proof"',
+  'strict app secret companion agent proof',
 );
 assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup-key"', 'strict app secret backup encryption key');
 
@@ -500,6 +525,21 @@ const hubClientCert = findDocumentByKindName(hubRendered, 'Certificate', 'psfn-s
 assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client Certificate secret');
 assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
 assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
+
+const piHubOverlayRendered = render([
+  '-f',
+  resolve(chartDir, 'overlays/pi-satellite-hub.values.yaml'),
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+  '--set-string',
+  'secrets.values.satelliteHubApiKey=verify-hub-satellite-key',
+]);
+const piHubDevices = findDocumentByKindName(piHubOverlayRendered, 'ConfigMap', 'psfn-hub-devices');
+assertIncludes(
+  piHubDevices,
+  '\"control\":[\"interrupt\",\"presence\",\"session_attach\",\"approvals\",\"touch\"]',
+  'Pi companion app touch capability grant',
+);
 
 const hubTextOnlyRendered = render([
   '--set',

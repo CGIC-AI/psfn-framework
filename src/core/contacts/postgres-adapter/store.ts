@@ -61,6 +61,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare getEmotionalSnapshot: ContactStorePort['getEmotionalSnapshot'];
   declare getEmotionalTimeSeries: ContactStorePort['getEmotionalTimeSeries'];
   declare updateRelationshipType: ContactStorePort['updateRelationshipType'];
+  declare compareAndSetRelationshipType: ContactStorePort['compareAndSetRelationshipType'];
   declare setChannelPrivacy: ContactStorePort['setChannelPrivacy'];
   declare setConversationChannelPrivacy: ContactStorePort['setConversationChannelPrivacy'];
   declare getConversationChannelPrivacy: ContactStorePort['getConversationChannelPrivacy'];

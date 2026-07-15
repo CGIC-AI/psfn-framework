@@ -148,6 +148,18 @@ describe('hub stream store', () => {
 });
 
 describe('hub stream store control + artifact wiring', () => {
+  it('relays a coalesced headpat through the client transport', () => {
+    const client = new FakeHubClient();
+    const spy = vi.spyOn(client, 'sendTouchInteraction');
+    const store = new HubStreamStore(client);
+    const interaction = { kind: 'headpat', region: 'head', count: 12, durationMs: 1_100 } as const;
+
+    store.sendTouchInteraction(interaction);
+
+    expect(spy).toHaveBeenCalledWith(interaction);
+    store.destroy();
+  });
+
   it('relays approval decisions through the client transport', () => {
     const client = new FakeHubClient();
     const spy = vi.spyOn(client, 'sendApprovalDecision');
@@ -279,6 +291,10 @@ class FakeHubClient implements HubStreamClientLike {
   }
 
   sendArtifactPreviewRequest(): void {
+    return;
+  }
+
+  sendTouchInteraction(): void {
     return;
   }
 

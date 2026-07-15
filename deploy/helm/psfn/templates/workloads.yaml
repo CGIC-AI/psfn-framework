@@ -260,6 +260,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.gatewaySessionIntegrityAuthToken }}
+            - name: GATEWAY_COMPANION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewayCompanionAuthToken }}
+                  optional: true
             - name: GATEWAY_RPC_TLS_CA_PATH
               value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
             - name: GATEWAY_RPC_TLS_CERT_PATH

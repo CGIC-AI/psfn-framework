@@ -3,6 +3,8 @@ import {
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
+  SESSION_TAIL_CACHE_MAX_ENTRIES_RANGE,
+  type SessionTailCacheSettings,
 } from '../config/runtime-config-contracts.js';
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
@@ -356,6 +358,26 @@ function normalizeObserverEvalSidecarLeverSettings(
   };
 }
 
+/**
+ * Session tail cache owner-field validation (psfn-framework-hgw3.5). Fail
+ * closed: an enabled tail with an out-of-range bound must never start.
+ */
+function normalizeSessionTailCacheSettings(
+  value: unknown,
+  fieldPath: string,
+): SessionTailCacheSettings {
+  const root = expectRecord(value, fieldPath);
+  return {
+    enabled: expectBoolean(root.enabled, `${fieldPath}.enabled`),
+    maxEntriesPerChannel: expectIntegerInRange(
+      root.maxEntriesPerChannel,
+      `${fieldPath}.maxEntriesPerChannel`,
+      SESSION_TAIL_CACHE_MAX_ENTRIES_RANGE.min,
+      SESSION_TAIL_CACHE_MAX_ENTRIES_RANGE.max,
+    ),
+  };
+}
+
 function normalizeObserverEvalSidecarSettings(
   value: unknown,
   fieldPath: string,
@@ -615,6 +637,12 @@ function normalizeEndpointAndGardenSettings(
     normalized.observerEvalSidecar = normalizeObserverEvalSidecarSettings(
       settings.observerEvalSidecar,
       'observerEvalSidecar',
+    );
+  }
+  if ('sessionTailCache' in settings) {
+    normalized.sessionTailCache = normalizeSessionTailCacheSettings(
+      settings.sessionTailCache,
+      'sessionTailCache',
     );
   }
   if ('groupMemory' in settings) {

@@ -43,6 +43,7 @@ import {
   type PlacesRegistryConfig,
 } from '../../shared/contracts/places-registry.js';
 import { DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS } from '../../core/agent/companion-presence-runtime.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
 /** Narrow read-only view over the shared-schema presence store. */
 export interface CompanionPresenceReadRow {
@@ -66,7 +67,7 @@ export interface GatewayCompanionChannelLaneOptions {
   placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
   presence: CompanionPresenceReadPort;
   /** Fleet manifest companion ids (companions.json); DM peers must be members. */
-  fleetCompanionIds: ReadonlySet<string>;
+  fleetCompanionIds: ReadonlySet<CompanionId>;
   /** Read-side staleness TTL override (tests). */
   staleTtlMs?: number;
   /** Clock override (tests). */
@@ -84,7 +85,7 @@ export type CompanionDeliveryResolution =
     ok: true;
     kind: 'room' | 'dm';
     channelId: string;
-    recipients: string[];
+    recipients: CompanionId[];
     /** Room only: the addressed place's privacy classification. */
     roomPrivacy?: PlacePrivacy;
     /**
@@ -92,7 +93,7 @@ export type CompanionDeliveryResolution =
      * opened after the message was minted (join race) or their row carried
      * no `since` (fail closed).
      */
-    windowExcluded?: string[];
+    windowExcluded?: CompanionId[];
   }
   | { ok: false; violation: CompanionDeliveryViolation };
 
@@ -107,7 +108,7 @@ export interface CompanionDeliveryResolveOptions {
 export class GatewayCompanionChannelLane {
   private readonly placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
   private readonly presence: CompanionPresenceReadPort;
-  private readonly fleetCompanionIds: ReadonlySet<string>;
+  private readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   private readonly staleTtlMs: number;
   private readonly now: () => number;
 
@@ -120,7 +121,7 @@ export class GatewayCompanionChannelLane {
   }
 
   async resolveDelivery(
-    senderCompanionId: string,
+    senderCompanionId: CompanionId,
     channelId: string,
     options?: CompanionDeliveryResolveOptions,
   ): Promise<CompanionDeliveryResolution> {
@@ -171,22 +172,26 @@ export class GatewayCompanionChannelLane {
 
     const rows = await this.presence.listByPlace(place.siteId, place.placeId);
     const staleCutoffMs = this.now() - this.staleTtlMs;
-    const recipients: string[] = [];
-    const windowExcluded: string[] = [];
+    const recipients: CompanionId[] = [];
+    const windowExcluded: CompanionId[] = [];
     for (const row of rows) {
-      if (row.companionId === senderCompanionId) continue; // never echo the sender
+      const rowCompanionId = createCompanionId(
+        row.companionId,
+        'Companion presence row companionId',
+      );
+      if (rowCompanionId === senderCompanionId) continue; // never echo the sender
       if (Date.parse(row.updatedAt) < staleCutoffMs) continue; // crashed/idle-out rows
-      if (recipients.includes(row.companionId) || windowExcluded.includes(row.companionId)) continue;
+      if (recipients.includes(rowCompanionId) || windowExcluded.includes(rowCompanionId)) continue;
       if (windowCutoffMs !== null) {
         const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
         // Fail closed: no parseable join time, or joined after the message
         // was minted — a private room never delivers pre-join content.
         if (!Number.isFinite(sinceMs) || sinceMs > windowCutoffMs) {
-          windowExcluded.push(row.companionId);
+          windowExcluded.push(rowCompanionId);
           continue;
         }
       }
-      recipients.push(row.companionId);
+      recipients.push(rowCompanionId);
     }
     return {
       ok: true,

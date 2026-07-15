@@ -147,6 +147,13 @@ export interface ContactStorePort {
   getEmotionalSnapshot(id: string): Awaitable<EmotionalSnapshot | undefined>;
   getEmotionalTimeSeries(id: string, limit?: number): Awaitable<EmotionalTimeSeriesPoint[]>;
   updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Awaitable<boolean>;
+  /** Atomically changes a relationship only while its persisted value matches `expectedRelationshipType`. */
+  compareAndSetRelationshipType(
+    id: string,
+    expectedRelationshipType: RelationshipType,
+    relationshipType: RelationshipType,
+    actor?: string,
+  ): Awaitable<boolean>;
   setChannelPrivacy(
     contactId: string,
     channel: ContactChannel,

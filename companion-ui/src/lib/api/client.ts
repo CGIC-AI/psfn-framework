@@ -9,6 +9,7 @@ import type {
   RuntimeIdentity,
   SatelliteCapabilities,
   SessionReadyMessage,
+  TouchInteractionMessage,
 } from '../protocol/events.js';
 import {
   HubFramingError,
@@ -280,6 +281,10 @@ export class SatelliteHubClient {
 
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void {
     this.send({ type: 'artifact.preview', requestId, artifactId });
+  }
+
+  sendTouchInteraction(interaction: Omit<TouchInteractionMessage, 'type'>): void {
+    this.send({ type: 'touch.interaction', ...interaction });
   }
 
   ping(sentAt = this.nowMs()): void {

@@ -74,6 +74,11 @@ import {
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import {
+  MISSING_IMAGE_ATTACHMENT_CORRECTION,
+  rejectsMissingImageAttachmentClaim,
+} from '../../../primitives/images/attachment-claim-guard.js';
+import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
@@ -898,12 +903,16 @@ export async function handleMessageForTurn(
     const {
       firstTokenAt,
       turnUsage,
-      responseText,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
       runtimeFallbackProvenance,
       turnIntent,
     } = invocationResult;
+    // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
+    // applied where the model's turn text is accepted so persistence
+    // (recordAssistantMessage), channel dispatch (AgentResponse.content), and
+    // TTS all see clean output.
+    const responseText = stripLeadingHistoryStamps(invocationResult.responseText);
     const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
     // authored. A no_reply issued during internal follow-up continuation
@@ -1032,6 +1041,24 @@ export async function handleMessageForTurn(
             ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
           },
         });
+
+    if (rejectsMissingImageAttachmentClaim({
+      responseText: safeResponseText,
+      attachmentCount: responseAttachments.length,
+    })) {
+      safeResponseText = MISSING_IMAGE_ATTACHMENT_CORRECTION;
+      log.warn('Rejected assistant image-attachment claim without a current-turn attachment', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+      });
+      runtime.emitTelemetry('agent.image_attachment_claim.rejected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.image_attachment_claim.rejected'),
+      });
+    }
 
     // Fail loud, never silently: if a charged image deliverable was produced this
     // turn but is not riding out on the reply, surface it. The response_control

@@ -154,7 +154,7 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
      && test -f /app/deploy/helm/psfn/Chart.yaml \
      && test -f /app/deploy/helm/psfn/recovery-chart.sha256 \
      && command -v bd >/dev/null && command -v rg >/dev/null" \
-    || { echo "FAIL: in-image verification (pi-ai patch / runtime config / recovery chart / bd / rg)" >&2; exit 1; }
+    || { echo "FAIL: in-image verification (pi-ai accumulator / runtime config / recovery chart / bd / rg)" >&2; exit 1; }
   echo "    contract hash: $NEW_HASH"
 fi
 

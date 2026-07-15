@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "npm run verify:companion-id-types && tsup",
-    "postinstall": "patch-package && npm install --prefix admin-ui",
+    "postinstall": "npm install --prefix admin-ui",
     "dev": "./scripts/start-gateway-agent.sh",
     "start": "./scripts/start-gateway-agent.sh",
     "gateway": "tsx src/app/gateway/main.ts",
@@ -100,7 +100,6 @@
     "ipaddr.js": "2.2.0",
     "js-tiktoken": "1.0.21",
     "json-rpc-2.0": "1.7.1",
-    "patch-package": "8.0.1",
     "pdfjs-dist": "5.4.394",
     "pg": "8.20.0",
     "prism-media": "1.3.5",

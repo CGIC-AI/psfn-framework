@@ -229,11 +229,12 @@ interleaved thinking) displaced `currentBlock` to a thinking block; the next
 (id-less) argument fragment then opened a fresh blank tool block, orphaning the
 real arguments while the named call was finalized with `{}`.
 
-Fix (`patches/@mariozechner+pi-ai+0.62.0.patch`, applied on install via
-patch-package): accumulate tool-call fragments keyed by the wire `index`, keep
-tool blocks open across interleaved reasoning/text, and finalize them once the
-stream drains. `pi-ai` is pinned to `0.62.0` so the version-specific patch always
-applies — do not loosen it to a caret range.
+Fix: upgrade to pinned `@mariozechner/pi-ai` `0.73.1`, whose upstream
+`ensureToolCallBlock` accumulator keys tool-call blocks by wire `index` and
+`id`, keeps them open across interleaved reasoning/text, and finalizes them when
+the stream drains. This superseded the former local `0.62.0` overlay. Keep the
+dependency on an exact version and rerun the streaming/retry regressions when
+upgrading it.
 
 Diagnostics: the gateway (`LLMClient.stream`) counts streamed tool-argument
 fragment bytes and, when a tool call still arrives with empty arguments, emits a
@@ -243,6 +244,6 @@ fragment bytes and, when a tool call still arrives with empty arguments, emits a
 - `provider_emitted_empty` — empty args, zero fragment bytes streamed (the model
   genuinely called with no arguments).
 - `stream_parse_dropped` — empty args but fragment bytes *were* streamed (the
-  pre-patch loss mode; must not recur once the patch is applied).
+  pre-upstream-fix loss mode; must not recur with the pinned accumulator).
 - `validation_rejected` — args were non-empty (any downstream failure is a real
   schema mismatch, not lost/absent arguments).

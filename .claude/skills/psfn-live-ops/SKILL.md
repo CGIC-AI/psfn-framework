@@ -64,10 +64,10 @@ fetched by the orchestrator and staged into the scratchpad.
   observations into conversational sessions (the 2026-07-06 regression).
 - `src/core/agent/substrate-agent.ts` has a non-UTF8 byte: use `git grep` or
   `grep -a`.
-- `@mariozechner/pi-ai` is **pinned** and patched via `patch-package`
-  (`patches/`); `patch-package` must stay in `dependencies` (production
-  `npm ci --omit=dev` runs postinstall). A pi-ai version bump requires
-  regenerating the patch.
+- `@mariozechner/pi-ai` is pinned to `0.73.1`, whose upstream index-keyed
+  tool-call accumulator supersedes the former local `0.62.0` overlay. There
+  is no local patch step. A pi-ai version bump requires rerunning the
+  streaming/retry regressions and the in-image accumulator check.
 - Baseline test failures exist; before blaming your change, run the failing
   file against a pristine worktree of the base commit.
 

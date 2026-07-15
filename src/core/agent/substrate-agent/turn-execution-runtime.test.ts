@@ -9,7 +9,7 @@ import { getVisionToolRequestContext } from '../../../primitives/images/request-
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import { SessionManager } from '../../session/manager.js';
-import { SessionStore } from '../../../persistence/sessions/store.js';
+import { SessionStore, type SessionStoreOptions } from '../../../persistence/sessions/store.js';
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
@@ -64,6 +64,7 @@ import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
+import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -607,6 +608,7 @@ function createRuntime(params: {
       recordTurn: vi.fn(),
       hasRecordedTurn: vi.fn(() => false),
       findRecordedTurn: vi.fn(() => null),
+      findSourceRecordedTurn: vi.fn(() => null),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
@@ -808,8 +810,12 @@ function createRuntime(params: {
   return runtime;
 }
 
-function createPersistenceBackedRuntime(dataDir: string, eventBus: EventBus) {
-  const store = new SessionStore(dataDir);
+function createPersistenceBackedRuntime(
+  dataDir: string,
+  eventBus: EventBus,
+  storeOptions: SessionStoreOptions = {},
+) {
+  const store = new SessionStore(dataDir, storeOptions);
   const sessionManager = new SessionManager(store, makePersistenceConfig(dataDir));
   const turnSupportRuntime = new TurnSupportRuntime({
     eventBus,
@@ -852,7 +858,46 @@ function createPersistenceBackedRuntime(dataDir: string, eventBus: EventBus) {
         : '';
   });
 
-  return { runtime, store };
+  return { runtime, store, sessionManager };
+}
+
+function buildPersistenceTestTurnRecord(
+  input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0],
+  logicalSessionId: string,
+): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId: input.turnId,
+    requestId: input.requestId,
+    sessionId: logicalSessionId,
+    channelId: input.message.channelId,
+    channelType: input.message.channelType,
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+    status: input.status ?? 'completed',
+    userMessage: {
+      role: 'user',
+      content: input.message.content,
+      timestamp: input.message.timestamp.getTime(),
+    },
+    assistantMessage: {
+      role: 'assistant',
+      content: input.response?.content ?? input.assistantMessageContent ?? 'assistant reply',
+      timestamp: input.completedAt,
+    },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: input.response?.metadata.model ?? input.model ?? 'test-model' },
+    provenanceRefs: [],
+    ...(input.internalStateSnapshotRef
+      ? { internalStateSnapshotRef: input.internalStateSnapshotRef }
+      : {}),
+    ...(input.message.routing?.icpCorrelation
+      ? { icpCorrelation: input.message.routing.icpCorrelation }
+      : {}),
+  };
 }
 
 describe('handleMessageForTurn intentional no-reply', () => {
@@ -2299,6 +2344,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         recordTurn,
         hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
         findRecordedTurn: vi.fn(() => recordedTurn),
+        findSourceRecordedTurn: vi.fn(() => recordedTurn),
       },
     });
     if (noReply) runtime.extractResponseText = vi.fn(() => '');
@@ -2637,29 +2683,31 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     };
     const enqueuePostTurnBackgroundWork = vi.fn(async () => undefined);
     const recordTurn = vi.fn();
+    const completedTurnRecord: TurnRecord = {
+      schemaVersion: 1,
+      turnId: correlation.turnId,
+      requestId: correlation.requestId,
+      sessionId: channelId,
+      channelId,
+      channelType: 'companion',
+      startedAt: 1,
+      completedAt: 2,
+      status: 'completed',
+      userMessage: { role: 'user', content: 'source', timestamp: 1 },
+      assistantMessage: { role: 'assistant', content: '', timestamp: 2 },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: 'durable-suppression' },
+      provenanceRefs: [],
+    };
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
       configOverrides: { companionId: localCompanionId },
       sessionManager: {
-        findRecordedTurn: vi.fn(() => ({
-          schemaVersion: 1,
-          turnId: correlation.turnId,
-          requestId: correlation.requestId,
-          sessionId: channelId,
-          channelId,
-          channelType: 'companion',
-          startedAt: 1,
-          completedAt: 2,
-          status: 'completed',
-          userMessage: { role: 'user', content: 'source', timestamp: 1 },
-          assistantMessage: { role: 'assistant', content: '', timestamp: 2 },
-          toolCalls: [],
-          extractedMemoryIds: [],
-          concernDeltaRefs: [],
-          contactDeltaRefs: [],
-          versionPointers: { model: 'durable-suppression' },
-          provenanceRefs: [],
-        })),
+        findRecordedTurn: vi.fn(() => completedTurnRecord),
+        findSourceRecordedTurn: vi.fn(() => completedTurnRecord),
         recordTurn,
       },
     });
@@ -3780,11 +3828,81 @@ describe('handleMessageForTurn compaction scheduling', () => {
     );
   });
 
+  it('recovers one exact routed-session manifest after a live enqueue failure', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, store, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus, {
+      turnRecordEligibilityFence: {
+        withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+        withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+      },
+    });
+    const sourceChannelId = 'discord:guild:routed-handoff';
+    const reset = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'exercise physical-source handoff recovery',
+      mode: 'fresh_split',
+    });
+    const logicalSessionId = reset.newLogicalSessionId;
+    runtime.sessionManager = sessionManager;
+    runtime.resolveSessionChannelId = (channelId: string) => (
+      sessionManager.resolveSessionChannelId(channelId)
+    );
+    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+      callType,
+      purpose: 'agent.turn',
+      turnId,
+      requestId,
+      channelId: message.channelId,
+      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+    });
+    runtime.buildTurnRecord = input => buildPersistenceTestTurnRecord(input, logicalSessionId);
+    const liveEnqueue = vi.fn()
+      .mockRejectedValueOnce(new Error('injected routed enqueue failure'));
+    runtime.enqueuePostTurnBackgroundWork = liveEnqueue;
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-routed-handoff', {
+      channelId: sourceChannelId,
+      channelType: 'discord',
+      isDirectMessage: false,
+    }))).rejects.toThrow('injected routed enqueue failure');
+
+    const physicalRecords = store.getRecentSourceTurnRecords(sourceChannelId, 10);
+    expect(physicalRecords).toHaveLength(1);
+    expect(physicalRecords[0]).toMatchObject({
+      channelId: sourceChannelId,
+      sessionId: logicalSessionId,
+      status: 'completed',
+    });
+    const exactManifest = parseTurnRecordBackgroundWorkHandoff(physicalRecords[0]!);
+    const recoveryEnqueue = vi.fn(async () => undefined);
+    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
+      1,
+      async record => recoveryEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
+    )).toBe(1);
+    expect(recoveryEnqueue).toHaveBeenCalledOnce();
+    expect(recoveryEnqueue).toHaveBeenCalledWith(exactManifest);
+    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
+      1,
+      async record => recoveryEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
+    )).toBe(0);
+  });
+
   it('replays the exact TurnRecord handoff after a record-to-queue crash gap', async () => {
+    const dataDir = makeTempDir();
     const eventBus = new EventBus();
     const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const { runtime, store, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
+    const reset = sessionManager.resetSourceChannelSession({
+      sourceChannelId: channelId,
+      actor: 'test',
+      reason: 'exercise routed delivery recovery',
+      mode: 'fresh_split',
+    });
+    const logicalSessionId = reset.newLogicalSessionId;
     const sourceMessageId = 'icp-initiation:33333333-3333-4333-8333-333333333333';
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
@@ -3803,68 +3921,26 @@ describe('handleMessageForTurn compaction scheduling', () => {
       costOriginStage: 'initiation' as const,
       fatigueDecision: 'not_evaluated' as const,
     };
-    let recordedTurn: TurnRecord | null = null;
-    const recordTurn = vi.fn((record: TurnRecord) => { recordedTurn = record; });
-    const deferBackgroundWorkHandoffRecovery = vi.fn();
     const enqueuePostTurnBackgroundWork = vi.fn()
       .mockRejectedValueOnce(new Error('injected queue crash gap'))
       .mockResolvedValue(undefined);
-    const sessionManager = {
-      recordTurn,
-      hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
-      findRecordedTurn: vi.fn(() => recordedTurn),
-      deferBackgroundWorkHandoffRecovery,
-    } as unknown as SessionManager;
-    const runtime = createRuntime({
-      eventBus,
-      sessionManager,
-      buildContext: vi.fn(async () => ({
-        systemPrompt: 'System prompt',
-        messages: [],
-        manifest: undefined,
-      })),
-      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
-      awaitPendingAutoCompaction: vi.fn(async () => undefined),
-      recordUserMessage: vi.fn(() => 1),
-      recordAssistantMessage: vi.fn(() => 2),
-      enqueuePostTurnBackgroundWork,
-      configOverrides: { companionId: localCompanionId },
-      resolveAuthorContext: vi.fn(() => machineIntelligenceAuthorContext({
-        canonicalContactKey: correlation.peerContactId,
-      })),
+    runtime.sessionManager = sessionManager;
+    runtime.config.companionId = localCompanionId;
+    runtime.enqueuePostTurnBackgroundWork = enqueuePostTurnBackgroundWork;
+    runtime.resolveSessionChannelId = (sourceChannelId: string) => (
+      sessionManager.resolveSessionChannelId(sourceChannelId)
+    );
+    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+      callType,
+      purpose: 'agent.turn',
+      turnId,
+      requestId,
+      channelId: message.channelId,
+      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
     });
-    runtime.buildTurnRecord = vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
-      schemaVersion: 1,
-      turnId: input.turnId,
-      requestId: input.requestId,
-      sessionId: input.message.channelId,
-      channelId: input.message.channelId,
-      channelType: input.message.channelType,
-      startedAt: input.startedAt,
-      completedAt: input.completedAt,
-      status: 'completed',
-      userMessage: {
-        role: 'user',
-        content: input.message.content,
-        timestamp: input.message.timestamp.getTime(),
-      },
-      assistantMessage: {
-        role: 'assistant',
-        content: input.response?.content ?? 'assistant reply',
-        timestamp: input.completedAt,
-      },
-      toolCalls: [],
-      extractedMemoryIds: [],
-      concernDeltaRefs: [],
-      contactDeltaRefs: [],
-      versionPointers: { model: input.response?.metadata.model ?? 'test-model' },
-      provenanceRefs: [],
-      ...(input.internalStateSnapshotRef
-        ? { internalStateSnapshotRef: input.internalStateSnapshotRef }
-        : {}),
-      ...(input.message.routing?.icpCorrelation
-        ? { icpCorrelation: input.message.routing.icpCorrelation }
-        : {}),
+    runtime.buildTurnRecord = input => buildPersistenceTestTurnRecord(input, logicalSessionId);
+    runtime.resolveAuthorContext = vi.fn(() => machineIntelligenceAuthorContext({
+      canonicalContactKey: correlation.peerContactId,
     }));
     const message = createMessage(sourceMessageId, {
       channelId,
@@ -3884,8 +3960,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
     await expect(handleMessageForTurn(runtime, message, {
       finalizeDelivery: vi.fn(async () => undefined),
     })).rejects.toThrow('injected queue crash gap');
-    expect(recordTurn).toHaveBeenCalledTimes(1);
-    expect(deferBackgroundWorkHandoffRecovery).toHaveBeenCalledWith(recordedTurn);
+    const physicalRecords = store.getRecentSourceTurnRecords(channelId, 10);
+    expect(physicalRecords).toHaveLength(1);
+    const recordedTurn = physicalRecords[0]!;
+    expect(recordedTurn).toMatchObject({
+      channelId,
+      sessionId: logicalSessionId,
+      status: 'completed',
+    });
     const recordedJobs = recordedTurn.backgroundWorkHandoff?.jobs;
     expect(recordedJobs).toHaveLength(3);
 
@@ -3909,7 +3991,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     expect(enqueuePostTurnBackgroundWork).toHaveBeenCalledTimes(2);
     expect(enqueuePostTurnBackgroundWork.mock.calls[1]?.[0]).toEqual(recordedJobs);
-    expect(recordTurn).toHaveBeenCalledTimes(1);
+    expect(store.getRecentSourceTurnRecords(channelId, 10)).toHaveLength(1);
   });
 
   it.each([

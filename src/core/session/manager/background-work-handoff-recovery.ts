@@ -48,7 +48,13 @@ export class BackgroundWorkHandoffRecovery {
     if (!Number.isSafeInteger(limit) || limit < 1) {
       throw new Error('Background work handoff recovery limit must be a positive safe integer');
     }
-    const selected = [...this.pending.values()].slice(0, limit);
+    const selected: PendingBackgroundWorkHandoffReference[] = [];
+    const pending = this.pending.values();
+    while (selected.length < limit) {
+      const next = pending.next();
+      if (next.done) break;
+      selected.push(next.value);
+    }
     let recovered = 0;
     const errors: unknown[] = [];
     for (const reference of selected) {

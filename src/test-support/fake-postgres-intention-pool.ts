@@ -579,7 +579,7 @@ export class FakeIntentionPool {
       const [contactId, strategy] = values as [string, string];
       const row = [...this.behavioralPatternEvents.values()]
         .filter(event => event.contact_id === contactId && event.strategy === strategy && event.promoted_at !== null)
-        .sort((left, right) => (left.promoted_at ?? '').localeCompare(right.promoted_at ?? ''))[0];
+        .sort((left, right) => (left.promoted_at ?? '').localeCompare(right.promoted_at ?? '')).at(0);
       return { rows: row ? [{ promoted_memory_id: row.promoted_memory_id } as Row] : [] };
     }
 

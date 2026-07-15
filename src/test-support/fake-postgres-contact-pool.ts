@@ -228,7 +228,8 @@ export class FakePostgresPool {
     if (normalized.startsWith("select actor from contact_mutation_audit where contact_id = $1 and field = 'is_machine_intelligence'")) {
       const row = this.contactMutationAudit
         .filter(entry => entry.contact_id === String(values[0] ?? '') && entry.field === 'is_machine_intelligence')
-        .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.id - left.id)[0];
+        .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.id - left.id)
+        .at(0);
       return result(row ? [{ actor: row.actor }] : []);
     }
 

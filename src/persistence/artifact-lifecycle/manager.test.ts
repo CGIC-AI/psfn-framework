@@ -1,10 +1,8 @@
-import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import * as sqliteVec from 'sqlite-vec';
-import { MemoryStore } from '../../faculties/memory/store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { resolveArtifactLifecycleAuditPath, resolveManagedWorkspaceTempDir } from '../layout.js';
 import { ResearchLibraryStore } from '../../faculties/memory/research-library/store.js';
 import { ArtifactLifecycleManager } from './manager.js';
@@ -13,8 +11,7 @@ describe('ArtifactLifecycleManager', () => {
   let tempRoot: string;
   let companionDataDir: string;
   let workspacePath: string;
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
+  let memoryStore: InMemoryMemoryStore;
   let researchLibraryStore: ResearchLibraryStore;
 
   beforeEach(() => {
@@ -23,14 +20,11 @@ describe('ArtifactLifecycleManager', () => {
     workspacePath = join(tempRoot, 'workspace');
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(workspacePath, { recursive: true });
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
+    memoryStore = new InMemoryMemoryStore();
     researchLibraryStore = new ResearchLibraryStore({ companionDataDir, workspacePath });
   });
 
   afterEach(() => {
-    db.close();
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
@@ -74,7 +68,7 @@ describe('ArtifactLifecycleManager', () => {
         workspaceTempRetentionDays: 14,
         cleanupBatchSize: 10,
       },
-      memoryStore,
+      memoryStore: memoryStore.asPort(),
       researchLibraryStore,
     });
 

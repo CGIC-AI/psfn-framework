@@ -5,13 +5,12 @@
 // crashes, no fake contacts).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { MemoryExtractor } from '../extraction.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../embedding.js';
-import { MemoryStore } from '../store.js';
 import type { ExtractedFact } from '../types.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
+import { createTestPostgresContactStore } from '../../../test-support/postgres-contact-store.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 const PRIMARY_USER_ID = 'discord-primary-user';
@@ -30,22 +29,19 @@ function makeFact(text: string, overrides: Partial<ExtractedFact> = {}): Extract
 }
 
 describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
-  let db: Database.Database;
-  let memoryStore: MemoryStore;
-  let contactStore: ContactStore;
+  let memoryStore: InMemoryMemoryStore;
+  let contactStore: ContactStorePort;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    memoryStore = new MemoryStore(db);
-    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  beforeEach(async () => {
+    memoryStore = new InMemoryMemoryStore();
+    ({ store: contactStore } = await createTestPostgresContactStore(PRIMARY_USER_ID));
   });
 
   function makeExtractor(isAutoContactCreationAllowed?: (channelId: string) => boolean): MemoryExtractor {
     return new MemoryExtractor(
       { complete: vi.fn() } as any,
       { characterName: 'Purrsephone' } as any,
-      memoryStore,
+      memoryStore.asPort(),
       {
         embed: vi.fn().mockResolvedValue(new Float32Array(EMBEDDING_DIMS)),
         embedBatch: vi.fn(),
@@ -61,7 +57,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
   }
 
   it('skips mention-only contact creation in gated channels even with recurring evidence', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
@@ -87,7 +83,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
     // The same recurring evidence WOULD create a contact in an auto channel
     // (covered by mention-only-contacts.test.ts); here the gate blocks it.
     expect(gate).toHaveBeenCalledWith(APPROVAL_CHANNEL);
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
 
     // Room-scoped facts are still written — the gate blocks contact rows, not memory.
     const channelMemories = memoryStore.getMemoriesByChannel(APPROVAL_CHANNEL, 10);
@@ -117,7 +113,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
 
     // No crash, no fake contact, no contact-keyed row.
     expect(result.action).not.toBe('skipped');
-    expect(contactStore.listAll()).toHaveLength(0);
+    expect(await contactStore.listAll()).toHaveLength(0);
 
     const [memory] = memoryStore.getMemoriesByChannel(APPROVAL_CHANNEL, 10);
     expect(memory).toBeDefined();
@@ -131,7 +127,7 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
   });
 
   it('leaves auto channels byte-identical: absent predicate keeps the mention-only path active', async () => {
-    const primary = contactStore.upsert({
+    const primary = await contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
     });
@@ -153,6 +149,6 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
       );
     }
 
-    expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
+    expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
   });
 });

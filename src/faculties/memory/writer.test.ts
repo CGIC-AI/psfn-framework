@@ -1,15 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
 import { createIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { validateIntakePolicy } from '../../system/config/intake-policy-config.js';
-import * as sqliteVec from 'sqlite-vec';
 import { MemoryCandidacyPolicyError, MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { MemoryEvolutionLinkInput, MemoryStorePort } from './memory-store-port.js';
-import { MemoryStore } from './store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
 
@@ -1050,9 +1048,7 @@ describe('MemoryWriter', () => {
 
   describe('transactional replacement guarantees', () => {
     it('rolls back supersede markers when replacement insert fails', async () => {
-      const db = new Database(':memory:');
-      sqliteVec.load(db);
-      const realStore = new MemoryStore(db, 4);
+      const realStore = new InMemoryMemoryStore();
 
       const existing = makeExistingMemory({
         id: 'existing-transactional',
@@ -1066,7 +1062,7 @@ describe('MemoryWriter', () => {
         embedBatch: vi.fn(async (texts: string[]) => texts.map(() => makeEmbedding(2))),
         dims: 4,
       };
-      const transactionalWriter = new MemoryWriter(realStore, embeddingService);
+      const transactionalWriter = new MemoryWriter(realStore.asPort(), embeddingService);
 
       const storedExisting = realStore.getById(existing.id);
       expect(storedExisting).toBeDefined();
@@ -1094,14 +1090,11 @@ describe('MemoryWriter', () => {
       } finally {
         searchSpy.mockRestore();
         insertSpy.mockRestore();
-        db.close();
       }
     });
 
     it('keeps the original memory active when patch replacement insert fails', async () => {
-      const db = new Database(':memory:');
-      sqliteVec.load(db);
-      const realStore = new MemoryStore(db, 4);
+      const realStore = new InMemoryMemoryStore();
 
       const existing = makeExistingMemory({
         id: 'existing-patch-transactional',
@@ -1114,12 +1107,13 @@ describe('MemoryWriter', () => {
         embedBatch: vi.fn(async (texts: string[]) => texts.map(() => makeEmbedding(2))),
         dims: 4,
       };
-      const transactionalWriter = new MemoryWriter(realStore, embeddingService);
+      const transactionalWriter = new MemoryWriter(realStore.asPort(), embeddingService);
+      const insertMemory = realStore.insertMemory.bind(realStore);
       const insertSpy = vi.spyOn(realStore, 'insertMemory').mockImplementation((memory, embedding) => {
         if (memory.id !== existing.id) {
           throw new Error('simulated patch insert failure');
         }
-        return MemoryStore.prototype.insertMemory.call(realStore, memory, embedding);
+        return insertMemory(memory, embedding);
       });
 
       try {
@@ -1133,7 +1127,6 @@ describe('MemoryWriter', () => {
         expect(afterFailure?.text).toBe('Original patchable memory');
       } finally {
         insertSpy.mockRestore();
-        db.close();
       }
     });
   });

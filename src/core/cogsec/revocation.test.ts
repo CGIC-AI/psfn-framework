@@ -1,14 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../../faculties/memory/embedding.js';
-import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { CogSecEventStore } from './events.js';
 import type { CogSecLineageCompactionRef, CogSecLineagePreview } from './lineage.js';
 import { applyCogSecRevocation } from './revocation.js';
@@ -122,9 +119,7 @@ describe('applyCogSecRevocation', () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_revoke';
     const eventStore = createEventStore(root, caseId);
-    const db = new Database(':memory:');
-    sqliteVec.load(db);
-    const memoryStore = new MemoryStore(db);
+    const memoryStore = new InMemoryMemoryStore();
     const taintedEmbedding = makeEmbedding(1);
     const cleanEmbedding = makeEmbedding(2);
     memoryStore.insertMemory(
@@ -228,7 +223,7 @@ describe('applyCogSecRevocation', () => {
     const result = await applyCogSecRevocation({
       preview,
       eventStore,
-      memoryStore: memoryStore as unknown as Pick<MemoryStorePort, 'softDeleteMemory'>,
+      memoryStore: memoryStore.asPort(),
       activeMemoryInvalidator: activeInvalidator,
       compactionInvalidator: makeCompactionInvalidator(sessionStore),
       externalArtifactInvalidator: externalInvalidator,

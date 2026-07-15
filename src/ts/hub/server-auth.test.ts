@@ -56,6 +56,50 @@ test("authenticated hello uses registry-owned identity and bounded capabilities"
   await server.close();
 });
 
+test("authenticated user.text forwards an explicit text reply mode", async () => {
+  let capturedMode: Parameters<FrameworkAgentAdapter["streamReply"]>[0]["inputMode"] | undefined;
+  const replyAgent: FrameworkAgentAdapter = {
+    async *streamReply(input) {
+      capturedMode = input.inputMode;
+      yield "Typed response";
+      return "Typed response";
+    },
+    async close() {},
+  };
+  const server = new RealtimeHubServer(config(), { agent: replyAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", (raw) => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: { input: ["text"], output: ["text"], control: [], safety: [] },
+    }));
+    await waitFor(() => messages.some((message) => message.type === "hello.ack"));
+
+    socket.send(JSON.stringify({ type: "user.text", text: "hello" }));
+    await waitFor(() => messages.some(
+      (message) => message.type === "message"
+        && message.data.role === "assistant"
+        && message.data.final === true,
+    ));
+
+    assert.equal(capturedMode, "text");
+  } finally {
+    socket.close();
+    await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
 function config(): HubConfig {
   return {
     textOnlyMode: true, bindHost: "127.0.0.1", port: 0,
@@ -65,7 +109,8 @@ function config(): HubConfig {
       namespace: "satellite.endpoint", type: "text-only", channelType: "satellite.endpoint",
       capabilityProfile: "text-only", satelliteId: "hub", endpointId: "hub", displayName: "Hub",
       endpointClass: "text", locationMode: "static", telemetry: { mode: "disabled", categories: [] },
-    } },
+    }, voiceReplyDeadlineMs: 8_000, voiceAttemptTimeoutMs: 6_000,
+      textReplyDeadlineMs: 80_000, textAttemptTimeoutMs: 75_000 },
     companion: null, homeAssistant: null, control: null,
     deviceRegistry: { schemaVersion: 1, devices: [{
       deviceId: "office-device", deviceName: "Office Device", satelliteId: "office",

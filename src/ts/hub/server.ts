@@ -29,7 +29,7 @@ import {
   type TranscriptInterim,
   type TranscriptResult,
 } from "./deepgram-live.js";
-import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework-agent.js";
 import {
   CompanionBridge,
   CompanionRequestError,
@@ -538,7 +538,7 @@ class RealtimeConnection {
     });
 
     this.sessions.append(this.sessionId, { role: "user", content: userText });
-    const task = this.runReply(turn, userText);
+    const task = this.runReply(turn, userText, "text");
     this.replyTask = task;
     await task.finally(() => {
       if (this.replyTask === task) {
@@ -816,7 +816,7 @@ class RealtimeConnection {
     }
 
     this.sessions.append(this.sessionId, { role: "user", content: event.text });
-    const task = this.runReply(turn, event.text);
+    const task = this.runReply(turn, event.text, "voice");
     this.replyTask = task;
     await task.finally(() => {
       if (this.replyTask === task) {
@@ -825,7 +825,11 @@ class RealtimeConnection {
     });
   }
 
-  private async runReply(turn: ArtifactTurn, transcript: string): Promise<void> {
+  private async runReply(
+    turn: ArtifactTurn,
+    transcript: string,
+    inputMode: FrameworkReplyInputMode,
+  ): Promise<void> {
     const replyId = ++this.replySequence;
     this.replyAbort = false;
     const replyAbortController = new AbortController();
@@ -874,6 +878,7 @@ class RealtimeConnection {
       let pendingAudioText = "";
       let audioHasStarted = false;
       const stream = this.agent.streamReply({
+        inputMode,
         userText: transcript,
         conversationId: this.sessionId,
         history: this.sessions.getHistory(this.sessionId),

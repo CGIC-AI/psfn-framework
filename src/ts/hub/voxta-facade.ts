@@ -835,6 +835,7 @@ class VoxtaConnection {
     });
 
     const stream = this.deps.agent.streamReply({
+      inputMode: "voice",
       userText,
       conversationId: this.sessionId,
       history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],

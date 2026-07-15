@@ -6,6 +6,13 @@ import { PsfnModelAdapter, type PsfnReplyTelemetry } from "./psfn-model.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 
+const TEST_REPLY_BUDGETS = {
+  voiceReplyDeadlineMs: 8_000,
+  voiceAttemptTimeoutMs: 6_000,
+  textReplyDeadlineMs: 80_000,
+  textAttemptTimeoutMs: 75_000,
+} as const;
+
 function buildRuntimeConfig(overrides: Partial<PsfnRuntimeConfig> = {}): PsfnRuntimeConfig {
   const satelliteClaim = normalizeSatelliteClaimConfig({
     capabilityProfile: "voxta-avatar",
@@ -19,6 +26,7 @@ function buildRuntimeConfig(overrides: Partial<PsfnRuntimeConfig> = {}): PsfnRun
     apiKey: "secret",
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    ...TEST_REPLY_BUDGETS,
     ...overrides,
   };
 }
@@ -61,6 +69,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     apiKey: "secret",
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    ...TEST_REPLY_BUDGETS,
   });
   const channel: PsfnChannelContext = {
     sessionId: "thin-shell:demo",
@@ -86,6 +95,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
   try {
     const chunks = [];
     for await (const chunk of adapter.streamReply({
+      inputMode: "text",
       userText: "hello",
       conversationId: "thin-shell:demo",
       history: [],
@@ -168,6 +178,7 @@ test("psfn model adapter sends VaM vision captures as inline image blocks", asyn
     apiKey: "secret",
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    ...TEST_REPLY_BUDGETS,
   });
   const channel: PsfnChannelContext = {
     sessionId: "voxta-session",
@@ -213,6 +224,7 @@ test("psfn model adapter sends VaM vision captures as inline image blocks", asyn
 
   try {
     for await (const _chunk of adapter.streamReply({
+      inputMode: "voice",
       userText: "what do you see?",
       conversationId: "voxta-session",
       history: [{ role: "user", content: "what do you see?" }],
@@ -272,6 +284,7 @@ test("psfn model adapter injects retained VaM context into the active user turn"
     apiKey: "secret",
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    ...TEST_REPLY_BUDGETS,
   });
   const channel: PsfnChannelContext = {
     sessionId: "voxta-session",
@@ -288,6 +301,7 @@ test("psfn model adapter injects retained VaM context into the active user turn"
 
   try {
     for await (const _chunk of adapter.streamReply({
+      inputMode: "voice",
       userText: "can you see?",
       conversationId: "voxta-session",
       history: [{ role: "user", content: "can you see?" }],
@@ -338,6 +352,7 @@ test("psfn model adapter recovers from an empty primary response within the repl
     const startedAt = Date.now();
     const chunks: string[] = [];
     for await (const chunk of adapter.streamReply({
+      inputMode: "voice",
       userText: "hello",
       conversationId: "voxta-session",
       history: [],
@@ -363,7 +378,90 @@ test("psfn model adapter recovers from an empty primary response within the repl
   }
 });
 
-test("psfn model adapter fails clearly within the reply deadline when responses stay empty", async () => {
+test("typed replies can complete after the voice deadline but within the text deadline", async () => {
+  const originalFetch = globalThis.fetch;
+  const timeoutOverrides: Partial<PsfnRuntimeConfig> = {
+    voiceReplyDeadlineMs: 15,
+    voiceAttemptTimeoutMs: 10,
+    textReplyDeadlineMs: 200,
+    textAttemptTimeoutMs: 150,
+  };
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) =>
+    await delayedResponse(
+      40,
+      '{"choices":[{"message":{"role":"assistant","content":"Typed reply survived"}}]}',
+      init?.signal,
+    );
+
+  const telemetry: PsfnReplyTelemetry[] = [];
+  const adapter = new PsfnModelAdapter(buildRuntimeConfig(timeoutOverrides), (record) => telemetry.push(record));
+
+  try {
+    const chunks: string[] = [];
+    const input = {
+      inputMode: "text" as const,
+      userText: "take the time you need",
+      conversationId: "typed-session",
+      history: [],
+    };
+    for await (const chunk of adapter.streamReply(input)) {
+      chunks.push(chunk);
+    }
+
+    assert.deepEqual(chunks, ["Typed reply survived"]);
+    assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.inputMode, "text");
+    assert.equal(telemetry[0]!.deadlineMs, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("voice replies still time out on the tight voice budget", async () => {
+  const originalFetch = globalThis.fetch;
+  const telemetry: PsfnReplyTelemetry[] = [];
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) =>
+    await delayedResponse(
+      40,
+      '{"choices":[{"message":{"role":"assistant","content":"Too late for voice"}}]}',
+      init?.signal,
+    );
+
+  const adapter = new PsfnModelAdapter(
+    buildRuntimeConfig({
+      voiceReplyDeadlineMs: 15,
+      voiceAttemptTimeoutMs: 10,
+      textReplyDeadlineMs: 200,
+      textAttemptTimeoutMs: 150,
+    }),
+    (record) => telemetry.push(record),
+  );
+
+  try {
+    await assert.rejects(
+      (async () => {
+        for await (const _chunk of adapter.streamReply({
+          inputMode: "voice",
+          userText: "answer immediately",
+          conversationId: "voice-session",
+          history: [],
+        })) {
+          // drain
+        }
+      })(),
+      /did not produce assistant content within 15 ms/,
+    );
+    assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.inputMode, "voice");
+    assert.deepEqual(telemetry[0]!.attempts.map((attempt) => attempt.status), ["timeout", "timeout"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter fails repeated empty text responses before the typed client budget", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
 
@@ -374,7 +472,7 @@ test("psfn model adapter fails clearly within the reply deadline when responses 
 
   const telemetry: PsfnReplyTelemetry[] = [];
   const adapter = new PsfnModelAdapter(
-    buildRuntimeConfig({ voiceReplyDeadlineMs: 300, voiceAttemptTimeoutMs: 150 }),
+    buildRuntimeConfig({ textReplyDeadlineMs: 300, textAttemptTimeoutMs: 150 }),
     (record) => telemetry.push(record),
   );
 
@@ -383,6 +481,7 @@ test("psfn model adapter fails clearly within the reply deadline when responses 
     await assert.rejects(
       (async () => {
         for await (const _chunk of adapter.streamReply({
+          inputMode: "text",
           userText: "hello",
           conversationId: "voxta-session",
           history: [],
@@ -397,6 +496,7 @@ test("psfn model adapter fails clearly within the reply deadline when responses 
     assert.ok(elapsedMs < 2_000, `failure must be bounded by the reply deadline (was ${elapsedMs} ms)`);
     assert.equal(calls, 2);
     assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.inputMode, "text");
     assert.equal(telemetry[0]!.outcome, "failed");
     assert.deepEqual(telemetry[0]!.attempts.map((a) => a.status), ["empty", "empty"]);
   } finally {
@@ -408,6 +508,10 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
   const originalFetch = globalThis.fetch;
   let sawAbortedSignal = false;
   let hungCalls = 0;
+  let markRequestStarted!: () => void;
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve;
+  });
 
   const telemetry: PsfnReplyTelemetry[] = [];
   const adapter = new PsfnModelAdapter(buildRuntimeConfig(), (record) => telemetry.push(record));
@@ -416,6 +520,7 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
     // First turn: the framework request hangs until the client disconnects.
     globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
       hungCalls += 1;
+      markRequestStarted();
       const signal = init?.signal ?? undefined;
       return await new Promise<Response>((_resolve, reject) => {
         const abort = (): void => {
@@ -433,6 +538,7 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
     const controller = new AbortController();
     const drain = (async () => {
       for await (const _chunk of adapter.streamReply({
+        inputMode: "text",
         userText: "are you there?",
         conversationId: "voxta-session",
         history: [],
@@ -442,8 +548,8 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
       }
     })();
 
-    // Let the request reach the in-flight state, then simulate client disconnect.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Abort only after the request has reached the in-flight state.
+    await requestStarted;
     controller.abort(new DOMException("client disconnect", "AbortError"));
 
     await assert.rejects(drain);
@@ -457,6 +563,7 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
 
     const chunks: string[] = [];
     for await (const chunk of adapter.streamReply({
+      inputMode: "text",
       userText: "hello again",
       conversationId: "voxta-session",
       history: [],
@@ -507,11 +614,13 @@ test("psfn model adapter retries transient agent_busy responses", async () => {
     apiKey: "secret",
     channelType: satelliteClaim.channelType,
     satelliteClaim,
+    ...TEST_REPLY_BUDGETS,
   });
 
   try {
     const chunks: string[] = [];
     for await (const chunk of adapter.streamReply({
+      inputMode: "voice",
       userText: "hello",
       conversationId: "voxta-session",
       history: [],
@@ -529,3 +638,21 @@ test("psfn model adapter retries transient agent_busy responses", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+function delayedResponse(delayMs: number, body: string, signal?: AbortSignal | null): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(jsonResponse(body));
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("aborted", "AbortError"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

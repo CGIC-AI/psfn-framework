@@ -11,6 +11,7 @@ import WebSocket, { type RawData } from "ws";
 import { wrapPcmAsWav } from "../shared/audio.js";
 import type { HubConfig } from "../shared/env.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import type { FrameworkReplyInputMode } from "./framework-agent.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import { RealtimeHubServer } from "./server.js";
@@ -20,6 +21,7 @@ const SIGNALR_RECORD_SEPARATOR = "\x1e";
 
 class FakeAgent implements FrameworkAgentAdapter {
   readonly calls: Array<{
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -29,6 +31,7 @@ class FakeAgent implements FrameworkAgentAdapter {
   constructor(private readonly chunks: string[] = ["Hello", " from PSFN"]) {}
 
   async *streamReply(input: {
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -145,6 +148,7 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
 
     assert.deepEqual(voxtaPayloads(frames).filter((payload) => payload.$type === "message"), []);
     assert.equal(agent.calls.length, 1);
+    assert.equal(agent.calls[0]?.inputMode, "voice");
     assert.equal(agent.calls[0]?.userText, "hello there");
     assert.equal(agent.calls[0]?.conversationId, sessionId);
     assert.equal(agent.calls[0]?.channel?.sourceSatelliteId, "voxta-vam");
@@ -817,6 +821,10 @@ function testHubConfig(overrides: {
       model: "psfn",
       channelType: satelliteClaim.channelType,
       satelliteClaim,
+      voiceReplyDeadlineMs: 8_000,
+      voiceAttemptTimeoutMs: 6_000,
+      textReplyDeadlineMs: 80_000,
+      textAttemptTimeoutMs: 75_000,
     },
     companion: null,
     homeAssistant: null,

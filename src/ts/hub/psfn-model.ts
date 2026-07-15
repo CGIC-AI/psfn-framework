@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { ConversationMessage } from "./session-store.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
-import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework-agent.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 import type { RuntimeIdentity } from "../shared/protocol.js";
 import {
@@ -35,9 +35,7 @@ type PsfnChatMessage = {
 };
 
 const DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES = 12;
-const DEFAULT_VOICE_REPLY_DEADLINE_MS = 8_000;
-const DEFAULT_VOICE_ATTEMPT_TIMEOUT_MS = 6_000;
-const MAX_VOICE_REPLY_ATTEMPTS = 2;
+const MAX_REPLY_ATTEMPTS = 2;
 
 export type PsfnReplyAttemptStatus = "ok" | "empty" | "timeout" | "error";
 
@@ -57,6 +55,7 @@ export interface PsfnReplyAttemptTelemetry {
 export interface PsfnReplyTelemetry {
   conversationId: string;
   model: string;
+  inputMode: FrameworkReplyInputMode;
   deadlineMs: number;
   totalMs: number;
   outcome: "primary" | "recovered" | "failed" | "cancelled";
@@ -77,6 +76,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   }
 
   async *streamReply(input: {
+    inputMode: FrameworkReplyInputMode;
     userText: string;
     conversationId?: string;
     history?: ConversationMessage[];
@@ -107,8 +107,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       messages: this.buildMessages(input.history ?? [], input.userText, channel),
     });
 
-    const deadlineMs = normalizeDurationMs(this.runtime.voiceReplyDeadlineMs, DEFAULT_VOICE_REPLY_DEADLINE_MS);
-    const attemptTimeoutMs = normalizeDurationMs(this.runtime.voiceAttemptTimeoutMs, DEFAULT_VOICE_ATTEMPT_TIMEOUT_MS);
+    const { deadlineMs, attemptTimeoutMs } = replyBudgetForMode(this.runtime, input.inputMode);
     const externalSignal = input.signal;
     const startedAt = Date.now();
     const attempts: PsfnReplyAttemptTelemetry[] = [];
@@ -116,6 +115,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       this.onTelemetry({
         conversationId,
         model: this.runtime.model,
+        inputMode: input.inputMode,
         deadlineMs,
         totalMs: Date.now() - startedAt,
         outcome,
@@ -127,7 +127,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       return abortReason(externalSignal);
     };
 
-    for (let attempt = 1; attempt <= MAX_VOICE_REPLY_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= MAX_REPLY_ATTEMPTS; attempt += 1) {
       if (externalSignal?.aborted) {
         throw cancelled();
       }
@@ -652,8 +652,36 @@ function requiredPath(value: string | undefined, name: string): string {
   return value;
 }
 
-function normalizeDurationMs(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+function replyBudgetForMode(
+  runtime: PsfnRuntimeConfig,
+  inputMode: FrameworkReplyInputMode,
+): { deadlineMs: number; attemptTimeoutMs: number } {
+  let deadlineMs: number;
+  let attemptTimeoutMs: number;
+  switch (inputMode) {
+    case "text":
+      deadlineMs = runtime.textReplyDeadlineMs;
+      attemptTimeoutMs = runtime.textAttemptTimeoutMs;
+      break;
+    case "voice":
+      deadlineMs = runtime.voiceReplyDeadlineMs;
+      attemptTimeoutMs = runtime.voiceAttemptTimeoutMs;
+      break;
+    default:
+      throw new Error(`Unsupported PSFN reply input mode: ${String(inputMode)}`);
+  }
+  assertReplyDuration(inputMode, "reply deadline", deadlineMs);
+  assertReplyDuration(inputMode, "attempt timeout", attemptTimeoutMs);
+  if (attemptTimeoutMs > deadlineMs) {
+    throw new Error(`PSFN ${inputMode} attempt timeout must be less than or equal to its reply deadline`);
+  }
+  return { deadlineMs, attemptTimeoutMs };
+}
+
+function assertReplyDuration(inputMode: FrameworkReplyInputMode, label: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`PSFN ${inputMode} ${label} must be a positive safe integer`);
+  }
 }
 
 interface AttemptScope {
@@ -701,12 +729,12 @@ function abortReason(signal?: AbortSignal): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  return new DOMException("The PSFN voice reply was aborted", "AbortError");
+  return new DOMException("The PSFN reply was aborted", "AbortError");
 }
 
 function defaultTelemetrySink(telemetry: PsfnReplyTelemetry): void {
   // Structured single-line record. Only accepted-content character counts are
   // included, never the assistant text of any attempt, so discarded deltas
   // cannot leak into logs.
-  console.log(`psfn.voice.reply ${JSON.stringify(telemetry)}`);
+  console.log(`psfn.reply ${JSON.stringify(telemetry)}`);
 }

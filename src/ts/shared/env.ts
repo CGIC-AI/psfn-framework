@@ -23,6 +23,8 @@ import {
   type SatelliteTelemetryMode,
 } from "../hub/satellite-claim.js";
 
+const MAX_NODE_TIMER_MS = 2_147_483_647;
+
 export interface PsfnRuntimeConfig {
   model: string;
   baseUrl: string;
@@ -35,9 +37,17 @@ export interface PsfnRuntimeConfig {
    * retry within this budget; once it elapses the turn fails closed so the
    * voice client is never left waiting on an unbounded fallback.
    */
-  voiceReplyDeadlineMs?: number;
+  voiceReplyDeadlineMs: number;
   /** Per-attempt timeout, clamped to the remaining reply deadline. */
-  voiceAttemptTimeoutMs?: number;
+  voiceAttemptTimeoutMs: number;
+  /**
+   * Total wall-clock budget for authenticated typed turns. The 80 second
+   * default leaves 10 seconds for Hub error delivery before the framework's
+   * current 90 second API request timeout.
+   */
+  textReplyDeadlineMs: number;
+  /** Per-attempt timeout for typed turns, clamped to their remaining deadline. */
+  textAttemptTimeoutMs: number;
 }
 
 export interface CompanionBridgeIdentity {
@@ -188,11 +198,22 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
     },
     tls: loadPsfnClientCertificateConfig(projectRoot),
   });
-  const voiceReplyDeadlineMs = parsePositiveIntegerEnv("PSFN_VOICE_REPLY_DEADLINE_MS", 8_000);
-  const voiceAttemptTimeoutMs = parsePositiveIntegerEnv("PSFN_VOICE_ATTEMPT_TIMEOUT_MS", 6_000);
-  if (voiceAttemptTimeoutMs > voiceReplyDeadlineMs) {
-    throw new Error("PSFN_VOICE_ATTEMPT_TIMEOUT_MS must be less than or equal to PSFN_VOICE_REPLY_DEADLINE_MS");
-  }
+  const voiceReplyDeadlineMs = parseStrictPositiveIntegerEnv("PSFN_VOICE_REPLY_DEADLINE_MS", 8_000);
+  const voiceAttemptTimeoutMs = parseStrictPositiveIntegerEnv("PSFN_VOICE_ATTEMPT_TIMEOUT_MS", 6_000);
+  const textReplyDeadlineMs = parseStrictPositiveIntegerEnv("PSFN_TEXT_REPLY_DEADLINE_MS", 80_000);
+  const textAttemptTimeoutMs = parseStrictPositiveIntegerEnv("PSFN_TEXT_ATTEMPT_TIMEOUT_MS", 75_000);
+  validateReplyBudget(
+    "PSFN_VOICE_ATTEMPT_TIMEOUT_MS",
+    voiceAttemptTimeoutMs,
+    "PSFN_VOICE_REPLY_DEADLINE_MS",
+    voiceReplyDeadlineMs,
+  );
+  validateReplyBudget(
+    "PSFN_TEXT_ATTEMPT_TIMEOUT_MS",
+    textAttemptTimeoutMs,
+    "PSFN_TEXT_REPLY_DEADLINE_MS",
+    textReplyDeadlineMs,
+  );
   return {
     model,
     baseUrl,
@@ -201,6 +222,8 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
     satelliteClaim,
     voiceReplyDeadlineMs,
     voiceAttemptTimeoutMs,
+    textReplyDeadlineMs,
+    textAttemptTimeoutMs,
   };
 }
 
@@ -350,6 +373,33 @@ function parsePositiveIntegerEnv(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function parseStrictPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = optional(name);
+  if (!raw) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  if (parsed > MAX_NODE_TIMER_MS) {
+    throw new Error(`${name} must not exceed ${MAX_NODE_TIMER_MS} ms`);
+  }
+  return parsed;
+}
+
+function validateReplyBudget(
+  attemptName: string,
+  attemptTimeoutMs: number,
+  deadlineName: string,
+  replyDeadlineMs: number,
+): void {
+  if (attemptTimeoutMs > replyDeadlineMs) {
+    throw new Error(`${attemptName} must be less than or equal to ${deadlineName}`);
+  }
 }
 
 function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {

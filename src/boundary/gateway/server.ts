@@ -860,6 +860,10 @@ export class GatewayServer {
       await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
     });
 
+    conn.on('heartbeat', () => {
+      this.touchConnectionHealthcheck(conn);
+    });
+
     conn.onMessage(async (message) => {
       if (!this.connections.has(conn)) {
         return;

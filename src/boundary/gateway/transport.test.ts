@@ -399,6 +399,46 @@ describe('gateway RPC endpoint parsing', () => {
 });
 
 describe('createSocketClient lifecycle', () => {
+  it('exchanges Unix transport heartbeats without producing JSON-RPC frames or stats', async () => {
+    const socketPath = join(tmpdir(), `psfn-transport-heartbeat-${randomUUID()}.sock`);
+    let serverConn: GatewayRpcConnection | null = null;
+    let serverHeartbeats = 0;
+    const serverMessages: unknown[] = [];
+    const server = createSocketServer(socketPath, (conn) => {
+      serverConn = conn;
+      conn.on('heartbeat', () => {
+        serverHeartbeats += 1;
+      });
+      conn.onMessage((message) => serverMessages.push(message));
+    });
+    const client = await createSocketClient({ socketPath, reconnect: false });
+
+    try {
+      expect(client.sendHeartbeat()).toBe(true);
+      await waitFor(() => serverHeartbeats === 1 && serverConn !== null);
+      await sleep(10);
+
+      expect(client.sendHeartbeat()).toBe(true);
+      await waitFor(() => serverHeartbeats === 2);
+      expect(serverMessages).toEqual([]);
+      expect(client.serializedTransportStats).toEqual({
+        frameCount: 0,
+        serializedBytes: 0,
+        rpcCallCount: 0,
+        byMethod: {},
+      });
+      expect(serverConn!.serializedTransportStats).toEqual({
+        frameCount: 0,
+        serializedBytes: 0,
+        rpcCallCount: 0,
+        byMethod: {},
+      });
+    } finally {
+      client.destroy();
+      await closeServer(server);
+    }
+  });
+
   it('counts exact serialized JSON bytes and RPC calls by method', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-stats-${randomUUID()}.sock`);
     let serverConn: GatewayRpcConnection | null = null;
@@ -570,6 +610,50 @@ describe('WebSocket RPC transport', () => {
 
       client.destroy();
     } finally {
+      await harness.close();
+    }
+  });
+
+  it('exchanges WSS ping/pong heartbeats without producing JSON-RPC frames or stats', async () => {
+    let serverConn: GatewayRpcConnection | null = null;
+    let serverHeartbeats = 0;
+    const serverMessages: unknown[] = [];
+    const harness = await createWssHarness((conn) => {
+      serverConn = conn;
+      conn.on('heartbeat', () => {
+        serverHeartbeats += 1;
+      });
+      conn.onMessage((message) => serverMessages.push(message));
+    });
+
+    let client: GatewayRpcConnection | null = null;
+    try {
+      client = await createWebSocketRpcClient({
+        url: harness.url,
+        tls: harness.fixture.clientTls,
+        reconnect: false,
+      });
+      expect(client.sendHeartbeat()).toBe(true);
+      await waitFor(() => serverHeartbeats === 1 && serverConn !== null);
+      await sleep(10);
+
+      expect(client.sendHeartbeat()).toBe(true);
+      await waitFor(() => serverHeartbeats === 2);
+      expect(serverMessages).toEqual([]);
+      expect(client.serializedTransportStats).toEqual({
+        frameCount: 0,
+        serializedBytes: 0,
+        rpcCallCount: 0,
+        byMethod: {},
+      });
+      expect(serverConn!.serializedTransportStats).toEqual({
+        frameCount: 0,
+        serializedBytes: 0,
+        rpcCallCount: 0,
+        byMethod: {},
+      });
+    } finally {
+      client?.destroy();
       await harness.close();
     }
   });

@@ -39,6 +39,7 @@ type MockConnection = {
   sent: unknown[];
   _emit(message: unknown): void;
   _emitClose(): void;
+  _emitHeartbeat(): void;
 };
 
 function createMockConnection(
@@ -73,6 +74,9 @@ function createMockConnection(
     _emitClose(): void {
       emitter.emit('close');
     },
+    _emitHeartbeat(): void {
+      emitter.emit('heartbeat');
+    },
   };
 
   return {
@@ -80,6 +84,7 @@ function createMockConnection(
     sent,
     _emit: conn._emit,
     _emitClose: conn._emitClose,
+    _emitHeartbeat: conn._emitHeartbeat,
   };
 }
 
@@ -483,6 +488,43 @@ describe('GatewayServer single-companion parity (flag off)', () => {
 });
 
 describe('GatewayServer multi-companion identify (flag on)', () => {
+  it('refreshes only the sending companion from an unaudited transport heartbeat', async () => {
+    const auditAppend = vi.fn(async () => 30);
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+    auditAppend.mockClear();
+
+    const before = server.getFleetConnectionSnapshot();
+    const beforeA = before.connections.find(connection => connection.companionId === 'comp-a')!;
+    const beforeB = before.connections.find(connection => connection.companionId === 'comp-b')!;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    connA._emitHeartbeat();
+
+    const after = server.getFleetConnectionSnapshot();
+    const afterA = after.connections.find(connection => connection.companionId === 'comp-a')!;
+    const afterB = after.connections.find(connection => connection.companionId === 'comp-b')!;
+    expect(afterA.lastSeenAt).toBeGreaterThan(beforeA.lastSeenAt);
+    expect(afterB.lastSeenAt).toBe(beforeB.lastSeenAt);
+    expect(auditAppend).not.toHaveBeenCalled();
+
+    const realRpc = await invokeRpc(connA, 3, 'discord.typing', {
+      channelId: 'comp-a-channel',
+      companionId: 'comp-a',
+    });
+    expect(realRpc.result).toEqual({ success: true });
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'discord.typing',
+      decision: 'ALLOW',
+    }));
+  });
+
   it('keeps retained inline images private to the authenticated companion connection', async () => {
     const options = createMinimalOptions();
     const stream = vi.mocked(options.llmProvider.stream);

@@ -48,6 +48,7 @@ import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js
 import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
+import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -386,6 +387,7 @@ function makeMockSessionManager(): SessionManager {
     recordSystemMessage: vi.fn().mockReturnValue(103),
     recordTurn: vi.fn(),
     hasRecordedTurn: vi.fn().mockReturnValue(false),
+    findRecordedTurn: vi.fn().mockReturnValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
@@ -6304,8 +6306,10 @@ describe('SubstrateAgent steering + follow-up', () => {
     const postTurnRelease = new Promise<void>((resolve) => {
       releasePostTurn = resolve;
     });
-    agent.registerIntentionPostTurnHook(async (context) => {
-      if (context.message.id !== candidateMessage.id) return;
+    const enqueuePostTurnSpy = vi.spyOn(
+      TurnSupportRuntime.prototype,
+      'enqueuePostTurnBackgroundWork',
+    ).mockImplementationOnce(async () => {
       markPostTurnEntered();
       await postTurnRelease;
     });
@@ -6314,12 +6318,17 @@ describe('SubstrateAgent steering + follow-up', () => {
       appendAssistant(this, 'candidate post-turn phase starting');
     });
     const candidatePostTurnRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
-    await postTurnEntered;
-    await assertDeferredIngressPhase({
-      phase: 'post-turn',
-      candidateRun: candidatePostTurnRun,
-      release: releasePostTurn,
-    });
+    try {
+      await postTurnEntered;
+      await assertDeferredIngressPhase({
+        phase: 'post-turn',
+        candidateRun: candidatePostTurnRun,
+        release: releasePostTurn,
+      });
+    } finally {
+      releasePostTurn();
+      enqueuePostTurnSpy.mockRestore();
+    }
 
     let releaseDetachedIngress!: () => void;
     const detachedIngressRelease = new Promise<void>((resolve) => {

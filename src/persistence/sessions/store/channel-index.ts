@@ -579,24 +579,18 @@ export function primeChannelIndexFromDisk(params: {
     loadedCount: number,
   ) => void;
 }): void {
-  const indexedByFilename = new Map(
-    [...params.channelIndex.entries()].map(([sessionId, entry]) => [entry.filename, { sessionId, entry }]),
-  );
   const scannedSessions = readdirSync(params.sessionsDir)
     .filter(isSessionJournalFilename)
     .map((filename) => {
       const filePath = join(params.sessionsDir, filename);
       const fingerprint = readJournalFileFingerprint(filePath);
       if (!fingerprint) return null;
-      const known = indexedByFilename.get(filename);
-      if (known && isIndexEntryComplete(known.entry) && indexEntryMatchesFile(known.entry, fingerprint)) {
-        return {
-          filename,
-          filePath,
-          channelId: indexedChannelId(known.sessionId, known.entry),
-          fingerprint,
-        };
-      }
+
+      // The channel index is derived, repairable metadata. Never let an
+      // index-only mutation decide which privacy boundary owns a journal.
+      // Reading the canonical identity from the journal still lets the
+      // fingerprint fast path below avoid rebuilding all other metadata for
+      // unchanged files.
       const channelId = readChannelIdFromFile(filePath);
       return channelId ? { filename, filePath, channelId, fingerprint } : null;
     })

@@ -1,5 +1,12 @@
 import * as fs from 'node:fs';
-import { appendFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,7 +32,7 @@ describe('session channel-index boot fingerprints', () => {
     roots.length = 0;
   });
 
-  it('skips first-line reads for unchanged journals and rereads a changed journal', () => {
+  it('uses the unchanged fingerprint to avoid a metadata rebuild and rebuilds a changed journal', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-channel-index-boot-'));
     roots.push(root);
     const writer = new SessionStore(root);
@@ -43,7 +50,7 @@ describe('session channel-index boot fingerprints', () => {
     openSpy.mockClear();
 
     new SessionStore(root);
-    expect(openSpy.mock.calls.filter(call => call[0] === journalPath)).toHaveLength(0);
+    expect(openSpy.mock.calls.filter(call => call[0] === journalPath)).toHaveLength(1);
 
     appendFileSync(journalPath, `${JSON.stringify({
       type: 'message',
@@ -61,5 +68,43 @@ describe('session channel-index boot fingerprints', () => {
       'first',
       'changed',
     ]);
+  });
+
+  it('repairs an index-only channelId mutation from the canonical journal identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-channel-index-identity-'));
+    roots.push(root);
+    const privateChannelId = 'api:partner-private';
+    const forgedChannelId = 'api:other-partner';
+    const writer = new SessionStore(root);
+    writer.append({
+      channelId: privateChannelId,
+      role: 'user',
+      content: 'private partner data',
+      timestamp: 1_000,
+    });
+
+    // Upgrade the index to the fingerprint-bearing format, then corrupt only
+    // its derived channelId. The journal itself (and therefore its valid
+    // filename/mtime/size fingerprint) remains untouched.
+    new SessionStore(root);
+    const indexPath = join(root, '_channel_index.json');
+    const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
+      channels: Record<string, { channelId?: string }>;
+    };
+    const indexedEntry = Object.values(index.channels)[0];
+    expect(indexedEntry).toBeDefined();
+    indexedEntry!.channelId = forgedChannelId;
+    writeFileSync(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf-8');
+
+    const restarted = new SessionStore(root);
+    expect(restarted.getRecent(forgedChannelId, 10)).toEqual([]);
+    expect(restarted.getRecent(privateChannelId, 10).map(entry => entry.content)).toEqual([
+      'private partner data',
+    ]);
+
+    const repaired = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
+      channels: Record<string, { channelId?: string }>;
+    };
+    expect(Object.values(repaired.channels).map(entry => entry.channelId)).toEqual([privateChannelId]);
   });
 });

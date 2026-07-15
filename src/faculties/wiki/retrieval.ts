@@ -7,6 +7,11 @@ import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
 import type { SharedWikiSearchPort } from './shared-pgvector-projection.js';
 import { isSharedWorldScope, resolveReadableWikiScopes, type WikiScope } from './scope.js';
+import {
+  cloneWikiContextSnapshot,
+  resolveWikiContextKey,
+  type WikiContextSnapshot,
+} from './active-context.js';
 import type {
   RetrievalQueryEmbeddingProvenance,
   TurnRetrievalQueryEmbedding,
@@ -129,6 +134,22 @@ export interface WikiContextBuildResult {
   selectedCount: number;
 }
 
+/**
+ * Result of one off-path wiki retrieval computation (embed + search + build).
+ * `hardFailed` distinguishes a fail-closed embed/search failure (no data — keep
+ * the last-good cache) from a legitimate empty result (below threshold / budget
+ * exhausted — a fresh, cacheable empty block). A partial shared-slice degrade
+ * still serves a valid personal block, so it is NOT a hard failure.
+ */
+interface WikiContextComputation {
+  block: string;
+  tokenCount: number;
+  selectedCount: number;
+  contextClass: WikiRetrievalContextClass;
+  hardFailed: boolean;
+  degradedError?: string;
+}
+
 function renderMatchEntry(match: WikiSemanticMatch): string {
   const scorePct = Math.round(match.score * 100);
   return `- [${match.title}] (${match.sourceClass}, id=${match.documentId}, match=${scorePct}%)\n${match.chunkText.trim()}`;
@@ -245,10 +266,17 @@ export interface WikiRetrievalRequest {
  * typed `wiki.retrieval` event rather than blocking the turn. The returned
  * block is always within its own token cap and is designed to be appended to
  * prompt assembly AFTER memory context.
+ *
+ * mmo9.7.4: the turn hot path never awaits embed+search. It reads a
+ * synchronous last-good snapshot via {@link getWikiContextBlock} and schedules
+ * an off-path {@link refreshWikiContextBlock}, mirroring active-memory's
+ * `getActiveMemoryContext`/`refreshActiveMemoryContext` cached-snapshot model.
  */
 export class WikiRetrievalService {
   private readonly deps: WikiRetrievalServiceDeps;
   private readonly searchLimit: number;
+  private readonly contexts = new Map<string, { snapshot: WikiContextSnapshot }>();
+  private readonly refreshLoops = new Map<string, Promise<WikiContextSnapshot | null>>();
 
   constructor(deps: WikiRetrievalServiceDeps) {
     this.deps = deps;
@@ -277,19 +305,160 @@ export class WikiRetrievalService {
     });
   }
 
-  async retrieveContextBlock(request: WikiRetrievalRequest): Promise<string> {
-    const settings = this.deps.getSettings();
-    const plan = resolveWikiRetrievalPlan({
-      settings,
+  /**
+   * Synchronous last-good read for the turn hot path (mmo9.7.4). Never issues
+   * embed or search. Returns a `ready`, empty, non-degraded snapshot when the
+   * deterministic gate is closed (disabled, or a zero cap for the turn's
+   * class) — that is a skip, not a degradation. Returns null only on a genuine
+   * cold cache miss for an enabled lane, which the caller treats as
+   * `not_ready` (cold start) and serves an empty block.
+   */
+  getWikiContextBlock(request: WikiRetrievalRequest): WikiContextSnapshot | null {
+    const plan = this.resolveWikiRetrievalPlan(request);
+    if (!plan) {
+      return this.buildGateSkippedSnapshot(request.channelId);
+    }
+    const key = resolveWikiContextKey({
+      channelId: request.channelId,
+      contextClass: plan.contextClass,
+      ...(plan.allowedScopes ? { allowedScopes: plan.allowedScopes } : {}),
+    });
+    const state = this.contexts.get(key);
+    return state ? cloneWikiContextSnapshot(state.snapshot) : null;
+  }
+
+  /**
+   * Off-path refresh, scheduled fire-and-forget by the turn. Runs embed+search,
+   * updates the keyed cache, and preserves the existing `wiki.retrieval`
+   * ran/skipped/degraded telemetry. A hard embed/search failure keeps the
+   * last-good block and only marks the snapshot `degraded`, never clobbering it
+   * with an empty block. Concurrent refreshes for the same key coalesce onto a
+   * single in-flight run.
+   */
+  async refreshWikiContextBlock(request: WikiRetrievalRequest): Promise<WikiContextSnapshot | null> {
+    const plan = this.resolveWikiRetrievalPlan(request);
+    if (!plan) {
+      // Deterministic gate closed: preserve the skipped/disabled telemetry the
+      // foreground path emitted every turn. Nothing is cached for a closed gate.
+      this.emit({ channelId: request.channelId, outcome: 'skipped', reason: 'disabled', correlation: request.correlation });
+      return null;
+    }
+    const key = resolveWikiContextKey({
+      channelId: request.channelId,
+      contextClass: plan.contextClass,
+      ...(plan.allowedScopes ? { allowedScopes: plan.allowedScopes } : {}),
+    });
+    const existing = this.refreshLoops.get(key);
+    if (existing) return existing;
+    const run = this.performWikiRefresh(key, plan, request).finally(() => {
+      if (this.refreshLoops.get(key) === run) {
+        this.refreshLoops.delete(key);
+      }
+    });
+    this.refreshLoops.set(key, run);
+    return run;
+  }
+
+  private resolveWikiRetrievalPlan(request: WikiRetrievalRequest): WikiRetrievalPlan | null {
+    return resolveWikiRetrievalPlan({
+      settings: this.deps.getSettings(),
       isDirectMessage: request.isDirectMessage,
       focusActive: request.focusActive,
       multiCompanion: this.deps.getMultiCompanion?.() === true,
       ...(request.currentSiteId ? { currentSiteId: request.currentSiteId } : {}),
     });
-    if (!plan) {
-      this.emit({ channelId: request.channelId, outcome: 'skipped', reason: 'disabled', correlation: request.correlation });
-      return '';
+  }
+
+  /**
+   * A closed deterministic gate (disabled / zero cap) is a `ready` empty
+   * snapshot, never a cold miss: the turn serves an empty block with no
+   * degradation signal, exactly as the old serial path returned `''`.
+   */
+  private buildGateSkippedSnapshot(channelId: string): WikiContextSnapshot {
+    return {
+      key: `gate-skipped:${channelId}`,
+      channelId,
+      contextClass: null,
+      block: '',
+      tokenCount: 0,
+      selectedCount: 0,
+      generatedAt: 0,
+      lastRefreshStartedAt: 0,
+      refreshStatus: 'ready',
+    };
+  }
+
+  private markWikiRefreshing(key: string, startedAt: number): void {
+    const state = this.contexts.get(key);
+    // Cold: no snapshot yet, so getWikiContextBlock returns null → not_ready.
+    if (!state) return;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'refreshing',
+      lastRefreshStartedAt: startedAt,
+    };
+  }
+
+  /**
+   * Hard failure: keep the previous block (last-good) and mark it degraded. The
+   * `wiki.retrieval` degraded telemetry was already emitted by the computation.
+   * A cold failure (no prior snapshot) has nothing to preserve → null.
+   */
+  private markWikiDegraded(
+    key: string,
+    startedAt: number,
+    error: string | undefined,
+  ): WikiContextSnapshot | null {
+    const state = this.contexts.get(key);
+    if (!state) return null;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'degraded',
+      lastRefreshStartedAt: startedAt,
+      lastRefreshCompletedAt: Date.now(),
+      ...(error ? { lastRefreshError: error } : {}),
+    };
+    return cloneWikiContextSnapshot(state.snapshot);
+  }
+
+  private async performWikiRefresh(
+    key: string,
+    plan: WikiRetrievalPlan,
+    request: WikiRetrievalRequest,
+  ): Promise<WikiContextSnapshot | null> {
+    const startedAt = Date.now();
+    this.markWikiRefreshing(key, startedAt);
+    const computation = await this.computeWikiContext(plan, request);
+    if (computation.hardFailed) {
+      return this.markWikiDegraded(key, startedAt, computation.degradedError);
     }
+    const snapshot: WikiContextSnapshot = {
+      key,
+      channelId: request.channelId,
+      contextClass: computation.contextClass,
+      block: computation.block,
+      tokenCount: computation.tokenCount,
+      selectedCount: computation.selectedCount,
+      generatedAt: startedAt,
+      lastRefreshStartedAt: startedAt,
+      lastRefreshCompletedAt: Date.now(),
+      refreshStatus: 'ready',
+    };
+    this.contexts.set(key, { snapshot });
+    return cloneWikiContextSnapshot(snapshot);
+  }
+
+  private async computeWikiContext(
+    plan: WikiRetrievalPlan,
+    request: WikiRetrievalRequest,
+  ): Promise<WikiContextComputation> {
+    const empty = (): WikiContextComputation => ({
+      block: '',
+      tokenCount: 0,
+      selectedCount: 0,
+      contextClass: plan.contextClass,
+      hardFailed: false,
+    });
     const query = request.queryText.trim();
     if (!query) {
       this.emit({
@@ -300,7 +469,7 @@ export class WikiRetrievalService {
         tokenCap: plan.tokenCap,
         correlation: request.correlation,
       });
-      return '';
+      return empty();
     }
     let matches: WikiSemanticMatch[];
     let queryEmbedding: Float32Array;
@@ -343,7 +512,7 @@ export class WikiRetrievalService {
         error: message,
         correlation: request.correlation,
       });
-      return '';
+      return { ...empty(), hardFailed: true, degradedError: message };
     }
     // s10f9 retrieval union: when the plan grants shared_world scopes, the
     // shared-schema projection is queried with EXACTLY those scopes and the
@@ -389,7 +558,7 @@ export class WikiRetrievalService {
         tokenCap: plan.tokenCap,
         correlation: request.correlation,
       });
-      return '';
+      return empty();
     }
     const built = buildWikiContextBlock(matches, plan.tokenCap);
     if (built.selectedCount === 0) {
@@ -402,7 +571,7 @@ export class WikiRetrievalService {
         tokenCap: plan.tokenCap,
         correlation: request.correlation,
       });
-      return '';
+      return empty();
     }
     // A shared-slice failure still serves the personal block, but the event is
     // honest about the partial degrade (never a silent 'ran').
@@ -417,6 +586,12 @@ export class WikiRetrievalService {
       tokenCount: built.tokenCount,
       correlation: request.correlation,
     });
-    return built.block;
+    return {
+      block: built.block,
+      tokenCount: built.tokenCount,
+      selectedCount: built.selectedCount,
+      contextClass: plan.contextClass,
+      hardFailed: false,
+    };
   }
 }

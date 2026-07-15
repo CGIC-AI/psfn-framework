@@ -9,7 +9,8 @@ import type {
   ActiveMemoryContextRequest,
   ActiveMemoryContextSnapshot,
 } from '../../../../faculties/memory/active-context.js';
-import type { MemoryProvider } from '../../contracts.js';
+import type { WikiContextSnapshot } from '../../../../faculties/wiki/active-context.js';
+import type { MemoryProvider, WikiRetrievalRequest } from '../../contracts.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
 import {
@@ -214,6 +215,21 @@ function requireTurnActiveMemorySurface(memoryProvider: MemoryProvider | null): 
  */
 function resolveActiveMemoryTurnDegradedReason(
   snapshot: ActiveMemoryContextSnapshot | null,
+): 'not_ready' | 'refresh_failed' | 'stale' | null {
+  if (!snapshot) return 'not_ready';
+  if (snapshot.refreshStatus === 'degraded') return 'refresh_failed';
+  if (snapshot.refreshStatus === 'refreshing') return 'stale';
+  return null;
+}
+
+/**
+ * mmo9.7.4: same explicit-degradation classification for the wiki cached
+ * snapshot as active-memory. A `ready` snapshot (including the gate-skipped
+ * empty snapshot when wiki retrieval is disabled) is healthy and produces no
+ * signal; a cold miss, in-flight refresh, or failed refresh does.
+ */
+function resolveWikiTurnDegradedReason(
+  snapshot: WikiContextSnapshot | null,
 ): 'not_ready' | 'refresh_failed' | 'stale' | null {
   if (!snapshot) return 'not_ready';
   if (snapshot.refreshStatus === 'degraded') return 'refresh_failed';
@@ -830,8 +846,14 @@ export async function computePreTurnState(input: {
       runtime.resolveSituatedFallbackPlaceId?.(message),
     )
     : undefined;
-  const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn
-    ? await runtime.wikiRetrieval.retrieveContextBlock({
+  // mmo9.7.4: wiki retrieval mirrors active-memory — the turn reads a
+  // synchronous last-good cached snapshot and schedules an off-path refresh.
+  // It NEVER awaits embed+search on the foreground path. Cold/in-flight/failed
+  // state is explicit via a typed `wiki.retrieval.turn_degraded` event and the
+  // turn proceeds on last-good (or empty, preserving the fail-closed behavior).
+  const wikiRetrieval = runtime.wikiRetrieval;
+  const wikiRequest: WikiRetrievalRequest | null = wikiRetrieval && !bypassMemoryForVisionTurn
+    ? {
       channelId: message.channelId,
       queryText: memoryRetrievalContextText,
       isDirectMessage: channelMeta.isDirectMessage,
@@ -849,8 +871,47 @@ export async function computePreTurnState(input: {
         : {}),
       ...(currentSiteId ? { currentSiteId } : {}),
       correlation: turnCorrelationBase,
-    })
-    : '';
+    }
+    : null;
+  const wikiContext = wikiRetrieval && wikiRequest
+    ? wikiRetrieval.getWikiContextBlock(wikiRequest)
+    : null;
+  const wikiDegradedReason = wikiRetrieval && wikiRequest
+    ? resolveWikiTurnDegradedReason(wikiContext)
+    : null;
+  if (wikiDegradedReason) {
+    void runtime.eventBus.emit('wiki.retrieval.turn_degraded', {
+      channelId: message.channelId,
+      key: wikiContext?.key ?? 'unresolved',
+      reason: wikiDegradedReason,
+      refreshStatus: wikiContext?.refreshStatus === 'degraded'
+        || wikiContext?.refreshStatus === 'refreshing'
+        ? wikiContext.refreshStatus
+        : null,
+      turnId,
+      requestId,
+      ...(wikiContext?.lastRefreshError ? { lastRefreshError: wikiContext.lastRefreshError } : {}),
+      timestamp: Date.now(),
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit wiki turn degradation event', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(emitError),
+      });
+    });
+  }
+  if (wikiRetrieval && wikiRequest) {
+    void wikiRetrieval.refreshWikiContextBlock(wikiRequest).catch((error: unknown) => {
+      log.error('Wiki context refresh failed after scheduling', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(error),
+      });
+    });
+  }
+  const wikiContextBlock = wikiContext?.block ?? '';
   const scratchpadBlock = runtime.buildScratchpadContextBlock();
   observability.emitObservedTurnStage('memory', {
     durationMs: Date.now() - memoryStageStart,

@@ -8,6 +8,7 @@ import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js'
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
 } from './constants.js';
@@ -30,15 +31,21 @@ describe('ICP certification production-shape fixture', () => {
       loadAgentConfig(companion.env),
       { seedDir: companion.env.CONFIG_DIR },
     ));
+    const settings = JSON.parse(
+      readFileSync(join(fixture.systemDataDir, 'settings.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(settings.embeddingDims).toBe(CERTIFICATION_EMBEDDING_DIMS);
     expect(configA).toMatchObject({
       multiCompanion: true,
       companionId: CERTIFICATION_COMPANION_A,
+      embeddingDims: CERTIFICATION_EMBEDDING_DIMS,
       postgresSchema: CERTIFICATION_SCHEMA_A,
       persistenceBackend: 'postgres',
     });
     expect(configB).toMatchObject({
       multiCompanion: true,
       companionId: CERTIFICATION_COMPANION_B,
+      embeddingDims: CERTIFICATION_EMBEDDING_DIMS,
       postgresSchema: CERTIFICATION_SCHEMA_B,
       persistenceBackend: 'postgres',
     });

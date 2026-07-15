@@ -19,6 +19,7 @@ import {
   evaluateFreeTimeGate,
   evaluateFreeTimeLaneEligibility,
   FREE_TIME_CHANNEL_PREFIX,
+  FREE_TIME_IDLE_TASK_ID,
   FREE_TIME_QUIET_HOURS_TASK_ID,
   FREE_TIME_RETURN_NOTE_SOURCE,
   registerFreeTimeTasks,
@@ -296,7 +297,12 @@ describe('runFreeTimeBlock', () => {
 // ── Runtime registration integration ──
 
 interface FakeSessionManager {
-  resolveStartupSessionMetadata: () => { sessionId: string; channelType: string; timestamp: number } | null;
+  resolveStartupSessionMetadata: () => {
+    sessionId: string;
+    channelType: string;
+    timestamp: number;
+    lastRole?: SessionEntry['role'];
+  } | null;
   getRecentMessages: (channelId: string, limit?: number) => SessionEntry[];
   getRecentSessionEntries: (channelId: string, limit: number) => SessionEntry[];
   appendSystemNote: ReturnType<typeof vi.fn>;
@@ -356,6 +362,74 @@ function buildRuntime(options: {
 }
 
 describe('registerFreeTimeTasks', () => {
+  it.each([
+    ['quiet_hours', FREE_TIME_QUIET_HOURS_TASK_ID],
+    ['idle', FREE_TIME_IDLE_TASK_ID],
+  ] as const)('%s lane rejects recent partner metadata without reading session entries', async (lane, taskId) => {
+    const nowMs = lane === 'quiet_hours'
+      ? Date.parse('2026-06-11T06:00:00.000Z')
+      : Date.parse('2026-06-11T15:00:00.000Z');
+    const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
+      turnScript: ['should not run'],
+      config: freeTimeConfig({
+        quietHours: { enabled: lane === 'quiet_hours', checkIntervalMs: 1_000 },
+        idle: { enabled: lane === 'idle', checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    const getRecentMessages = vi.fn(() => []);
+    const getRecentSessionEntries = vi.fn(() => []);
+    sessionManager.resolveStartupSessionMetadata = () => ({
+      sessionId: 'api:main',
+      channelType: 'api',
+      timestamp: nowMs - 30 * 60_000,
+      lastRole: 'user',
+    });
+    sessionManager.getRecentMessages = getRecentMessages;
+    sessionManager.getRecentSessionEntries = getRecentSessionEntries;
+    const gateReasons: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => gateReasons.push(payload.reason));
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(taskId)?.handler;
+    if (!handler) throw new Error(`${lane} free-time task was not registered`);
+    await handler();
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(invokeTurn).not.toHaveBeenCalled();
+    expect(gateReasons).toEqual([`${lane}:partner_recently_active`]);
+  });
+
+  it('does not treat a recent system index row as recent partner activity', async () => {
+    const nowMs = Date.parse('2026-06-11T15:00:00.000Z');
+    const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      config: freeTimeConfig({
+        quietHours: { enabled: false, checkIntervalMs: 1_000 },
+        idle: { enabled: true, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    const originalGetRecentMessages = sessionManager.getRecentMessages;
+    const getRecentMessages = vi.fn(originalGetRecentMessages);
+    sessionManager.resolveStartupSessionMetadata = () => ({
+      sessionId: 'api:main',
+      channelType: 'api',
+      timestamp: nowMs - 30 * 60_000,
+      lastRole: 'system',
+    });
+    sessionManager.getRecentMessages = getRecentMessages;
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;
+    if (!handler) throw new Error('idle free-time task was not registered');
+    await handler();
+
+    expect(getRecentMessages).toHaveBeenCalledTimes(1);
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('runs a quiet-hours block only through an internal channel and never dispatches outward', async () => {
     let nowMs = Date.parse('2026-06-11T05:59:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
@@ -442,27 +516,81 @@ describe('registerFreeTimeTasks', () => {
     let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     try {
-      const { scheduler, invokeTurn, runtime } = buildRuntime({
+      const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
         turnScript: ['I wrote a little poem.', HEARTBEAT_SILENT_REFLECTION_TOKEN],
         freeTimeTranscript: [
           entry({ id: 10, role: 'assistant', timestamp: nowMs + 30_000, content: 'poem' }),
         ],
         now: () => nowMs,
       });
+      const originalGetRecentMessages = sessionManager.getRecentMessages;
+      const originalGetRecentSessionEntries = sessionManager.getRecentSessionEntries;
+      const getRecentMessages = vi.fn(originalGetRecentMessages);
+      const getRecentSessionEntries = vi.fn(originalGetRecentSessionEntries);
+      sessionManager.getRecentMessages = getRecentMessages;
+      sessionManager.getRecentSessionEntries = getRecentSessionEntries;
+      const gateReasons: string[] = [];
+      eventBus.on('scheduler.free_time.gate', payload => gateReasons.push(payload.reason));
       registerFreeTimeTasks(runtime);
 
       nowMs += 2_000; // let the poll interval elapse so the task is due
       await scheduler.tick();
       const firstCallCount = invokeTurn.mock.calls.length;
       expect(firstCallCount).toBeGreaterThan(0);
+      expect(getRecentMessages).toHaveBeenCalled();
+      expect(getRecentSessionEntries).toHaveBeenCalled();
+      getRecentMessages.mockClear();
+      getRecentSessionEntries.mockClear();
+      gateReasons.length = 0;
 
       // 30 minutes later — still inside the 240-minute min interval.
       nowMs += 30 * 60_000;
       await scheduler.tick();
       expect(invokeTurn.mock.calls.length).toBe(firstCallCount);
+      expect(getRecentMessages).not.toHaveBeenCalled();
+      expect(getRecentSessionEntries).not.toHaveBeenCalled();
+      expect(gateReasons).toContain('quiet_hours:min_block_interval');
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('enforces the shared daily cap before rereading an unchanged session', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      config: freeTimeConfig({
+        maxBlocksPerDay: 1,
+        quietHours: { enabled: true, checkIntervalMs: 1_000 },
+        idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    const originalGetRecentMessages = sessionManager.getRecentMessages;
+    const originalGetRecentSessionEntries = sessionManager.getRecentSessionEntries;
+    const getRecentMessages = vi.fn(originalGetRecentMessages);
+    const getRecentSessionEntries = vi.fn(originalGetRecentSessionEntries);
+    sessionManager.getRecentMessages = getRecentMessages;
+    sessionManager.getRecentSessionEntries = getRecentSessionEntries;
+    const gateReasons: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => gateReasons.push(payload.reason));
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    getRecentMessages.mockClear();
+    getRecentSessionEntries.mockClear();
+    gateReasons.length = 0;
+
+    nowMs += 5 * 60 * 60_000;
+    await handler();
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(getRecentSessionEntries).not.toHaveBeenCalled();
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(gateReasons).toEqual(['quiet_hours:daily_block_cap']);
   });
 
   it('emits a block event with visible spend and activity', async () => {

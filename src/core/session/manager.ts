@@ -188,7 +188,10 @@ export interface LegacyChatImportRunResult {
 export interface StartupSessionMetadata {
   sessionId: string;
   channelType?: string;
+  /** Timestamp of the session index's latest entry, regardless of role. */
   timestamp: number;
+  /** Role of the session-index entry at `timestamp`; absent for fresh sessions. */
+  lastRole?: SessionEntry['role'];
 }
 
 export interface SessionCoreMemoryProvider {
@@ -436,6 +439,7 @@ export class SessionManager {
         sessionId: summary.sessionId,
         channelType: summary.channelType,
         timestamp: summary.lastActivityAt,
+        lastRole: summary.lastRole,
       });
     }
     return active;
@@ -1645,6 +1649,7 @@ export class SessionManager {
       sessionId: latest.sessionId,
       channelType: latest.channelType,
       timestamp: latest.timestamp,
+      lastRole: latest.lastRole,
     };
   }
 }

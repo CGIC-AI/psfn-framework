@@ -133,6 +133,7 @@ export interface LatestSessionSummary {
   sessionId: string;
   timestamp: number;
   channelType?: string;
+  lastRole: SessionEntry['role'];
 }
 
 export interface SessionActivitySummary {
@@ -1828,6 +1829,7 @@ export class SessionStore implements TranscriptSearchPort {
       sessionId: latest.sessionId,
       timestamp: latest.lastActivityAt,
       channelType: latest.channelType,
+      lastRole: latest.lastRole,
     };
   }
   listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {

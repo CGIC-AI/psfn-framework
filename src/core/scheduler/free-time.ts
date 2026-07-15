@@ -60,6 +60,7 @@ import {
 import type { StartupSessionMetadata } from '../session/manager.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 
 const log = createComponentLogger('FreeTime');
 
@@ -405,6 +406,82 @@ function partnerActivityMinutes(decision: AmbientPresenceDecision, nowMs: number
   return Math.max(0, nowMs - at) / MINUTE_MS;
 }
 
+function evaluateFreeTimeGatePreflight(input: {
+  lane: FreeTimeLane;
+  session: StartupSessionMetadata | null;
+  restWindow: EpisodicProcessingRestWindowConfig;
+  idleMinIdleMinutes: number;
+  nowMs: number;
+  minutesSinceLastBlock: number;
+  blocksToday: number;
+  activeConversationGuardMinutes: number;
+  minBlockIntervalMinutes: number;
+  maxBlocksPerDay: number;
+}): GateDecision | null {
+  const evaluateLane = (recentEntries: readonly SessionEntry[]): AmbientPresenceDecision =>
+    evaluateFreeTimeLaneEligibility({
+      lane: input.lane,
+      session: input.session,
+      recentEntries,
+      restWindow: input.restWindow,
+      idleMinIdleMinutes: input.idleMinIdleMinutes,
+      nowMs: input.nowMs,
+    });
+  const evaluateGate = (laneDecision: AmbientPresenceDecision): GateDecision =>
+    evaluateFreeTimeGate({
+      laneEligible: laneDecision.allowed,
+      minutesSincePartnerActivity: partnerActivityMinutes(laneDecision, input.nowMs),
+      minutesSinceLastBlock: input.minutesSinceLastBlock,
+      blocksToday: input.blocksToday,
+      activeConversationGuardMinutes: input.activeConversationGuardMinutes,
+      minBlockIntervalMinutes: input.minBlockIntervalMinutes,
+      maxBlocksPerDay: input.maxBlocksPerDay,
+    });
+
+  const structuralDecision = evaluateLane([]);
+  if (
+    !structuralDecision.allowed
+    && (
+      structuralDecision.reason === 'no_recent_session'
+      || structuralDecision.reason === 'internal_session'
+      || structuralDecision.reason === 'privacy_boundary'
+    )
+  ) {
+    return evaluateGate(structuralDecision);
+  }
+
+  const latestConversation = conversationalEntryFromSessionMetadata(input.session);
+  if (latestConversation?.role === 'user') {
+    const gate = evaluateGate(evaluateLane([latestConversation]));
+    if (!gate.open) return gate;
+  }
+
+  const latestActivityMinutes = input.session && Number.isFinite(input.session.timestamp)
+    ? Math.max(0, input.nowMs - input.session.timestamp) / MINUTE_MS
+    : null;
+  // An old latest-any-role timestamp proves every partner turn is older too.
+  // Only then may cadence gates run early; partner recency must retain first
+  // priority whenever the metadata cannot disprove it.
+  if (
+    latestActivityMinutes === null
+    || latestActivityMinutes < Math.max(0, input.activeConversationGuardMinutes)
+  ) {
+    return null;
+  }
+  const cadenceGate = evaluateFreeTimeGate({
+    laneEligible: false,
+    minutesSincePartnerActivity: latestActivityMinutes,
+    minutesSinceLastBlock: input.minutesSinceLastBlock,
+    blocksToday: input.blocksToday,
+    activeConversationGuardMinutes: input.activeConversationGuardMinutes,
+    minBlockIntervalMinutes: input.minBlockIntervalMinutes,
+    maxBlocksPerDay: input.maxBlocksPerDay,
+  });
+  return cadenceGate.reason === 'min_block_interval' || cadenceGate.reason === 'daily_block_cap'
+    ? cadenceGate
+    : null;
+}
+
 async function surfaceReturnNote(
   options: FreeTimeRuntimeOptions,
   partnerSessionId: string,
@@ -466,18 +543,6 @@ function makeLaneHandler(
     const nowMs = now();
     const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
     const sessionId = session?.sessionId;
-    const recentEntries = sessionId
-      ? options.sessionManager.getRecentMessages(sessionId, 16)
-      : [];
-
-    const laneDecision = evaluateFreeTimeLaneEligibility({
-      lane,
-      session,
-      recentEntries,
-      restWindow: options.restWindow,
-      idleMinIdleMinutes: options.config.idle.minIdleMinutes,
-      nowMs,
-    });
 
     // Daily block counter resets on local-day rollover.
     const dayKey = localDateKey(nowMs, dayKeyTimeZone);
@@ -489,18 +554,44 @@ function makeLaneHandler(
     const activeConversationGuardMinutes = lane === 'idle'
       ? options.config.idle.minIdleMinutes
       : Math.max(1, options.restWindow.inactivityThresholdMinutes);
-
-    const gate = evaluateFreeTimeGate({
-      laneEligible: laneDecision.allowed,
-      minutesSincePartnerActivity: partnerActivityMinutes(laneDecision, nowMs),
-      minutesSinceLastBlock: state.lastBlockAtMs === undefined
-        ? NO_PRIOR_SENTINEL_MINUTES
-        : Math.max(0, nowMs - state.lastBlockAtMs) / MINUTE_MS,
+    const minutesSinceLastBlock = state.lastBlockAtMs === undefined
+      ? NO_PRIOR_SENTINEL_MINUTES
+      : Math.max(0, nowMs - state.lastBlockAtMs) / MINUTE_MS;
+    let gate = evaluateFreeTimeGatePreflight({
+      lane,
+      session,
+      restWindow: options.restWindow,
+      idleMinIdleMinutes: options.config.idle.minIdleMinutes,
+      nowMs,
+      minutesSinceLastBlock,
       blocksToday: state.blocksToday,
       activeConversationGuardMinutes,
       minBlockIntervalMinutes: options.config.minBlockIntervalMinutes,
       maxBlocksPerDay: options.config.maxBlocksPerDay,
     });
+
+    if (!gate) {
+      const recentEntries = sessionId
+        ? options.sessionManager.getRecentMessages(sessionId, 16)
+        : [];
+      const laneDecision = evaluateFreeTimeLaneEligibility({
+        lane,
+        session,
+        recentEntries,
+        restWindow: options.restWindow,
+        idleMinIdleMinutes: options.config.idle.minIdleMinutes,
+        nowMs,
+      });
+      gate = evaluateFreeTimeGate({
+        laneEligible: laneDecision.allowed,
+        minutesSincePartnerActivity: partnerActivityMinutes(laneDecision, nowMs),
+        minutesSinceLastBlock,
+        blocksToday: state.blocksToday,
+        activeConversationGuardMinutes,
+        minBlockIntervalMinutes: options.config.minBlockIntervalMinutes,
+        maxBlocksPerDay: options.config.maxBlocksPerDay,
+      });
+    }
 
     if (options.eventBus) {
       void options.eventBus.emit(FREE_TIME_GATE_EVENT, {

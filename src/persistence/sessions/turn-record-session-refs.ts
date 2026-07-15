@@ -49,7 +49,7 @@ import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../
  * record's inline `recentEntries` is still redaction-gated against L0 on read
  * (see gateInlineRecentEntries), because leaving frozen L0 plaintext ungated
  * would resurrect a since-redacted entry — the exact pathology this epic closes.
- * one documented deviation: unlike the immutable content-addressed sidecars
+ * The one documented deviation: unlike the immutable content-addressed sidecars
  * (dangling ref = fail closed), an L0 entry that is legitimately absent on
  * re-read (redacted-as-tombstone / tombstoned / rolled off by L0 rolling) is
  * EXPECTED and heals (the entry is dropped) rather than throwing — L0 entries

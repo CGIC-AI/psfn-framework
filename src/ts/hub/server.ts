@@ -494,8 +494,13 @@ class RealtimeConnection {
       });
       return;
     }
+    const previousReply = this.replyTask;
     if (message.interrupt !== false) {
       await this.cancelReply("typed_user_text");
+      // SAFETY: inbound protocol messages stay serialized, but a model reply
+      // must not hold that queue. Wait only for the already-aborted reply to
+      // settle before appending the replacement turn so history stays ordered.
+      await previousReply?.catch(() => undefined);
     } else if (this.replyTask && !this.replyAbort) {
       await this.send({
         type: "error-event",
@@ -538,13 +543,7 @@ class RealtimeConnection {
     });
 
     this.sessions.append(this.sessionId, { role: "user", content: userText });
-    const task = this.runReply(turn, userText, "text");
-    this.replyTask = task;
-    await task.finally(() => {
-      if (this.replyTask === task) {
-        this.replyTask = null;
-      }
-    });
+    this.startReply(turn, userText, "text");
   }
 
   private async handleTextSignal(signal: string): Promise<void> {
@@ -816,13 +815,29 @@ class RealtimeConnection {
     }
 
     this.sessions.append(this.sessionId, { role: "user", content: event.text });
-    const task = this.runReply(turn, event.text, "voice");
+    this.startReply(turn, event.text, "voice");
+  }
+
+  private startReply(
+    turn: ArtifactTurn,
+    transcript: string,
+    inputMode: FrameworkReplyInputMode,
+  ): void {
+    const task = this.runReply(turn, transcript, inputMode);
     this.replyTask = task;
-    await task.finally(() => {
+    void this.observeReplyTask(task);
+  }
+
+  private async observeReplyTask(task: Promise<void>): Promise<void> {
+    try {
+      await task;
+    } catch (error) {
+      console.error("Realtime reply task failed:", error);
+    } finally {
       if (this.replyTask === task) {
         this.replyTask = null;
       }
-    });
+    }
   }
 
   private async runReply(

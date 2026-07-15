@@ -100,7 +100,67 @@ test("authenticated user.text forwards an explicit text reply mode", async () =>
   }
 });
 
-function config(): HubConfig {
+test("authenticated realtime replacement and interrupt preempt active replies without blocking the message queue", async () => {
+  const replyAgent = new BlockingAgent();
+  const server = new RealtimeHubServer(config({ allowInterrupt: true }), { agent: replyAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", (raw) => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello",
+      deviceId: "office-device",
+      deviceName: "Office Device",
+      credential,
+      capabilities: { input: ["text"], output: ["text"], control: ["interrupt"], safety: [] },
+    }));
+    await waitFor(() => messages.some((message) => message.type === "hello.ack"));
+
+    socket.send(JSON.stringify({ type: "user.text", text: "block replacement" }));
+    await waitFor(() => replyAgent.calls.length === 1);
+    socket.send(JSON.stringify({ type: "user.text", text: "replacement" }));
+    await waitFor(() => replyAgent.aborted.includes("block replacement"));
+    await waitFor(() => finalAssistantMessages(messages).includes("reply:replacement"));
+
+    socket.send(JSON.stringify({ type: "user.text", text: "block explicit interrupt" }));
+    await waitFor(() => replyAgent.calls.length === 3);
+    socket.send(JSON.stringify({ type: "interrupt" }));
+    await waitFor(() => replyAgent.aborted.includes("block explicit interrupt"));
+    await waitFor(() => messages.some((message) => message.type === "assistant.interrupted"));
+
+    socket.send(JSON.stringify({ type: "user.text", text: "after interrupt" }));
+    await waitFor(() => finalAssistantMessages(messages).includes("reply:after interrupt"));
+
+    assert.deepEqual(replyAgent.calls.map((call) => call.userText), [
+      "block replacement",
+      "replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
+    assert.deepEqual(replyAgent.calls[1]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+    ]);
+    assert.deepEqual(replyAgent.calls[3]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+      "reply:replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
+  } finally {
+    socket.close();
+    await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
+function config(options: { allowInterrupt?: boolean } = {}): HubConfig {
   return {
     textOnlyMode: true, bindHost: "127.0.0.1", port: 0,
     deepgramApiKey: null, elevenlabsApiKey: null, elevenlabsVoiceId: null,
@@ -117,7 +177,12 @@ function config(): HubConfig {
       satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
       credentialSha256: createHash("sha256").update(credential).digest("hex"),
       homeAssistantEntityIds: [],
-      maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+      maxCapabilities: {
+        input: ["text"],
+        output: ["text"],
+        control: options.allowInterrupt ? ["interrupt"] : [],
+        safety: ["local_only"],
+      },
     }] },
     voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,
       chatId: null, assistantId: "assistant", assistantName: "Assistant", userId: "user", userName: "User",
@@ -129,6 +194,45 @@ function config(): HubConfig {
 
 function agent(): FrameworkAgentAdapter {
   return { async *streamReply() { return ""; }, async close() {} };
+}
+
+type ReplyInput = Parameters<FrameworkAgentAdapter["streamReply"]>[0];
+
+class BlockingAgent implements FrameworkAgentAdapter {
+  readonly calls: ReplyInput[] = [];
+  readonly aborted: string[] = [];
+
+  async *streamReply(input: ReplyInput): AsyncGenerator<string, string, void> {
+    this.calls.push(input);
+    if (input.userText.startsWith("block")) {
+      await new Promise<void>((_resolve, reject) => {
+        const onAbort = (): void => {
+          this.aborted.push(input.userText);
+          reject(input.signal?.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        if (input.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        input.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+    const response = `reply:${input.userText}`;
+    yield response;
+    return response;
+  }
+
+  async close(): Promise<void> {}
+}
+
+function finalAssistantMessages(messages: HubToClientMessage[]): string[] {
+  return messages.flatMap((message) => (
+    message.type === "message"
+      && message.data.role === "assistant"
+      && message.data.final === true
+      ? [message.data.content]
+      : []
+  ));
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

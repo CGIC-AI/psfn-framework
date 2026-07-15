@@ -423,6 +423,7 @@ class VoxtaConnection {
   private readonly voxtaContexts = new Map<string, string[]>();
   private replyAbort = false;
   private replySequence = 0;
+  private replyTask: Promise<void> | null = null;
   private replyAbortController: AbortController | null = null;
   private keepAlive: NodeJS.Timeout | null = null;
 
@@ -705,6 +706,14 @@ class VoxtaConnection {
     this.attachSatellite();
     this.registerSession();
 
+    const previousReply = this.replyTask;
+    if (previousReply) {
+      this.cancelReply();
+      // SAFETY: SignalR frames stay serialized, but the long model request is
+      // observed outside that queue. Await only its cancellation settlement so
+      // the replacement user turn cannot enter the prior reply's history.
+      await previousReply.catch(() => undefined);
+    }
     this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
     if (!shouldReplyToVoxtaSend(input, payload.doReply)) {
       await this.sendReceive({
@@ -716,22 +725,43 @@ class VoxtaConnection {
       return;
     }
     const replyTask = this.streamAssistantReply(input.promptText);
-    await replyTask;
-    await this.sendCompletion(invocationId);
+    this.replyTask = replyTask;
+    void this.observeReplyTask(replyTask, invocationId).catch((error) => {
+      console.error("Voxta reply observer failed:", error);
+    });
   }
 
   private async handleInterrupt(invocationId: string | undefined, _payload: VoxtaClientPayload): Promise<void> {
-    this.cancelReply();
+    const hadActiveReply = this.cancelReply();
     await this.sendReceive({
       $type: "interruptSpeech",
       sessionId: this.sessionId,
     });
-    await this.sendReceive({
-      $type: "replyCancelled",
-      sessionId: this.sessionId,
-      messageId: crypto.randomUUID(),
-    });
+    if (!hadActiveReply) {
+      await this.sendReceive({
+        $type: "replyCancelled",
+        sessionId: this.sessionId,
+        messageId: crypto.randomUUID(),
+      });
+    }
     await this.sendCompletion(invocationId);
+  }
+
+  private async observeReplyTask(task: Promise<void>, invocationId: string | undefined): Promise<void> {
+    try {
+      await task;
+      await this.sendCompletion(invocationId);
+    } catch (error) {
+      console.error("Voxta message handling failed:", error);
+      await this.sendReceive({
+        $type: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (this.replyTask === task) {
+        this.replyTask = null;
+      }
+    }
   }
 
   private async handleUpdateContext(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
@@ -1071,10 +1101,12 @@ class VoxtaConnection {
     }
   }
 
-  private cancelReply(): void {
+  private cancelReply(): boolean {
+    const hadActiveReply = this.replyAbortController !== null;
     this.replyAbort = true;
     this.replySequence += 1;
     this.replyAbortController?.abort(new DOMException("voxta reply cancelled", "AbortError"));
+    return hadActiveReply;
   }
 
   private characterSummary(): Record<string, unknown> {

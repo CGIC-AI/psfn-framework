@@ -47,6 +47,35 @@ class FakeAgent implements FrameworkAgentAdapter {
   async close(): Promise<void> {}
 }
 
+type AgentReplyInput = Parameters<FrameworkAgentAdapter["streamReply"]>[0];
+
+class BlockingVoxtaAgent implements FrameworkAgentAdapter {
+  readonly calls: AgentReplyInput[] = [];
+  readonly aborted: string[] = [];
+
+  async *streamReply(input: AgentReplyInput): AsyncGenerator<string, string, void> {
+    this.calls.push(input);
+    if (input.userText.startsWith("block")) {
+      await new Promise<void>((_resolve, reject) => {
+        const onAbort = (): void => {
+          this.aborted.push(input.userText);
+          reject(input.signal?.reason ?? new DOMException("aborted", "AbortError"));
+        };
+        if (input.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        input.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+    const response = `reply:${input.userText}`;
+    yield response;
+    return response;
+  }
+
+  async close(): Promise<void> {}
+}
+
 test("Voxta facade negotiates SignalR and routes SendMessage into the embodied session", async () => {
   const agent = new FakeAgent();
   const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
@@ -158,6 +187,88 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
     assert.ok(
       agent.calls[0]?.channel?.activeSatellites[0]?.capabilities.output.includes("action"),
     );
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta replacement and interrupt frames preempt active replies without blocking SignalR", async () => {
+  const agent = new BlockingVoxtaAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-preempt", acidBubblesAuthenticate())));
+    await waitForCompletion(frames, "auth-preempt");
+    socket.send(encodeFrame(invocation("start-preempt", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-preempt");
+
+    socket.send(encodeFrame(invocation("send-block-replacement", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "block replacement",
+    })));
+    await waitForCondition(() => agent.calls.length === 1);
+    socket.send(encodeFrame(invocation("send-replacement", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "replacement",
+    })));
+    await waitForCondition(() => agent.aborted.includes("block replacement"));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:replacement");
+    await waitForCompletion(frames, "send-replacement");
+
+    socket.send(encodeFrame(invocation("send-block-interrupt", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "block explicit interrupt",
+    })));
+    await waitForCondition(() => agent.calls.length === 3);
+    socket.send(encodeFrame(invocation("interrupt-active", {
+      $type: "interrupt",
+      sessionId: chatStarted.sessionId,
+    })));
+    await waitForCondition(() => agent.aborted.includes("block explicit interrupt"));
+    await waitForVoxta(frames, "interruptSpeech");
+    await waitForCompletion(frames, "interrupt-active");
+
+    socket.send(encodeFrame(invocation("send-after-interrupt", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "after interrupt",
+    })));
+    await waitForVoxta(frames, "replyChunk", (payload) => payload.text === "reply:after interrupt");
+    await waitForCompletion(frames, "send-after-interrupt");
+
+    assert.deepEqual(agent.calls.map((call) => call.userText), [
+      "block replacement",
+      "replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+    ]);
+    assert.deepEqual(agent.calls[3]?.history?.map((message) => message.content), [
+      "block replacement",
+      "replacement",
+      "reply:replacement",
+      "block explicit interrupt",
+      "after interrupt",
+    ]);
   } finally {
     socket?.close();
     await server.close();
@@ -1053,6 +1164,15 @@ async function waitForFrame(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail(`Timed out waiting for SignalR frame. Received: ${JSON.stringify(frames)}`);
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("Timed out waiting for condition");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

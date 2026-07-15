@@ -146,6 +146,7 @@ test("loadPsfnRuntime fails closed on malformed or contradictory reply budgets",
     withPsfnEnv({
       PSFN_API_BASE_URL: "https://psfn.example/v1",
       PSFN_TEXT_REPLY_DEADLINE_MS: invalidValue,
+      PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "1",
     }, () => {
       assert.throws(
         () => loadPsfnRuntime(process.cwd()),
@@ -156,11 +157,40 @@ test("loadPsfnRuntime fails closed on malformed or contradictory reply budgets",
 
   withPsfnEnv({
     PSFN_API_BASE_URL: "https://psfn.example/v1",
-    PSFN_TEXT_REPLY_DEADLINE_MS: "2147483648",
+    PSFN_VOICE_REPLY_DEADLINE_MS: "2147483648",
+    PSFN_VOICE_ATTEMPT_TIMEOUT_MS: "1",
   }, () => {
     assert.throws(
       () => loadPsfnRuntime(process.cwd()),
-      /PSFN_TEXT_REPLY_DEADLINE_MS must not exceed 2147483647 ms/,
+      /PSFN_VOICE_REPLY_DEADLINE_MS must not exceed 2147483647 ms/,
+    );
+  });
+
+  for (const oneSidedConfig of [
+    { PSFN_VOICE_REPLY_DEADLINE_MS: "8000" },
+    { PSFN_VOICE_ATTEMPT_TIMEOUT_MS: "6000" },
+    { PSFN_TEXT_REPLY_DEADLINE_MS: "80000" },
+    { PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "75000" },
+  ]) {
+    withPsfnEnv({
+      PSFN_API_BASE_URL: "https://psfn.example/v1",
+      ...oneSidedConfig,
+    }, () => {
+      assert.throws(
+        () => loadPsfnRuntime(process.cwd()),
+        /PSFN_(?:VOICE|TEXT)_REPLY_DEADLINE_MS and PSFN_(?:VOICE|TEXT)_ATTEMPT_TIMEOUT_MS must be configured together/,
+      );
+    });
+  }
+
+  withPsfnEnv({
+    PSFN_API_BASE_URL: "https://psfn.example/v1",
+    PSFN_TEXT_REPLY_DEADLINE_MS: "80001",
+    PSFN_TEXT_ATTEMPT_TIMEOUT_MS: "75000",
+  }, () => {
+    assert.throws(
+      () => loadPsfnRuntime(process.cwd()),
+      /PSFN_TEXT_REPLY_DEADLINE_MS must not exceed 80000 ms/,
     );
   });
 

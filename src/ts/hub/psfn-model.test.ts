@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import https from "node:https";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import type { PsfnChannelContext } from "./embodied-session.js";
@@ -576,6 +581,88 @@ test("psfn model adapter cancels an in-flight fallback on client disconnect and 
   }
 });
 
+test("mTLS transport aborts stalled response bodies on deadline and external cancellation", async () => {
+  const certificateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-mtls-timeout-"));
+  const certPath = path.join(certificateRoot, "test-cert.pem");
+  const keyPath = path.join(certificateRoot, "test-key.pem");
+  fs.writeFileSync(certPath, TEST_TLS_CERTIFICATE);
+  fs.writeFileSync(keyPath, TEST_TLS_PRIVATE_KEY);
+
+  let requestCount = 0;
+  let closedResponseCount = 0;
+  const server = https.createServer({
+    key: TEST_TLS_PRIVATE_KEY,
+    cert: TEST_TLS_CERTIFICATE,
+    ca: TEST_TLS_CERTIFICATE,
+    requestCert: true,
+    rejectUnauthorized: true,
+  }, (request, response) => {
+    requestCount += 1;
+    request.resume();
+    response.once("close", () => {
+      closedResponseCount += 1;
+    });
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.flushHeaders();
+    response.write('{"choices":[{"message":{"role":"assistant","content":"');
+    // Intentionally never complete the JSON body. Cancellation must destroy
+    // this response stream after headers, not merely abort before headers.
+  });
+  server.on("clientError", (_error, socket) => socket.destroy());
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  const runtime = buildRuntimeConfig({
+    baseUrl: `https://127.0.0.1:${address.port}`,
+    voiceReplyDeadlineMs: 60,
+    voiceAttemptTimeoutMs: 30,
+    textReplyDeadlineMs: 200,
+    textAttemptTimeoutMs: 150,
+  });
+  runtime.satelliteClaim = {
+    ...runtime.satelliteClaim,
+    tls: { certPath, keyPath, caPath: certPath },
+  };
+  const adapter = new PsfnModelAdapter(runtime, () => {});
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "voice",
+        userText: "deadline",
+        conversationId: "mtls-deadline",
+        history: [],
+      }),
+      /did not produce assistant content within 60 ms/,
+    );
+    await waitForCondition(() => requestCount === 2 && closedResponseCount === 2);
+
+    const controller = new AbortController();
+    const cancelledReply = drainReply(adapter, {
+      inputMode: "text",
+      userText: "external cancel",
+      conversationId: "mtls-external-cancel",
+      history: [],
+      signal: controller.signal,
+    });
+    await waitForCondition(() => requestCount === 3);
+    controller.abort(new DOMException("test external cancellation", "AbortError"));
+    await assert.rejects(cancelledReply, (error: unknown) => (
+      error instanceof Error
+      && error.name === "AbortError"
+      && error.message === "test external cancellation"
+    ));
+    await waitForCondition(() => closedResponseCount === 3);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(certificateRoot, { recursive: true, force: true });
+  }
+});
+
 test("psfn model adapter retries transient agent_busy responses", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
@@ -656,3 +743,70 @@ function delayedResponse(delayMs: number, body: string, signal?: AbortSignal | n
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
+
+async function drainReply(
+  adapter: PsfnModelAdapter,
+  input: Parameters<PsfnModelAdapter["streamReply"]>[0],
+): Promise<void> {
+  for await (const _chunk of adapter.streamReply(input)) {
+    // drain
+  }
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail("Timed out waiting for condition");
+}
+
+const TEST_TLS_CERTIFICATE = `-----BEGIN CERTIFICATE-----
+MIIDJTCCAg2gAwIBAgIUfT/pEOJZABz3h2of3OMWkCcd3wcwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcxNTEzMDA0NFoXDTM2MDcx
+MjEzMDA0NFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAyLpEARFLGQhc5XoPsdup2VpXf+h5CEL75ld6F1FYblDd
+bozJtd275QNDSeb5FiugegClvz6Ft6/BhRVSeAZdrw2GnvSO6xYhM+QXEcLZE+/7
+xfSbBBrRe78X2K0vI8xpCdInrvawyZ3QWckmVH6Ws10io3z7/vPH36PtHVFGC0ia
+yCeo/BHyRcA+WspNRXklSu1kwt9mu5z5XK6i8YmtzUJ5n719x8METgJ1Knv8+76P
+pHvWYstgp1r7R1lrXWtCXGucGOHUV6xZSdkK6whRsra+Ro5bciXv4vDA0S/bwKZt
+sWIEc1lZ6ShRf3v4or4unKnYNsmvMJKb/2qEmkAd7QIDAQABo28wbTAdBgNVHQ4E
+FgQU57Bd2sp7KFi7YhVwwwySvMNpPT4wHwYDVR0jBBgwFoAU57Bd2sp7KFi7YhVw
+wwySvMNpPT4wDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SH
+BH8AAAEwDQYJKoZIhvcNAQELBQADggEBAMP/BgeFXVShwMViRgn3oPxHQrj0dcV7
+D8pLjV6tb6WW9ct4KK+ZIRgoWoSUmJl8qYvlD6YGBVWQRocYLfUvRaC0LzrdSI6K
+rwtIRbtJIV4wLholaGYbh5mCvfFuPnOVmZCXei0hm23c/T+MWMvqY24JOlC111g7
+vz7xJ/QYNmgwRClZld5iSQiK9OIebMqbNpQrQK+MiML0NYZzUcjgA+fgwWv8Uxbz
+6NcwgByhiZgcELxTiH91NIiitz4WrQMKCMVvN91kk9t1gY6jtbaPJhsaB5rPlzeq
+UB6LjoWKfuaJ3JCaLXOlrGHxgGySAL4EhmtKJJyy6Leuzit63Jekmug=
+-----END CERTIFICATE-----`;
+
+const TEST_TLS_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDIukQBEUsZCFzl
+eg+x26nZWld/6HkIQvvmV3oXUVhuUN1ujMm13bvlA0NJ5vkWK6B6AKW/PoW3r8GF
+FVJ4Bl2vDYae9I7rFiEz5BcRwtkT7/vF9JsEGtF7vxfYrS8jzGkJ0ieu9rDJndBZ
+ySZUfpazXSKjfPv+88ffo+0dUUYLSJrIJ6j8EfJFwD5ayk1FeSVK7WTC32a7nPlc
+rqLxia3NQnmfvX3HwwROAnUqe/z7vo+ke9Ziy2CnWvtHWWtda0Jca5wY4dRXrFlJ
+2QrrCFGytr5GjltyJe/i8MDRL9vApm2xYgRzWVnpKFF/e/iivi6cqdg2ya8wkpv/
+aoSaQB3tAgMBAAECggEAAM1t1CtDh5gW9vvj8CwWo73Ot74wLa5G34beABXdKqO8
+HuMFM2rtg17d9/+qY0JNY+94uij/09oqBeQt7jjoSvjc3unPYHU4MMLqrLGAuKmu
+8f2mWP/acoozCDS5CYWZreZfLj3iOwwcdx9svc27wH/Q0aKAR2amF+jJ2+IlS4o+
+8zXCP0qGbzZoOQZbM0n5/az1vHBnBlUokj0lL8y2nsqoknUvT2JdNEffzSIKk2AO
+X4NLNMIKG5rKq59MeuG9WZozg4PWoDe+h88+jcoMc7rk7U6yaAwq7+rcCfXrgfjx
++26BGEOQKyQOS0PFsN8BpEoZABWjym685+2h8fcowQKBgQDxuDvjN2hlmOnBxcNQ
+qyXy8hILyuLk48kTI4/42W+fO4yXQOh2DmN5fmBfEpL3nZ/xV5U4DL+YfTn+SOWV
++lPMEvGWe5POMkm4YfV4pIgOAWd12owK761ykz9KPrhG+KglvCJzNFDpqecTI8jA
+3MRhpXjTLzkKLw9UM3FQy+PgiQKBgQDUlhFuwfQTxWuOuZdgnRVdremaC2Sah4bN
+aEwsGidTcyXlMCs94rrQiDpvAJ0XhopYXtBrefVwksbTjSOcifYDodqkLoxrtaJi
+zrRQxuOxWA4nAOVH9ylcAblSmF6yMwgYsGBGPG+WpKdqA7JIu4YAdngQk6RO81Ee
+G5HA5q+RRQKBgEMKx0l497KeG8+Ly2VXYtokO88bgZzcdMujJG5v2F7AxHi7Hv6H
+dR2gaJhV7X9SL6dflFqMZqOjr+8QRuU3HgDPDEShl9gr6HiEavIAKGBCEXEFoavy
+2BecMYSlKrU8iF6W9LMhQoPchOOxHCAp2yn+HCnuwhJKBSVkczxmoJiJAoGBAJsa
+gs2UpUhnmfogXtoWwif/Y5kJBvXYO/pSRoFG87pnIRb+9g3JBxRu0HN8tyEbAIVJ
+aDeCXBkuffKL35eu8Nfll2iCreFIPJpqxhTJiAc0f97lQGQpaPvAJj6k/TJ3GUkq
+JpQYNDJtH9ixqbp3V2WvChrOHeuci2q0Irvjk+UhAoGAHmz7vz3/2vnUCl/rIubE
+Xd3JhHpN1z6fUlJ7JiS8CEMqUivXu1jP4HRMGTJ0LN/zzDxiYzPcGhXJNJztpJ6f
+qr60QKLGS7zUfVl5Ruc3j49A3P9sSwfpn/WaarnEEkIuowpfR5b030mT1NehYkv1
+6zqit3QdaW+hsr73CJymx8U=
+-----END PRIVATE KEY-----`;

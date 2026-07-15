@@ -287,6 +287,13 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
         reject(abortReason(signal));
         return;
       }
+      let responseMessage: IncomingMessage | undefined;
+      let cleanedUp = false;
+      const cleanup = (): void => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        signal?.removeEventListener("abort", onAbort);
+      };
       const request = https.request(
         url,
         {
@@ -300,15 +307,20 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           ...(tls.caPath ? { ca: fs.readFileSync(tls.caPath) } : {}),
         },
         (message) => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve(responseFromIncomingMessage(message));
+          responseMessage = message;
+          message.once("close", cleanup);
+          message.once("end", cleanup);
+          message.once("error", cleanup);
+          resolve(responseFromIncomingMessage(message, cleanup));
         },
       );
       const onAbort = (): void => {
-        request.destroy(abortReason(signal));
+        const reason = abortReason(signal);
+        responseMessage?.destroy(reason);
+        request.destroy(reason);
       };
       request.on("error", (error) => {
-        signal?.removeEventListener("abort", onAbort);
+        cleanup();
         reject(error);
       });
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -626,20 +638,28 @@ function responseFromText(status: number, body: string): CompletionResponse {
   };
 }
 
-function responseFromIncomingMessage(message: IncomingMessage): CompletionResponse {
+function responseFromIncomingMessage(message: IncomingMessage, onConsumed: () => void = () => {}): CompletionResponse {
   return {
     ok: Boolean(message.statusCode && message.statusCode >= 200 && message.statusCode < 300),
     status: message.statusCode ?? 0,
     text: async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of message) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of message) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        return Buffer.concat(chunks).toString("utf8");
+      } finally {
+        onConsumed();
       }
-      return Buffer.concat(chunks).toString("utf8");
     },
     chunks: async function* chunks() {
-      for await (const chunk of message) {
-        yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      try {
+        for await (const chunk of message) {
+          yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        }
+      } finally {
+        onConsumed();
       }
     },
   };

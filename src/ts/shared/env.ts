@@ -198,21 +198,30 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
     },
     tls: loadPsfnClientCertificateConfig(projectRoot),
   });
-  const voiceReplyDeadlineMs = parseStrictPositiveIntegerEnv("PSFN_VOICE_REPLY_DEADLINE_MS", 8_000);
-  const voiceAttemptTimeoutMs = parseStrictPositiveIntegerEnv("PSFN_VOICE_ATTEMPT_TIMEOUT_MS", 6_000);
-  const textReplyDeadlineMs = parseStrictPositiveIntegerEnv("PSFN_TEXT_REPLY_DEADLINE_MS", 80_000);
-  const textAttemptTimeoutMs = parseStrictPositiveIntegerEnv("PSFN_TEXT_ATTEMPT_TIMEOUT_MS", 75_000);
+  const voiceBudget = loadReplyBudget(
+    "PSFN_VOICE_REPLY_DEADLINE_MS",
+    "PSFN_VOICE_ATTEMPT_TIMEOUT_MS",
+    8_000,
+    6_000,
+  );
+  const textBudget = loadReplyBudget(
+    "PSFN_TEXT_REPLY_DEADLINE_MS",
+    "PSFN_TEXT_ATTEMPT_TIMEOUT_MS",
+    80_000,
+    75_000,
+    80_000,
+  );
   validateReplyBudget(
     "PSFN_VOICE_ATTEMPT_TIMEOUT_MS",
-    voiceAttemptTimeoutMs,
+    voiceBudget.attemptTimeoutMs,
     "PSFN_VOICE_REPLY_DEADLINE_MS",
-    voiceReplyDeadlineMs,
+    voiceBudget.replyDeadlineMs,
   );
   validateReplyBudget(
     "PSFN_TEXT_ATTEMPT_TIMEOUT_MS",
-    textAttemptTimeoutMs,
+    textBudget.attemptTimeoutMs,
     "PSFN_TEXT_REPLY_DEADLINE_MS",
-    textReplyDeadlineMs,
+    textBudget.replyDeadlineMs,
   );
   return {
     model,
@@ -220,10 +229,10 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
     apiKey,
     channelType: satelliteClaim.channelType,
     satelliteClaim,
-    voiceReplyDeadlineMs,
-    voiceAttemptTimeoutMs,
-    textReplyDeadlineMs,
-    textAttemptTimeoutMs,
+    voiceReplyDeadlineMs: voiceBudget.replyDeadlineMs,
+    voiceAttemptTimeoutMs: voiceBudget.attemptTimeoutMs,
+    textReplyDeadlineMs: textBudget.replyDeadlineMs,
+    textAttemptTimeoutMs: textBudget.attemptTimeoutMs,
   };
 }
 
@@ -389,6 +398,26 @@ function parseStrictPositiveIntegerEnv(name: string, fallback: number): number {
     throw new Error(`${name} must not exceed ${MAX_NODE_TIMER_MS} ms`);
   }
   return parsed;
+}
+
+function loadReplyBudget(
+  deadlineName: string,
+  attemptName: string,
+  defaultDeadlineMs: number,
+  defaultAttemptTimeoutMs: number,
+  maxDeadlineMs?: number,
+): { replyDeadlineMs: number; attemptTimeoutMs: number } {
+  const deadlineConfigured = optional(deadlineName) !== undefined;
+  const attemptConfigured = optional(attemptName) !== undefined;
+  if (deadlineConfigured !== attemptConfigured) {
+    throw new Error(`${deadlineName} and ${attemptName} must be configured together`);
+  }
+  const replyDeadlineMs = parseStrictPositiveIntegerEnv(deadlineName, defaultDeadlineMs);
+  const attemptTimeoutMs = parseStrictPositiveIntegerEnv(attemptName, defaultAttemptTimeoutMs);
+  if (maxDeadlineMs !== undefined && replyDeadlineMs > maxDeadlineMs) {
+    throw new Error(`${deadlineName} must not exceed ${maxDeadlineMs} ms`);
+  }
+  return { replyDeadlineMs, attemptTimeoutMs };
 }
 
 function validateReplyBudget(

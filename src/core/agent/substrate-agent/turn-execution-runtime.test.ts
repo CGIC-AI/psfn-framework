@@ -819,6 +819,108 @@ describe('handleMessageForTurn intentional no-reply', () => {
   });
 });
 
+describe('handleMessageForTurn outbound reply hygiene', () => {
+  it('strips mimicked history stamps before persistence and channel dispatch', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    // The model mimicked the rendered-history stamp prefix on its own reply
+    // (psfn-framework-2x37.10): the accepted turn text must reach persistence
+    // and AgentResponse.content clean, on every line, including doubled stamps.
+    runtime.extractResponseText = vi.fn(
+      () => '[Mon 07-13-26 14:32] the kettle is on\n[Mon 07-13-26 14:32] [Mon 07-13-26 14:33] tea in five',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-stamped'));
+
+    expect(response.content).toBe('the kettle is on\ntea in five');
+    expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe('the kettle is on\ntea in five');
+  });
+
+  it('leaves a stamp quoted mid-sentence in the reply untouched', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    const quoted = 'you sent that at [Mon 07-13-26 14:32] if I remember right';
+    runtime.extractResponseText = vi.fn(() => quoted);
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-quoted-stamp'));
+
+    expect(response.content).toBe(quoted);
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(quoted);
+  });
+
+  it('rejects an image-attachment claim when no attachment exists this turn', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => '*image attached*\nFresh selfie, exactly like you asked for.',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-false-image-claim'));
+
+    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
+      + 'I need to call selfie_create or generate_image before saying an image is attached.';
+    expect(response.content).toBe(correction);
+    expect(response.attachments).toBeUndefined();
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(correction);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-false-image-claim',
+      }),
+    );
+  });
+});
+
 describe('handleMessageForTurn generated media delivery', () => {
   it('turns successful media tool results into response attachments for chat egress', async () => {
     const eventBus = new EventBus();

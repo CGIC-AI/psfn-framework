@@ -92,6 +92,8 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/skills.seed.json ./data/skills.json
    ```
 
+   The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
+
 3. Provision the intake firewall's L1.5 prompt-injection classifier model (optional but recommended; ~704 MiB, gitignored, never downloaded at runtime):
 
    ```bash

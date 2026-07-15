@@ -101,6 +101,12 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 
 const tempDirs: string[] = [];
 
+// Mirrors client-prompt-cache's provider-facing session token: raw channel /
+// request ids are hashed before they reach provider adapters.
+function providerCacheSessionId(raw: string): string {
+  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -957,7 +963,7 @@ describe('LLMClient prompt caching', () => {
     expect(model.api).toBe('openai-responses');
     expect(requestOptions).toMatchObject({
       cacheRetention: 'long',
-      sessionId: 'discord:cache-channel',
+      sessionId: providerCacheSessionId('discord:cache-channel'),
     });
     expect(response.providerObservability).toMatchObject({
       backendApi: 'openai-responses',
@@ -967,7 +973,7 @@ describe('LLMClient prompt caching', () => {
         strategy: 'openai_responses',
         retention: 'long',
         scope: 'channel',
-        sessionId: 'discord:cache-channel',
+        sessionId: providerCacheSessionId('discord:cache-channel'),
       },
     });
   });
@@ -1134,7 +1140,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
     expect(typeof requestOptions.onPayload).toBe('function');
 
     // Exercise the transformer against the completions payload shape pi-ai builds.
@@ -1163,7 +1169,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
         mechanism: 'openrouter_cache_control_passthrough',
         retention: 'short',
         scope: 'channel',
-        sessionId: 'discord:e24-channel',
+        sessionId: providerCacheSessionId('discord:e24-channel'),
         boundaries: {
           staticPrefixChars: STATIC_PREFIX.length,
           sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
@@ -1177,7 +1183,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('z-ai/glm-5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
     expect(requestOptions.onPayload).toBeUndefined();
     expect(response.providerObservability).toMatchObject({
       promptCaching: {

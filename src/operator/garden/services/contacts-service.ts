@@ -422,7 +422,7 @@ export class AdminContactsDataService implements AdminContactsService {
       contactInput.timezone = timezonePayload.timezone;
     }
 
-    const contact = await contactStore.upsert(contactInput);
+    const contact = await contactStore.upsert(contactInput, { actor: 'admin:api' });
 
     return {
       ok: true,

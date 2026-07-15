@@ -13,6 +13,7 @@ export const SATELLITE_CAPABILITIES = [
   'avatar',
   'avatar_expression',
   'avatar_action',
+  'touch',
   'location',
   'timezone',
   'presence',

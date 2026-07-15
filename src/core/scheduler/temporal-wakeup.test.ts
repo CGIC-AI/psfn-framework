@@ -15,7 +15,7 @@ import {
   detectInternalOriginForUserAttribution,
   normalizeSessionEntryAttribution,
 } from '../session/entry-attribution.js';
-import { SessionManager } from '../session/manager.js';
+import { SessionManager, type StartupSessionMetadata } from '../session/manager.js';
 import type { SessionEntry } from '../session/types.js';
 import { evaluateAmbientPresenceEligibility } from './ambient-presence.js';
 import { Scheduler } from './scheduler.js';
@@ -72,9 +72,12 @@ function makeWakeConfig(overrides?: {
   morning?: Partial<TemporalWakeupConfig['morningWake']>;
   refresher?: Partial<TemporalWakeupConfig['idleRefresher']>;
   enabled?: boolean;
+  activeChannelLookbackHours?: number;
 }): TemporalWakeupConfig {
   return {
     enabled: overrides?.enabled ?? true,
+    activeChannelLookbackHours:
+      overrides?.activeChannelLookbackHours ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.activeChannelLookbackHours,
     morningWake: {
       ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake,
       timezone: 'utc',
@@ -84,6 +87,7 @@ function makeWakeConfig(overrides?: {
       ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher,
       ...overrides?.refresher,
     },
+    wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
   };
 }
 
@@ -851,5 +855,282 @@ describe('idle refresher lane', () => {
     });
     expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)).toBeUndefined();
     expect(scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)).toBeUndefined();
+  });
+});
+
+// ── Multi-channel fan-out (bead psfn-framework-2x37.3) ──
+
+interface FanoutChannelFixture {
+  sessionId: string;
+  channelType: string;
+  /** Recent conversational entries the eligibility check reads for this channel. */
+  entries: SessionEntry[];
+}
+
+/**
+ * Mock port whose enumeration returns a fixed set of channels; per-channel
+ * recent entries and persisted notes are keyed by sessionId so the anti-loop
+ * scan behaves per channel exactly as the real manager would.
+ */
+function makeFanoutPort(channels: readonly FanoutChannelFixture[]): {
+  port: TemporalWakeupSessionManagerPort;
+  appended: Array<{ channelId: string; note: string; source?: string }>;
+} {
+  const appended: Array<{ channelId: string; note: string; source?: string }> = [];
+  const persistedByChannel = new Map<string, SessionEntry[]>();
+  const byId = new Map(channels.map(channel => [channel.sessionId, channel]));
+  const metadata = (fixture: FanoutChannelFixture): StartupSessionMetadata => ({
+    sessionId: fixture.sessionId,
+    channelType: fixture.channelType,
+    timestamp: fixture.entries.reduce((latest, e) => Math.max(latest, e.timestamp), 0),
+  });
+  const port: TemporalWakeupSessionManagerPort = {
+    resolveStartupSessionMetadata: () => (channels[0] ? metadata(channels[0]) : null),
+    listRecentlyActiveChannels: () => channels.map(metadata),
+    getRecentMessages: (channelId: string) => byId.get(channelId)?.entries ?? [],
+    getRecentSessionEntries: (channelId: string) => persistedByChannel.get(channelId) ?? [],
+    appendContextSystemNote: (channelId: string, note: string, source?: string) => {
+      appended.push({ channelId, note, ...(source !== undefined ? { source } : {}) });
+      const list = persistedByChannel.get(channelId) ?? [];
+      list.push(entry({
+        role: 'system',
+        timestamp: Date.now(),
+        channelId,
+        content: note,
+        metadata: JSON.stringify({ sessionLane: { schemaVersion: 1, kind: 'system_note', source } }),
+      }));
+      persistedByChannel.set(channelId, list);
+    },
+  };
+  return { port, appended };
+}
+
+function runMorningHandler(scheduler: Scheduler): Promise<void> {
+  const handler = scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.handler;
+  if (!handler) throw new Error('morning wake task was not registered');
+  return Promise.resolve(handler());
+}
+
+describe('temporal wake fan-out across channels (2x37.3)', () => {
+  // A discord-like DM and a satellite-like room are both private/invite_only.
+  const DISCORD = 'discord:dm-alpha';
+  const SATELLITE = 'satellite:bedroom';
+  const IDLE = 'discord:dm-quiet';
+  const PUBLIC = 'twitter:timeline';
+  const INTERNAL = 'internal:reflection:daily';
+
+  it('morning lane injects the new-day frame into every active channel and skips idle/public/internal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: DAY1_EVENING - 60_000 })] },
+      // Idle: only the companion spoke recently — no partner turn to wake for.
+      { sessionId: IDLE, channelType: 'discord', entries: [entry({ channelId: IDLE, role: 'assistant', timestamp: DAY1_NIGHT })] },
+      // Public broadcast surface: privacy boundary blocks quiet-time notes.
+      { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: DAY1_EVENING })] },
+      // Internal reflection channel: never a wake target.
+      { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    const noteChannels = appended.map(a => a.channelId).sort();
+    expect(noteChannels).toEqual([DISCORD, SATELLITE].sort());
+    expect(appended.every(a => a.source === TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE)).toBe(true);
+    expect(appended.every(a => a.note.includes('[Temporal wake]'))).toBe(true);
+  });
+
+  it('morning lane still wakes the latest session when the partner has been idle past the lookback window', async () => {
+    vi.useFakeTimers();
+    // Partner last spoke 4 days before the wake slot — outside the 72h
+    // lookback, so enumeration returns nothing; the latest session must
+    // remain a candidate (pre-fan-out behavior, and the absence case is
+    // exactly when the new-day frame matters most).
+    const FOUR_DAYS_AGO = DAY2_MORNING - 4 * 24 * 60 * 60_000;
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: FOUR_DAYS_AGO })] },
+    ]);
+    port.listRecentlyActiveChannels = () => [];
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(appended.map(a => a.channelId)).toEqual([DISCORD]);
+    expect(appended[0]?.note).toContain('[Temporal wake]');
+  });
+
+  it('morning outward delivery targets only the single most-recent-partner channel', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    // Satellite partner activity is more recent than discord's.
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING - 30 * 60_000 })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    const dispatchOutbound = vi.fn(async () => ({ outcome: 'sent' as const }));
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      invokeWakeTurn: async () => 'good morning',
+      dispatchOutbound,
+    });
+
+    await runMorningHandler(scheduler);
+
+    // Internal frames fanned out to BOTH channels...
+    expect(appended.map(a => a.channelId).sort()).toEqual([DISCORD, SATELLITE].sort());
+    // ...but outward delivery fired exactly once, to the most-recent-partner channel.
+    expect(dispatchOutbound).toHaveBeenCalledTimes(1);
+    expect(dispatchOutbound.mock.calls[0][0]).toMatchObject({ channelId: SATELLITE });
+  });
+
+  it('morning anti-loop injects at most one note per channel per day across repeated fires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+    // Second fire later the SAME day: the persisted-note scan + in-memory map
+    // suppress any further note per channel.
+    vi.setSystemTime(new Date(DAY2_MORNING + 3 * 60 * 60_000));
+    await runMorningHandler(scheduler);
+
+    expect(appended.filter(a => a.channelId === DISCORD)).toHaveLength(1);
+    expect(appended.filter(a => a.channelId === SATELLITE)).toHaveLength(1);
+  });
+
+  it('idle refresher fans the refresh out to every active channel, skipping public/internal', async () => {
+    vi.useFakeTimers();
+    // Same-day long gap: last activity was this morning, now late afternoon.
+    const morningAt = Date.parse('2026-06-11T09:00:00.000Z');
+    const afternoonAt = Date.parse('2026-06-11T15:30:00.000Z');
+    vi.setSystemTime(new Date(afternoonAt));
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: morningAt })] },
+      { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: morningAt })] },
+      { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: morningAt })] },
+      { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: morningAt })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({
+        morning: { enabled: false },
+        refresher: { enabled: true, checkIntervalMs: 900_000, minIdleMinutes: 120, minNoteIntervalMinutes: 120 },
+      }),
+    });
+
+    const handler = scheduler.getTask(TEMPORAL_WAKEUP_REFRESHER_TASK_ID)?.handler;
+    if (!handler) throw new Error('refresher task was not registered');
+    await handler();
+
+    expect(appended.map(a => a.channelId).sort()).toEqual([DISCORD, SATELLITE].sort());
+    expect(appended.every(a => a.source === TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE)).toBe(true);
+  });
+});
+
+describe('listRecentlyActiveChannels (real session manager)', () => {
+  let dir: string;
+  let store: SessionStore;
+  let mgr: SessionManager;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-wakeup-enum-'));
+    store = new SessionStore(dir);
+    mgr = new SessionManager(store, makeConfig(), new EventBus());
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns only channels with in-lookback partner activity, most-recent first', () => {
+    vi.useFakeTimers();
+    const nowMs = DAY2_MORNING;
+
+    // Stale/idle channel: partner spoke 5 days ago (outside a 72h lookback).
+    vi.setSystemTime(new Date(nowMs - 5 * 24 * 60 * 60_000));
+    mgr.recordUserMessage('discord:dm-stale', 'earlier in the week', 'user-1', 'Partner');
+
+    // Assistant-only channel in-window: no partner turn, so not a wake target.
+    vi.setSystemTime(new Date(nowMs - 3 * 60 * 60_000));
+    mgr.recordAssistantMessage('discord:dm-assistant-only', 'are you there?');
+
+    // Two genuinely active channels, satellite more recent than discord.
+    vi.setSystemTime(new Date(DAY1_EVENING));
+    mgr.recordUserMessage('discord:dm-alpha', 'evening chat', 'user-1', 'Partner');
+    vi.setSystemTime(new Date(DAY1_EVENING + 45 * 60_000));
+    mgr.recordUserMessage('satellite:bedroom', 'goodnight', 'user-1', 'Partner');
+
+    const active = mgr.listRecentlyActiveChannels({ lookbackMs: 72 * 60 * 60_000, nowMs });
+    expect(active.map(channel => channel.sessionId)).toEqual(['satellite:bedroom', 'discord:dm-alpha']);
+  });
+});
+
+describe('day-scoped catch-up summary (2x37.5)', () => {
+  it('summarizes only the latest chat day, dropping earlier-day entries', async () => {
+    vi.useFakeTimers();
+    const dayA = Date.parse('2026-06-09T10:00:00.000Z');
+    const dayB = Date.parse('2026-06-10T14:00:00.000Z');
+    const dayCUser = Date.parse('2026-06-11T07:00:00.000Z');
+    const dayCAssistant = Date.parse('2026-06-11T07:05:00.000Z');
+    const nowMs = Date.parse('2026-06-11T08:05:00.000Z');
+    vi.setSystemTime(new Date(nowMs));
+
+    const spanning: SessionEntry[] = [
+      entry({ channelId: 'discord:dm-alpha', role: 'user', timestamp: dayA, content: 'day A user' }),
+      entry({ channelId: 'discord:dm-alpha', role: 'assistant', timestamp: dayA + 60_000, content: 'day A reply' }),
+      entry({ channelId: 'discord:dm-alpha', role: 'user', timestamp: dayB, content: 'day B user' }),
+      entry({ channelId: 'discord:dm-alpha', role: 'assistant', timestamp: dayB + 60_000, content: 'day B reply' }),
+      entry({ channelId: 'discord:dm-alpha', role: 'user', timestamp: dayCUser, content: 'day C user' }),
+      entry({ channelId: 'discord:dm-alpha', role: 'assistant', timestamp: dayCAssistant, content: 'day C reply' }),
+    ];
+    const { port } = makeFanoutPort([
+      { sessionId: 'discord:dm-alpha', channelType: 'discord', entries: spanning },
+    ]);
+
+    let captured: SessionEntry[] | undefined;
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      summarizeCatchUp: async ({ entries }) => {
+        captured = [...entries];
+        return 'the latest day, summarized';
+      },
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(captured).toBeDefined();
+    expect(captured?.map(e => e.timestamp)).toEqual([dayCUser, dayCAssistant]);
+    // No entry from the earlier two days leaked into the summarizer.
+    expect(captured?.some(e => e.timestamp === dayA || e.timestamp === dayB)).toBe(false);
   });
 });

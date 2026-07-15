@@ -108,6 +108,17 @@ describe('ContactStore', () => {
   });
 
   describe('upsert', () => {
+    it('rejects autonomous creation at approval-gated relationship classifications', () => {
+      expect(() => store.upsert(
+        { displayName: 'Autonomous Family', relationshipType: 'family' },
+        { actor: 'agent:tool:test' },
+      )).toThrow(/relationship assignment denied/);
+      expect(() => store.upsert(
+        { displayName: 'Extracted Partner', relationshipType: 'partner' },
+        { actor: 'system:memory_extraction:mention_contact' },
+      )).toThrow(/relationship assignment denied/);
+    });
+
     it('creates new contact with generated UUID', () => {
       const contact = store.upsert({ displayName: 'Alice' });
       expect(contact.id).toBeDefined();
@@ -147,7 +158,23 @@ describe('ContactStore', () => {
         trustLevel: 'regular',  // Should be overridden
       });
       expect(contact.trustLevel).toBe('primary');
-      expect(contact.relationshipType).toBe('partner');
+      expect(contact.relationshipType).toBe('stranger');
+    });
+
+    it('keeps primary trust independent from relationship on an unrelated upsert', () => {
+      const contact = store.upsert({
+        displayName: 'Primary Relationship',
+        discordUserId: PRIMARY_USER_ID,
+        relationshipType: 'acquaintance',
+      });
+
+      const updated = store.upsert({
+        id: contact.id,
+        displayName: 'Primary Relationship Renamed',
+      });
+
+      expect(updated.trustLevel).toBe('primary');
+      expect(updated.relationshipType).toBe('acquaintance');
     });
 
     it('forces primary trust when updating existing primary user', () => {
@@ -225,6 +252,43 @@ describe('ContactStore', () => {
       });
       expect(updated.notes).toBe('Old notes');
       expect(updated.emotionalBaseline).toEqual({ warmth: 0.5 });
+    });
+
+    it('does not overwrite a relationship changed while an unrelated upsert is in flight', () => {
+      const contact = store.upsert({ displayName: 'Concurrent Profile', relationshipType: 'friend' });
+      db.exec(`
+        CREATE TRIGGER concurrent_relationship_approval
+        BEFORE UPDATE OF display_name ON contacts
+        WHEN NEW.display_name = 'Concurrent Profile Renamed'
+        BEGIN
+          UPDATE contacts SET relationship_type = 'family' WHERE id = OLD.id;
+        END
+      `);
+
+      const updated = store.upsert({
+        id: contact.id,
+        displayName: 'Concurrent Profile Renamed',
+      });
+
+      expect(updated.displayName).toBe('Concurrent Profile Renamed');
+      expect(updated.relationshipType).toBe('family');
+    });
+
+    it('audits an operator-authorized relationship assignment through upsert', () => {
+      const contact = store.upsert({ displayName: 'Upsert Relationship Audit', relationshipType: 'friend' });
+      const updated = store.upsert({
+        id: contact.id,
+        displayName: contact.displayName,
+        relationshipType: 'family',
+      }, { actor: 'operator:test' });
+
+      expect(updated.relationshipType).toBe('family');
+      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+        .toEqual([expect.objectContaining({
+          actor: 'operator:test',
+          oldValue: 'friend',
+          newValue: 'family',
+        })]);
     });
 
     it('persists, hydrates, preserves, updates, and clears optional timezone', () => {
@@ -710,6 +774,94 @@ describe('ContactStore', () => {
       ]);
     });
 
+    it('keeps relationship classification independent from primary trust', () => {
+      const owner = store.upsert(
+        {
+          displayName: 'Owner Relationship Target',
+          discordUserId: 'primary-user-123',
+          trustLevel: 'primary',
+        },
+        {
+          actor: 'operator:test',
+          allowPrimaryTrustAssignment: true,
+        },
+      );
+      expect(owner.trustLevel).toBe('primary');
+      expect(owner.relationshipType).toBe('stranger');
+
+      expect(store.updateRelationshipType(
+        owner.id,
+        'acquaintance',
+        'agent:tool:contact_set_relationship',
+      )).toBe(true);
+      expect(store.getById(owner.id)?.trustLevel).toBe('primary');
+      expect(store.getById(owner.id)?.relationshipType).toBe('acquaintance');
+    });
+
+    it('fails closed on autonomous family and partner writes while allowing operator approval', () => {
+      const contact = store.upsert({ displayName: 'Gated Relationship Target', relationshipType: 'friend' });
+
+      expect(store.updateRelationshipType(
+        contact.id,
+        'family',
+        'agent:tool:contact_set_relationship',
+      )).toBe(false);
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+
+      expect(store.updateRelationshipType(contact.id, 'family', 'operator:confirmation-queue')).toBe(true);
+      expect(store.updateRelationshipType(contact.id, 'partner', 'operator:confirmation-queue')).toBe(true);
+      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
+      expect(store.updateRelationshipType(
+        contact.id,
+        'friend',
+        'agent:tool:contact_set_relationship',
+      )).toBe(false);
+      expect(store.getById(contact.id)?.relationshipType).toBe('partner');
+    });
+
+    it('compare-and-sets approved relationships without overwriting stale state', () => {
+      const contact = store.upsert({ displayName: 'CAS Relationship Target', relationshipType: 'friend' });
+
+      expect(store.compareAndSetRelationshipType(
+        contact.id,
+        'acquaintance',
+        'family',
+        'operator:confirmation-queue',
+      )).toBe(false);
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+
+      expect(store.compareAndSetRelationshipType(
+        contact.id,
+        'friend',
+        'family',
+        'operator:confirmation-queue',
+      )).toBe(true);
+      expect(store.getById(contact.id)?.relationshipType).toBe('family');
+      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' }))
+        .toEqual([expect.objectContaining({ oldValue: 'friend', newValue: 'family' })]);
+    });
+
+    it('rolls back relationship compare-and-set when its audit insert fails', () => {
+      const contact = store.upsert({ displayName: 'CAS Audit Rollback', relationshipType: 'friend' });
+      db.exec(`
+        CREATE TRIGGER fail_relationship_audit
+        BEFORE INSERT ON contact_mutation_audit
+        WHEN NEW.field = 'relationship_type'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced relationship audit failure');
+        END
+      `);
+
+      expect(() => store.compareAndSetRelationshipType(
+        contact.id,
+        'friend',
+        'family',
+        'operator:confirmation-queue',
+      )).toThrow('forced relationship audit failure');
+      expect(store.getById(contact.id)?.relationshipType).toBe('friend');
+      expect(store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' })).toEqual([]);
+    });
+
     it('records linked identity and conversation channel privacy mutations', () => {
       const contact = store.upsert({ displayName: 'Privacy Audit Target' });
       expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'invite_only' })).toBe('linked');
@@ -832,7 +984,7 @@ describe('ContactStore', () => {
     it('creates primary user with correct defaults', () => {
       const contact = store.resolveUserId(PRIMARY_USER_ID);
       expect(contact.trustLevel).toBe('primary');
-      expect(contact.relationshipType).toBe('partner');
+      expect(contact.relationshipType).toBe('stranger');
       expect(contact.discordUserId).toBe(PRIMARY_USER_ID);
     });
   });
@@ -885,6 +1037,7 @@ describe('ContactStore', () => {
       const resolved = store.resolveChannelIdentity('discord', PRIMARY_USER_ID, 'V');
       expect(resolved.id).toBe('primary-owner');
       expect(resolved.trustLevel).toBe('primary');
+      // Duplicate reconciliation preserves the more-established explicit relationship.
       expect(resolved.relationshipType).toBe('partner');
       expect(store.getById('duplicate-primary')).toBeUndefined();
       expect(store.getByChannelIdentity('api', 'primary-api-alias')?.id).toBe('primary-owner');

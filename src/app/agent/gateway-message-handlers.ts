@@ -349,6 +349,25 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
 
     const processMessage = async (): Promise<AgentResponse> => {
       trackSessionActivity(message);
+      if (message.routing?.responseMode === 'observe') {
+        await agentLoop.observeMessage(message);
+        safeguardAuditTrail.append('gateway.message.observed', {
+          route: 'handle',
+          channelId: message.channelId,
+          messageId: message.id,
+          authorId: message.authorId,
+        });
+        return {
+          content: '',
+          channelId: message.channelId,
+          metadata: {
+            model: 'observation-only',
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          },
+        };
+      }
       log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
       const routingDecision = satelliteRouting.evaluateDelegation(
         message,

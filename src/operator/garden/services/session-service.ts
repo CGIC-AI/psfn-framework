@@ -56,6 +56,8 @@ import type {
   AdminSessionMessagesData,
   AdminSessionSearchData,
   AdminSessionService,
+  AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types.js';
 import {
   resolveCogSecEventsPath,
@@ -83,6 +85,18 @@ const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'unknown',
 ]);
 const COGSEC_SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);
+
+/**
+ * Thrown by getSessionTurnDetail when the requested turn is not in the recent
+ * turn window (or the turnId is blank). The session route maps this to a 404
+ * instead of a 500 so a stale/expired turn expand degrades cleanly.
+ */
+export class AdminSessionTurnNotFoundError extends Error {
+  constructor(public readonly sessionId: string, public readonly turnId: string) {
+    super(`Turn "${turnId}" not found for session "${sessionId}"`);
+    this.name = 'AdminSessionTurnNotFoundError';
+  }
+}
 
 function resolveMessageClass(value: unknown): AdminSessionMessageOntologyView['messageClass'] {
   return typeof value === 'string' && Object.values(MESSAGE_CLASSES).includes(value as never)
@@ -220,7 +234,7 @@ function previewCounts(preview: CogSecLineagePreview): AdminCogSecPreviewCounts 
 
 function makeCompactionInvalidator(sessionStore: SessionStore) {
   return {
-    invalidateCompactionSummaries: (input: {
+    invalidateCompactionSummaries: async (input: {
       caseId: string;
       compactionSummaries: readonly CogSecLineageCompactionRef[];
     }) => {
@@ -232,7 +246,7 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
         bySession.set(summary.logicalSessionId, ids);
       }
       for (const [channelId, compactionIds] of bySession.entries()) {
-        const result = sessionStore.applyCogSecCompactionInvalidations({
+        const result = await sessionStore.applyCogSecCompactionInvalidations({
           channelId,
           caseId: input.caseId,
           compactionIds,
@@ -561,16 +575,21 @@ export class AdminSessionDataService implements AdminSessionService {
       safeAgentSummary: draft.safeSummary,
     });
 
-    const tombstones = draft.affectedMessageRanges.map(range => this.deps.sessionStore.applyCogSecTombstones({
-      channelId: range.logicalSessionId ?? draft.sourceChannelId,
-      caseId: draft.caseId,
-      eventStore,
-      forensicArchive,
-      ...(range.messageIds ? { messageIds: range.messageIds } : {}),
-      ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
-      ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
-      actor: draft.actor,
-    }));
+    const tombstones = [];
+    for (const range of draft.affectedMessageRanges) {
+      // Sequential on purpose: each rewrite fences the shared session tail
+      // (epoch bump) before and after touching the journal.
+      tombstones.push(await this.deps.sessionStore.applyCogSecTombstones({
+        channelId: range.logicalSessionId ?? draft.sourceChannelId,
+        caseId: draft.caseId,
+        eventStore,
+        forensicArchive,
+        ...(range.messageIds ? { messageIds: range.messageIds } : {}),
+        ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
+        ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
+        actor: draft.actor,
+      }));
+    }
 
     const eventAfterTombstones = eventStore.getEvent(draft.caseId);
     if (!eventAfterTombstones) {
@@ -671,6 +690,7 @@ export class AdminSessionDataService implements AdminSessionService {
     limit?: number;
     beforeId?: number | null;
     messagesOnly?: boolean;
+    includeTurns?: boolean;
   } = {}): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
@@ -694,15 +714,19 @@ export class AdminSessionDataService implements AdminSessionService {
     // (legacy 'semi_private'/'broadcast' records map onto ChannelPrivacy).
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(messages[0]?.channelVisibility)
       ?? classifyChannelDisclosure(channelId).channelPrivacy;
-    const roleEnvelopePreviews = options.messagesOnly
-      ? []
-      : messages.flatMap((entry) => {
+    // messagesOnly drops everything heavy (turns, previews, compaction).
+    // includeTurns=false keeps compaction summaries but drops the up-to-50 full
+    // turn snapshots and role-envelope previews; the session browser uses it so
+    // its initial page stays small and pulls per-turn detail on demand.
+    const includeTurnDetail = !options.messagesOnly && options.includeTurns !== false;
+    const roleEnvelopePreviews = includeTurnDetail
+      ? messages.flatMap((entry) => {
         const preview = resolveSessionEntryRoleEnvelopePreview(entry);
         return preview ? [{ sessionEntryId: entry.id, preview }] : [];
-      });
-    const turns = options.messagesOnly
-      ? []
-      : this.deps.sessionStore
+      })
+      : [];
+    const turns = includeTurnDetail
+      ? this.deps.sessionStore
         .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
         .map((record) => {
           const turnData = this.turnObservability.buildTurnData(record);
@@ -715,7 +739,8 @@ export class AdminSessionDataService implements AdminSessionService {
               turnData.snapshot?.sessionContext?.continuityEntries ?? [],
             ),
           };
-        });
+        })
+      : [];
     const compactionAuditViews = options.messagesOnly
       ? []
       : this.deps.sessionStore
@@ -740,6 +765,43 @@ export class AdminSessionDataService implements AdminSessionService {
       compactionAuditViews,
       turns,
     };
+  }
+
+  /**
+   * Lazily resolve a single turn's full snapshot detail, bounded to one turn so
+   * the session browser can pull turn data on expand without shipping the
+   * up-to-50 snapshots the list endpoint would otherwise attach. Searches the
+   * same recent-turn window the list uses; a turnId outside that window (or an
+   * unknown one) fails closed with AdminSessionTurnNotFoundError so the route
+   * can answer 404 rather than silently returning an empty turn.
+   */
+  getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData {
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedTurnId) {
+      throw new AdminSessionTurnNotFoundError(sessionId, turnId);
+    }
+    const record = this.deps.sessionStore
+      .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
+      .find(candidate => candidate.turnId === normalizedTurnId);
+    if (!record) {
+      throw new AdminSessionTurnNotFoundError(sessionId, normalizedTurnId);
+    }
+    // Decode channel visibility from a single recent entry (bounded read),
+    // mirroring the list endpoint's fallback to channel-disclosure policy.
+    const recentEntry = this.deps.sessionStore.getRecent(sessionId, 1).at(0);
+    const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
+      ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
+    const turnData = this.turnObservability.buildTurnData(record);
+    const turn: AdminSessionTurnData = {
+      ...turnData,
+      continuityProvenance: buildContinuityProvenanceViews(
+        record.turnId,
+        record.channelId,
+        currentVisibility,
+        turnData.snapshot?.sessionContext?.continuityEntries ?? [],
+      ),
+    };
+    return { sessionId, channelId: record.channelId, turn };
   }
 }
 

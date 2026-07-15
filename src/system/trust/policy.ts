@@ -69,13 +69,28 @@ export function buildTrustPromptState(trustLevel: TrustLevel): Record<string, st
   };
 }
 
-export function buildResponseStylePromptState(style: ResponseStyle): Record<string, string> {
+export function buildResponseStylePromptState(
+  style: ResponseStyle,
+  voiceChannel = false,
+): Record<string, string> {
   return {
     runtime_response_style: style,
     runtime_response_style_name: style === 'concise' ? 'Concise' : 'Expressive',
     runtime_response_style_is_concise: String(style === 'concise'),
     runtime_response_style_is_expressive: String(style === 'expressive'),
+    runtime_response_style_is_concise_voice: String(style === 'concise' && voiceChannel),
   };
+}
+
+export function isVoiceResponseChannel(channelId: string, channelType?: string): boolean {
+  const normalizedChannelType = channelType?.trim().toLowerCase();
+  const normalizedChannelId = channelId.trim().toLowerCase();
+  return normalizedChannelId.startsWith('discord-voice:')
+    || normalizedChannelId.startsWith('api-voice:')
+    || normalizedChannelId.startsWith('satellite:voice-only:')
+    || normalizedChannelType === 'discord_voice'
+    || normalizedChannelType === 'api_voice'
+    || normalizedChannelType === 'voice-only';
 }
 
 /**
@@ -580,12 +595,7 @@ export function resolveChannelResponseStyle(
 
   const normalizedChannelType = channelType?.toLowerCase();
   const normalizedChannelId = channelId.toLowerCase();
-  if (
-    normalizedChannelId.startsWith('discord-voice:')
-    || normalizedChannelType === 'discord_voice'
-    || normalizedChannelType === 'api_voice'
-    || normalizedChannelId.startsWith('api-voice:')
-  ) {
+  if (isVoiceResponseChannel(normalizedChannelId, normalizedChannelType)) {
     return 'concise';
   }
   if (

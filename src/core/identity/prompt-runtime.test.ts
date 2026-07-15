@@ -98,6 +98,7 @@ const RESPONSE_STYLE_MACRO_TOKENS = [
   '{{runtime_response_style_name}}',
   '{{runtime_response_style_is_concise}}',
   '{{runtime_response_style_is_expressive}}',
+  '{{runtime_response_style_is_concise_voice}}',
 ] as const;
 
 const AFFECT_MACRO_TOKENS = [

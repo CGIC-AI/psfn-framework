@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonicalModelPurpose, CanonicalModelRegistry, ModelRegistryEntry } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
+import { evaluateImportPolicy, resolveGlobalPromptCachePolicy, resolveRoutingCandidates } from './routing.js';
 
 interface RegistryModelInput {
   id: string;
@@ -666,8 +666,36 @@ describe('evaluateImportPolicy', () => {
   });
 });
 
+describe('resolveGlobalPromptCachePolicy (E2.4)', () => {
+  it('returns a policy when the shipped-default enabled flag is set', () => {
+    const config = makeConfig({
+      modelRegistry: { ...makeBaseRegistry(), promptCaching: { enabled: true } },
+    });
+    expect(resolveGlobalPromptCachePolicy(config)).toEqual({ retention: 'short', scope: 'channel' });
+  });
+
+  it('honours explicit retention/scope over the defaults', () => {
+    const config = makeConfig({
+      modelRegistry: {
+        ...makeBaseRegistry(),
+        promptCaching: { enabled: true, retention: 'long', scope: 'request' },
+      },
+    });
+    expect(resolveGlobalPromptCachePolicy(config)).toEqual({ retention: 'long', scope: 'request' });
+  });
+
+  it('returns null when the policy is disabled or absent', () => {
+    expect(
+      resolveGlobalPromptCachePolicy(makeConfig({
+        modelRegistry: { ...makeBaseRegistry(), promptCaching: { enabled: false } },
+      })),
+    ).toBeNull();
+    expect(resolveGlobalPromptCachePolicy(makeConfig())).toBeNull();
+  });
+});
+
 describe('registry-wide promptCaching policy (E2.4)', () => {
-  it('leaves candidates untouched when the policy is absent or disabled (default off)', () => {
+  it('leaves candidates untouched when the policy is absent or disabled', () => {
     for (const config of [
       makeConfig(),
       makeConfig({

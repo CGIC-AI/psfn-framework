@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the CompanionId dependency status refreshed in §0.4 on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the companion-app status and the CompanionId dependency status in §0.4 refreshed on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -65,8 +65,10 @@ restore proof `s10d7` (§2d hard gate unchanged). `s10mc.3` per-companion owners
 and the `s10mc.8`/`s10f8` live demo remain open.
 
 **Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
-service-worker stale-shell fix and `8ora` first-class PWA channel are now
-children of `w9hj`; `mmo9.1` SSE first-chunk fix rides in `mmo9` wave 1.
+service-worker stale-shell recovery is delivered and independently approved on
+`feat/companion-app-solid` @ `b3da2ddf`, pending merge to `main`; `8ora`
+first-class PWA channel remains a child of `w9hj`, and `mmo9.1` SSE first-chunk
+fix rides in `mmo9` wave 1.
 Satellite side: `343f` (empty satellite replies — first step is the
 discriminating two-model live capture) blocks `6kr8` enrollment.
 
@@ -83,10 +85,18 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
 - The presence/locations branches (`mc/w5a-companion-presence`,
   `mc/vinz29-dual-presence`, `mc/vinz2021-presence-follow`) are **merged to
   main** — the locations threshold `s10mc` sequenced behind is met.
-- 2026-07-12 audits confirmed still open on every branch: `u24q`, `mmo9.1`,
-  `lghd` (unbounded re-prompt retry is intentional design, no bounded abort
-  exists; stays P1 in the working set), `343f`. `sj4d` and `nw90` were fixed
-  2026-07-09 and are closed.
+- `u24q` is delivered on `feat/companion-app-solid` through `b3da2ddf` and an
+  independent review approved the branch with zero findings. Local Chromium
+  validation exercised both required deploy paths: the actual legacy client
+  moved from build A to B after one ordinary reload, and generated build A
+  discovered B without discarding active form/attachment state before the
+  operator reload; both paths then reloaded B offline. The focused service
+  worker suite passed 8/8, Playwright passed 2/2, and companion-ui build and
+  lint pass. This is feature-branch evidence only: the work is not yet merged
+  to `main` or live-deployed.
+- The remaining audited working set is `mmo9.1`, `lghd` (unbounded re-prompt
+  retry is intentional design, no bounded abort exists; stays P1), and `343f`.
+  `sj4d` and `nw90` were fixed 2026-07-09 and are closed.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
 

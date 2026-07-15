@@ -10,7 +10,9 @@ import type {
   CompanionApprovalDecisionRequest,
   CompanionEventEnvelope,
 } from '../../../shared/contracts/companion-relay.js';
-import { companionEventKindsForScopes } from '../../../shared/contracts/companion-relay.js';
+import {
+  companionEventKindsForScopes,
+} from '../../../shared/contracts/companion-relay.js';
 import {
   resolveCompanionApprovalActor,
   resolveCompanionRelayAccess,
@@ -25,6 +27,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { sendApiError } from './http.js';
+import type { CompanionStimulusPort } from './companion-stimuli.js';
 
 const log = createComponentLogger('CompanionRelayRoutes');
 
@@ -50,15 +53,17 @@ export interface CompanionRelayHttpDeps {
   approvals: CompanionApprovalDecisionPort;
   /** Records an audit summary; failures must reject (fail closed). */
   audit: (entry: CompanionRelayAuditEntry) => Promise<void>;
+  stimuli: CompanionStimulusPort;
 }
 
 export const COMPANION_EVENTS_PATH = '/v1/companion/events';
 const COMPANION_APPROVALS_PREFIX = '/v1/companion/approvals/';
+export const COMPANION_STIMULI_PATH = '/v1/companion/stimuli';
 const COMPANION_ARTIFACTS_PREFIX = '/v1/companion/artifacts/';
 const COMPANION_ARTIFACT_PREVIEW_SUFFIX = '/preview';
 
 export interface CompanionRelayRouteMatch {
-  route: 'events' | 'approval_decision' | 'artifact_preview';
+  route: 'events' | 'approval_decision' | 'artifact_preview' | 'touch_stimulus';
   id?: string;
 }
 
@@ -86,6 +91,9 @@ export function matchCompanionRelayRoute(
       return { route: 'approval_decision', id };
     }
   }
+  if (method === 'POST' && path === COMPANION_STIMULI_PATH) {
+    return { route: 'touch_stimulus' };
+  }
   if (
     method === 'GET'
     && path.startsWith(COMPANION_ARTIFACTS_PREFIX)
@@ -109,6 +117,7 @@ interface CompanionRelayRequestContext {
   principal: ApiAuthPrincipal;
   registry?: SatelliteRegistryConfig;
   clientCert?: SatelliteClientCertIdentity;
+  companionId: string;
   deps: CompanionRelayHttpDeps;
 }
 

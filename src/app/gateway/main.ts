@@ -136,6 +136,7 @@ async function main(): Promise<void> {
 
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
+    env,
     bootstrap,
     startupHydration,
     logger: log,

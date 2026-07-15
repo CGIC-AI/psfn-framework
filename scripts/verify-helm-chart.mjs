@@ -186,6 +186,9 @@ assertIncludes(defaultDenyPolicy, '- Egress', 'default deny egress');
 const agentPolicy = findDocument(rendered, 'psfn-agent');
 assertNotIncludes(agentPolicy, '0.0.0.0/0', 'agent policy broad egress');
 assertIncludes(agentPolicy, 'component: gateway', 'agent policy gateway flow');
+// x5rt.10: the agent no longer reaches the gateway API (operator confirmation
+// relay removed); the Garden operator process holds that egress instead.
+assertNotIncludes(agentPolicy, 'port: 10053', 'agent has no gateway operator API egress');
 assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow');
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
 assertNotIncludes(agentPolicy, 'component: litellm', 'agent policy LiteLLM direct egress');
@@ -213,6 +216,106 @@ assertIncludes(
 assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data\n              readOnly: true', 'gateway read-only companion-data root');
 assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data/state', 'gateway writable CogSec state submount');
 assertIncludes(gatewayDeployment, 'subPath: state', 'gateway CogSec state PVC subPath');
+assertIncludes(gatewayDeployment, 'automountServiceAccountToken: false', 'default gateway ServiceAccount token disabled');
+assertNotIncludes(gatewayDeployment, 'PSFN_KUBE_SELF_MANAGEMENT_ENABLED', 'default kube self-management runtime disabled');
+assertNotIncludes(rendered, 'name: psfn-kube-self-management', 'default kube self-management RBAC disabled');
+
+const kubeSelfManagementRendered = render([
+  '--set',
+  'kubeSelfManagement.enabled=true',
+  '--set-string',
+  'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+  '--set-string',
+  `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+]);
+if (findDocumentsByKind(kubeSelfManagementRendered, 'ClusterRole').length > 0
+  || findDocumentsByKind(kubeSelfManagementRendered, 'ClusterRoleBinding').length > 0) {
+  throw new Error('kube self-management RBAC must never render cluster-scoped roles');
+}
+const kubeServiceAccount = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'ServiceAccount',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeServiceAccount, 'automountServiceAccountToken: true', 'dedicated kube ServiceAccount token');
+const kubeRole = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'Role',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeRole, 'resources: ["pods"]\n    verbs: ["list"]', 'pod diagnostics least-privilege rule');
+assertIncludes(kubeRole, 'resources: ["deployments"]', 'deployment lifecycle rule');
+assertIncludes(kubeRole, '- psfn-agent\n      - psfn-gateway\n      - psfn-garden', 'release deployment resourceNames');
+assertIncludes(kubeRole, 'verbs: ["get", "patch"]', 'deployment lifecycle exact verbs');
+for (const forbidden of ['ClusterRole', 'resources: ["secrets"]', 'resources: ["jobs"]', 'pods/exec', 'verbs: ["*"]']) {
+  assertNotIncludes(kubeRole, forbidden, 'kube self-management forbidden RBAC authority');
+}
+const kubeRoleBinding = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'RoleBinding',
+  'psfn-kube-self-management',
+);
+assertIncludes(kubeRoleBinding, 'kind: Role\n  name: psfn-kube-self-management', 'namespaced kube RoleBinding');
+assertIncludes(kubeRoleBinding, 'name: psfn-kube-self-management\n    namespace: psfn-test', 'dedicated kube RoleBinding subject');
+const kubeGatewayDeployment = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'Deployment',
+  'psfn-gateway',
+);
+assertIncludes(kubeGatewayDeployment, 'serviceAccountName: psfn-kube-self-management', 'gateway dedicated kube ServiceAccount');
+assertIncludes(kubeGatewayDeployment, 'automountServiceAccountToken: true', 'gateway kube token mount');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED\n              value: "true"', 'gateway kube runtime opt-in');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_CURRENT_IMAGE\n              value: "localhost/psfn-framework:0.1.0-kube"', 'gateway exact current image binding');
+assertIncludes(kubeGatewayDeployment, 'name: PSFN_KUBE_RESOURCE_PREFIX\n              value: "psfn"', 'gateway exact Helm resource prefix binding');
+const kubeGatewayPolicy = findDocumentByKindName(
+  kubeSelfManagementRendered,
+  'NetworkPolicy',
+  'psfn-gateway',
+);
+assertIncludes(kubeGatewayPolicy, 'cidr: "10.43.0.1/32"', 'single-host Kubernetes API egress');
+assertIncludes(kubeGatewayPolicy, 'port: 443\n          protocol: TCP', 'Kubernetes API HTTPS-only egress');
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.apiServerCIDRs must contain the Kubernetes API Service host CIDR',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+  ],
+  'psfnAppImage.gitCommit must be an exact 40-character Git revision',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=0.0.0.0/0',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.apiServerCIDRs entries must be single-host',
+);
+assertRenderFails(
+  [
+    '--set',
+    'kubeSelfManagement.enabled=true',
+    '--set-string',
+    'kubeSelfManagement.serviceAccountName=psfn',
+    '--set-string',
+    'kubeSelfManagement.apiServerCIDRs[0]=10.43.0.1/32',
+    '--set-string',
+    `psfnAppImage.gitCommit=${'a'.repeat(40)}`,
+  ],
+  'kubeSelfManagement.serviceAccountName must be dedicated to the gateway',
+);
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');
@@ -248,6 +351,14 @@ assertIncludes(
   'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
   'agent companion role proof remains optional for single-companion installs',
 );
+// x5rt.10: the operator confirmation endpoint (and the ADMIN_TOKEN it carries)
+// lives in the Garden operator process, never the agent.
+assertNotIncludes(
+  agentDeployment,
+  'name: GATEWAY_OPERATOR_API_BASE_URL',
+  'agent has no gateway operator confirmation endpoint env',
+);
+assertNotIncludes(agentDeployment, 'name: ADMIN_TOKEN', 'agent admin credential isolation');
 for (const [name, value] of [
   ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
@@ -282,6 +393,24 @@ assertNotIncludes(
   gardenCredentialBoundaryDeployment,
   '- name: POSTGRES_DATABASE_URL\n',
   'Garden raw Postgres credential env',
+);
+// x5rt.10: the Garden operator process resolves operator-only confirmations
+// directly against the gateway API, carrying ADMIN_TOKEN so it never traverses
+// the agent.
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'name: GATEWAY_OPERATOR_API_BASE_URL',
+  'Garden operator confirmation endpoint env',
+);
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'value: "http://psfn-gateway:10053/v1"',
+  'Garden in-cluster gateway operator confirmation endpoint',
+);
+assertIncludes(
+  gardenCredentialBoundaryDeployment,
+  'name: ADMIN_TOKEN',
+  'Garden operator owns ADMIN_TOKEN for operator confirmation resolution',
 );
 
 const workloadImageOverrides = [
@@ -392,6 +521,15 @@ assertIncludes(liteLlmDeployment, 'runAsUser: 999', 'LiteLLM numeric user');
 const gatewayPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-gateway');
 assertIncludes(gatewayPolicy, 'component: litellm', 'gateway policy LiteLLM egress');
 assertIncludes(gatewayPolicy, 'port: 4000', 'gateway policy LiteLLM port');
+// x5rt.10: operator confirmation resolution ingress comes from the Garden
+// operator process, not the agent.
+assertIncludes(gatewayPolicy, 'component: garden', 'gateway policy garden operator API ingress');
+assertIncludes(gatewayPolicy, 'port: 10053', 'gateway policy garden operator API ingress port');
+
+const gardenPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-garden');
+assertIncludes(gardenPolicy, 'component: agent', 'garden policy agent admin transport egress');
+assertIncludes(gardenPolicy, 'component: gateway', 'garden policy gateway operator API egress');
+assertIncludes(gardenPolicy, 'port: 10053', 'garden policy gateway operator API egress port');
 
 const liteLlmPolicy = findDocumentByKindName(rendered, 'NetworkPolicy', 'psfn-litellm');
 assertIncludes(liteLlmPolicy, 'component: litellm', 'LiteLLM policy selector');

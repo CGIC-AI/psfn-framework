@@ -56,8 +56,29 @@ type WebSocketTlsRequestOptions = Omit<TlsRequestOptions, 'checkServerIdentity'>
   checkServerIdentity: NonNullable<ClientOptions['checkServerIdentity']>;
 };
 
+const PSFN_ADMIN_SESSION_COOKIE = 'psfn_token';
+
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Removes the operator ADMIN_TOKEN session cookie (`psfn_token`) from a Cookie
+ * header while preserving every other cookie (e.g. `psfn_garden_session`).
+ * Returns undefined when nothing survives.
+ */
+function stripAdminSessionCookie(cookieHeader: string | undefined): string | undefined {
+  if (!cookieHeader) return undefined;
+  const kept = cookieHeader
+    .split(';')
+    .map(part => part.trim())
+    .filter((part) => {
+      if (!part) return false;
+      const eq = part.indexOf('=');
+      const name = eq < 0 ? part : part.slice(0, eq);
+      return name !== PSFN_ADMIN_SESSION_COOKIE;
+    });
+  return kept.length > 0 ? kept.join('; ') : undefined;
 }
 
 function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
@@ -65,6 +86,19 @@ function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   delete forwardedHeaders.connection;
   delete forwardedHeaders.upgrade;
   delete forwardedHeaders['proxy-connection'];
+
+  // The operator ADMIN_TOKEN authenticates the browser↔operator boundary only.
+  // The agent authenticates transport peers via mTLS/SPIFFE and never needs the
+  // ADMIN_TOKEN, so it must not travel onward into the less-trusted agent
+  // process where it could be captured or replayed (x5rt.10). Strip the bearer
+  // credential and the `psfn_token` session cookie; other cookies are kept.
+  delete forwardedHeaders.authorization;
+  const strippedCookie = stripAdminSessionCookie(firstHeader(headers.cookie));
+  if (strippedCookie === undefined) {
+    delete forwardedHeaders.cookie;
+  } else {
+    forwardedHeaders.cookie = strippedCookie;
+  }
 
   const forwardedHost = firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers.host);
   if (forwardedHost) {
@@ -315,6 +349,69 @@ export class GardenAdminTransportProxy {
     });
 
     req.pipe(proxyRequest);
+  }
+
+  /**
+   * Proxies an admin API request whose body has already been read into a
+   * buffer. Used by the operator surface when it must inspect the confirmation
+   * payload before deciding whether to resolve it against the gateway or fall
+   * back to agent-local resolution (x5rt.10). Credential headers are stripped by
+   * {@link buildProxyHeaders} exactly as in {@link proxyApiRequest}.
+   */
+  proxyBufferedApiRequest(req: IncomingMessage, res: ServerResponse, body: Buffer): void {
+    let timedOut = false;
+    const requestPath = req.url ?? '/';
+    const headers = buildProxyHeaders(req.headers);
+    delete headers['transfer-encoding'];
+    headers['content-length'] = String(body.byteLength);
+    const proxyRequest = this.createRequest(
+      requestPath,
+      req.method,
+      headers,
+      (proxyResponse) => {
+        res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        proxyResponse.pipe(res);
+        proxyResponse.on('error', (error) => {
+          log.warn('Garden admin proxy response stream failed', {
+            path: requestPath,
+            error: String(error),
+          });
+          if (!res.destroyed) {
+            res.destroy(error);
+          }
+        });
+      },
+    );
+
+    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
+      timedOut = true;
+      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
+    });
+
+    proxyRequest.on('error', (error) => {
+      log.warn('Garden admin proxy request failed', {
+        path: requestPath,
+        error: String(error),
+      });
+      if (res.writableEnded || res.destroyed) return;
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      sendText(
+        res,
+        502,
+        timedOut
+          ? 'Bad Gateway: admin transport timed out'
+          : 'Bad Gateway: admin transport unavailable',
+      );
+    });
+
+    req.on('aborted', () => {
+      proxyRequest.destroy(new Error('Client request aborted'));
+    });
+
+    proxyRequest.end(body);
   }
 
   handleTelemetryUpgrade(

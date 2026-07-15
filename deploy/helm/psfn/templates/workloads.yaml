@@ -46,7 +46,8 @@ spec:
       labels:
         {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      serviceAccountName: {{ include "psfn.gatewayServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.kubeSelfManagement.enabled }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -100,6 +101,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            {{- if .Values.kubeSelfManagement.enabled }}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+            - name: PSFN_KUBE_RESOURCE_PREFIX
+              value: {{ include "psfn.fullname" . | quote }}
+            {{- end }}
             {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
             - name: SATELLITE_HUB_CONTROL_BASE_URL
               value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}
@@ -212,6 +221,7 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -235,6 +245,19 @@ spec:
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
+            {{- if .Values.kubeSelfManagement.enabled }}
+            {{- /* Kube-aware lifecycle (x5rt.5): the agent detects the guarded
+                 Kubernetes deployment and routes restart/rebuild through the
+                 gateway's approval-gated controller. PSFN_KUBE_CURRENT_IMAGE must
+                 match the gateway's own value so the restart request validates
+                 against the controller's configured scope. The agent holds no kube
+                 RBAC (automountServiceAccountToken: false); the write path stays on
+                 the gateway ServiceAccount. */}}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+            {{- end }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
               value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
@@ -393,6 +416,7 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -429,6 +453,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.adminToken }}
+            {{- /* The Garden operator process owns ADMIN_TOKEN and resolves
+                 operator-only gateway confirmations (e.g. kube self-management)
+                 directly against the gateway API, so the credential never
+                 traverses the agent (x5rt.10). */}}
+            - name: GATEWAY_OPERATOR_API_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
             - name: ADMIN_TRANSPORT_MODE
               value: network
             - name: ADMIN_TRANSPORT_URL
@@ -519,6 +549,7 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -726,6 +757,7 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}

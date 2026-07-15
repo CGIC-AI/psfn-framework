@@ -73,11 +73,14 @@ export function redactApprovalRequested(
 /**
  * Maps internal confirmation-queue resolution statuses onto the hub protocol
  * statuses. `modified` executed with operator-adjusted params, so it reads as
- * approved; `failed` means the approved action was blocked from executing.
+ * approved. A `failed` action is blocked only when it did not execute. If a
+ * post-execution durability step failed, the companion must see `approved`
+ * so it cannot infer that retrying the already-committed effect is safe.
  * `not_found` never resolves a real entry and must not be emitted.
  */
 export function toCompanionApprovalStatus(
   status: ConfirmationResolutionStatus,
+  executed = false,
 ): CompanionApprovalResolutionStatus {
   switch (status) {
     case 'approved':
@@ -88,7 +91,7 @@ export function toCompanionApprovalStatus(
     case 'expired':
       return 'expired';
     case 'failed':
-      return 'blocked';
+      return executed ? 'approved' : 'blocked';
     case 'not_found':
       throw new Error('Cannot redact approval resolution: not_found is not an emittable status');
     default: {
@@ -102,10 +105,11 @@ export function redactApprovalResolved(input: {
   id: string;
   status: ConfirmationResolutionStatus;
   resolvedAt: number;
+  executed: boolean;
 }): CompanionApprovalResolvedPayload {
   return {
     id: requireId(input.id, 'approval id'),
-    status: toCompanionApprovalStatus(input.status),
+    status: toCompanionApprovalStatus(input.status, input.executed),
     resolvedAt: toIsoTimestamp(input.resolvedAt),
   };
 }

@@ -903,3 +903,139 @@ describe('deferred lifecycle execution', () => {
     exitSpy.mockRestore();
   });
 });
+
+describe('system tool under a guarded Kubernetes deployment', () => {
+  const VALID_COMMIT = '0123456789abcdef0123456789abcdef01234567';
+  const VALID_IMAGE = 'localhost/psfn-framework:0.1.0-kube-0ecaa08d';
+
+  function enabledContext() {
+    return {
+      deployment: 'kube' as const,
+      selfManagement: {
+        enabled: true as const,
+        namespace: 'psfn',
+        release: 'psfn',
+        sourceRevision: VALID_COMMIT,
+        targetImage: VALID_IMAGE,
+        helmRevision: 8,
+      },
+    };
+  }
+
+  function makeKubeTool(invoke: ReturnType<typeof vi.fn>, context = enabledContext()) {
+    // No notifier/stopFn: kube lifecycle must not depend on the local restart path.
+    return createSystemTool(makeConfig(), {
+      kubeLifecycle: { context, invoke },
+    });
+  }
+
+  it('routes restart through the gateway controller and surfaces the pending approval', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const invoke = vi.fn(async () => ({ status: 'approval_required', approvalId: 'appr-1', expiresAt: 42 }));
+    const tool = makeKubeTool(invoke);
+
+    const result = await tool.execute('call-kube-restart', { action: 'restart', reason: 'apply hotfix' });
+
+    expect(invoke).toHaveBeenCalledWith({
+      action: 'restart',
+      namespace: 'psfn',
+      release: 'psfn',
+      sourceRevision: VALID_COMMIT,
+      targetImage: VALID_IMAGE,
+      helmRevision: 8,
+      reason: 'apply hotfix',
+    });
+    expect(resultText(result)).toContain('queued for operator approval');
+    expect(resultText(result)).toContain('appr-1');
+    expect((result.details as { isError?: boolean }).isError).toBeUndefined();
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('reports a completed rollout restart', async () => {
+    const invoke = vi.fn(async () => ({
+      status: 'completed',
+      validationResult: 'passed',
+      rollbackStatus: 'not_requested',
+    }));
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-restart-done', { action: 'restart', reason: 'apply hotfix' });
+    expect(resultText(result)).toContain('Rollout restart completed');
+    expect(resultText(result)).toContain('passed');
+  });
+
+  it('fails closed (no local restart) when kube self-management is disabled', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const invoke = vi.fn();
+    const tool = makeKubeTool(invoke, {
+      deployment: 'kube' as const,
+      selfManagement: { enabled: false as const, reason: 'self-management disabled' },
+    });
+
+    const result = await tool.execute('call-kube-disabled', { action: 'restart', reason: 'apply hotfix' });
+
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(resultText(result)).toContain('No local restart was performed');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('requires a reason for a kube restart', async () => {
+    const invoke = vi.fn();
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-noreason', { action: 'restart', reason: '  ' });
+    expect(resultText(result)).toContain('reason is required');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses an in-pod rebuild and points at the guarded pipeline', async () => {
+    const invoke = vi.fn();
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-rebuild', { action: 'rebuild', reason: 'ship a fix' });
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(resultText(result)).toContain('does not run in-pod');
+    expect(resultText(result)).toContain('x5rt.6');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an RPC failure as a loud error rather than a silent restart', async () => {
+    const invoke = vi.fn(async () => { throw new Error('gateway unreachable'); });
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-rpc-fail', { action: 'restart', reason: 'apply hotfix' });
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(resultText(result)).toContain('Restart failed');
+    expect(resultText(result)).toContain('gateway unreachable');
+  });
+
+  it('appends live kube lifecycle status to a settings read', async () => {
+    const invoke = vi.fn(async () => ({
+      status: 'completed',
+      validationResult: 'not_run',
+      rollbackStatus: 'not_requested',
+      details: {
+        deployments: [
+          { name: 'psfn-agent', readyReplicas: 1, desiredReplicas: 1 },
+          { name: 'psfn-gateway', readyReplicas: 0, desiredReplicas: 1 },
+        ],
+      },
+    }));
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-read', { action: 'read', list: true });
+    const text = resultText(result);
+    expect(invoke).toHaveBeenCalledWith({ action: 'diagnose', namespace: 'psfn', release: 'psfn' });
+    expect(text).toContain('Deployment mode: kubernetes');
+    expect(text).toContain(VALID_IMAGE);
+    expect(text).toContain('psfn-agent: ready 1/1');
+    expect(text).toContain('psfn-gateway: ready 0/1');
+  });
+
+  it('keeps a settings read working when live diagnose fails', async () => {
+    const invoke = vi.fn(async () => { throw new Error('diagnose timeout'); });
+    const tool = makeKubeTool(invoke);
+    const result = await tool.execute('call-kube-read-fail', { action: 'read', list: true });
+    const text = resultText(result);
+    expect(text).toContain('Deployment mode: kubernetes');
+    expect(text).toContain('Live deployment state unavailable');
+  });
+});

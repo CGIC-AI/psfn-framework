@@ -15,6 +15,7 @@ import { registerBeadsMethods } from './beads.js';
 import { registerImageMethods } from './image.js';
 import { registerIntakeImageMethods } from './intake-image.js';
 import { registerHomeAssistantMethods } from './home-assistant.js';
+import { registerKubeSelfManagementMethods } from './kube-self-management.js';
 
 export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerLLMMethods(runtime);
@@ -33,4 +34,5 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerImageMethods(runtime);
   registerIntakeImageMethods(runtime);
   registerHomeAssistantMethods(runtime);
+  registerKubeSelfManagementMethods(runtime);
 }

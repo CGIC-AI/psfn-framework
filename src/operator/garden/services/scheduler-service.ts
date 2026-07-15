@@ -392,6 +392,14 @@ export class AdminSchedulerService {
     if (!task) {
       return { ok: false, message: `Task "${id}" not found` };
     }
+    if (task.scheduleSource) {
+      return {
+        ok: false,
+        message:
+          `Task "${id}" is read-only because its schedule is owned by ${task.scheduleSource}; `
+          + 'edit the canonical owner in Settings and restart to apply it',
+      };
+    }
     const previousCadence = readCadenceFromTask(task) ?? { kind: 'relative' };
 
     const taskUpdates: {
@@ -558,6 +566,14 @@ export class AdminSchedulerService {
     const task = this.scheduler.getTask(id);
     if (!task) {
       return { ok: false, message: `Task "${id}" not found` };
+    }
+    if (task.scheduleSource) {
+      return {
+        ok: false,
+        message:
+          `Task "${id}" is read-only because its schedule is owned by ${task.scheduleSource}; `
+          + 'edit the canonical owner in Settings and restart to apply it',
+      };
     }
 
     // Protect core system tasks

@@ -73,6 +73,14 @@ export interface EffectiveChargeQuotaState {
   restartRequired: boolean;
 }
 
+/** Startup-loaded scheduler cadence compared with the canonical owner file. */
+export interface EffectiveBackgroundMaintenanceState {
+  ownerFile: 'scheduler.json';
+  effectiveIntervalMs: number | null;
+  onDiskIntervalMs: number;
+  restartRequired: boolean;
+}
+
 export interface IcpAutonomyChargeOwnerProjection {
   companionSocialQuota: number;
   companionSocialContinuationCost: number;
@@ -102,6 +110,7 @@ export interface AdminSettingsData {
   voiceProviders: AdminVoiceProviderData;
   status: AdminSettingsStatus;
   effectiveChargeQuota: EffectiveChargeQuotaState;
+  effectiveBackgroundMaintenance: EffectiveBackgroundMaintenanceState;
   effectiveIcpAutonomy: EffectiveIcpAutonomySettingsState;
   workspaceLayout?: {
     mode: 'single' | 'fleet';

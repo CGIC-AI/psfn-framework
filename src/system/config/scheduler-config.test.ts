@@ -422,6 +422,58 @@ describe('scheduler config seed defaults', () => {
     });
   });
 
+  it('fails before startup when the relative background cadence can phase-lock outside the rest window', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 8 * 60 * 60_000 + 29 * 60_000,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /backgroundMaintenance\.intervalMs.*plus tickIntervalMs.*must be less than.*rest-window duration.*phase-lock/s,
+      );
+    });
+  });
+
+  it('does not impose the rest-window coverage invariant when episodic processing is disabled', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 24 * 60 * 60_000,
+      };
+      config.episodicProcessing = {
+        ...(config.episodicProcessing as Record<string, unknown>),
+        enabled: false,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(loadSchedulerSeedDefaults({ seedDir }).backgroundMaintenance.intervalMs)
+        .toBe(24 * 60 * 60_000);
+    });
+  });
+
+  it('allows any relative cadence when equal rest-window endpoints mean all day', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.backgroundMaintenance = {
+        ...(config.backgroundMaintenance as Record<string, unknown>),
+        intervalMs: 48 * 60 * 60_000,
+      };
+      config.episodicProcessing = {
+        ...(config.episodicProcessing as Record<string, unknown>),
+        startLocalTime: '00:00',
+        endLocalTime: '00:00',
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+
+      expect(loadSchedulerSeedDefaults({ seedDir }).backgroundMaintenance.intervalMs)
+        .toBe(48 * 60 * 60_000);
+    });
+  });
+
   it('rejects the removed "sleeptime" cadence key with rename guidance (no legacy alias)', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();

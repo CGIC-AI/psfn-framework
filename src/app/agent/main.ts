@@ -443,7 +443,12 @@ async function main(): Promise<void> {
     log.info('No persisted internal state snapshot found; starting fresh');
   }
 
-  const { scheduler, postTurnActions, backgroundMaintenance } = buildAgentSchedulerRuntime({
+  const {
+    scheduler,
+    postTurnActions,
+    backgroundMaintenance,
+    compressionGuidelineEvolution,
+  } = buildAgentSchedulerRuntime({
     eventBus,
     eligibilityGate,
     config,
@@ -569,6 +574,7 @@ async function main(): Promise<void> {
       await moduleLoader.applyRegistryMutation(mutation);
     },
     executionPort: sandboxExecutionPort,
+    compressionGuidelineEvolution,
   });
 
   // Memory write/import tools — intentional memory creation

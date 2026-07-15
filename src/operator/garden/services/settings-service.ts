@@ -63,6 +63,7 @@ import type {
   AdminVoiceProviderData,
   AdminVoiceProviderOption,
   ConfigUpdateResult,
+  EffectiveBackgroundMaintenanceState,
   EffectiveChargeQuotaState,
   EffectiveIcpAutonomySettingsState,
   IcpAutonomyChargeOwnerProjection,
@@ -835,6 +836,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
+      effectiveBackgroundMaintenance: this.buildEffectiveBackgroundMaintenanceState(
+        editors.scheduler,
+      ),
       effectiveIcpAutonomy: this.buildEffectiveIcpAutonomyState(editors),
       workspaceLayout: {
         mode: this.deps.config.multiCompanion === true ? 'fleet' : 'single',
@@ -865,6 +869,20 @@ export class AdminSettingsDataService implements AdminSettingsService {
       effectiveChargeQuotaByLane,
       onDiskChargeQuotaByLane,
       restartRequired,
+    };
+  }
+
+  private buildEffectiveBackgroundMaintenanceState(
+    onDisk: SettingsConfigEditors['scheduler'],
+  ): EffectiveBackgroundMaintenanceState {
+    const effectiveIntervalMs = this.deps.effectiveSchedulerConfig
+      ?.backgroundMaintenance.intervalMs ?? null;
+    const onDiskIntervalMs = onDisk.backgroundMaintenance.intervalMs;
+    return {
+      ownerFile: 'scheduler.json',
+      effectiveIntervalMs,
+      onDiskIntervalMs,
+      restartRequired: effectiveIntervalMs !== null && effectiveIntervalMs !== onDiskIntervalMs,
     };
   }
 
@@ -1129,8 +1147,41 @@ export class AdminSettingsDataService implements AdminSettingsService {
             : { ok: false, message: result.message };
         }
         case 'scheduler': {
-          this.deps.configStore.saveScheduler(parsed);
-          return { ok: true, message: 'scheduler.json saved' };
+          const saved = this.deps.configStore.saveScheduler(parsed);
+          const effectiveSchedulerConfig = this.deps.effectiveSchedulerConfig ?? null;
+          const onDiskIntervalMs = saved.backgroundMaintenance.intervalMs;
+          if (effectiveSchedulerConfig === null) {
+            return {
+              ok: true,
+              message: 'scheduler.json saved; restart required before scheduler runtime changes take effect',
+            };
+          }
+          const effectiveIntervalMs = effectiveSchedulerConfig.backgroundMaintenance.intervalMs;
+          const restartRequired = JSON.stringify(effectiveSchedulerConfig) !== JSON.stringify(saved);
+          if (restartRequired && effectiveIntervalMs !== onDiskIntervalMs) {
+            return {
+              ok: true,
+              message:
+                'scheduler.json saved; restart required before scheduler changes take effect; '
+                + `live background-maintenance cadence remains `
+                + `${effectiveIntervalMs.toLocaleString()} ms until restart `
+                + `(on disk: ${onDiskIntervalMs.toLocaleString()} ms)`,
+            };
+          }
+          if (restartRequired) {
+            return {
+              ok: true,
+              message:
+                'scheduler.json saved; restart required before scheduler changes take effect; '
+                + `background-maintenance cadence remains aligned at `
+                + `${onDiskIntervalMs.toLocaleString()} ms`,
+            };
+          }
+          return {
+            ok: true,
+            message:
+              'scheduler.json saved; live scheduler already matches scheduler.json',
+          };
         }
         case 'capabilities': {
           const result = applyAdminCapabilityTierMutation({

@@ -100,6 +100,7 @@ function buildService(
       dataDir: config.dataDir,
       defaultContextWindow: config.defaultContextWindow,
     }),
+    effectiveSchedulerConfig: loadSchedulerConfig(config.dataDir),
     ...(getCredentialPresence ? { getCredentialPresence } : {}),
   });
 }
@@ -544,7 +545,10 @@ describe('AdminSettingsDataService', () => {
 
     expect(schedulerResult).toEqual({
       ok: true,
-      message: 'scheduler.json saved',
+      message:
+        'scheduler.json saved; restart required before scheduler changes take effect; '
+        + 'live background-maintenance cadence remains '
+        + '3,600,000 ms until restart (on disk: 180,000 ms)',
     });
     expect(capabilitiesResult).toEqual({
       ok: true,
@@ -567,10 +571,51 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.scheduler.backgroundMaintenance.intervalMs).toBe(180_000);
+    expect(settingsData.effectiveBackgroundMaintenance).toEqual({
+      ownerFile: 'scheduler.json',
+      effectiveIntervalMs: 3_600_000,
+      onDiskIntervalMs: 180_000,
+      restartRequired: true,
+    });
     expect(settingsData.editors.capabilities).toEqual(expect.objectContaining({
       tier: 'custom',
       customTokens: capabilitiesPayload.customTokens,
     }));
+  });
+
+  it('reports the live 1h cadence, a saved 10m cadence, and restart alignment end to end', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+    const editedScheduler = {
+      ...loadSchedulerConfig(root),
+      backgroundMaintenance: {
+        ...loadSchedulerConfig(root).backgroundMaintenance,
+        intervalMs: 600_000,
+      },
+    };
+
+    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
+      ok: true,
+      message:
+        'scheduler.json saved; restart required before scheduler changes take effect; '
+        + 'live background-maintenance cadence remains '
+        + '3,600,000 ms until restart (on disk: 600,000 ms)',
+    });
+    expect((await service.getSettingsData()).effectiveBackgroundMaintenance).toEqual({
+      ownerFile: 'scheduler.json',
+      effectiveIntervalMs: 3_600_000,
+      onDiskIntervalMs: 600_000,
+      restartRequired: true,
+    });
+
+    const restartedService = buildService(config);
+    expect((await restartedService.getSettingsData()).effectiveBackgroundMaintenance).toEqual({
+      ownerFile: 'scheduler.json',
+      effectiveIntervalMs: 600_000,
+      onDiskIntervalMs: 600_000,
+      restartRequired: false,
+    });
   });
 
   it('round-trips models through the raw editor path via the injected config store port', async () => {
@@ -955,7 +1000,12 @@ describe('AdminSettingsDataService', () => {
       },
     };
 
-    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler)).ok).toBe(true);
+    expect(service.saveSubConfigJson('scheduler', JSON.stringify(editedScheduler))).toEqual({
+      ok: true,
+      message:
+        'scheduler.json saved; restart required before scheduler changes take effect; '
+        + 'background-maintenance cadence remains aligned at 3,600,000 ms',
+    });
     const data = await service.getSettingsData();
 
     expect(data.effectiveIcpAutonomy.scheduler).toMatchObject({

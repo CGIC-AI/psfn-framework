@@ -7,10 +7,7 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import {
-  isCompressionGuidelineEvolutionChannel,
-  registerSalienceDecayOperation,
-} from './scheduler-runtime.js';
+import { registerSalienceDecayOperation } from './scheduler-runtime.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -51,14 +48,11 @@ describe('agent scheduler runtime wiring', () => {
     expect(source).not.toContain('intervalMs: options.config.maintenanceIntervalMs');
   });
 
-  it('reviews compression guidance only after real shard compaction signals', () => {
+  it('does not register a global turn-end listener for shard compression guidance', () => {
     const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 
-    expect(isCompressionGuidelineEvolutionChannel('shard:analysis-1')).toBe(true);
-    expect(isCompressionGuidelineEvolutionChannel('discord:chat')).toBe(false);
-    expect(isCompressionGuidelineEvolutionChannel('api:main')).toBe(false);
-    expect(source).toContain('if (!isCompressionGuidelineEvolutionChannel(message.channelId)) return;');
-    expect(source).toContain('await runCompressionGuidelineReview(options);');
+    expect(source).toContain('createCompressionGuidelineEvolution({');
+    expect(source).not.toContain("eventBus.on('agent.turn.end'");
     expect(source).not.toContain("id: 'compaction-guideline-review'");
   });
 });

@@ -43,6 +43,10 @@ import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import {
+  createCompressionGuidelineEvolution,
+  type CompressionGuidelineEvolutionPort,
+} from '../../core/session/compression-guideline-evolution.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -55,16 +59,12 @@ import {
 } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Agent');
-const COMPACTION_GUIDELINE_REVIEW_ACTION_KIND = 'compaction-guideline-review';
-
-export function isCompressionGuidelineEvolutionChannel(channelId: string): boolean {
-  return channelId.startsWith('shard:');
-}
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
   backgroundMaintenance: BackgroundMaintenanceRegistrar;
+  compressionGuidelineEvolution: CompressionGuidelineEvolutionPort;
 }
 
 export interface BuildAgentSchedulerRuntimeOptions {
@@ -113,40 +113,6 @@ export function registerSalienceDecayOperation(input: {
   });
 }
 
-async function runCompressionGuidelineReview(
-  options: Pick<BuildAgentSchedulerRuntimeOptions, 'eligibilityGate' | 'sessionManager' | 'gateway'>,
-): Promise<void> {
-  const eligibility = options.eligibilityGate.evaluate(
-    {
-      kind: 'post_turn.action',
-      actionKind: COMPACTION_GUIDELINE_REVIEW_ACTION_KIND,
-    },
-    { requiredTokens: ['memory.write'] },
-  );
-  if (!eligibility.allowed) {
-    log.debug('Compression guideline review skipped', {
-      reason: eligibility.reasonCode,
-      reviewedFailureCount: 0,
-    });
-    return;
-  }
-
-  const result = await options.sessionManager.runPeriodicCompressionGuidelineUpdate(
-    options.gateway,
-  );
-  if (result.status === 'updated') {
-    log.info('Compression guideline updated from failure log review', {
-      version: result.version,
-      reviewedFailureCount: result.reviewedFailureCount,
-    });
-    return;
-  }
-  log.debug('Compression guideline review skipped', {
-    reason: result.reason,
-    reviewedFailureCount: result.reviewedFailureCount,
-  });
-}
-
 export function buildAgentSchedulerRuntime(
   options: BuildAgentSchedulerRuntimeOptions,
 ): AgentSchedulerRuntime {
@@ -164,6 +130,10 @@ export function buildAgentSchedulerRuntime(
     scheduler,
     eligibilityGate: options.eligibilityGate,
     intervalMs: options.schedulerConfig.backgroundMaintenance.intervalMs,
+  });
+  const compressionGuidelineEvolution = createCompressionGuidelineEvolution({
+    eligibilityGate: options.eligibilityGate,
+    llmProvider: options.gateway,
   });
 
   registerSalienceDecayOperation({
@@ -390,25 +360,11 @@ export function buildAgentSchedulerRuntime(
     eligibilityGate: options.eligibilityGate,
     persistencePath: resolvePostTurnActionQueuePath(options.pathSnapshot.companionDataDir),
   });
-  options.eventBus.on('agent.turn.end', async ({ message, response }) => {
-    if (!isCompressionGuidelineEvolutionChannel(message.channelId)) return;
-    const captured = options.sessionManager.recordCompressionFailureFromResponse(
-      message.channelId,
-      message.id,
-      response.content,
-    );
-    if (!captured) return;
-    log.info('Captured compression failure signal for guideline evolution', {
-      channelId: message.channelId,
-      sourceMessageId: message.id,
-    });
-    await runCompressionGuidelineReview(options);
-  });
-
   log.info(`Memory system enabled (${options.gateway.dims}d embeddings via gateway)`);
   return {
     scheduler,
     postTurnActions,
     backgroundMaintenance,
+    compressionGuidelineEvolution,
   };
 }

@@ -100,14 +100,25 @@ export function resolveSettingAuthority(
 
   if (key === 'backgroundMaintenanceIntervalMs') {
     const scheduler = (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
-    const effectiveMs = asInteger(scheduler.backgroundMaintenance?.intervalMs);
+    const effectiveState = data?.effectiveBackgroundMaintenance;
+    const liveMs = asInteger(effectiveState?.effectiveIntervalMs);
+    const onDiskMs = asInteger(effectiveState?.onDiskIntervalMs)
+      ?? asInteger(scheduler.backgroundMaintenance?.intervalMs);
+    const effectiveValue = liveMs !== undefined && onDiskMs !== undefined
+      ? `Live: ${liveMs.toLocaleString()} ms · on disk: ${onDiskMs.toLocaleString()} ms`
+      : onDiskMs !== undefined
+        ? `On disk: ${onDiskMs.toLocaleString()} ms · live value unavailable`
+        : undefined;
     return {
       sourceLabel: fallback.sourceLabel,
-      ...(effectiveMs !== undefined ? { effectiveValue: `${effectiveMs.toLocaleString()} ms` } : {}),
+      ...(effectiveValue ? { effectiveValue } : {}),
       detail:
-        'Authoritative source: scheduler.json > backgroundMaintenance.intervalMs. Saving here changes the one shared cadence for every operation listed on the Bundled Background Maintenance task.',
-      precedence:
-        'scheduler.json wins. Weighted-thought outreach, wake timing, backups, reflections, episode synthesis, and post-turn work keep their own justified triggers.',
+        'Authoritative source: scheduler.json > backgroundMaintenance.intervalMs. Saving writes the shared cadence on disk; the running Bundled Background Maintenance task is unchanged until restart.',
+      precedence: effectiveState?.restartRequired
+        ? 'Restart required: the running cadence still differs from scheduler.json.'
+        : liveMs !== undefined
+          ? 'Live and on-disk cadences match. Other scheduler lanes keep their own justified triggers.'
+          : 'Restart after saving so the scheduler runtime loads the owner-file cadence.',
     };
   }
 

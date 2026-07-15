@@ -39,6 +39,12 @@ const baseData = {
     stt: [],
     tts: [],
   },
+  effectiveBackgroundMaintenance: {
+    ownerFile: 'scheduler.json',
+    effectiveIntervalMs: 3600000,
+    onDiskIntervalMs: 120000,
+    restartRequired: true,
+  },
 };
 
 const baseSchema = {
@@ -75,9 +81,10 @@ const baseSchema = {
 test('bundled background-maintenance interval authority points at scheduler ownership', () => {
   const info = resolveSettingAuthority(baseData, baseSchema, 'backgroundMaintenanceIntervalMs');
   assert.equal(info.sourceLabel, 'scheduler.json');
-  assert.equal(info.effectiveValue, '120,000 ms');
+  assert.equal(info.effectiveValue, 'Live: 3,600,000 ms · on disk: 120,000 ms');
   assert.match(info.detail, /scheduler\.json > backgroundMaintenance\.intervalMs/);
-  assert.match(info.precedence ?? '', /scheduler\.json wins/);
+  assert.match(info.detail, /unchanged until restart/);
+  assert.match(info.precedence ?? '', /Restart required/);
 });
 
 test('custom capability tokens authority shows dormant/active precedence', () => {

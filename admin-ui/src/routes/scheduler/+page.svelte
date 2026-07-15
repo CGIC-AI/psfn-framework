@@ -801,7 +801,12 @@
                 </td>
                 <td class="px-4 py-3">
                   {#if task.type === 'every'}
-                    {#if hasCadenceControls(task)}
+                    {#if task.scheduleSource}
+                      <div class="space-y-1">
+                        <span class="text-sm text-shadow-700 font-mono">{formatInterval(task)}</span>
+                        <span class="block text-[11px] text-shadow-500">Edit this shared cadence in Settings.</span>
+                      </div>
+                    {:else if hasCadenceControls(task)}
                       {@const cadenceEditor = getCadenceEditor(task)}
                       <div class="space-y-2">
                         <div class="flex flex-wrap items-center gap-2">
@@ -1018,7 +1023,9 @@
                 </td>
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-2">
-                    {#if task.type === 'every'}
+                    {#if task.scheduleSource}
+                      <span class="text-xs text-shadow-500">Read-only · restart after Settings edits</span>
+                    {:else if task.type === 'every'}
                       <button
                         onclick={() => toggleTaskEnabled(task)}
                         disabled={saving === `toggle:${task.id}`}
@@ -1030,7 +1037,7 @@
                         {task.state === 'paused' ? 'Enable' : 'Pause'}
                       </button>
                     {/if}
-                    {#if !isProtected(task.id)}
+                    {#if !task.scheduleSource && !isProtected(task.id)}
                       <button
                         onclick={() => handleRemoveTask(task)}
                         disabled={saving === `remove:${task.id}`}

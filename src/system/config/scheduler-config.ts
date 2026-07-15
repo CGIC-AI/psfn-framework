@@ -1463,7 +1463,44 @@ function validateIntrospectionAuditConfig(
   };
 }
 
-function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
+function localTimeMinute(value: string): number {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+}
+
+function assertBackgroundMaintenanceRestWindowCoverage(
+  config: Pick<
+    SchedulerRuntimeConfig,
+    'tickIntervalMs' | 'backgroundMaintenance' | 'episodicProcessing'
+  >,
+  sourcePath: string,
+): void {
+  if (!config.episodicProcessing.enabled) return;
+
+  const startMinute = localTimeMinute(config.episodicProcessing.startLocalTime);
+  const endMinute = localTimeMinute(config.episodicProcessing.endLocalTime);
+  // Equal endpoints mean the gate is open all day, so there is no outside
+  // phase for a relative cadence to lock onto.
+  if (startMinute === endMinute) return;
+  const windowMinutes = (endMinute - startMinute + 24 * 60) % (24 * 60);
+  const windowDurationMs = windowMinutes * 60_000;
+  const maximumRelativeGapMs = config.backgroundMaintenance.intervalMs
+    + config.tickIntervalMs;
+
+  // A relative task can start at any phase. Its longest possible gap includes
+  // one scheduler-tick delay, so that gap must be strictly shorter than the
+  // daily rest window or every poll could forever land outside the window.
+  if (maximumRelativeGapMs >= windowDurationMs) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.intervalMs `
+      + `(${config.backgroundMaintenance.intervalMs}) plus tickIntervalMs (${config.tickIntervalMs}) `
+      + `must be less than the episodicProcessing rest-window duration (${windowDurationMs} ms); `
+      + 'otherwise the relative cadence can phase-lock outside every rest window',
+    );
+  }
+}
+
+export function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
   }
@@ -1482,12 +1519,18 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     );
   }
 
-  return {
-    tickIntervalMs: toInterval(raw.tickIntervalMs, 'tickIntervalMs'),
+  const tickIntervalMs = toInterval(raw.tickIntervalMs, 'tickIntervalMs');
+  const backgroundMaintenance = validateBackgroundMaintenanceConfig(
+    raw.backgroundMaintenance,
+    sourcePath,
+  );
+  const episodicProcessing = validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath);
+  const validated: SchedulerRuntimeConfig = {
+    tickIntervalMs,
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
-    backgroundMaintenance: validateBackgroundMaintenanceConfig(raw.backgroundMaintenance, sourcePath),
+    backgroundMaintenance,
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
-    episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
+    episodicProcessing,
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
@@ -1504,6 +1547,8 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
   };
+  assertBackgroundMaintenanceRestWindowCoverage(validated, sourcePath);
+  return validated;
 }
 
 export function loadSchedulerConfig(

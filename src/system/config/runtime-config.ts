@@ -28,7 +28,7 @@ export function hydrateJsonBackedRuntimeConfig(
   applySettings(config, modelsConfig);
   applyProvidersRuntimeConfig(config, loadProvidersConfig(dataDir, loadOptions));
 
-  const schedulerConfig = resolveRuntimeSchedulerConfig({
+  resolveRuntimeSchedulerConfig({
     dataDir,
     ...(seedDir ? { seedDir } : {}),
   });

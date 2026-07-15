@@ -30,3 +30,9 @@ obj/
 # Local beads runtime state
 .beads/interactions.jsonl
 .beads/dolt-monitor.pid.lock
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# NTM swarm local runtime state
+.ntm/

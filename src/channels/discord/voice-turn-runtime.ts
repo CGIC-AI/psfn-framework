@@ -588,6 +588,21 @@ export async function transcribeOpusStream(
   return { transcript: finalTranscript || latestPartial, pcmBytes };
 }
 
+type TtsStreamSession = { audio: AsyncIterable<{ audio: Uint8Array }>; cancel(reason: string): Promise<void> };
+
+/**
+ * A streaming TTS session whose first audible chunk has already been read under
+ * the short `tts_first_byte` budget. Playback resumes from `firstChunk` and
+ * continues draining `iterator`, all under the long, non-retryable `output`
+ * budget so playback duration can never trip a first-byte retry (double-speak).
+ */
+interface AcquiredTtsAudio {
+  session: TtsStreamSession;
+  iterator: AsyncIterator<{ audio: Uint8Array }>;
+  firstChunk: { audio: Uint8Array } | null;
+  totalAudioBytes: number;
+}
+
 export async function speakVoiceText(
   runtime: VoiceTurnRuntimeContext & {
     playWithTtsConnector(connector: NonNullable<VoiceTurnRuntimeContext['ttsConnectors'][number]>, text: string, turn?: ActiveVoiceTurn): Promise<void>;
@@ -618,19 +633,88 @@ export async function speakVoiceText(
     throw new Error('No TTS connector available');
   }
 
-  await runWithVoiceStageBudget({
-    stage: 'tts',
+  // No stage wraps the whole synth+playback: request-to-first-byte is budgeted
+  // under `tts_first_byte` (inside playWithTtsConnector) and playback under
+  // `output`. A long reply's playback therefore never trips a synth retry.
+  await runtime.playWithTtsConnector(selected.value, safeText, turn);
+}
+
+/**
+ * Read the streaming session up to and including its first audible chunk under
+ * the short, retry-safe `tts_first_byte` budget. On a first-byte retry the prior
+ * attempt's session is cancelled BEFORE re-synthesizing, so a stalled first byte
+ * can never leave two live TTS streams playing at once (double-speak).
+ */
+export async function acquireTtsFirstByte(
+  runtime: VoiceTurnRuntimeContext,
+  connector: NonNullable<VoiceTurnRuntimeContext['ttsConnectors'][number]>,
+  text: string,
+  turn?: ActiveVoiceTurn,
+): Promise<AcquiredTtsAudio> {
+  let attempt = 0;
+
+  return await runWithVoiceStageBudget({
+    stage: 'tts_first_byte',
     budgets: runtime.reliabilityBudgets,
     signal: turn?.abortController.signal,
-    task: async () => {
-      await runtime.playWithTtsConnector(selected.value, safeText, turn);
+    task: async (signal) => {
+      attempt += 1;
+
+      // Retry: the previous attempt may have opened a session before stalling.
+      // Cancel it before re-synth so we never run two overlapping streams.
+      if (attempt > 1 && turn?.ttsSession) {
+        const prior = turn.ttsSession;
+        turn.ttsSession = null;
+        await prior.cancel('tts-first-byte-retry').catch(() => undefined);
+      }
+
+      if (turn) {
+        assertActiveVoiceTurn(runtime, turn);
+      }
+
+      const session = await connector.synthesizeStream({
+        text,
+        encoding: 'mp3',
+        allowBufferFallback: false,
+      }, signal);
+      if (turn) {
+        turn.ttsSession = session;
+      }
+
+      const iterator = session.audio[Symbol.asyncIterator]();
+      let totalAudioBytes = 0;
+
+      for (;;) {
+        if (turn) {
+          assertActiveVoiceTurn(runtime, turn);
+        }
+
+        const next = await iterator.next();
+        if (next.done) {
+          return { session, iterator, firstChunk: null, totalAudioBytes };
+        }
+
+        totalAudioBytes = validateTtsAudioChunk(next.value.audio, totalAudioBytes, runtime.securityLimits);
+        if (next.value.audio.byteLength === 0) continue;
+
+        if (turn?.turnId) {
+          await runtime.eventBus.emit('voice.tts.first-byte', {
+            turnId: turn.turnId,
+            channelId: turn.channel.id,
+            userId: runtime.targetUserId,
+            timestampMs: Date.now(),
+          });
+          emitVoicePerformance(runtime, turn, 'tts_first_byte');
+        }
+
+        return { session, iterator, firstChunk: next.value, totalAudioBytes };
+      }
     },
   });
 }
 
 export async function playWithTtsConnector(
   runtime: VoiceTurnRuntimeContext & {
-    playTtsSession(session: { audio: AsyncIterable<{ audio: Uint8Array }>; cancel(reason: string): Promise<void> }, turn?: ActiveVoiceTurn): Promise<void>;
     playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
   },
   connector: NonNullable<VoiceTurnRuntimeContext['ttsConnectors'][number]>,
@@ -641,15 +725,8 @@ export async function playWithTtsConnector(
     if (turn) {
       assertActiveVoiceTurn(runtime, turn);
     }
-    const streamSession = await connector.synthesizeStream({
-      text,
-      encoding: 'mp3',
-      allowBufferFallback: false,
-    }, turn?.abortController.signal);
-    if (turn) {
-      turn.ttsSession = streamSession;
-    }
-    await runtime.playTtsSession(streamSession, turn);
+    const acquired = await acquireTtsFirstByte(runtime, connector, text, turn);
+    await playAcquiredTtsAudio(runtime, acquired, turn);
   } catch (error) {
     if (turn?.abortController.signal.aborted || classifyVoiceTurnStatus(error) === 'cancelled') {
       throw error;
@@ -664,7 +741,12 @@ export async function playWithTtsConnector(
       if (turn) {
         assertActiveVoiceTurn(runtime, turn);
       }
-      const audio = await connector.synthesizeBuffer({ text, encoding: 'mp3' }, turn?.abortController.signal);
+      const audio = await runWithVoiceStageBudget({
+        stage: 'tts_first_byte',
+        budgets: runtime.reliabilityBudgets,
+        signal: turn?.abortController.signal,
+        task: async (signal) => connector.synthesizeBuffer({ text, encoding: 'mp3' }, signal),
+      });
       validateTtsAudioChunk(audio, 0, runtime.securityLimits);
       if (turn?.turnId) {
         await runtime.eventBus.emit('voice.tts.first-byte', {
@@ -686,15 +768,29 @@ export async function playWithTtsConnector(
   }
 }
 
-export async function playTtsSession(
+/**
+ * Play an acquired streaming session under the long, non-retryable `output`
+ * budget (inside playReadableAudio). The first audible chunk was already read
+ * during first-byte acquisition; playback resumes from it.
+ */
+export async function playAcquiredTtsAudio(
   runtime: VoiceTurnRuntimeContext & {
     playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
   },
-  session: { audio: AsyncIterable<{ audio: Uint8Array }>; cancel(reason: string): Promise<void> },
+  acquired: AcquiredTtsAudio,
   turn?: ActiveVoiceTurn,
 ): Promise<void> {
+  const { session } = acquired;
   try {
-    await runtime.playReadableAudio(Readable.from(createPlaybackChunkIterator(runtime, session.audio, turn)), turn);
+    // Empty synthesis (no audible bytes) has nothing to play; do not spin up a
+    // player on silence.
+    if (!acquired.firstChunk) {
+      return;
+    }
+    await runtime.playReadableAudio(
+      Readable.from(resumeTtsPlayback(runtime, acquired, turn)),
+      turn,
+    );
   } finally {
     const reason = turn?.abortController.signal.aborted ? 'playback-aborted' : 'playback-finished';
     await session.cancel(reason).catch(() => undefined);
@@ -704,33 +800,30 @@ export async function playTtsSession(
   }
 }
 
-export async function* createPlaybackChunkIterator(
+export async function* resumeTtsPlayback(
   runtime: VoiceTurnRuntimeContext,
-  audio: AsyncIterable<{ audio: Uint8Array }>,
+  acquired: AcquiredTtsAudio,
   turn?: ActiveVoiceTurn,
 ): AsyncGenerator<Buffer> {
-  let totalAudioBytes = 0;
-  let emittedFirstByte = false;
+  const { iterator, firstChunk } = acquired;
+  let totalAudioBytes = acquired.totalAudioBytes;
 
-  for await (const chunk of audio) {
+  if (firstChunk) {
+    yield Buffer.isBuffer(firstChunk.audio) ? firstChunk.audio : Buffer.from(firstChunk.audio);
+  }
+
+  for (;;) {
     if (turn) {
       assertActiveVoiceTurn(runtime, turn);
     }
-    totalAudioBytes = validateTtsAudioChunk(chunk.audio, totalAudioBytes, runtime.securityLimits);
-    if (chunk.audio.byteLength === 0) continue;
 
-    if (!emittedFirstByte && turn?.turnId) {
-      emittedFirstByte = true;
-      await runtime.eventBus.emit('voice.tts.first-byte', {
-        turnId: turn.turnId,
-        channelId: turn.channel.id,
-        userId: runtime.targetUserId,
-        timestampMs: Date.now(),
-      });
-      emitVoicePerformance(runtime, turn, 'tts_first_byte');
-    }
+    const next = await iterator.next();
+    if (next.done) break;
 
-    yield Buffer.isBuffer(chunk.audio) ? chunk.audio : Buffer.from(chunk.audio);
+    totalAudioBytes = validateTtsAudioChunk(next.value.audio, totalAudioBytes, runtime.securityLimits);
+    if (next.value.audio.byteLength === 0) continue;
+
+    yield Buffer.isBuffer(next.value.audio) ? next.value.audio : Buffer.from(next.value.audio);
   }
 }
 

@@ -1,7 +1,11 @@
 import type { RetryOptions } from '../../llm/retry.js';
 import { withRetry } from '../../llm/retry.js';
 
-export type VoiceRuntimeStage = 'ingest' | 'stt' | 'llm' | 'tts' | 'output';
+// `tts_first_byte` budgets the synth-request -> first audible chunk window only.
+// It is short and retry-safe so a stalled first byte fails fast and re-synths
+// (after cancelling the prior attempt). `tts`/`output` are long, non-retryable
+// playback budgets: playback duration must never trip a retry (double-speak).
+export type VoiceRuntimeStage = 'ingest' | 'stt' | 'llm' | 'tts_first_byte' | 'tts' | 'output';
 
 export interface VoiceStageBudget {
   timeoutMs: number;
@@ -15,7 +19,11 @@ export const DEFAULT_VOICE_RELIABILITY_BUDGETS: VoiceReliabilityBudgets = {
   ingest: { timeoutMs: 8_000, maxRetries: 0, baseDelayMs: 0 },
   stt: { timeoutMs: 20_000, maxRetries: 1, baseDelayMs: 250 },
   llm: { timeoutMs: 45_000, maxRetries: 1, baseDelayMs: 500 },
-  tts: { timeoutMs: 25_000, maxRetries: 1, baseDelayMs: 250 },
+  // Short, retry-safe: cover only request -> first audible byte.
+  tts_first_byte: { timeoutMs: 8_000, maxRetries: 1, baseDelayMs: 250 },
+  // Long, non-retryable playback budgets. A retry here would re-synthesize an
+  // already-playing reply and cause double-speak, so maxRetries stays 0.
+  tts: { timeoutMs: 125_000, maxRetries: 0, baseDelayMs: 0 },
   output: { timeoutMs: 125_000, maxRetries: 0, baseDelayMs: 0 },
 };
 

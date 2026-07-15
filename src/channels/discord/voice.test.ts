@@ -128,6 +128,7 @@ const reliabilityMocks = vi.hoisted(() => {
       ingest: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
       stt: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
       llm: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
+      tts_first_byte: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
       tts: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
       output: { timeoutMs: 10, maxRetries: 0, baseDelayMs: 0 },
     })),

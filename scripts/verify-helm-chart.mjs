@@ -502,7 +502,7 @@ const hubRendered = render([
   '--set',
   'hostPorts.satelliteHub.enabled=true',
   '--set',
-  'hostPorts.satelliteHub.sourceCIDRs[0]=192.168.1.0/24',
+  'hostPorts.satelliteHub.sourceCIDRs[0]=192.0.2.0/24',
 ]);
 
 const hubSecret = findDocumentByKindName(hubRendered, 'Secret', 'psfn-app');

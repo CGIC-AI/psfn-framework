@@ -255,7 +255,7 @@ reconstructed from the true-up doc.)
    legitimate behavior (read article → message someone about it). Hard, or
    soft-with-review at regular/public tiers only?
 3. **Runtime budget + licensing.** Is ~184M ONNX in-process acceptable on the
-   psfn-shard Pi (or use `-small` / gateway-host-only)? Is the Llama Community
+   constrained deployment host (or use `-small` / gateway-host-only)? Is the Llama Community
    license acceptable for Prompt-Guard-2 as a second opinion, or standardize
    on Apache-2.0 ProtectAI only?
 4. **Who releases quarantined items** — operator-only via Garden, or can the

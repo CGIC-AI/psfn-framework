@@ -86,7 +86,7 @@ describe('structured tool error results', () => {
   it('redacts sensitive diagnostics and bounds rawDiagnostic length', () => {
     const longSecret = 'a'.repeat(80);
     const raw = [
-      'failed reading /home/ada/psfn-framework/.env',
+      'failed reading /home/user/psfn-framework/.env',
       'OPENAI_API_KEY=sk-secret',
       `Authorization: Bearer ${longSecret}`,
       'url=https://user:password@example.com/callback?api_key=secret&q=ok#token=secret',
@@ -98,7 +98,7 @@ describe('structured tool error results', () => {
 
     expect(diagnostic).toBeDefined();
     expect(diagnostic?.length).toBeLessThanOrEqual(512);
-    expect(diagnostic).not.toContain('/home/ada');
+    expect(diagnostic).not.toContain('/home/user');
     expect(diagnostic).not.toContain('OPENAI_API_KEY');
     expect(diagnostic).not.toContain('sk-secret');
     expect(diagnostic).not.toContain(longSecret);

@@ -240,7 +240,7 @@ describe('ShardManager', () => {
 
   beforeEach(() => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
-    dir = mkdtempSync(join(tmpdir(), 'psfn-shard-'));
+    dir = mkdtempSync(join(tmpdir(), 'psfn-worker-'));
     sessionStore = new SessionStore(dir);
     eventBus = new EventBus();
     // Reset per-test mock state

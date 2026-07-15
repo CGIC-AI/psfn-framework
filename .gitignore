@@ -30,7 +30,12 @@ working_docs/*primer*
 working_docs/*Primer*
 working_docs/*PRIMER*
 working_docs/PSFN_PROJECT_STATE_20260611.md
+working_docs/private-live-ops.md
 workspace/
+
+# Deployment-specific operator inputs; copy from the tracked example.
+scripts/ops/private-ops.env
+deploy/helm/psfn/overlays/*.local.values.yaml
 
 # Companion personal files live inside the repo tree but are runtime/personal data.
 purrsephone/

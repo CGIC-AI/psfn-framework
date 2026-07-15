@@ -97,6 +97,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/public-sanitize-check.mjs",
+      "contains": "psfn",
+      "reason": "Public sanitization rejects deployment fingerprints that use the project slug; these patterns are infrastructure hygiene rules, not companion identity defaults.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-agent-docker-isolation.mjs",
       "contains": "psfn",
       "reason": "Docker isolation verification references project-owned service and network names.",

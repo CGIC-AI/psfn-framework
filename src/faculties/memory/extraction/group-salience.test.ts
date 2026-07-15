@@ -74,7 +74,7 @@ function settings(overrides: SalienceTestOverrides = {}): GroupMemorySettings {
 describe('group salience candidate selection', () => {
   it('keeps chatter-heavy 75-message chunks bounded while retaining durable signals', () => {
     const entries = makeChatterEntries(75);
-    entries[9] = makeEntry(10, 'Carlini, I need you to remember that I hate blue cheese.');
+    entries[9] = makeEntry(10, 'Lyra, I need you to remember that I hate blue cheese.');
     entries[19] = makeEntry(20, 'My favorite coffee is a cardamom latte.');
     entries[39] = makeEntry(40, "Please don't share my work schedule outside this room.");
     entries[49] = makeEntry(50, 'I will bring the monastery beer recipe tomorrow.');
@@ -85,7 +85,7 @@ describe('group salience candidate selection', () => {
         maxCandidateSpansPerChunk: 8,
         neighboringContextMessages: 1,
       }),
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     const selectedIds = selection.candidateSpans.flatMap(span => span.sourceMessageIds);
@@ -112,7 +112,7 @@ describe('group salience candidate selection', () => {
       settings: settings({
         neighboringContextMessages: 0,
       }),
-      companionNames: ['Carlini'],
+      companionNames: ['Lyra'],
     });
 
     expect(selection.candidateSpans).toHaveLength(1);

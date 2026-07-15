@@ -185,11 +185,11 @@ describe('LLMClient ICP conversation cost admission', () => {
   const correlation: IcpConversationCorrelation = {
     conversationId: '33333333-3333-4333-8333-333333333333',
     rootInitiationId: '44444444-4444-4444-8444-444444444444',
-    initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
-    localCompanionId: '11111111-1111-4111-8111-111111111111',
-    peerCompanionId: '22222222-2222-4222-8222-222222222222',
+    initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     peerContactId: 'contact-b',
-    channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+    channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     turnId: 'turn-1',
     messageId: 'message-1',
     requestId: 'request-1',
@@ -3984,7 +3984,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
       if (model.id === 'ChatGPTN') {
         yield { type: 'text_delta', delta: '<｜begin' };
-        yield { type: 'text_delta', delta: "▁of▁sentence｜># Carlini's Response\n\nYeah, I remember." };
+        yield { type: 'text_delta', delta: "▁of▁sentence｜># Lyra's Response\n\nYeah, I remember." };
         return;
       }
 
@@ -4081,7 +4081,7 @@ describe('LLMClient model budget gates and usage metering', () => {
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
       if (model.id === 'ChatGPTN') {
-        yield { type: 'text_delta', delta: '# Carlini' };
+        yield { type: 'text_delta', delta: '# Lyra' };
         yield { type: 'text_delta', delta: "'s Response\n\nYeah, I remember." };
         return;
       }
@@ -4116,7 +4116,7 @@ describe('LLMClient model budget gates and usage metering', () => {
 
     expect(response.content).toBe('Recovered on fallback.');
     expect(streamedText.join('')).toBe('Recovered on fallback.');
-    expect(streamedText.join('')).not.toContain("Carlini's Response");
+    expect(streamedText.join('')).not.toContain("Lyra's Response");
     expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
   });
 

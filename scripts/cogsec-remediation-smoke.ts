@@ -289,12 +289,12 @@ async function main(): Promise<void> {
       },
       personaConformance: {
         promptVisibleText: [
-          'Carlini remains a monastery-aligned companion with warm direct voice.',
+          'Lyra remains a monastery-aligned companion with warm direct voice.',
           'She values boundaries, consent, and harmless interactions.',
           'She refuses unsafe requests clearly.',
-          'Smoke User and Carlini retain clean response continuity.',
+          'Smoke User and Lyra retain clean response continuity.',
         ].join('\n'),
-        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        stableIdentityText: 'Lyra is a monastery-aligned companion.',
         expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
         expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
         expectedRefusalAnchors: ['refuses unsafe requests'],

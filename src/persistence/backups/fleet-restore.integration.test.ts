@@ -19,6 +19,7 @@ import {
   type FleetBackupCompanionUnit,
 } from './service.js';
 import {
+  invalidateRestoredMemorySubjectProjections,
   restoreFleetClusterArtifact,
   restoreFleetCompanionSlice,
   restoreFleetGroupArtifact,
@@ -107,6 +108,64 @@ async function expectProbe(databaseUrl: string, schema: string, expected: string
 }
 
 describe('fleet restore against real Postgres', () => {
+  it('invalidates restored memory subject projections before the database is accepted', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const pool = createPostgresPool(databaseUrl, { max: 1 });
+    try {
+      await pool.query(`
+        CREATE SCHEMA companion_alpha;
+        CREATE TABLE companion_alpha.l2_memories (
+          id text PRIMARY KEY,
+          authorization_revision bigint NOT NULL,
+          subject_evidence_digest text
+        );
+        CREATE TABLE companion_alpha.l2_memory_subject_classifications (
+          memory_id text PRIMARY KEY,
+          status text NOT NULL,
+          updated_at bigint NOT NULL
+        );
+        CREATE TABLE companion_alpha.l2_memory_subject_backfill_checkpoints (
+          classifier_version integer PRIMARY KEY,
+          cursor_memory_id text,
+          completed boolean NOT NULL,
+          processed_count bigint NOT NULL,
+          updated_at bigint NOT NULL
+        );
+        INSERT INTO companion_alpha.l2_memories VALUES ('memory-1', 4, repeat('a', 64));
+        INSERT INTO companion_alpha.l2_memory_subject_classifications VALUES ('memory-1', 'current', 1);
+        INSERT INTO companion_alpha.l2_memory_subject_backfill_checkpoints VALUES (1, 'memory-1', TRUE, 1, 1);
+      `);
+
+      await invalidateRestoredMemorySubjectProjections({ databaseUrl }, ['companion_alpha']);
+      const state = await pool.query<{
+        authorization_revision: string;
+        subject_evidence_digest: string | null;
+        status: string;
+        cursor_memory_id: string | null;
+        completed: boolean;
+        processed_count: string;
+      }>(`
+        SELECT memory.authorization_revision, memory.subject_evidence_digest,
+               classification.status, checkpoint.cursor_memory_id,
+               checkpoint.completed, checkpoint.processed_count
+        FROM companion_alpha.l2_memories memory
+        JOIN companion_alpha.l2_memory_subject_classifications classification
+          ON classification.memory_id = memory.id
+        CROSS JOIN companion_alpha.l2_memory_subject_backfill_checkpoints checkpoint
+      `);
+      expect(state.rows[0]).toEqual({
+        authorization_revision: '5',
+        subject_evidence_digest: null,
+        status: 'invalidated',
+        cursor_memory_id: null,
+        completed: false,
+        processed_count: '0',
+      });
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('authenticates the exact durable marker inside schema rollback', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const pool = createPostgresPool(databaseUrl, { max: 1 });

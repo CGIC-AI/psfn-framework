@@ -845,3 +845,149 @@ describe('turn-records content-addressed captured wire payload (bead hgw3-80f6)'
       .toThrow(/both an inline body and bodyRef/);
   });
 });
+
+function staticpromptsDir(sessionsDir: string): string {
+  return join(sessionsDir, '_turn_records', '_shared', 'staticprompts');
+}
+
+function buildStaticPrefixTemplate(marker: string): string {
+  // A realistically-sized, session-stable static prefix: the amplified,
+  // byte-identical-across-turns material bead auiu content-addresses.
+  return [
+    `<character marker="${marker}">`,
+    'You are a long-lived companion. Your identity lives in data, not weights.',
+    ...Array.from({ length: 40 }, (_, index) => `Static operator directive line ${index}: {{companion_name}} holds continuity.`),
+    '</character>',
+  ].join('\n');
+}
+
+function createStaticPromptTurnRecord(
+  template: string,
+  overrides: Partial<TurnRecord> = {},
+): TurnRecord {
+  const record = createSnapshotTurnRecord(buildToolDefinitions('static'), overrides);
+  const snapshot = record.observability!.snapshot! as TurnSnapshotRecord & Record<string, unknown>;
+  snapshot.prompt = {
+    staticPrefixTemplate: template,
+    dynamicSuffixTemplate: 'Per-turn dynamic suffix for {{channel_id}}.',
+    staticHash: 'fixture-static-hash',
+    versionPointer: 'fixture-version-pointer',
+  } as unknown as TurnSnapshotRecord['prompt'];
+  return record;
+}
+
+describe('turn-records content-addressed static prompt prefix (bead auiu)', () => {
+  it('persists staticPrefixTemplateRef, drops the inline template, and resolves byte-identically on read', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-'));
+    const template = buildStaticPrefixTemplate('alpha');
+    const record = createStaticPromptTurnRecord(template);
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    store.appendTurnRecord(record);
+
+    const rawLine = readFileSync(join(sessionsDir, '_turn_records', 'psfn-amica%3Atest%3Api5.jsonl'), 'utf-8');
+    expect(rawLine).toContain('"staticPrefixTemplateRef"');
+    // The big session-stable template left the hot JSONL.
+    expect(rawLine).not.toContain('Static operator directive line 0');
+    expect(rawLine).not.toContain(template);
+    // The per-turn dynamic suffix stays inline (non-goal).
+    expect(rawLine).toContain('Per-turn dynamic suffix');
+    expect(readdirSync(staticpromptsDir(sessionsDir))).toHaveLength(1);
+
+    // Read restores the inline template transparently — byte-identical round-trip.
+    expect(store.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
+    const [readBack] = store.readRecentTurnRecords(record.channelId, 5);
+    expect(readBack!.observability!.snapshot!.prompt?.staticPrefixTemplate).toBe(template);
+  });
+
+  it('stores an identical static prefix once and distinct prefixes separately', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-dedupe-'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    const shared = buildStaticPrefixTemplate('shared');
+
+    store.appendTurnRecord(createStaticPromptTurnRecord(shared, { requestId: 'req-1' }));
+    store.appendTurnRecord(createStaticPromptTurnRecord(shared, {
+      requestId: 'req-2',
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4f',
+    }));
+    expect(readdirSync(staticpromptsDir(sessionsDir))).toHaveLength(1);
+
+    store.appendTurnRecord(createStaticPromptTurnRecord(buildStaticPrefixTemplate('other'), {
+      requestId: 'req-3',
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e50',
+    }));
+    expect(readdirSync(staticpromptsDir(sessionsDir))).toHaveLength(2);
+  });
+
+  it('resolves the staticPrefixTemplateRef transparently via findTurnRecord too', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-find-'));
+    const record = createStaticPromptTurnRecord(buildStaticPrefixTemplate('find'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    store.appendTurnRecord(record);
+    expect(store.findTurnRecord(record.channelId, record.turnId)).toEqual(record);
+  });
+
+  it('fails loudly on a dangling staticPrefixTemplateRef', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-dangling-'));
+    const record = createStaticPromptTurnRecord(buildStaticPrefixTemplate('gone'));
+    createFilesystemTurnRecordStorePort(sessionsDir).appendTurnRecord(record);
+
+    const [sidecarFile] = readdirSync(staticpromptsDir(sessionsDir));
+    rmSync(join(staticpromptsDir(sessionsDir), sidecarFile!));
+
+    const freshStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    expect(() => freshStore.readRecentTurnRecords(record.channelId, 5))
+      .toThrow(/staticPrefixTemplateRef .* is dangling/);
+  });
+
+  it('rejects a record carrying both an inline template and a staticPrefixTemplateRef', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-ambiguous-'));
+    const record = createStaticPromptTurnRecord(buildStaticPrefixTemplate('both'));
+    const store = createFilesystemTurnRecordStorePort(sessionsDir);
+    store.appendTurnRecord(record);
+
+    const path = join(sessionsDir, '_turn_records', 'psfn-amica%3Atest%3Api5.jsonl');
+    const persisted = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const snapshot = (persisted.observability as Record<string, unknown>).snapshot as Record<string, unknown>;
+    (snapshot.prompt as Record<string, unknown>).staticPrefixTemplate = buildStaticPrefixTemplate('both');
+    writeFileSync(path, `${JSON.stringify(persisted)}\n`, 'utf-8');
+
+    expect(() => createFilesystemTurnRecordStorePort(sessionsDir).readRecentTurnRecords(record.channelId, 5))
+      .toThrow(/both an inline staticPrefixTemplate/);
+  });
+
+  it('fails closed when interning against a static-prefix sidecar that was rewritten', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-tampered-'));
+    const sharedStore = createTurnRecordSharedStore(join(sessionsDir, '_turn_records'));
+    const template = buildStaticPrefixTemplate('verified');
+
+    const hash = sharedStore.internStaticPrompt(template);
+    writeFileSync(
+      join(staticpromptsDir(sessionsDir), `${hash}.json`),
+      JSON.stringify(buildStaticPrefixTemplate('rewritten')),
+      'utf-8',
+    );
+
+    const freshStore = createTurnRecordSharedStore(join(sessionsDir, '_turn_records'));
+    expect(() => freshStore.internStaticPrompt(template))
+      .toThrow(/corrupt.*does not match ref/);
+    expect(() => freshStore.resolveStaticPrompt(hash)).toThrow(/corrupt/);
+  });
+
+  it('reads old fat records with an inline staticPrefixTemplate exactly as written', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-static-fat-compat-'));
+    const template = buildStaticPrefixTemplate('fat');
+    const record = createStaticPromptTurnRecord(template);
+
+    // Historical fat line: written directly, bypassing the slimming append.
+    const path = join(sessionsDir, '_turn_records', 'psfn-amica%3Atest%3Api5.jsonl');
+    mkdirSync(join(sessionsDir, '_turn_records'), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(record)}\n`, 'utf-8');
+
+    const [readBack] = createFilesystemTurnRecordStorePort(sessionsDir).readRecentTurnRecords(record.channelId, 5);
+    expect(readBack).toEqual(record);
+    expect(readBack!.observability!.snapshot!.prompt?.staticPrefixTemplate).toBe(template);
+    // No sidecar was created for a directly-written fat record.
+    expect(existsSync(staticpromptsDir(sessionsDir))).toBe(false);
+  });
+});

@@ -26,9 +26,19 @@ import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
 const SHARED_DIR = '_shared';
 const TOOLDEFS_DIR = 'tooldefs';
 const WIREBODIES_DIR = 'wirebodies';
+const STATICPROMPTS_DIR = 'staticprompts';
 
 /** Persisted-record field carrying the content hash instead of inline defs. */
 export const TOOL_DEFINITIONS_REF_FIELD = 'toolDefinitionsRef';
+
+/**
+ * Persisted-record field (bead auiu) carrying the content hash of the static
+ * system-prompt prefix template instead of the inline string. The static
+ * prefix is session-stable (it only changes when the prompt stack is edited),
+ * so hundreds of turns in a session serialize byte-identical copies of the
+ * same multi-KB template; content-addressing stores it once in the sidecar.
+ */
+export const STATIC_PROMPT_TEMPLATE_REF_FIELD = 'staticPrefixTemplateRef';
 
 export interface TurnRecordSharedStore {
   /** Store the set once (write-once) and return its content hash. */
@@ -39,6 +49,10 @@ export interface TurnRecordSharedStore {
   internWireBody(body: unknown): string;
   /** Resolve a content hash back to the stored wire body. Throws on dangling/corrupt refs. */
   resolveWireBody(hash: string): unknown;
+  /** Store the static system-prompt prefix template once (write-once) and return its content hash. */
+  internStaticPrompt(template: string): string;
+  /** Resolve a content hash back to the stored static prefix template. Throws on dangling/corrupt refs. */
+  resolveStaticPrompt(hash: string): string;
 }
 
 function assertValidToolDefinitionsPayload(value: unknown, hash: string): asserts value is ToolSchema[] {
@@ -117,8 +131,10 @@ function resolveSerialized(
 export function createTurnRecordSharedStore(turnRecordsDir: string): TurnRecordSharedStore {
   const tooldefsDir = join(turnRecordsDir, SHARED_DIR, TOOLDEFS_DIR);
   const wirebodiesDir = join(turnRecordsDir, SHARED_DIR, WIREBODIES_DIR);
+  const staticpromptsDir = join(turnRecordsDir, SHARED_DIR, STATICPROMPTS_DIR);
   const tooldefsByHash = new Map<string, string>();
   const wirebodiesByHash = new Map<string, string>();
+  const staticpromptsByHash = new Map<string, string>();
 
   return {
     internToolDefinitions: (toolDefinitions) => internSerialized(
@@ -154,6 +170,28 @@ export function createTurnRecordSharedStore(turnRecordsDir: string): TurnRecordS
         hash,
       );
       return JSON.parse(serialized) as unknown;
+    },
+    internStaticPrompt: (template) => internSerialized(
+      staticpromptsDir,
+      'static-prompt',
+      staticpromptsByHash,
+      JSON.stringify(template),
+    ),
+    resolveStaticPrompt: (hash) => {
+      const serialized = resolveSerialized(
+        staticpromptsDir,
+        'static-prompt',
+        STATIC_PROMPT_TEMPLATE_REF_FIELD,
+        staticpromptsByHash,
+        hash,
+      );
+      const parsed: unknown = JSON.parse(serialized);
+      if (typeof parsed !== 'string') {
+        throw new Error(
+          `TurnRecord shared static-prompt payload for ref "${hash}" is not a string`,
+        );
+      }
+      return parsed;
     },
   };
 }
@@ -320,5 +358,87 @@ export function resolveTurnRecordWirePayload(
   return withCapturedWirePayload(record, {
     ...capturedRest,
     body,
+  });
+}
+
+function readSnapshotPrompt(record: TurnRecord): Record<string, unknown> | undefined {
+  const snapshot = record.observability?.snapshot;
+  if (!snapshot || !isRecord(snapshot.prompt)) return undefined;
+  return snapshot.prompt as unknown as Record<string, unknown>;
+}
+
+function withSnapshotPrompt(record: TurnRecord, prompt: Record<string, unknown>): TurnRecord {
+  const observability = record.observability!;
+  const snapshot = observability.snapshot!;
+  return {
+    ...record,
+    observability: {
+      ...observability,
+      snapshot: {
+        ...snapshot,
+        prompt: prompt as unknown as NonNullable<typeof snapshot.prompt>,
+      },
+    },
+  };
+}
+
+/**
+ * Persisted-record projection (bead auiu): replace the inline static system
+ * prompt prefix template (`snapshot.prompt.staticPrefixTemplate`) with a
+ * content-addressed `staticPrefixTemplateRef`, interning the template into the
+ * sidecar store. The static prefix is session-stable, so every turn in a
+ * session otherwise serializes a byte-identical multi-KB copy; the sidecar
+ * stores each distinct template once. Only the static prefix is deduped — the
+ * per-turn dynamic suffix template stays inline (it re-renders each turn).
+ * Empty templates stay inline: there is nothing worth sharing. Returns a
+ * restructured copy; the input record is not mutated.
+ */
+export function slimTurnRecordStaticPromptForAppend(
+  record: TurnRecord,
+  store: TurnRecordSharedStore,
+): TurnRecord {
+  const prompt = readSnapshotPrompt(record);
+  const template = prompt?.staticPrefixTemplate;
+  if (!prompt || typeof template !== 'string' || template.length === 0) {
+    return record;
+  }
+  const hash = store.internStaticPrompt(template);
+  const { staticPrefixTemplate: _inline, ...promptRest } = prompt;
+  return withSnapshotPrompt(record, {
+    ...promptRest,
+    [STATIC_PROMPT_TEMPLATE_REF_FIELD]: hash,
+  });
+}
+
+/**
+ * Read-side inverse (bead auiu): restore the inline static prefix template from
+ * the sidecar for a record carrying `staticPrefixTemplateRef`, making the ref
+ * transparent to every consumer above persistence (the Garden Loom, session
+ * turn observability). Fail closed: a dangling ref, a corrupt payload, or an
+ * ambiguous ref+inline record is a loud error. Records without a ref (old fat
+ * records, prompt-less snapshots) pass through untouched.
+ */
+export function resolveTurnRecordStaticPrompt(
+  record: TurnRecord,
+  store: TurnRecordSharedStore,
+): TurnRecord {
+  const prompt = readSnapshotPrompt(record);
+  const ref = prompt?.[STATIC_PROMPT_TEMPLATE_REF_FIELD];
+  if (!prompt || ref === undefined) return record;
+  if (typeof ref !== 'string' || ref.trim().length === 0) {
+    throw new Error(
+      `TurnRecord field "observability.snapshot.prompt.${STATIC_PROMPT_TEMPLATE_REF_FIELD}" must be a non-empty string`,
+    );
+  }
+  if (prompt.staticPrefixTemplate !== undefined) {
+    throw new Error(
+      `TurnRecord snapshot prompt carries both an inline staticPrefixTemplate and ${STATIC_PROMPT_TEMPLATE_REF_FIELD} "${ref}"`,
+    );
+  }
+  const staticPrefixTemplate = store.resolveStaticPrompt(ref);
+  const { [STATIC_PROMPT_TEMPLATE_REF_FIELD]: _ref, ...promptRest } = prompt;
+  return withSnapshotPrompt(record, {
+    ...promptRest,
+    staticPrefixTemplate,
   });
 }

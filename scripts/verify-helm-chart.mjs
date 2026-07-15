@@ -128,10 +128,47 @@ assertIncludes(rendered, 'mountPath: /app/workspace', 'workspace PVC mount');
 assertIncludes(rendered, 'mountPath: /app/models/transformers', 'model cache PVC mount');
 assertIncludes(rendered, 'runAsUser: 999', 'numeric non-root user');
 assertIncludes(rendered, 'runAsGroup: 999', 'numeric non-root group');
-assertIncludes(rendered, 'CREATE EXTENSION IF NOT EXISTS vector;', 'pgvector init SQL');
+const postgresInit = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-postgres-init');
+assertIncludes(
+  postgresInit,
+  'CREATE EXTENSION IF NOT EXISTS vector;',
+  'pgvector init SQL',
+);
+assertIncludes(
+  postgresInit,
+  "'CREATE DATABASE %I OWNER %I',\n      'psfn_restore_verify',\n      'psfn'",
+  'Postgres restore-verify database and owner init SQL',
+);
+assertIncludes(
+  postgresInit,
+  "WHERE datname = 'psfn_restore_verify'",
+  'Postgres restore-verify idempotency guard',
+);
+assertIncludes(
+  postgresInit,
+  '\\gexec',
+  'Postgres restore-verify guarded command execution',
+);
 assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
 assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetch Job');
+
+const customPostgresRendered = render([
+  '--set-string',
+  'postgres.auth.database=companion',
+  '--set-string',
+  'postgres.auth.username=companion_owner',
+]);
+const customPostgresInit = findDocumentByKindName(
+  customPostgresRendered,
+  'ConfigMap',
+  'psfn-postgres-init',
+);
+assertIncludes(
+  customPostgresInit,
+  "'CREATE DATABASE %I OWNER %I',\n      'companion_restore_verify',\n      'companion_owner'",
+  'custom Postgres restore-verify database and owner init SQL',
+);
 
 const appSecret = findDocument(rendered, 'psfn-app');
 assertIncludes(appSecret, 'kind: Secret', 'app secret kind');

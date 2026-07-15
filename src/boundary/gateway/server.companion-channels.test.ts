@@ -130,6 +130,11 @@ function multiCompanion(): GatewayMultiCompanionConfig {
     fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
     channelRouting: {},
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      'comp-a': '/workspace/comp-a',
+      'comp-b': '/workspace/comp-b',
+      'comp-c': '/workspace/comp-c',
+    },
   };
 }
 

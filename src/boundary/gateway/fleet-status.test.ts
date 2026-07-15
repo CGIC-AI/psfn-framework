@@ -156,6 +156,10 @@ function multiCompanion(
     fleetCompanionIds: [COMPANION_A, COMPANION_B],
     channelRouting,
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      [COMPANION_A]: `/workspace/${COMPANION_A}`,
+      [COMPANION_B]: `/workspace/${COMPANION_B}`,
+    },
   };
 }
 

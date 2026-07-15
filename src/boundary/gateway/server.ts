@@ -83,6 +83,8 @@ import {
   type CompanionId,
   type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
+import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
+import { materializeGatewayAttachments } from './attachment-materialization.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -263,12 +265,16 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
+    this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
+      ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
+      : null;
     if (options.companionChannels && !this.multiCompanion.enabled) {
       throw new Error(
         'GatewayServer received a companionChannels lane while multi-companion is disabled; '
@@ -276,6 +282,18 @@ export class GatewayServer {
       );
     }
     if (this.multiCompanion.enabled) {
+      const missingWorkspaceRoots = this.multiCompanion.fleetCompanionIds.filter(
+        (companionId) => {
+          const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
+          return typeof workspacePath !== 'string' || !workspacePath.trim();
+        },
+      );
+      if (missingWorkspaceRoots.length > 0) {
+        throw new Error(
+          'Multi-companion gateway requires one resolved Personal Workspace per fleet companion; '
+          + `missing: ${missingWorkspaceRoots.join(', ')}`,
+        );
+      }
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
         discordAccounts: this.multiCompanion.discordAccounts,
@@ -386,6 +404,8 @@ export class GatewayServer {
   }
 
   private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
+    const resolveWorkspacePath = (): string => this.resolveConnectionWorkspacePath(conn);
+    const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -398,8 +418,9 @@ export class GatewayServer {
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
       ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
       ...(this.options.visionIntake ? { visionIntake: this.options.visionIntake } : {}),
-      policyConfig: this.options.policyConfig,
-      workspacePath: this.options.policyConfig.workspacePath,
+      get policyConfig() { return resolvePolicyConfig(); },
+      get workspacePath() { return resolveWorkspacePath(); },
+      personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
@@ -455,9 +476,87 @@ export class GatewayServer {
       return null;
     });
     target.addMethod('companion.event.publish', async (params: unknown) => {
-      await this.dispatchCompanionEventPublish(params);
+      await this.dispatchCompanionEventPublish(conn, params);
       return null;
     });
+    target.addMethod('shared.workspace.list', this.audited(
+      'shared.workspace.list',
+      (params: unknown) => this.listSharedWorkspaceArtifacts(conn, params),
+    ));
+    target.addMethod('shared.workspace.read', this.audited(
+      'shared.workspace.read',
+      (params: unknown) => this.readSharedWorkspaceArtifact(conn, params),
+      (params: unknown) => ({
+        ...(isRecord(params) && typeof params.artifactPath === 'string'
+          ? { artifactPath: params.artifactPath }
+          : {}),
+      }),
+    ));
+  }
+
+  private requireSharedWorkspaceReader(conn: GatewayRpcConnection): SharedCompanionWorkspaceReader {
+    const status = this.connectionStatuses.get(conn);
+    if (!this.multiCompanion.enabled
+      || status?.role !== 'agent'
+      || !status.companionId
+      || !this.sharedWorkspaceReader) {
+      throw new Error('Shared workspace reads require an authenticated fleet companion connection');
+    }
+    return this.sharedWorkspaceReader;
+  }
+
+  private listSharedWorkspaceArtifacts(conn: GatewayRpcConnection, params: unknown) {
+    if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
+      throw new Error('shared.workspace.list accepts no parameters or identity assertions');
+    }
+    return { artifacts: this.requireSharedWorkspaceReader(conn).listArtifacts() };
+  }
+
+  private readSharedWorkspaceArtifact(conn: GatewayRpcConnection, params: unknown) {
+    if (!isRecord(params)
+      || Object.keys(params).length !== 1
+      || typeof params.artifactPath !== 'string') {
+      throw new Error('shared.workspace.read requires only artifactPath; identity assertions are forbidden');
+    }
+    return this.requireSharedWorkspaceReader(conn).readArtifact(params.artifactPath);
+  }
+
+  private resolveConnectionWorkspacePath(conn: GatewayRpcConnection): string {
+    if (!this.multiCompanion.enabled) {
+      return this.options.policyConfig.workspacePath;
+    }
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    if (!companionId) {
+      throw new Error('Multi-companion workspace access requires an authenticated companion connection');
+    }
+    const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
+    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+      throw new Error(`No Personal Workspace is resolved for companion ${companionId}`);
+    }
+    return workspacePath;
+  }
+
+  private resolveConnectionPolicyConfig(conn: GatewayRpcConnection): PolicyConfig {
+    if (!this.multiCompanion.enabled) {
+      return this.options.policyConfig;
+    }
+    // Method registration inspects policy feature flags before the connection
+    // can authenticate. Request dispatch still rejects every non-identify RPC
+    // from an unidentified connection; return the base config only for that
+    // registration phase and bind the personal policy after identify.
+    if (!this.connectionStatuses.get(conn)?.companionId) {
+      return this.options.policyConfig;
+    }
+    const workspacePath = this.resolveConnectionWorkspacePath(conn);
+    const { fullCodebaseReadRoot: _ignoredReadRoot, ...basePolicy } = this.options.policyConfig;
+    return {
+      ...basePolicy,
+      workspacePath,
+      allowedReadPaths: [workspacePath],
+      ...(basePolicy.shellExec
+        ? { shellExec: { ...basePolicy.shellExec, allowedCwd: [workspacePath] } }
+        : {}),
+    };
   }
 
   /**
@@ -467,12 +566,20 @@ export class GatewayServer {
    * published. Approval events cannot arrive here — they originate inside
    * the gateway approval boundary.
    */
-  private async dispatchCompanionEventPublish(params: unknown): Promise<void> {
+  private async dispatchCompanionEventPublish(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): Promise<void> {
     const parsed = parseCompanionRelayPublishParams(params);
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    if (this.multiCompanion.enabled && !companionId) {
+      throw new Error('companion.event.publish requires an authenticated companion identity');
+    }
     if (parsed.kind === 'tool.activity') {
       await this.options.eventBus.emit('companion.tool.activity', {
         payload: parsed.payload,
         ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+        ...(companionId ? { companionId } : {}),
         timestamp: Date.now(),
       });
       return;
@@ -481,6 +588,7 @@ export class GatewayServer {
       payload: parsed.payload,
       ...(parsed.preview ? { preview: parsed.preview } : {}),
       ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+      ...(companionId ? { companionId } : {}),
       timestamp: Date.now(),
     });
   }
@@ -1398,6 +1506,7 @@ export class GatewayServer {
     options: VoiceStreamRequestOptions = {},
   ): Promise<VoiceHandleMessageResult> {
     let client: JSONRPCServerAndClient;
+    let conn: GatewayRpcConnection;
     let companionId = this.options.companionId
       ?? createCompanionId(DEFAULT_COMPANION_ID, 'Default companionId');
     if (this.multiCompanion.enabled) {
@@ -1414,12 +1523,15 @@ export class GatewayServer {
       }
       const route = this.resolveCompanionAgent(surface);
       client = route.client;
+      conn = route.conn;
       companionId = route.companionId;
     } else {
-      client = this.resolveReadyRpcClient();
+      const route = this.resolveReadyAgentConnection();
+      client = route.client;
+      conn = route.conn;
     }
 
-    return requestAgentVoiceStream({
+    const result = await requestAgentVoiceStream({
       client,
       message,
       options,
@@ -1427,9 +1539,21 @@ export class GatewayServer {
       companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
     });
+    const attachments = materializeGatewayAttachments(
+      result.attachments,
+      this.resolveConnectionWorkspacePath(conn),
+    );
+    return { ...result, ...(attachments ? { attachments } : {}) };
   }
 
   private resolveReadyRpcClient(): JSONRPCServerAndClient {
+    return this.resolveReadyAgentConnection().client;
+  }
+
+  private resolveReadyAgentConnection(): {
+    conn: GatewayRpcConnection;
+    client: JSONRPCServerAndClient;
+  } {
     this.refreshConnectionHealth();
     if (this.rpcClients.size === 0) {
       throw new Error('No agent connected');
@@ -1441,7 +1565,7 @@ export class GatewayServer {
         continue;
       }
       if (status.role === 'agent' && status.state === 'ready' && status.health === 'healthy') {
-        return client;
+        return { conn, client };
       }
     }
 

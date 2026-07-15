@@ -262,10 +262,18 @@ describe('companions owner-file config', () => {
       const canonicalRoot = realpathSync(root);
 
       expect(resolved.persistenceRoot).toBe(canonicalRoot);
+      expect(resolved.workspacesRoot).toBe(join(canonicalRoot, 'workspaces'));
+      expect(resolved.sharedWorkspacePath).toBe(join(canonicalRoot, 'workspaces/shared'));
       expect(resolved.companions[0]).toMatchObject({
         companionDataDir: join(canonicalRoot, 'companions/flagship'),
         characterCardPath: join(canonicalRoot, 'companions/flagship/character-card.json'),
+        personalWorkspacePath: join(
+          canonicalRoot,
+          'workspaces/personal/11111111-1111-4111-8111-111111111111',
+        ),
       });
+      expect(resolved.companions[1].personalWorkspacePath)
+        .not.toBe(resolved.companions[0].personalWorkspacePath);
     });
 
     it('rejects paths that traverse an existing symlink outside the persistence root', () => {
@@ -293,6 +301,27 @@ describe('companions owner-file config', () => {
         .toThrow(/must not overlap companionDataDir/);
     });
 
+    it('rejects a workspace root that escapes the runtime root through a symlink', () => {
+      const root = makeDataDir();
+      const outside = makeDataDir();
+      symlinkSync(outside, join(root, 'workspaces'));
+
+      expect(() => resolveCompanionFleetPaths(VALID_FLEET, root))
+        .toThrow(/workspaces root resolves through a symlink outside persistence root/);
+    });
+
+    it('rejects personal or shared workspace overlap with companion runtime state', () => {
+      const root = makeDataDir();
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].companionDataDir =
+        'workspaces/personal/11111111-1111-4111-8111-111111111111/state';
+      fleet.companions[0].characterCardPath =
+        'workspaces/personal/11111111-1111-4111-8111-111111111111/state/character-card.json';
+
+      expect(() => resolveCompanionFleetPaths(fleet, root))
+        .toThrow(/Personal Workspace.*must not overlap.*companionDataDir/);
+    });
+
     it('binds one runtime to the complete selected fleet tuple', () => {
       const fleet = resolveCompanionFleetPaths(VALID_FLEET, makeDataDir());
       const expected = fleet.companions[0];
@@ -303,6 +332,7 @@ describe('companions owner-file config', () => {
         companionDataDir: expected.companionDataDir,
         characterCardPath: expected.characterCardPath,
         postgresSchema: expected.postgresSchema,
+        workspacePath: expected.personalWorkspacePath,
       })).toEqual(expected);
     });
 
@@ -315,6 +345,7 @@ describe('companions owner-file config', () => {
         companionDataDir: expected.companionDataDir,
         characterCardPath: expected.characterCardPath,
         postgresSchema: expected.postgresSchema,
+        workspacePath: expected.personalWorkspacePath,
       };
 
       expect(() => resolveCompanionRuntimeIdentity({ ...valid, companionId: 'missing' }))
@@ -325,6 +356,10 @@ describe('companions owner-file config', () => {
         .toThrow(/CHARACTER_CARD_PATH/);
       expect(() => resolveCompanionRuntimeIdentity({ ...valid, postgresSchema: fleet.companions[1].postgresSchema }))
         .toThrow(/COMPANION_PG_SCHEMA/);
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, workspacePath: fleet.companions[1].personalWorkspacePath }))
+        .toThrow(/WORKSPACE_PATH/);
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, workspacePath: undefined }))
+        .toThrow(/WORKSPACE_PATH/);
     });
   });
 

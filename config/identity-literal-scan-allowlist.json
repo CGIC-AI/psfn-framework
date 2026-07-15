@@ -397,6 +397,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/persistence/workspaces/provisioning.ts",
+      "contains": "join(personalWorkspacePath, '.psfn', 'seed-bundles')",
+      "reason": "Companion Library seed state extends the established project-owned hidden workspace lifecycle namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/persistence/postgres.ts",
       "contains": "application_name: options.applicationName ?? 'psfn-framework'",
       "reason": "Shared PostgreSQL pool creation uses a project-scoped application_name label.",

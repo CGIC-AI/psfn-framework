@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1004,7 +1004,10 @@ describe('handleMessageForTurn generated media delivery', () => {
     const eventBus = new EventBus();
     const emitSpy = vi.spyOn(eventBus, 'emit');
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'generated-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'generated-purr.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1020,6 +1023,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       recordAssistantMessage: vi.fn(() => 2),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
@@ -1106,7 +1110,9 @@ describe('handleMessageForTurn generated media delivery', () => {
   it('recovers response attachments from tracked paid deliverables when the turn transcript misses the tool result', async () => {
     const eventBus = new EventBus();
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'missed-transcript-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'missed-transcript-purr.png');
     writeFileSync(localPath, Buffer.from('png-bytes'));
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -1123,6 +1129,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       recordAssistantMessage: vi.fn(() => 2),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
@@ -1188,7 +1195,9 @@ describe('handleMessageForTurn generated media delivery', () => {
   it('drops a paid deliverable and emits no attachments when the turn ends in intentional no-reply', async () => {
     const eventBus = new EventBus();
     const companionDataDir = makeTempDir();
-    const localPath = join(companionDataDir, 'no-reply-purr.png');
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'no-reply-purr.png');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1217,6 +1226,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       consumeIntentionalNoReplyDecision: vi.fn(() => noReply),
       configOverrides: {
         companionDataDir,
+        workspacePath: companionDataDir,
       },
     });
     (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {

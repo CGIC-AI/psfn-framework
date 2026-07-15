@@ -119,6 +119,10 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import {
+  AdminSharedWorkspaceService,
+  type SharedWorkspaceCredentials,
+} from './services/shared-workspace-service.js';
 
 export interface InProcessGardenAdminContractOptions {
   apiBaseUrl?: string;
@@ -163,6 +167,8 @@ export interface InProcessGardenAdminContractOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
+  /** Distinct authenticated principals for governed shared-workspace writes. */
+  sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
 }
 
 export function createInProcessGardenAdminContract(
@@ -427,6 +433,14 @@ export function createInProcessGardenAdminContract(
       ? new AdminConcernDataService(options.concernStore)
       : null,
     settings: settingsService,
+    sharedWorkspace: options.config.sharedWorkspacePath
+      ? new AdminSharedWorkspaceService(
+        options.config.sharedWorkspacePath,
+        options.sharedWorkspaceCredentials ?? (() => {
+          throw new Error('Shared workspace is configured without authenticated principal credentials');
+        })(),
+      )
+      : null,
     intakeQuarantine,
     driftReviews,
     identity: new AdminIdentityDataService({

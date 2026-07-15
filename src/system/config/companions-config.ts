@@ -1,4 +1,4 @@
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
@@ -11,6 +11,11 @@ import {
   LOWERCASE_RFC4122_COMPANION_ID_PATTERN,
   type CompanionId,
 } from '../../shared/routing/companion-id.js';
+import {
+  resolveCanonicalPathInsideRoot,
+  resolveCompanionWorkspaceLayout,
+  type ProtectedWorkspaceRoot,
+} from './companion-workspace-layout.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
@@ -82,10 +87,16 @@ export interface ResolvedCompanionFleetEntry extends Omit<CompanionFleetEntry, '
   companionDataDir: string;
   /** Absolute character-card path resolved beneath the runtime persistence root. */
   characterCardPath: string;
+  /** Canonical, installation-derived Personal Workspace for this companion. */
+  personalWorkspacePath: string;
 }
 
 export interface ResolvedCompanionsFleetConfig {
   persistenceRoot: string;
+  /** Canonical installation workspace parent beneath the runtime root. */
+  workspacesRoot: string;
+  /** Canonical governed Shared Companion Workspace. Never exported as WORKSPACE_PATH. */
+  sharedWorkspacePath: string;
   companions: ResolvedCompanionFleetEntry[];
 }
 
@@ -367,53 +378,13 @@ export function resolveCompanionFleet(
   return undefined;
 }
 
-function assertResolvedPathInsideRoot(
-  candidatePath: string,
-  persistenceRoot: string,
-  field: string,
-): string {
-  if (!isStrictSubpath(candidatePath, persistenceRoot)) {
-    throw new Error(
-      `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${persistenceRoot}, `
-      + `got ${candidatePath}`,
-    );
-  }
-
-  const realRoot = realpathSync(persistenceRoot);
-  let existingAncestor = candidatePath;
-  while (!existsSync(existingAncestor)) {
-    const parent = resolve(existingAncestor, '..');
-    if (parent === existingAncestor || !isStrictSubpath(parent, persistenceRoot)) {
-      existingAncestor = persistenceRoot;
-      break;
-    }
-    existingAncestor = parent;
-  }
-  const realAncestor = realpathSync(existingAncestor);
-  if (realAncestor !== realRoot && !isStrictSubpath(realAncestor, realRoot)) {
-    throw new Error(
-      `${COMPANIONS_ERROR_PREFIX}: ${field} resolves through a symlink outside persistence root `
-      + `${persistenceRoot}`,
-    );
-  }
-
-  const canonicalPath = resolve(realAncestor, relative(existingAncestor, candidatePath));
-  if (!isStrictSubpath(canonicalPath, realRoot)) {
-    throw new Error(
-      `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${realRoot}, `
-      + `got ${canonicalPath}`,
-    );
-  }
-  return canonicalPath;
-}
-
 function resolveFleetPath(
   persistenceRoot: string,
   relativePath: string,
   field: string,
 ): string {
   const candidatePath = resolve(persistenceRoot, relativePath);
-  return assertResolvedPathInsideRoot(candidatePath, persistenceRoot, field);
+  return resolveCanonicalPathInsideRoot(candidatePath, persistenceRoot, field);
 }
 
 /**
@@ -424,6 +395,7 @@ function resolveFleetPath(
 export function resolveCompanionFleetPaths(
   fleet: CompanionsFleetConfig,
   persistenceRoot: string,
+  protectedWorkspaceRoots: readonly ProtectedWorkspaceRoot[] = [],
 ): ResolvedCompanionsFleetConfig {
   const requestedRoot = resolve(persistenceRoot);
   if (!existsSync(requestedRoot) || !statSync(requestedRoot).isDirectory()) {
@@ -433,7 +405,7 @@ export function resolveCompanionFleetPaths(
   }
   const resolvedRoot = realpathSync(requestedRoot);
 
-  const companions = fleet.companions.map((entry, index) => ({
+  const resolvedEntries = fleet.companions.map((entry, index) => ({
     ...entry,
     companionDataDir: resolveFleetPath(
       resolvedRoot,
@@ -446,10 +418,27 @@ export function resolveCompanionFleetPaths(
       `companions[${index}].characterCardPath`,
     ),
   }));
-  assertNoOverlappingDataDirs(companions);
+  assertNoOverlappingDataDirs(resolvedEntries);
+  const workspaceLayout = resolveCompanionWorkspaceLayout({
+    runtimeRoot: resolvedRoot,
+    companionIds: resolvedEntries.map(entry => entry.companionId),
+    protectedRoots: [
+      ...resolvedEntries.map((entry, index) => ({
+        label: `companions[${index}].companionDataDir`,
+        path: entry.companionDataDir,
+      })),
+      ...protectedWorkspaceRoots,
+    ],
+  });
+  const companions: ResolvedCompanionFleetEntry[] = resolvedEntries.map(entry => ({
+    ...entry,
+    personalWorkspacePath: workspaceLayout.personalWorkspaceByCompanionId.get(entry.companionId)!,
+  }));
 
   return {
     persistenceRoot: resolvedRoot,
+    workspacesRoot: workspaceLayout.workspacesRoot,
+    sharedWorkspacePath: workspaceLayout.sharedWorkspacePath,
     companions,
   };
 }
@@ -479,6 +468,9 @@ export function resolveCompanionRuntimeIdentity(input: {
   companionDataDir?: string;
   characterCardPath?: string;
   postgresSchema?: string;
+  workspacePath?: string;
+  /** Gateway owns all fleet roots and does not impersonate one workspace. */
+  requireWorkspaceBinding?: boolean;
 }): CompanionRuntimeIdentity {
   const companionId = input.companionId.trim();
   const identity = input.fleet.companions.find(entry => entry.companionId === companionId);
@@ -491,5 +483,16 @@ export function resolveCompanionRuntimeIdentity(input: {
   assertRuntimeIdentityValue('COMPANION_DATA_DIR', input.companionDataDir, identity.companionDataDir, true);
   assertRuntimeIdentityValue('CHARACTER_CARD_PATH', input.characterCardPath, identity.characterCardPath, true);
   assertRuntimeIdentityValue('COMPANION_PG_SCHEMA', input.postgresSchema, identity.postgresSchema);
+  if (input.requireWorkspaceBinding !== false) {
+    const canonicalWorkspacePath = input.workspacePath?.trim()
+      ? resolveCanonicalPathInsideRoot(input.workspacePath, input.fleet.persistenceRoot, 'WORKSPACE_PATH')
+      : undefined;
+    assertRuntimeIdentityValue(
+      'WORKSPACE_PATH',
+      canonicalWorkspacePath,
+      identity.personalWorkspacePath,
+      true,
+    );
+  }
   return identity;
 }

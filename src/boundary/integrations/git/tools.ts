@@ -1,5 +1,8 @@
 import { Type } from '@sinclair/typebox';
-import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
+import {
+  CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
+  getCanonicalToolSurfaceDescription,
+} from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { GitOperations, GitStatusResult, GitDiffResult } from './ops.js';
@@ -171,7 +174,10 @@ export function createRepoTool(
   return {
     name: 'repo',
     label: 'repo',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.repo,
+    description: access === 'read_only'
+      ? getCanonicalToolSurfaceDescription('repo', 'read_only')
+        ?? CANONICAL_TOOL_SURFACE_DESCRIPTIONS.repo
+      : CANONICAL_TOOL_SURFACE_DESCRIPTIONS.repo,
     parameters: Type.Object({
       action: buildActionSchema(access),
       target: Type.Optional(Type.Union([

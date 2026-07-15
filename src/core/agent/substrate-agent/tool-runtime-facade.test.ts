@@ -12,7 +12,7 @@ import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { listCanonicalToolSurfaces } from '../tool-surface/registry.js';
-import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../tool-surface/descriptions.js';
+import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -345,7 +345,8 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'initiation_permit',
         'target_kind',
       ]);
-      expect(catalogNotify.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
+      const candidateDescription = getCanonicalToolSurfaceDescription('notify', 'companion_candidate');
+      expect(catalogNotify.description).toBe(candidateDescription);
 
       const searchResult = await facade.createToolSearchTool().execute(
         'call-search-notify',
@@ -354,7 +355,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       const searchMatch = (searchResult.details as {
         toolSearch?: { matches?: Array<{ description?: string }> };
       }).toolSearch?.matches?.[0];
-      expect(searchMatch?.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
+      expect(searchMatch?.description).toBe(candidateDescription);
 
       const describeResult = await facade.createToolsetTool().execute(
         'call-describe-notify',
@@ -366,7 +367,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
           schema?: { actions?: Array<{ name?: string }>; requiredParameters?: string[] };
         }>;
       };
-      expect(describedPayload.tools?.[0]?.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
+      expect(describedPayload.tools?.[0]?.description).toBe(candidateDescription);
       expect(describedPayload.tools?.[0]?.schema?.actions?.map(action => action.name)).toEqual(['send']);
       expect(describedPayload.tools?.[0]?.schema?.requiredParameters).toEqual([
         'action',

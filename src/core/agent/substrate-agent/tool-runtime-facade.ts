@@ -62,6 +62,7 @@ import {
   getCanonicalToolSurface,
   getRetiredToolAlias,
 } from '../tool-surface/registry.js';
+import { isCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import {
@@ -342,6 +343,7 @@ export class ToolRuntimeFacade {
     assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
     const canonicalSurface = getCanonicalToolSurface(tool.name);
     const describedTool = canonicalSurface
+      && !isCanonicalToolSurfaceDescription(tool.name, tool.description)
       ? { ...tool, description: canonicalSurface.description }
       : tool;
     const taggedTool = this.withCandidateExecutionGuard(

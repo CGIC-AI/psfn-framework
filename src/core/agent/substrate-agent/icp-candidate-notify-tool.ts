@@ -3,7 +3,7 @@ import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { textResultWithError } from '../../tools/results.js';
-import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../tool-surface/descriptions.js';
+import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 
 const candidateNotifyParameters = Type.Object({
   action: Type.Literal('send'),
@@ -68,7 +68,8 @@ export function createIcpCandidateScopedNotifyTool(input: {
     ...input.notifyTool,
     name: 'notify',
     label: 'notify',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
+    description: getCanonicalToolSurfaceDescription('notify', 'companion_candidate')
+      ?? input.notifyTool.description,
     parameters: candidateNotifyParameters,
     execute: async (toolCallId, rawParams, signal) => {
       let params: ReturnType<typeof parseCandidateNotifyParams>;

@@ -25,6 +25,7 @@ describe('createAnalysisWorkbenchTool', () => {
 
     expect(tool.name).toBe('analysis_workbench');
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.analysis_workbench);
+    expect(tool.description).not.toMatch(/(?:missing|absent)[^.]*capabil|capabil[^.]*(?:missing|absent)/iu);
   });
 
   it('marks truncated analysis workbench results as tool errors', async () => {

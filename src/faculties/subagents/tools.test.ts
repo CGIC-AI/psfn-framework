@@ -144,6 +144,8 @@ describe('createSubagentTool', () => {
     const tool = createSubagentTool(createPort());
 
     expect((tool.parameters as any).properties.max_turns.maximum).toBe(16);
+    expect((tool.parameters as any).properties).not.toHaveProperty('toolset');
+    expect(tool.description).not.toContain('toolset');
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent);
   });
 

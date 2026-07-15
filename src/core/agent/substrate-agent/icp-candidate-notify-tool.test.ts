@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
+import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 import { createIcpCandidateScopedNotifyTool } from './icp-candidate-notify-tool.js';
 
 function makeNotifyTool(execute: AgentTool<any>['execute']): AgentTool<any> {
@@ -13,6 +14,20 @@ function makeNotifyTool(execute: AgentTool<any>['execute']): AgentTool<any> {
 }
 
 describe('ICP candidate-scoped unified notify surface', () => {
+  it('projects the permit-bound send contract from the canonical structured source', () => {
+    const tool = createIcpCandidateScopedNotifyTool({
+      notifyTool: makeNotifyTool(vi.fn()),
+      authorizeExecution: () => true,
+    });
+
+    expect(tool.description).toBe(
+      getCanonicalToolSurfaceDescription('notify', 'companion_candidate'),
+    );
+    expect(tool.description).toContain('action=send');
+    expect(tool.description).toContain('initiation_permit');
+    expect(tool.description).not.toMatch(/action=(?:brief|consider|approval_request)/u);
+  });
+
   it('exposes only the canonical companion-send schema and capability', () => {
     const tool = createIcpCandidateScopedNotifyTool({
       notifyTool: makeNotifyTool(vi.fn()),

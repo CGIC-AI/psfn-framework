@@ -218,6 +218,48 @@ describe('schedule tool', () => {
     expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['title', 'title'],
+    ['content', 'content'],
+    ['due_at', 'due_at'],
+    ['channel_id', 'channel_id'],
+    ['channel_type', 'channel_type'],
+  ])('requires create_reminder field %s before persistence', async (field, expectedError) => {
+    const create = vi.fn();
+    const { tool } = createTool({ careReminderStore: { create } as any });
+    const args: Record<string, unknown> = {
+      action: 'create_reminder',
+      title: 'Check in',
+      content: 'Check whether the seedlings need water.',
+      due_at: '2026-07-16T12:00:00Z',
+      channel_id: '123456789012345678',
+      channel_type: 'discord',
+    };
+    delete args[field];
+
+    const result = await tool.execute(`call-reminder-missing-${field}`, args);
+
+    expect(resultText(result)).toContain(expectedError);
+    expect(result.details.isError).toBe(true);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ id: 'new-template' }, 'name'],
+    [{ id: 'new-template', name: 'Reflect' }, 'prompt'],
+    [{ id: 'new-template', name: 'Reflect', prompt: 'Review the day.' }, 'interval_ms is required'],
+  ])('requires the complete new-template branch for update_template', async (fields, expectedError) => {
+    const { tool } = createTool();
+
+    const result = await tool.execute('call-template-missing-field', {
+      action: 'update_template',
+      ...fields,
+    });
+
+    expect(resultText(result)).toContain(expectedError);
+    expect(result.details.isError).toBe(true);
+  });
+
   it('persists relative scheduled prompts before registering the one-shot task', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-03-07T12:00:00.000Z'));
     try {

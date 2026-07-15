@@ -717,6 +717,20 @@ describe('createMemoryTool', () => {
     ]);
   });
 
+  it('requires records, not a legacy entries field, for unified action=import', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-import-wrong-shape', {
+      action: 'import',
+      entries: [{ text: 'Legacy shape', type: 'semantic' }],
+    } as any);
+
+    expect(resultText(result as any)).toContain('records must be a non-empty array for action=import');
+    expect(result.details?.isError).toBe(true);
+    expect(writer.importBatch).not.toHaveBeenCalled();
+  });
+
   it('redacts through action=redact with unified requestedBy/sourceRef', async () => {
     const store = mockUnifiedStore();
     const redact = vi.fn().mockResolvedValue({

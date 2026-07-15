@@ -277,6 +277,32 @@ describe('orient tool', () => {
     expect(result.details?.isError).toBeUndefined();
   });
 
+  it.each(['persona', 'human', 'goals'])('requires reorient field %s', async (field) => {
+    const store = {
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const tool = createOrientTool(store);
+    const args: Record<string, unknown> = {
+      action: 'reorient',
+      persona: 'Pragmatic and helpful.',
+      human: 'Prefers concise answers.',
+      goals: 'Keep continuity coherent.',
+    };
+    delete args[field];
+
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute(`call-reorient-missing-${field}`, args as any));
+
+    expect(resultText(result)).toContain(`${field} must be a string for action=reorient`);
+    expect(result.details?.isError).toBe(true);
+    expect(store.rethink).not.toHaveBeenCalled();
+  });
+
   it('rejects CogSec-risk orientation rewrites before touching core memory', async () => {
     const store = {
       append: vi.fn(),

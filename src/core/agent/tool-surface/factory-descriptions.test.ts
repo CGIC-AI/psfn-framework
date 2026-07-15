@@ -1,33 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentTool } from '../../../boundary/pi-agent/index.js';
-import { createBeadsTool } from '../../../boundary/integrations/beads/tools.js';
-import { createFsTool } from '../../../boundary/integrations/filesystem/tools.js';
-import { createRepoTool } from '../../../boundary/integrations/git/tools.js';
-import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
-import { createShellTool } from '../../../boundary/integrations/shell/tools.js';
-import { createVaultTool } from '../../../boundary/integrations/vault/tools.js';
-import { createWebTool } from '../../../boundary/integrations/web/tools.js';
-import { createWorldTool } from '../../../boundary/integrations/world/tools.js';
-import { createContactTool } from '../../contacts/tools.js';
-import { createIdentityTool } from '../../identity/prompt-tools.js';
-import { createScheduleTool } from '../../scheduler/schedule-tool.js';
-import { createAnalysisWorkbenchTool } from '../../tools/analysis-workbench/tools.js';
-import { createSystemTool } from '../../tools/lifecycle.js';
-import { createNotifyTool } from '../../tools/ntfy.js';
-import { createSelfStatusTool } from '../../tools/self-status.js';
-import { createSessionTool } from '../../tools/session.js';
-import { createOrientTool } from '../../../faculties/core-memory/tools.js';
-import { createMemoryTool } from '../../../faculties/memory/tools.js';
-import { createScratchpadTool } from '../../../faculties/memory/tools/scratchpad.js';
-import { createNorthStarTool } from '../../../faculties/north-star/tools.js';
-import { createSkillTool } from '../../../faculties/skills/tools.js';
-import { createSubagentTool } from '../../../faculties/subagents/tools.js';
-import { createWikiTool } from '../../../faculties/wiki/tools.js';
-import { createGenerateImageTool, createSelfieTool } from '../../../primitives/images/tools.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import { createResponseControlTool } from '../no-reply-tool.js';
-import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
-import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from './descriptions.js';
+import { createCanonicalFactoryTools } from './canonical-tool-catalog.test-support.js';
+import {
+  CANONICAL_TOOL_SURFACE_CONTRACTS,
+  CANONICAL_TOOL_SURFACE_DESCRIPTIONS,
+} from './descriptions.js';
 import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from './registry.js';
 
 const LEGACY_ACTION_ALIASES_BY_TOOL: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -44,41 +21,6 @@ const LEGACY_ACTION_ALIASES_BY_TOOL: Readonly<Record<string, ReadonlySet<string>
   system: new Set(['settings_get', 'self_restart', 'self_rebuild']),
   vault: new Set(['vault_read', 'vault_write', 'vault_search', 'vault_daily']),
 };
-
-function createCanonicalFactoryTools(): AgentTool<any>[] {
-  const inert = {} as never;
-
-  return [
-    createToolSearchTool(inert),
-    createToolsetTool(inert),
-    createResponseControlTool(() => null),
-    createFsTool(inert),
-    createRepoTool(inert),
-    createShellTool(inert),
-    createWebTool(inert),
-    createWorldTool(inert, inert),
-    createAnalysisWorkbenchTool(inert),
-    createOrientTool(inert),
-    createIdentityTool(inert),
-    createMemoryTool(inert, inert),
-    createScratchpadTool(inert),
-    createContactTool(inert),
-    createSessionTool(inert),
-    createSelfStatusTool(inert),
-    createSystemTool(inert),
-    createSkillTool(inert),
-    createWikiTool(inert),
-    createScheduleTool(inert),
-    createNorthStarTool(inert),
-    createBeadsTool(inert),
-    createNotifyTool(inert),
-    createGenerateImageTool(inert),
-    createSelfieTool(inert),
-    createSubagentTool(inert),
-    createVaultTool(inert),
-    createJournalTool(inert),
-  ];
-}
 
 function extractLiteralStrings(schema: unknown): string[] {
   if (!isRecord(schema)) return [];
@@ -109,6 +51,20 @@ function extractActionLiterals(schema: unknown): string[] {
     ...extractLiteralStrings(properties.action),
     ...variants.flatMap(extractActionLiterals),
   ])].sort();
+}
+
+function extractSchemaPropertyNames(schema: unknown): Set<string> {
+  if (!isRecord(schema)) return new Set();
+  const properties = isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+  const variants = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+    ...(Array.isArray(schema.allOf) ? schema.allOf : []),
+  ];
+  return new Set([
+    ...properties,
+    ...variants.flatMap(variant => [...extractSchemaPropertyNames(variant)]),
+  ]);
 }
 
 function actionContractPattern(action: string): RegExp {
@@ -143,6 +99,33 @@ describe('canonical first-party tool factories', () => {
       for (const action of preferredActions) {
         expect(tool.description, `${tool.name} description missing action=${action}`)
           .toMatch(actionContractPattern(action));
+      }
+    }
+  });
+
+  it('keeps structured action contracts aligned with concrete factory schemas', () => {
+    for (const tool of createCanonicalFactoryTools()) {
+      const contract = CANONICAL_TOOL_SURFACE_CONTRACTS[
+        tool.name as keyof typeof CANONICAL_TOOL_SURFACE_CONTRACTS
+      ];
+      const propertyNames = extractSchemaPropertyNames(tool.parameters);
+      const legacyAliases = LEGACY_ACTION_ALIASES_BY_TOOL[tool.name] ?? new Set<string>();
+      const schemaActions = extractActionLiterals(tool.parameters)
+        .filter(action => !legacyAliases.has(action));
+      const contractActions = [...new Set(
+        contract.actions.filter(action => action.actionField !== false).map(action => action.action),
+      )].sort();
+
+      expect(contractActions, `${tool.name} structured action inventory`).toEqual(schemaActions);
+      for (const action of contract.actions) {
+        for (const field of [
+          ...action.required,
+          ...action.optional,
+          ...(action.requiredAnyOf ?? []).flat(),
+          ...(action.requiredOneOf ?? []),
+        ]) {
+          expect(propertyNames.has(field), `${tool.name}/${action.id} unknown field ${field}`).toBe(true);
+        }
       }
     }
   });

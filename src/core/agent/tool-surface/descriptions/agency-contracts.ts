@@ -1,0 +1,77 @@
+import { action, type CanonicalToolSurfaceContract } from './contracts.js';
+
+const IMAGE_RENDER_FIELDS = [
+  'provider', 'model', 'num_images', 'width', 'height', 'aspect_ratio', 'resolution',
+  'image_size', 'background', 'output_format', 'seed', 'guidance_scale',
+  'num_inference_steps', 'acceleration', 'enable_prompt_expansion',
+  'enable_safety_checker', 'negative_prompt', 'use_turbo',
+] as const;
+
+export const AGENCY_TOOL_CONTRACTS = {
+  notify: {
+    purpose: 'Send bounded notifications, request explicit review, or initiate governed outreach outside an ordinary same-channel reply.',
+    actions: [
+      action('brief', ['message'], ['title', 'priority', 'topic', 'budget_channel']),
+      action('send', ['message', 'delivery_channel', 'delivery_target'], ['target_kind'], { id: 'send_external', rule: 'this is the explicit external-delivery form' }),
+      action('send', ['target_kind', 'contact_id', 'initiation_permit'], [], { id: 'send_companion', rule: 'target_kind must be companion and peer-visible message content is forbidden' }),
+      action('consider', ['target_kind', 'contact_id', 'reason_summary'], [], { id: 'consider', rule: 'target_kind must be companion and the reason is never shared externally' }),
+      action('approval_request', ['approval_id', 'approval_method', 'approval_action', 'approval_scope', 'approval_reason'], ['approval_expires_at', 'review_path']),
+    ],
+    output: 'It returns delivery or review state, never chooses an implicit target, and companion initiation lets the destination turn author its message.',
+    guidance: 'Do not use notify for the current channel; resolve an exact contact first or send an ordinary reply.',
+    example: { action: 'brief', message: 'The overnight validation completed.', priority: 3 },
+  },
+  generate_image: {
+    purpose: 'Create, transform, or inspect generic images when the subject is not the companion\'s self-representation.',
+    actions: [
+      action('generate', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference']),
+      action('edit', ['prompt', 'input_urls'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference', 'mask_image_url', 'input_fidelity']),
+      action('analyze', ['input_urls'], ['question']),
+    ],
+    output: 'It returns pending image artifacts plus visual review, or visible-content evidence for analysis.',
+    guidance: 'Do not use it for the companion\'s selfie or self-portrait; use selfie_create.',
+    example: { action: 'generate', prompt: 'A watercolor map of a moonlit garden', aspect_ratio: '4:3' },
+  },
+  selfie_create: {
+    purpose: 'Create a selfie or self-portrait of the companion with appearance context and saved-reference anchoring.',
+    actions: [action('create', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_reference_image', 'edit_model'], { id: 'create', actionField: false })],
+    output: 'It returns pending image artifacts plus visual review and does not handle unrelated scenes or ordinary photo edits.',
+    guidance: 'Do not use it for generic image work; use generate_image.',
+    example: { prompt: 'A relaxed window-light selfie in a green sweater, eye-level camera' },
+  },
+  subagent: {
+    purpose: 'Control bounded short-horizon workers for parallel or isolated tasks.',
+    actions: [
+      action('spawn', ['name', 'task'], ['system_prompt', 'max_turns', 'capabilities', 'required_capabilities']),
+      action('message', ['subagent_id', 'message']), action('wait', [], ['subagent_id']),
+      action('cancel', ['subagent_id'], ['reason']),
+      action('status', [], ['subagent_id', 'task_limit', 'transcript_limit']),
+    ],
+    output: 'It returns task IDs, lifecycle state, or bounded results and never grants tools the parent cannot delegate.',
+    guidance: 'Do not use a bounded worker as a long-horizon shard; inspect status before messaging or cancelling.',
+    example: { action: 'spawn', name: 'log-check', task: 'Compare the two bounded error excerpts.' },
+  },
+  vault: {
+    purpose: 'Access the optional external Obsidian bridge for bounded compatibility with an existing vault.',
+    actions: [
+      action('read', ['name']), action('write', ['name', 'content'], ['folder', 'mode']),
+      action('search', ['query'], ['limit']), action('daily', [], ['content']),
+    ],
+    output: 'It returns external note material or write acknowledgement and never becomes the canonical runtime knowledge store.',
+    guidance: 'Do not use it for canonical reference knowledge or companion journals; use wiki or journal.',
+    example: { action: 'search', query: 'seedling rotation' },
+  },
+  journal: {
+    purpose: 'Read and write durable companion-authored markdown notes, reflections, and topic journals.',
+    actions: [
+      action('list'),
+      action('read', [], [], { id: 'read', requiredAnyOf: [['path'], ['title']] }),
+      action('write', ['content'], [], { id: 'write', requiredAnyOf: [['path'], ['title']] }),
+      action('append', ['content'], [], { id: 'append', requiredAnyOf: [['path'], ['title']] }),
+      action('search', ['query'], ['limit']),
+    ],
+    output: 'It returns note paths or bounded markdown and writes only journal documents.',
+    guidance: 'Do not use it for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
+    example: { action: 'write', title: 'Garden observations', content: 'The basil recovered after moving into indirect light.' },
+  },
+} as const satisfies Record<string, CanonicalToolSurfaceContract>;

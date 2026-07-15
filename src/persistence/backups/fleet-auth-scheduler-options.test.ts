@@ -53,6 +53,7 @@ describe('buildFleetAuthBackupCycleOptions', () => {
     const options = buildFleetAuthBackupCycleOptions({
       fleet: FLEET,
       systemDataDir: '/runtime/system-data',
+      companionDatabaseUrl: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app',
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
       roles: ROLES,
       backupConfig: BACKUP_CONFIG,
@@ -63,9 +64,9 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
       roles: ROLES,
       schemas: [
-        { kind: 'companion', schema: 'companion_one' },
-        { kind: 'companion', schema: 'companion_two' },
-        { kind: 'shared', schema: 'shared' },
+        { kind: 'companion', schema: 'companion_one', runtimeRoles: ['companion_runtime'] },
+        { kind: 'companion', schema: 'companion_two', runtimeRoles: ['companion_runtime'] },
+        { kind: 'shared', schema: 'shared', runtimeRoles: ['companion_runtime'] },
       ],
       systemDataDir: '/runtime/system-data',
       backupRootDir: '/runtime/backups',

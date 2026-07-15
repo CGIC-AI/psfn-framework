@@ -5,6 +5,7 @@ import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryRes
 // schema name can never be used to smuggle SQL into a search_path or DDL string.
 export const POSTGRES_SCHEMA_NAME_MAX_LENGTH = 63;
 const POSTGRES_SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+const POSTGRES_ROLE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 /**
  * Fail-closed validation for a Postgres schema identifier.
@@ -33,6 +34,15 @@ export function assertValidPostgresSchemaName(schema: string): string {
     );
   }
   return schema;
+}
+
+/** Fail closed before a configured PostgreSQL role is interpolated into SQL. */
+export function assertValidPostgresRoleName(role: string): string {
+  if (typeof role !== 'string' || role.length === 0 || role.length > POSTGRES_SCHEMA_NAME_MAX_LENGTH
+    || role === 'public' || !POSTGRES_ROLE_NAME_PATTERN.test(role)) {
+    throw new Error('Invalid PostgreSQL role name');
+  }
+  return role;
 }
 
 export interface PostgresConnectionOptions {

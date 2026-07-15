@@ -11,6 +11,7 @@ import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
 import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import { assertValidPostgresRoleName } from '../postgres.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import {
@@ -232,6 +233,7 @@ export function buildFleetBackupRunOptions(
 export function buildFleetAuthBackupCycleOptions(params: {
   fleet: ResolvedCompanionsFleetConfig;
   systemDataDir: string;
+  companionDatabaseUrl: string;
   backupRestoreDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   backupConfig: BackupRuntimeConfig;
@@ -240,6 +242,23 @@ export function buildFleetAuthBackupCycleOptions(params: {
   if (params.fleet.companions.length === 0) {
     throw new Error('Fleet auth consistent backup requires at least one companion schema');
   }
+  let companionDatabase: URL;
+  try {
+    companionDatabase = new URL(params.companionDatabaseUrl);
+  } catch {
+    throw new Error('Fleet auth consistent backup requires a PostgreSQL companion database URL');
+  }
+  let runtimeRole: string;
+  try {
+    runtimeRole = decodeURIComponent(companionDatabase.username);
+  } catch {
+    throw new Error('Fleet auth consistent backup companion database role is malformed');
+  }
+  try {
+    assertValidPostgresRoleName(runtimeRole);
+  } catch {
+    throw new Error('Fleet auth consistent backup companion database role is invalid');
+  }
   return {
     backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
     roles: params.roles,
@@ -247,8 +266,9 @@ export function buildFleetAuthBackupCycleOptions(params: {
       ...params.fleet.companions.map(companion => ({
         kind: 'companion' as const,
         schema: companion.postgresSchema,
+        runtimeRoles: [runtimeRole],
       })),
-      { kind: 'shared', schema: DEFAULT_SHARED_WORLD_SCHEMA },
+      { kind: 'shared', schema: DEFAULT_SHARED_WORLD_SCHEMA, runtimeRoles: [runtimeRole] },
     ],
     systemDataDir: params.systemDataDir,
     backupRootDir: params.backupConfig.rootDir,

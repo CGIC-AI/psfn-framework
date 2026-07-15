@@ -188,6 +188,9 @@ async function main(): Promise<void> {
     if (!config.companionFleet || !fleetAuthPersistence || !config.credentialVault) {
       throw new Error('Fleet auth backup startup invariants are incomplete');
     }
+    if (!config.postgresDatabaseUrl) {
+      throw new Error('Fleet auth backup requires the companion PostgreSQL credential');
+    }
     const backupConfig = resolveBackupRuntimeConfig({
       dataDir: startupHydration.pathSnapshot.systemDataDir,
       env,
@@ -203,6 +206,7 @@ async function main(): Promise<void> {
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
+      companionDatabaseUrl: config.postgresDatabaseUrl,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
       roles: config.fleetAuth.databaseRoles,
       backupConfig,

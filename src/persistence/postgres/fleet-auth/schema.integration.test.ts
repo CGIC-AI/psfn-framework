@@ -793,8 +793,8 @@ describe('fleet_auth Postgres authority boundary', () => {
         databaseUrl: db.backupUrl,
         roles: ROLES,
         schemas: [
-          { kind: 'companion', schema: 'companion_alpha' },
-          { kind: 'shared', schema: 'shared' },
+          { kind: 'companion', schema: 'companion_alpha', runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,
@@ -930,8 +930,8 @@ describe('fleet_auth Postgres authority boundary', () => {
         databaseUrl: source.backupUrl,
         roles: ROLES,
         schemas: [
-          { kind: 'companion', schema: 'companion_alpha' },
-          { kind: 'shared', schema: 'shared' },
+          { kind: 'companion', schema: 'companion_alpha', runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,
@@ -1107,8 +1107,8 @@ describe('fleet_auth Postgres authority boundary', () => {
         databaseUrl: source.backupUrl,
         roles: ROLES,
         schemas: [
-          { kind: 'companion', schema: 'companion_alpha' },
-          { kind: 'shared', schema: 'shared' },
+          { kind: 'companion', schema: 'companion_alpha', runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,

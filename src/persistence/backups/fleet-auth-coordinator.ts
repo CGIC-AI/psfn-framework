@@ -17,7 +17,11 @@ import {
   isCanonicalIsoTimestamp,
   isRecord,
 } from '../../shared/utils/types.js';
-import { assertValidPostgresSchemaName, createPostgresPool } from '../postgres.js';
+import {
+  assertValidPostgresRoleName,
+  assertValidPostgresSchemaName,
+  createPostgresPool,
+} from '../postgres.js';
 import {
   createSanitizedPostgresChildEnv,
   redactPostgresCredential,
@@ -38,6 +42,7 @@ import {
 const execFileAsync = promisify(execFile);
 export const FLEET_AUTH_BACKUP_MANIFEST_NAME = 'fleet-auth-backup-manifest.json';
 export const FLEET_AUTH_SNAPSHOT_NAME = 'fleet-auth.snapshot.json';
+export const FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION = 3;
 
 export type FleetAuthBackupArtifactKind =
   | 'companion'
@@ -51,10 +56,11 @@ export interface FleetAuthBackupArtifact {
   sha256: string;
   sizeBytes: number;
   postgresSchema?: string;
+  runtimeRoles?: string[];
 }
 
 export interface FleetAuthBackupManifest {
-  schemaVersion: 2;
+  schemaVersion: typeof FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
@@ -180,7 +186,11 @@ function writeJsonDurable(path: string, value: unknown): void {
 export async function runFleetAuthConsistentBackup(options: {
   databaseUrl: string;
   roles: FleetAuthDatabaseRoles;
-  schemas: ReadonlyArray<{ kind: 'companion' | 'shared'; schema: string }>;
+  schemas: ReadonlyArray<{
+    kind: 'companion' | 'shared';
+    schema: string;
+    runtimeRoles: readonly string[];
+  }>;
   systemDataDir: string;
   backupDir: string;
   capturedAt?: string;
@@ -193,12 +203,29 @@ export async function runFleetAuthConsistentBackup(options: {
   const schemas = options.schemas.map(entry => ({
     kind: entry.kind,
     schema: assertValidPostgresSchemaName(entry.schema),
+    runtimeRoles: [...entry.runtimeRoles],
   }));
   if (schemas.some(entry => entry.schema === FLEET_AUTH_SCHEMA_NAME)) {
     throw new Error('fleet_auth must use its dedicated JSON artifact, never a companion schema dump');
   }
   if (new Set(schemas.map(entry => entry.schema)).size !== schemas.length) {
     throw new Error('Fleet auth consistent backup schema list contains duplicates');
+  }
+  for (const descriptor of schemas) {
+    if (descriptor.runtimeRoles.length === 0
+      || new Set(descriptor.runtimeRoles).size !== descriptor.runtimeRoles.length
+      || descriptor.runtimeRoles.some((role) => {
+        try {
+          assertValidPostgresRoleName(role);
+        } catch {
+          return true;
+        }
+        return Object.values(options.roles).includes(role);
+      })) {
+      throw new Error(
+        `Fleet auth consistent backup schema ${descriptor.schema} has an invalid runtime-role mapping`,
+      );
+    }
   }
   const sharedCount = schemas.filter(entry => entry.kind === 'shared').length;
   if (sharedCount !== 1) throw new Error('Fleet auth consistent backup requires exactly one shared schema');
@@ -247,6 +274,7 @@ export async function runFleetAuthConsistentBackup(options: {
         kind: descriptor.kind,
         path: relative(backupDir, path),
         postgresSchema: descriptor.schema,
+        runtimeRoles: [...descriptor.runtimeRoles].sort(),
         ...hashFile(path),
       });
     }
@@ -279,7 +307,7 @@ export async function runFleetAuthConsistentBackup(options: {
     });
 
     const manifest: FleetAuthBackupManifest = {
-      schemaVersion: 2,
+      schemaVersion: FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION,
       capturedAt,
       postgresSnapshot: snapshot.postgres_snapshot,
       authorityLineageId: fleetAuthSnapshot.authorityLineageId,
@@ -308,7 +336,9 @@ export async function runFleetAuthConsistentBackup(options: {
 function parseArtifact(value: unknown, index: number): FleetAuthBackupArtifact {
   const field = `artifacts[${index}]`;
   if (!isRecord(value)) throw new Error(`Invalid fleet auth backup manifest: ${field} must be an object`);
-  assertNoUnknownKeys(value, ['kind', 'path', 'sha256', 'sizeBytes', 'postgresSchema'], field, {
+  assertNoUnknownKeys(value, [
+    'kind', 'path', 'sha256', 'sizeBytes', 'postgresSchema', 'runtimeRoles',
+  ], field, {
     errorPrefix: 'Invalid fleet auth backup manifest',
   });
   if (value.kind !== 'companion' && value.kind !== 'shared'
@@ -328,6 +358,20 @@ function parseArtifact(value: unknown, index: number): FleetAuthBackupArtifact {
   if (value.postgresSchema !== undefined && typeof value.postgresSchema !== 'string') {
     throw new Error(`Invalid fleet auth backup manifest: ${field}.postgresSchema is invalid`);
   }
+  if (value.runtimeRoles !== undefined && (!Array.isArray(value.runtimeRoles)
+    || value.runtimeRoles.length === 0
+    || value.runtimeRoles.some((role) => {
+      if (typeof role !== 'string') return true;
+      try {
+        assertValidPostgresRoleName(role);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    || new Set(value.runtimeRoles).size !== value.runtimeRoles.length)) {
+    throw new Error(`Invalid fleet auth backup manifest: ${field}.runtimeRoles is invalid`);
+  }
   return {
     kind: value.kind,
     path: value.path,
@@ -335,6 +379,9 @@ function parseArtifact(value: unknown, index: number): FleetAuthBackupArtifact {
     sizeBytes: Number(value.sizeBytes),
     ...(typeof value.postgresSchema === 'string'
       ? { postgresSchema: assertValidPostgresSchemaName(value.postgresSchema) }
+      : {}),
+    ...(Array.isArray(value.runtimeRoles)
+      ? { runtimeRoles: [...value.runtimeRoles as string[]].sort() }
       : {}),
   };
 }
@@ -358,7 +405,8 @@ export function verifyFleetAuthBackupManifest(manifestPath: string): FleetAuthBa
   ], 'root', {
     errorPrefix: 'Invalid fleet auth backup manifest',
   });
-  if (parsed.schemaVersion !== 2 || !isCanonicalIsoTimestamp(parsed.capturedAt)
+  if (parsed.schemaVersion !== FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION
+    || !isCanonicalIsoTimestamp(parsed.capturedAt)
     || typeof parsed.postgresSnapshot !== 'string'
     || parsed.postgresSnapshot.length === 0
     || typeof parsed.authorityLineageId !== 'string'
@@ -386,11 +434,12 @@ export function verifyFleetAuthBackupManifest(manifestPath: string): FleetAuthBa
         throw new Error('Invalid fleet auth backup manifest: fleet_auth artifact has the wrong schema');
       }
     } else if (artifact.kind === 'companion' || artifact.kind === 'shared') {
-      if (!artifact.postgresSchema || artifact.postgresSchema === FLEET_AUTH_SCHEMA_NAME) {
+      if (!artifact.postgresSchema || artifact.postgresSchema === FLEET_AUTH_SCHEMA_NAME
+        || !artifact.runtimeRoles) {
         throw new Error('Invalid fleet auth backup manifest: companion/shared schema is missing or reserved');
       }
-    } else if (artifact.postgresSchema !== undefined) {
-      throw new Error('Invalid fleet auth backup manifest: owner config cannot name a PostgreSQL schema');
+    } else if (artifact.postgresSchema !== undefined || artifact.runtimeRoles !== undefined) {
+      throw new Error('Invalid fleet auth backup manifest: non-schema artifact carries a PostgreSQL access mapping');
     }
     if (artifact.postgresSchema) {
       if (postgresSchemas.has(artifact.postgresSchema)) {
@@ -412,7 +461,7 @@ export function verifyFleetAuthBackupManifest(manifestPath: string): FleetAuthBa
     throw new Error('Invalid fleet auth backup manifest: incomplete same-snapshot artifact family');
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION,
     capturedAt: parsed.capturedAt,
     postgresSnapshot: parsed.postgresSnapshot,
     authorityLineageId: parsed.authorityLineageId,

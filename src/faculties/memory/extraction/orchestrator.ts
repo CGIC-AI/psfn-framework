@@ -265,17 +265,20 @@ export interface ExtractionRunOptions {
   emitExtractionEnd: (telemetry: ExtractionEndTelemetry) => Promise<void>;
   resolveCoveredUpToMessageId: (channelId: string, entries: SessionEntry[]) => number | null;
   recordExtractionMarker: (channelId: string, coveredUpToMessageId: number | null) => void;
+  // These durable children are awaited inside the effect-guarded region so the
+  // parent job receipt/fence stays open until they settle; each swallows its own
+  // best-effort failures, so awaiting never fails the extraction effect.
   maybePersistEmotionalState: (
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ) => void;
+  ) => Promise<void>;
   maybeRefreshContactProfile: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
-  ) => void;
+  ) => Promise<void>;
   emitConcernCandidates?: ConcernCandidateExtractionSink;
   assertEffectAllowed?: () => Promise<void>;
 }
@@ -863,7 +866,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);
     for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
       await options.assertEffectAllowed?.();
-      options.maybePersistEmotionalState(
+      // Awaited (not fire-and-forget) so this durable child settles before the
+      // parent effect receipt is applied and its fence releases (u5bv.6 AC3).
+      await options.maybePersistEmotionalState(
         contactId,
         acceptedFacts,
         recentEntries,
@@ -873,7 +878,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, options.canonicalContactId);
     for (const [contactId, writes] of refreshGroups.entries()) {
       await options.assertEffectAllowed?.();
-      options.maybeRefreshContactProfile(
+      // Awaited for the same reason: no detached durable child may outlive the
+      // parent receipt. The profile write is an idempotent upsert by contact id.
+      await options.maybeRefreshContactProfile(
         options.channelId,
         options.triggerReason,
         contactId,

@@ -646,7 +646,9 @@ export class BackgroundWorkSupervisor {
         if (disposition === 'outcome_unknown') {
           throw new BackgroundWorkEffectOutcomeUnknownError();
         }
-        let crossed = false;
+        // Holder object (matching the `fence` pattern) so the mutation inside
+        // the `crossBoundary` closure is visible to the catch below.
+        const boundary = { crossed: false };
         // The durable side-effect boundary. Handlers call this immediately
         // before their sink write; the first call promotes the receipt from
         // `pending` to `started` (outcome-ambiguous on interruption). Before the
@@ -654,7 +656,7 @@ export class BackgroundWorkSupervisor {
         // interrupt the write, so only lease ownership is re-fenced.
         const crossBoundary = async (): Promise<void> => {
           if (fence.lost) throw new BackgroundWorkLeaseLostError();
-          if (crossed) {
+          if (boundary.crossed) {
             await assertLeaseOwned();
             return;
           }
@@ -676,7 +678,7 @@ export class BackgroundWorkSupervisor {
           // 'crossed' (or the unreachable 'applied' — beginEffect already
           // returns early for an applied receipt, so this owner/revision cannot
           // observe one here). The boundary is now durably marked.
-          crossed = true;
+          boundary.crossed = true;
         };
         let operationCompleted = false;
         try {
@@ -694,7 +696,20 @@ export class BackgroundWorkSupervisor {
             nowMs: this.now(),
           });
         } catch (error) {
-          if (!operationCompleted && !(error instanceof BackgroundWorkLeaseLostError)) {
+          // Abandon (delete the receipt) ONLY when the effect never crossed its
+          // durable write boundary. A pre-boundary `pending` receipt carries no
+          // durable-effect risk, so dropping it lets the job re-run cleanly. Once
+          // the boundary is crossed the receipt is `started` — durable evidence
+          // that a write may have happened — and MUST be left in place so a
+          // retry fails closed via `outcome_unknown` rather than replaying the
+          // write and duplicating the durable effect (u5bv.6). `abandonEffect`
+          // also refuses to delete a `started` receipt at the store level; this
+          // guard additionally avoids the pointless post-boundary DELETE.
+          if (
+            !boundary.crossed
+            && !operationCompleted
+            && !(error instanceof BackgroundWorkLeaseLostError)
+          ) {
             await this.store.abandonEffect({
               jobId: job.jobId,
               effectKey,

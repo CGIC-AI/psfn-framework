@@ -141,6 +141,43 @@ function factResponse(text: string): string {
 </response>`;
 }
 
+describe('runExtractionOrchestration durable children', () => {
+  it('awaits the emotional and profile children before resolving (no detached child)', async () => {
+    let releaseEmotional!: () => void;
+    let releaseProfile!: () => void;
+    const emotionalSettled = new Promise<void>((resolve) => { releaseEmotional = resolve; });
+    const profileSettled = new Promise<void>((resolve) => { releaseProfile = resolve; });
+    const maybePersistEmotionalState = vi.fn(() => emotionalSettled);
+    const maybeRefreshContactProfile = vi.fn(() => profileSettled);
+    const options = buildOptions({
+      canonicalContactId: 'contact-1',
+      maybePersistEmotionalState,
+      maybeRefreshContactProfile,
+    });
+
+    const runPromise = runExtractionOrchestration(options);
+    let resolved = false;
+    void runPromise.then(() => { resolved = true; });
+
+    // The extraction reaches the emotional child and awaits it: it cannot
+    // resolve while the child is still in flight, and it has not yet launched
+    // the profile child.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(maybePersistEmotionalState).toHaveBeenCalledTimes(1);
+    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(resolved).toBe(false);
+
+    releaseEmotional();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The profile child is now awaited in turn; still not resolved.
+    expect(maybeRefreshContactProfile).toHaveBeenCalledTimes(1);
+    expect(resolved).toBe(false);
+
+    releaseProfile();
+    await expect(runPromise).resolves.toBeUndefined();
+  });
+});
+
 describe('runExtractionOrchestration snapshot authority', () => {
   it('treats an authoritative empty recovered snapshot as empty instead of reading live history', async () => {
     const liveEntries = [

@@ -1091,10 +1091,19 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
   }): Promise<void> {
+    // Only a `pending` receipt may be abandoned. A `pending` receipt proves the
+    // run entered but never crossed its write boundary, so deleting it returns
+    // the job to a cleanly re-runnable state with no durable effect at risk.
+    // A `started` receipt is durable evidence that a write MAY have happened;
+    // deleting it would let a retry replay the write and DUPLICATE the durable
+    // effect (the u5bv.6 defect). A boundary-crossed effect that throws is left
+    // `started` (outcome-ambiguous) so recovery/retry fails closed via
+    // `outcome_unknown` instead of duplicating. This DELETE therefore never
+    // matches a `started` receipt, even if a caller requests it.
     await this.pool.query(`
       DELETE FROM agent_background_work_effect_receipts receipt
       WHERE receipt.job_id = $1 AND receipt.effect_key = $2
-        AND receipt.state IN ('pending', 'started')
+        AND receipt.state = 'pending'
         AND receipt.lease_owner = $3 AND receipt.lease_revision = $4
         AND EXISTS (
           SELECT 1 FROM agent_background_work_jobs job

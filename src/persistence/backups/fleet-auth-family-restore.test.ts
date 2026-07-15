@@ -19,6 +19,7 @@ vi.mock('./fleet-auth-schema-access.js', () => ({
   ) => contracts,
   assertFleetAuthSchemaAccessTargets: async () => undefined,
   applyFleetAuthSchemaAccessContracts: async () => undefined,
+  assertFleetAuthSchemaAccessIsolation: async () => undefined,
 }));
 
 vi.mock('../postgres/fleet-auth/schema.js', async (importOriginal) => {
@@ -35,6 +36,7 @@ vi.mock('./fleet-restore-database-marker.js', () => ({
   commitFleetRestoreDatabaseMarker: async () => undefined,
   removeFleetRestoreDatabaseMarker: async () => undefined,
   rollbackFleetRestoreDatabaseSchemas: async () => undefined,
+  withFleetRestoreDatabaseLock: async <T>(_options: unknown, handler: () => Promise<T>) => await handler(),
 }));
 
 const ROLES: FleetAuthDatabaseRoles = {
@@ -86,13 +88,13 @@ function writeFamily(
     path: file.path,
     ...(file.schema ? { postgresSchema: file.schema } : {}),
     ...(file.kind === 'companion' || file.kind === 'shared'
-      ? { runtimeRoles: ['companion_runtime'] }
+      ? { ownerRole: 'companion_runtime', runtimeRoles: ['companion_runtime'] }
       : {}),
     ...hashArtifact(join(root, file.path)),
   }));
   const manifestPath = join(root, 'fleet-auth-backup-manifest.json');
   writeFileSync(manifestPath, JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     capturedAt: '2026-07-15T15:00:00.000Z',
     postgresSnapshot: '100:200:',
     authorityLineageId: 'a'.repeat(64),
@@ -146,6 +148,10 @@ function restoreOptions(
     roles: ROLES,
     authorityFloors: new FleetAuthAuthorityFloorStore(floorRoot),
     activationGeneration: 2,
+    schemaOwnerDatabaseUrls: {
+      companion_one: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app',
+      shared: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app',
+    },
     pgRestoreBinary,
     psqlBinary: join(dirname(manifestPath), 'psql-stub.sh'),
   };

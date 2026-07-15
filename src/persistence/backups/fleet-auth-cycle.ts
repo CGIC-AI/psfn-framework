@@ -31,6 +31,7 @@ export interface FleetAuthConsistentBackupCycleOptions {
   schemas: ReadonlyArray<{
     kind: 'companion' | 'shared';
     schema: string;
+    ownerRole: string;
     runtimeRoles: readonly string[];
   }>;
   systemDataDir: string;

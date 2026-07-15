@@ -87,13 +87,13 @@ function writeFakeFamily(
     path: file.path,
     ...(file.schema ? { postgresSchema: file.schema } : {}),
     ...(file.kind === 'companion' || file.kind === 'shared'
-      ? { runtimeRoles: ['companion_runtime'] }
+      ? { ownerRole: 'companion_runtime', runtimeRoles: ['companion_runtime'] }
       : {}),
     ...hashArtifact(join(backupDir, file.path)),
   }));
   const manifestPath = join(backupDir, FLEET_AUTH_BACKUP_MANIFEST_NAME);
   writeFileSync(manifestPath, JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     capturedAt: '2026-07-15T15:00:00.000Z',
     postgresSnapshot: '100:200:',
     authorityLineageId: 'a'.repeat(64),
@@ -139,8 +139,14 @@ function makeCycleOptions(
     backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
     roles: ROLES,
     schemas: [
-      { kind: 'companion', schema: 'companion_one', runtimeRoles: ['companion_runtime'] },
-      { kind: 'shared', schema: 'shared', runtimeRoles: ['companion_runtime'] },
+      {
+        kind: 'companion', schema: 'companion_one', ownerRole: 'companion_runtime',
+        runtimeRoles: ['companion_runtime'],
+      },
+      {
+        kind: 'shared', schema: 'shared', ownerRole: 'companion_runtime',
+        runtimeRoles: ['companion_runtime'],
+      },
     ],
     systemDataDir: join(root, 'system-data'),
     backupRootDir: config.rootDir,

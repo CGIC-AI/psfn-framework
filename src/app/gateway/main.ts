@@ -64,7 +64,9 @@ import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fl
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
+import { resolveFleetAuthSchemaAccessContracts } from '../../persistence/backups/fleet-auth-schema-access.js';
 import {
+  DEFAULT_SHARED_WORLD_SCHEMA,
   registerScheduledFleetAuthBackupTask,
   SCHEDULED_BACKUP_TASK_ID,
   SCHEDULED_BACKUP_TASK_NAME,
@@ -203,12 +205,18 @@ async function main(): Promise<void> {
         ? { companionDatabaseUrl: config.postgresDatabaseUrl }
         : {}),
     });
+    const schemaAccessContracts = await resolveFleetAuthSchemaAccessContracts({
+      databaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      companionSchemas: config.companionFleet.companions.map(companion => companion.postgresSchema),
+      sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
+      roles: config.fleetAuth.databaseRoles,
+    });
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
-      companionDatabaseUrl: config.postgresDatabaseUrl,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
       roles: config.fleetAuth.databaseRoles,
+      schemaAccessContracts,
       backupConfig,
     });
     fleetAuthBackupScheduler = new Scheduler(

@@ -49,13 +49,32 @@ const BACKUP_CONFIG: BackupRuntimeConfig = {
 };
 
 describe('buildFleetAuthBackupCycleOptions', () => {
-  it('derives every companion schema plus exactly one shared schema', () => {
+  it('uses distinct authoritative companion owners and preserves shared access', () => {
     const options = buildFleetAuthBackupCycleOptions({
       fleet: FLEET,
       systemDataDir: '/runtime/system-data',
-      companionDatabaseUrl: 'postgresql://companion_runtime:secret@127.0.0.1:5432/app',
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
       roles: ROLES,
+      schemaAccessContracts: [
+        {
+          kind: 'companion',
+          schema: 'companion_one',
+          ownerRole: 'companion_one_runtime',
+          runtimeRoles: ['companion_one_runtime'],
+        },
+        {
+          kind: 'companion',
+          schema: 'companion_two',
+          ownerRole: 'companion_two_runtime',
+          runtimeRoles: ['companion_two_runtime'],
+        },
+        {
+          kind: 'shared',
+          schema: 'shared',
+          ownerRole: 'shared_migration',
+          runtimeRoles: ['companion_one_runtime', 'companion_two_runtime'],
+        },
+      ],
       backupConfig: BACKUP_CONFIG,
       pgDumpBinary: '/usr/local/bin/pg_dump',
     });
@@ -64,14 +83,47 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
       roles: ROLES,
       schemas: [
-        { kind: 'companion', schema: 'companion_one', runtimeRoles: ['companion_runtime'] },
-        { kind: 'companion', schema: 'companion_two', runtimeRoles: ['companion_runtime'] },
-        { kind: 'shared', schema: 'shared', runtimeRoles: ['companion_runtime'] },
+        {
+          kind: 'companion', schema: 'companion_one', ownerRole: 'companion_one_runtime',
+          runtimeRoles: ['companion_one_runtime'],
+        },
+        {
+          kind: 'companion', schema: 'companion_two', ownerRole: 'companion_two_runtime',
+          runtimeRoles: ['companion_two_runtime'],
+        },
+        {
+          kind: 'shared', schema: 'shared', ownerRole: 'shared_migration',
+          runtimeRoles: ['companion_one_runtime', 'companion_two_runtime'],
+        },
       ],
       systemDataDir: '/runtime/system-data',
       backupRootDir: '/runtime/backups',
       config: BACKUP_CONFIG,
       pgDumpBinary: '/usr/local/bin/pg_dump',
     });
+  });
+
+  it('rejects one companion role mapped across sibling schemas', () => {
+    expect(() => buildFleetAuthBackupCycleOptions({
+      fleet: FLEET,
+      systemDataDir: '/runtime/system-data',
+      backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      roles: ROLES,
+      schemaAccessContracts: [
+        {
+          kind: 'companion', schema: 'companion_one', ownerRole: 'companion_runtime',
+          runtimeRoles: ['companion_runtime'],
+        },
+        {
+          kind: 'companion', schema: 'companion_two', ownerRole: 'companion_runtime',
+          runtimeRoles: ['companion_runtime'],
+        },
+        {
+          kind: 'shared', schema: 'shared', ownerRole: 'shared_migration',
+          runtimeRoles: ['companion_runtime'],
+        },
+      ],
+      backupConfig: BACKUP_CONFIG,
+    })).toThrow(/one companion role across sibling schemas/i);
   });
 });

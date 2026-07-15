@@ -282,6 +282,21 @@ describe('fleet-auth owner-file configuration', () => {
       protectedRestoreRoots: [],
       companionDatabaseUrl: 'postgres://fleet_auth_runtime:different@db.example.test/psfn',
     })).toThrow(/must not authenticate as a fleet auth role/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [],
+      companionDatabaseUrl: 'postgres://companion_runtime:secret@db.example.test/psfn?user=fleet_auth_runtime',
+    })).toThrow(/role-routing override/);
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config,
+      credentialVault: createStaticCredentialVault({
+        ...credentials,
+        FLEET_AUTH_RUNTIME_DATABASE_URL:
+          'postgres://fleet_auth_runtime:runtime@db.example.test/psfn?user=fleet_auth_backup',
+      }),
+      protectedRestoreRoots: [],
+    })).toThrow(/role-routing override/);
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {

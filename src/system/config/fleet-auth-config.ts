@@ -580,6 +580,9 @@ function parseDatabaseCredential(
   if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
     throw new Error(`${description} must be a PostgreSQL URL`);
   }
+  if (url.searchParams.has('user') || url.searchParams.has('service')) {
+    throw new Error(`${description} must not use a PostgreSQL role-routing override`);
+  }
   if (decodeURIComponent(url.username) !== expectedRole || !url.password) {
     throw new Error(`${description} must authenticate as configured role ${expectedRole}`);
   }
@@ -719,6 +722,10 @@ export function resolveGatewayFleetAuthSecrets(options: {
       decodeURIComponent(companionCredential.username),
     )) {
       throw new Error('Companion POSTGRES_DATABASE_URL must not authenticate as a fleet auth role');
+    }
+    if (companionCredential.searchParams.has('user')
+      || companionCredential.searchParams.has('service')) {
+      throw new Error('Companion POSTGRES_DATABASE_URL must not use a PostgreSQL role-routing override');
     }
   }
   if (new Set([runtime.username, migration.username, backup.username]).size !== 3) {

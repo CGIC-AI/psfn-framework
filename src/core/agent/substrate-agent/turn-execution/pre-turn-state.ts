@@ -21,7 +21,10 @@ import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import { dispatchObserverEvalTurn } from '../../../eval/observer-sidecar/runtime.js';
-import type { ObserverEvalLifecycleState } from '../../../eval/observer-sidecar/types.js';
+import type {
+  ObserverEvalLifecycleState,
+  ObserverEvalRoutingSource,
+} from '../../../eval/observer-sidecar/types.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
@@ -31,12 +34,27 @@ import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attac
 import type { TurnExecutionObservability } from './observability.js';
 import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
 import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
+import type { SessionActorKind } from '../../../session/turn-provenance.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
+
+function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
+  return authorContext.actorKind;
+}
+
+function resolveObserverEvalRoutingSource(message: SubstrateMessage): ObserverEvalRoutingSource {
+  if (message.routing?.source) {
+    return message.routing.source;
+  }
+  if (message.channelType === 'api' || message.channelType === 'terminal') {
+    return message.channelType;
+  }
+  return 'unspecified';
+}
 
 export interface PreparedTurnIdentityState {
   authorContext: ResolvedAuthorContext;
@@ -211,6 +229,7 @@ export async function prepareTurnIdentityState(input: {
   turnCorrelationBase: CorrelationMetadata;
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage'>;
   deferSessionEntryPersistence?: boolean;
+  skipSessionEntryPersistence?: boolean;
 }): Promise<PreparedTurnIdentityState> {
   const {
     runtime,
@@ -220,6 +239,7 @@ export async function prepareTurnIdentityState(input: {
     turnCorrelationBase,
     observability,
     deferSessionEntryPersistence = false,
+    skipSessionEntryPersistence = false,
   } = input;
 
   const trustStageStart = Date.now();
@@ -333,7 +353,10 @@ export async function prepareTurnIdentityState(input: {
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
-  const userSessionEntryId = deferSessionEntryPersistence
+  const privateTurnTrigger = message.routing?.privateTurnTrigger === true;
+  const userSessionEntryId = privateTurnTrigger || skipSessionEntryPersistence
+    ? null
+    : deferSessionEntryPersistence
     ? null
     : authorContext.speakerRole === 'system'
       ? runtime.recordSystemMessage(
@@ -349,6 +372,8 @@ export async function prepareTurnIdentityState(input: {
         requestId,
         authorContext.trustLevel,
         continuitySubjectKey,
+        undefined,
+        resolveSessionActorKind(authorContext),
       );
 
   // Single per-turn ConversationScope resolution (session-manager ingress).
@@ -713,7 +738,7 @@ export async function computePreTurnState(input: {
         ...(taskKind ? { taskKind } : {}),
       },
       source: {
-        routingSource: message.routing?.source ?? 'unspecified',
+        routingSource: resolveObserverEvalRoutingSource(message),
         isDirectMessage: message.isDirectMessage ?? false,
         ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
       },

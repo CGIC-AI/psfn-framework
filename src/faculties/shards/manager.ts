@@ -53,11 +53,7 @@ import type {
   ShardFoldReviewResolveParams,
 } from './fold-review.js';
 import {
-  type BoundedSubagentLaunchSummary,
-  type SubagentExecutionPort,
-} from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
-import {
-  resolveCompanionIdFromConfig,
+  resolveCoreCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
 import {
@@ -176,7 +172,7 @@ export interface ActiveShard {
   failureReason?: string;
 }
 
-export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
+export class ShardManager implements ShardExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private artifactReturnPort: ArtifactReturnPort;
@@ -240,7 +236,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -287,45 +283,6 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
   }
 
-  async executeSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
-    const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
-    if (!activeChargeContext && chargePolicy) {
-      return runWithChargeContext({
-        chargePolicy,
-        eventBus: this.deps.eventBus,
-        lane: 'interactive',
-        correlation: getRequestContext(),
-      }, async () => this.executeSubagent(shardConfig));
-    }
-
-    chargeSurface('subagentLaunch', {
-      details: {
-        name: shardConfig.name,
-        ...(shardConfig.maxTurns !== undefined ? { maxTurns: shardConfig.maxTurns } : {}),
-      },
-    });
-
-    const result = await this.spawn(shardConfig);
-    return {
-      subagentId: result.shardId,
-      name: result.name,
-      content: result.content,
-      model: result.model,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      durationMs: result.durationMs,
-      turns: result.turns,
-      lifecycleState: result.lifecycleState,
-      health: result.health,
-      stateReason: result.stateReason,
-      ...(result.failureReason ? { failureReason: result.failureReason } : {}),
-      capabilities: [...result.capabilities],
-      requiredCapabilities: [...result.requiredCapabilities],
-      ...(result.artifactReturn ? { artifactReturn: result.artifactReturn } : {}),
-    };
-  }
-
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
     const activeChargeContext = getRunChargeContext();
     const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
@@ -346,7 +303,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,

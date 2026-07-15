@@ -44,6 +44,12 @@ spec:
           emptyDir: {}
         - name: logs
           emptyDir: {}
+        - name: postgres-database-url
+          secret:
+            secretName: psfn-secrets
+            items:
+              - key: POSTGRES_DATABASE_URL
+                path: database-url
 
       containers:
         - name: gateway
@@ -102,9 +108,30 @@ spec:
           envFrom:
             - configMapRef:
                 name: psfn-config
-            - secretRef:
-                name: psfn-secrets
           env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: API_KEY
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: ADMIN_TOKEN
+            - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+            - name: GATEWAY_COMPANION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: GATEWAY_COMPANION_AUTH_TOKEN
+                  optional: true
+            - name: POSTGRES_DATABASE_URL_FILE
+              value: /var/run/secrets/psfn-postgres/database-url
             - name: CONTINUITY_WATCHDOG_ENDPOINT
               value: "http://127.0.0.1:3000/health"
             - name: CONTINUITY_WATCHDOG_RESTART_PID
@@ -125,6 +152,9 @@ spec:
               mountPath: /app/tmp
             - name: logs
               mountPath: /app/logs
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
           resources:
             requests:
               cpu: 500m

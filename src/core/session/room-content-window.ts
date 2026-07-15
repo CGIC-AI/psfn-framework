@@ -1,4 +1,4 @@
-// ── Presence-windowed room content gate (psfn-framework-s10rm) ──
+// ── Presence-windowed room content gate (bead s10rm) ──
 //
 // Privacy for PRIVATE rooms is enforced at DELIVERY time, never by filtering
 // memory extraction: an occupant receives room chat only from their join

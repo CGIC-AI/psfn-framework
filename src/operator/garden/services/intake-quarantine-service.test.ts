@@ -84,7 +84,10 @@ describe('admin intake quarantine service (htm9.11)', () => {
   let updatedEvents: Array<{ caseId: string; input: CogSecUpdateEventInput }>;
   let service: AdminIntakeQuarantineService;
 
-  const buildService = (overrides: { confirmTokenTtlMs?: number } = {}) => createAdminIntakeQuarantineService({
+  const buildService = (overrides: {
+    confirmTokenTtlMs?: number;
+    onQueueChanged?: () => void;
+  } = {}) => createAdminIntakeQuarantineService({
     store,
     settingsService: {
       getIntakeSourceLists: () => lists,
@@ -130,6 +133,7 @@ describe('admin intake quarantine service (htm9.11)', () => {
       },
     }),
     now: () => clock,
+    ...(overrides.onQueueChanged ? { onQueueChanged: overrides.onQueueChanged } : {}),
     ...(overrides.confirmTokenTtlMs !== undefined
       ? { confirmTokenTtlMs: overrides.confirmTokenTtlMs }
       : {}),
@@ -152,6 +156,23 @@ describe('admin intake quarantine service (htm9.11)', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('signals queue consumers only after a decision is successfully applied', () => {
+    const onQueueChanged = vi.fn();
+    const signalingService = buildService({ onQueueChanged });
+    const entry = holdItem();
+    const begun = signalingService.beginDecision({ id: entry.id, action: 'discard' });
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new Error('expected confirmation token');
+
+    expect(signalingService.resolveDecision({
+      id: entry.id,
+      action: 'discard',
+      confirmToken: begun.confirmToken,
+      reason: 'hostile content',
+    }).ok).toBe(true);
+    expect(onQueueChanged).toHaveBeenCalledTimes(1);
   });
 
   function holdItem(input: {

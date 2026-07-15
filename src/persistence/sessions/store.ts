@@ -18,6 +18,7 @@ import {
   IMPORT_MANIFEST_FILENAME,
   L0_SESSION_FILE_MAX_BYTES,
   createKeyringIntegrityProvider,
+  normalizeOptionalHmac,
   normalizeOptionalNonNegativeNumber,
   normalizeOptionalSessionEntryRole,
   normalizeOptionalString,
@@ -313,15 +314,6 @@ export class SessionStore implements TranscriptSearchPort {
           loaded,
         );
       },
-      onEntryRebuilt: (id, entry) => this.rememberJournalTombstoneAuthority(id, entry),
-    });
-  }
-  private rememberJournalTombstoneAuthority(sessionId: string, entry: ChannelIndexEntry): void {
-    const archiveFingerprint = normalizeOptionalString(entry.archiveFingerprint);
-    if (!archiveFingerprint) return;
-    this.journalTombstoneAuthority.set(sessionId, {
-      archiveFingerprint,
-      tombstones: new Set(entry.activeTurnTombstoneIds ?? []),
     });
   }
   private resolveJournalAuthoritativeTurnTombstones(params: {
@@ -350,16 +342,29 @@ export class SessionStore implements TranscriptSearchPort {
 
     // The channel index is an unsigned derived cache. On a fresh process it
     // cannot authorize removal of a redaction merely because its archive
-    // fingerprint is current; derive tombstones from canonical journal replay
-    // once per immutable archive generation, then retain only that authority.
-    const loaded = this.journalRuntime.loadChannelChain(archives);
-    const loadedFingerprint = loaded.archiveFingerprint;
-    if (!loadedFingerprint) {
-      throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
+    // fingerprint is current. Scan authenticated tombstone actions once per
+    // immutable archive generation without replaying every message row.
+    const scanned = this.journalRuntime.readTurnTombstoneAuthorityFromChain(
+      archives,
+      params.cache?.turnTombstones,
+    );
+    if (!scanned) {
+      const loaded = this.journalRuntime.loadChannelChain(archives);
+      const loadedFingerprint = loaded.archiveFingerprint;
+      if (!loadedFingerprint) {
+        throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
+      }
+      const tombstones = new Set(loaded.turnTombstones);
+      this.journalTombstoneAuthority.set(params.sessionId, {
+        archiveFingerprint: loadedFingerprint,
+        tombstones,
+      });
+      this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
+      return new Set(tombstones);
     }
-    const tombstones = new Set(loaded.turnTombstones);
+    const tombstones = new Set(scanned.tombstones);
     this.journalTombstoneAuthority.set(params.sessionId, {
-      archiveFingerprint: loadedFingerprint,
+      archiveFingerprint: scanned.archiveFingerprint,
       tombstones,
     });
     this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
@@ -428,8 +433,33 @@ export class SessionStore implements TranscriptSearchPort {
           loadedCount,
         );
       },
-      onEntryRebuilt: (sessionId, entry) => this.rememberJournalTombstoneAuthority(sessionId, entry),
     });
+    for (const [sessionId, entry] of this.channelIndex.entries()) {
+      const filePaths = entry.filenames.map(filename => join(this.sessionsDir, filename));
+      if (filePaths.some(filePath => !existsSync(filePath))) continue;
+      const channelId = indexedChannelId(sessionId, entry);
+      const archives = filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath));
+      const archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
+      if (!archiveFingerprint) continue;
+      if (this.journalTombstoneAuthority.get(sessionId)?.archiveFingerprint === archiveFingerprint) continue;
+      const metadata = archives.map(archive => this.journalRuntime.scanArchiveMetadata(archive));
+      if (metadata.every(result => result.turnTombstoneCount === 0 && result.quarantined.length === 0)) {
+        this.journalTombstoneAuthority.set(sessionId, {
+          archiveFingerprint,
+          tombstones: new Set(),
+        });
+        continue;
+      }
+      const scanned = this.journalRuntime.readTurnTombstoneAuthorityFromChain(
+        archives,
+        new Set(entry.activeTurnTombstoneIds ?? []),
+      );
+      if (!scanned) continue;
+      this.journalTombstoneAuthority.set(sessionId, {
+        archiveFingerprint: scanned.archiveFingerprint,
+        tombstones: new Set(scanned.tombstones),
+      });
+    }
   }
   private backfillTranscriptProjectionFromDisk(): void {
     this.journalRuntime.backfillTranscriptProjectionFromDisk({
@@ -633,6 +663,20 @@ export class SessionStore implements TranscriptSearchPort {
   ): SessionEntry[] {
     return this.journalRuntime.readRecentEntriesFromTailChain(
       filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath)),
+      limit,
+      tombstones,
+    );
+  }
+  private readEntriesBeforeFromArchive(
+    channelId: string,
+    filePath: string,
+    beforeId: number,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return this.journalRuntime.readEntriesBefore(
+      this.journalRuntime.openArchive(channelId, filePath),
+      beforeId,
       limit,
       tombstones,
     );
@@ -1030,6 +1074,10 @@ export class SessionStore implements TranscriptSearchPort {
   appendTurnRecord(record: TurnRecord): void {
     this.turnRecordStore.appendTurnRecord(record);
   }
+  findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    return this.turnRecordStore.findTurnRecord(sessionId, turnId);
+  }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
     this.refreshChannelIndexFromDisk();
@@ -1057,7 +1105,7 @@ export class SessionStore implements TranscriptSearchPort {
       sessionId: resolved.sessionId,
       channelId: resolved.channelId,
       filePaths: resolved.filePaths,
-      cache: cached,
+      cache: cached ?? undefined,
     });
     if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
     return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
@@ -1087,6 +1135,44 @@ export class SessionStore implements TranscriptSearchPort {
       requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
   }
+  /**
+   * Reads the physical turn-record stream for an exact source channel without
+   * resolving it through a logical-session alias. Introspection consent is
+   * channel-exact, so routed sessions must use this path instead of widening a
+   * source-channel decision to the whole logical session.
+   */
+  getRecentSourceTurnRecords(sourceChannelId: string, limit: number, offset = 0): TurnRecord[] {
+    if (limit <= 0 || offset < 0) return [];
+    const records = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    );
+    const filtered = records.filter((record) => {
+      const ownerSessionId = record.sessionId ?? sourceChannelId;
+      const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+      if (!owner) return false;
+      return !owner.turnTombstones.has(record.turnId);
+    });
+    const end = Math.max(0, filtered.length - offset);
+    const start = Math.max(0, end - limit);
+    return filtered.slice(start, end);
+  }
+  isSourceTurnRecordEligible(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): boolean {
+    const matches = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    ).filter(record => record.turnId === turnId);
+    if (matches.length !== 1) return false;
+    const record = matches[0];
+    const declaredOwnerSessionId = record.sessionId ?? sourceChannelId;
+    if (record.channelId !== sourceChannelId || declaredOwnerSessionId !== ownerSessionId) return false;
+    const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+    return owner !== null && !owner.turnTombstones.has(turnId);
+  }
   async searchByKeywords(
     query: string,
     limit = 10,
@@ -1107,6 +1193,7 @@ export class SessionStore implements TranscriptSearchPort {
     this.backfillTranscriptProjectionFromDisk();
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
     if (limit <= 0) return [];
     this.refreshChannelIndexFromDisk();
     const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
@@ -1136,7 +1223,7 @@ export class SessionStore implements TranscriptSearchPort {
       sessionId: resolved.sessionId,
       channelId: resolved.channelId,
       filePaths: resolved.filePaths,
-      cache: cached,
+      cache: cached ?? undefined,
     });
     const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
     const recentCacheHit = cached
@@ -1184,6 +1271,89 @@ export class SessionStore implements TranscriptSearchPort {
     const entries = this.getRecent(channelId, 1);
     return entries[entries.length - 1];
   }
+  findLatestEntries(
+    channelId: string,
+    predicate: (entry: SessionEntry) => boolean,
+    limit = 1,
+  ): SessionEntry[] {
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedLimit <= 0) return [];
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded || (cached?.activeTurnTombstoneCount ?? 0) > 0) {
+      const full = cached?.fullyLoaded ? cached : this.ensureChannelFullyLoaded(channelId);
+      return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+    }
+    const resolved = cached
+      ? { channelId: cached.channelId, filePath: cached.resolvedPath }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const found = this.journalRuntime.findLatestEntries(
+      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
+      predicate,
+      normalizedLimit,
+    );
+    if (found) return found;
+    const full = this.ensureChannelFullyLoaded(channelId);
+    return full ? full.entries.filter(predicate).slice(-normalizedLimit).reverse() : [];
+  }
+
+  getEntriesBefore(channelId: string, beforeId: number, limit: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
+    if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+    const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded) {
+      const current = this.fullyLoadedCacheIsCurrent(cached)
+        ? cached
+        : this.ensureChannelFullyLoaded(channelId);
+      if (!current) return [];
+      const eligible = current.entries.filter(entry => entry.id < normalizedBeforeId);
+      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+    }
+
+    const resolved = cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+        filePath: cached.resolvedPath,
+      }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached && !cached.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    if ((normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0) === 0) return [];
+
+    const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
+    const indexedTurnTombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
+    // Legacy/incomplete tombstone metadata cannot safely drive a bounded
+    // privacy filter. Fall back to canonical replay only for that stale shape.
+    if (activeTurnTombstoneCount > 0 && indexedTurnTombstones.size !== activeTurnTombstoneCount) {
+      const full = this.ensureChannelFullyLoaded(channelId);
+      if (!full) return [];
+      const eligible = full.entries.filter(entry => entry.id < normalizedBeforeId);
+      return eligible.length <= normalizedLimit ? eligible : eligible.slice(-normalizedLimit);
+    }
+
+    return this.readEntriesBeforeFromArchive(
+      resolved.channelId,
+      resolved.filePath,
+      normalizedBeforeId,
+      normalizedLimit,
+      indexedTurnTombstones,
+    );
+  }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
     this.refreshChannelIndexFromDisk();
     if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
@@ -1211,16 +1381,29 @@ export class SessionStore implements TranscriptSearchPort {
     if (cached && !cached.fullyLoaded) {
       syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
     }
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached ?? undefined,
+    });
+    if (
+      resolved.filePaths.length === 1
+      && tombstones.size === 0
+      && normalizeOptionalHmac(indexEntry.lastHmac) === null
+    ) {
+      const found = this.journalRuntime.findEntriesInRange(
+        this.journalRuntime.openArchive(resolved.channelId, resolved.filePaths[0]!),
+        normalizedStart,
+        normalizedEnd,
+      );
+      if (found) return found;
+    }
     return this.journalRuntime.readEntriesInRangeFromChain(
       resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
       normalizedStart,
       normalizedEnd,
-      this.resolveJournalAuthoritativeTurnTombstones({
-        sessionId: resolved.sessionId,
-        channelId: resolved.channelId,
-        filePaths: resolved.filePaths,
-        cache: cached,
-      }),
+      tombstones,
     );
   }
   async applyCogSecTombstones(options: CogSecL0TombstoneOptions): Promise<CogSecL0TombstoneResult> {
@@ -1527,6 +1710,7 @@ export class SessionStore implements TranscriptSearchPort {
     return new Set(ids);
   }
   count(channelId: string): number {
+    this.refreshChannelIndexFromDisk();
     let cached = this.getLoadedCache(channelId);
     // Frozen fullyLoaded caches must not serve counts across a sibling
     // process's journal rewrite (same fingerprint gate as entry reads).
@@ -1567,6 +1751,7 @@ export class SessionStore implements TranscriptSearchPort {
     );
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
+    this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     let cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     // Same fingerprint gate as count(): a frozen fullyLoaded cache must not
@@ -1605,8 +1790,8 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     };
   }
-  listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
-    if (limit <= 0) return [];
+  listSessionsByRecentActivity(limit = 20, offset = 0): SessionActivitySummary[] {
+    if (limit <= 0 || offset < 0) return [];
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
@@ -1633,7 +1818,7 @@ export class SessionStore implements TranscriptSearchPort {
       return left.sessionId.localeCompare(right.sessionId);
     });
 
-    return sessions.slice(0, limit);
+    return sessions.slice(offset, offset + limit);
   }
   getLatestSessionByTimestamp(): LatestSessionSummary | null {
     const latest = this.listSessionsByRecentActivity(1)[0];

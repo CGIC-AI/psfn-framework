@@ -87,7 +87,7 @@ export interface TurnSessionContextSnapshot {
   storeWindowMaxEntryId?: number;
   /**
    * Presence-window serve floor applied to this capture (private rooms,
-   * psfn-framework-s10rm). Absent when the channel is unwindowed.
+   * bead s10rm). Absent when the channel is unwindowed.
    */
   roomWindowFloorMs?: number;
   /** Entries dropped by the presence-window gate before assembly. */

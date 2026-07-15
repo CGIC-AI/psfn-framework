@@ -356,6 +356,22 @@ describe('SessionStore bounded logical-archive reads', () => {
       ]);
   });
 
+  it('does not let a tampered restore revoke indexed redaction authority', () => {
+    const fixture = createBoundedReadFixture();
+    const finalPath = fixture.filePaths[2];
+    const rows = readFileSync(finalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    rows.at(-1)!.tombstoneAction = 'restore';
+    writeFileSync(finalPath, `${rows.map(row => JSON.stringify(row)).join('\n')}\n`, 'utf8');
+
+    const reloaded = new SessionStore(fixture.dir, { integrityKeyring: fixture.keyring });
+
+    expect(reloaded.getEntriesInRange(fixture.channelId, 1, 9).map(message => message.id))
+      .toEqual([1, 3, 4, 6, 7, 9]);
+  });
+
   it('reads a deep range from a legacy single-file archive with byte I/O proportional to the window', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-session-bounded-single-'));
     dirs.push(dir);

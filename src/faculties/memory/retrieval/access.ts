@@ -54,13 +54,43 @@ export interface RetrievalRoomVisibilityContext {
   conversationScope?: ConversationScope;
 }
 
-function violatesHighIntimacyContactScope(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId'>,
-  canonicalContactId?: string,
+interface RetrievalParticipantAccessContext {
+  trustLevel: TrustLevel;
+  channelPrivacy: ChannelPrivacy;
+  broadcast: boolean;
+  canonicalContactId?: string;
+  roomVisibility?: RetrievalRoomVisibilityContext;
+}
+
+function normalizeContactId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveMemorySubjectContactId(
+  memory: Pick<PurrMemory, 'contactId' | 'provenance'>,
+): string | undefined {
+  return normalizeContactId(memory.contactId)
+    ?? normalizeContactId(memory.provenance?.subjectContactId)
+    ?? normalizeContactId(memory.provenance?.routedContactId)
+    ?? normalizeContactId(memory.provenance?.sourceContactId)
+    ?? normalizeContactId(memory.provenance?.triggerContactId);
+}
+
+function hasOnlyCanonicalParticipantAttribution(
+  memory: Pick<PurrMemory, 'contactId' | 'provenance'>,
+  canonicalContactId: string,
 ): boolean {
-  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
-  if (!canonicalContactId) return false;
-  return memory.contactId !== canonicalContactId;
+  const participantContactIds = [
+    memory.contactId,
+    memory.provenance?.subjectContactId,
+    memory.provenance?.routedContactId,
+    memory.provenance?.sourceContactId,
+    memory.provenance?.triggerContactId,
+  ]
+    .map(normalizeContactId)
+    .filter((contactId): contactId is string => contactId !== undefined);
+  return participantContactIds.every(contactId => contactId === canonicalContactId);
 }
 
 function normalizeRoomId(value: string | undefined): string | undefined {
@@ -92,6 +122,45 @@ function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeR
   };
 }
 
+function isPrimaryPrivateDmSubject(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  options: RetrievalParticipantAccessContext,
+): boolean {
+  const canonicalContactId = normalizeContactId(options.canonicalContactId);
+  const subjectContactId = resolveMemorySubjectContactId(memory);
+  if (!(options.trustLevel === 'primary'
+    && options.channelPrivacy === 'private'
+    && options.broadcast === false
+    && options.roomVisibility?.currentIsDirectMessage === true
+    && canonicalContactId !== undefined
+    && (subjectContactId === undefined || subjectContactId === canonicalContactId)
+    && hasOnlyCanonicalParticipantAttribution(memory, canonicalContactId))) {
+    return false;
+  }
+
+  const source = resolveMemorySourceRoom(memory);
+  if (source.inconsistent) return false;
+  if (subjectContactId === canonicalContactId) return true;
+  if (source.roomId && options.roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {
+    return true;
+  }
+
+  return memory.scopeRef?.kind !== 'conversation'
+    && !hasRoomContextScopeTag(memory)
+    && !isHighIntimacySensitivityLevel(memory.sensitivity);
+}
+
+function violatesHighIntimacyContactScope(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  options: RetrievalParticipantAccessContext,
+): boolean {
+  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
+  const canonicalContactId = normalizeContactId(options.canonicalContactId);
+  if (!canonicalContactId) return false;
+  if (isPrimaryPrivateDmSubject(memory, options)) return false;
+  return resolveMemorySubjectContactId(memory) !== canonicalContactId;
+}
+
 function requiresRoomProofWhenSourceMissing(
   memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
   roomVisibility: RetrievalRoomVisibilityContext,
@@ -102,9 +171,10 @@ function requiresRoomProofWhenSourceMissing(
 }
 
 function evaluateRoomVisibilityDecision(
-  memory: Pick<PurrMemory, 'sensitivity' | 'provenance' | 'scopeRef' | 'scopeTags'>,
-  roomVisibility: RetrievalRoomVisibilityContext | undefined,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  options: RetrievalParticipantAccessContext,
 ): RetrievalAccessDecision | undefined {
+  const roomVisibility = options.roomVisibility;
   const currentRoomId = normalizeRoomId(roomVisibility?.currentChannelId);
   if (!roomVisibility || !currentRoomId) return undefined;
 
@@ -116,6 +186,7 @@ function evaluateRoomVisibilityDecision(
       withheldReason: 'room_visibility.blocked',
     };
   }
+  if (isPrimaryPrivateDmSubject(memory, options)) return undefined;
   if (!source.roomId) {
     if (requiresRoomProofWhenSourceMissing(memory, roomVisibility)) {
       return {
@@ -159,10 +230,10 @@ export function evaluateRetrievalAccessDecision(
     roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): RetrievalAccessDecision {
-  const roomDecision = evaluateRoomVisibilityDecision(memory, options.roomVisibility);
+  const roomDecision = evaluateRoomVisibilityDecision(memory, options);
   if (roomDecision) return roomDecision;
 
-  if (violatesHighIntimacyContactScope(memory, options.canonicalContactId)) {
+  if (violatesHighIntimacyContactScope(memory, options)) {
     return {
       allowed: false,
       rejectionKind: 'contact_scope',

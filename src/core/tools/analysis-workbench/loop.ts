@@ -33,11 +33,16 @@ import {
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
 import {
-  chargeSurface,
   getRunChargeContext,
   inspectChargeSurface,
   runWithChargeContext,
+  runWithChargedSurface,
 } from '../../../shared/telemetry/run-charge.js';
+import {
+  resolveCorrelationMetadata,
+  type ResolvedCorrelationMetadata,
+} from '../../../primitives/llm/correlation.js';
+import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -424,33 +429,12 @@ function pushPassiveStep(
   }));
 }
 
-interface ResolvedAnalysisRequestMetadata {
-  requestId: string;
-  turnId?: string;
-  channelId?: string;
-  toolName?: string;
-  toolCallId?: string;
-  originType: 'tool' | 'background' | 'scheduled' | 'chat' | 'memory' | 'summary';
-}
+type ResolvedAnalysisRequestMetadata = ResolvedCorrelationMetadata;
 
 function normalizeMetadataValue(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeOriginType(value: string | undefined): ResolvedAnalysisRequestMetadata['originType'] | undefined {
-  if (
-    value === 'tool'
-    || value === 'background'
-    || value === 'scheduled'
-    || value === 'chat'
-    || value === 'memory'
-    || value === 'summary'
-  ) {
-    return value;
-  }
-  return undefined;
 }
 
 function resolveAnalysisRequestMetadata(
@@ -468,18 +452,12 @@ function resolveAnalysisRequestMetadata(
   const requestId = normalizeMetadataValue(merged.requestId)
     ?? turnId
     ?? `repl-analysis-${Date.now()}`;
-  const originType = normalizeOriginType(normalizeMetadataValue(merged.originType))
-    ?? normalizeOriginType(normalizeMetadataValue(merged.callType))
-    ?? 'tool';
-
-  return {
+  return resolveCorrelationMetadata({
+    ...merged,
     requestId,
     ...(turnId ? { turnId } : {}),
-    ...(normalizeMetadataValue(merged.channelId) ? { channelId: normalizeMetadataValue(merged.channelId) } : {}),
     toolName: normalizeMetadataValue(merged.toolName) ?? 'analysis_workbench',
-    ...(normalizeMetadataValue(merged.toolCallId) ? { toolCallId: normalizeMetadataValue(merged.toolCallId) } : {}),
-    originType,
-  };
+  }, undefined, 'reasoning');
 }
 
 function buildAnalysisCorrelation(
@@ -487,16 +465,26 @@ function buildAnalysisCorrelation(
   originStage: string,
   requestSuffix: string,
 ): CorrelationMetadata {
+  const requestId = `${metadata.requestId}:${requestSuffix}`;
   return {
-    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
-    requestId: `${metadata.requestId}:${requestSuffix}`,
-    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
-    callType: metadata.originType,
-    ...(metadata.toolName ? { toolName: metadata.toolName } : {}),
-    ...(metadata.toolCallId ? { toolCallId: metadata.toolCallId } : {}),
+    ...metadata,
+    requestId,
+    callType: 'tool',
     purpose: originStage,
-    originType: metadata.originType,
+    originType: 'tool',
     originStage,
+    ...(metadata.icpCorrelation
+      ? {
+          icpCorrelation: deriveChildIcpConversationCostCorrelation(
+            metadata.icpCorrelation,
+            {
+              requestId,
+              costPurpose: 'tool',
+              costOriginStage: metadata.icpCorrelation.costOriginStage,
+            },
+          ),
+        }
+      : {}),
   };
 }
 
@@ -505,14 +493,27 @@ function buildNestedAnalysisRequestMetadata(
   childId: number,
 ): Partial<LLMRequestMetadata> {
   const suffix = `nested-analysis-${childId}`;
+  const requestId = `${metadata.requestId}:${suffix}`;
+  const { callType: _callType, purpose: _purpose, ...requestMetadata } = metadata;
   return {
-    ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
-    requestId: `${metadata.requestId}:${suffix}`,
-    ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
+    ...requestMetadata,
+    requestId,
     toolName: metadata.toolName ?? 'analysis_workbench',
     ...(metadata.toolCallId ? { toolCallId: `${metadata.toolCallId}:${suffix}` } : {}),
-    originType: metadata.originType,
+    originType: 'tool',
     originStage: 'repl.analysis_workbench.subcall',
+    ...(metadata.icpCorrelation
+      ? {
+          icpCorrelation: deriveChildIcpConversationCostCorrelation(
+            metadata.icpCorrelation,
+            {
+              requestId,
+              costPurpose: 'tool',
+              costOriginStage: metadata.icpCorrelation.costOriginStage,
+            },
+          ),
+        }
+      : {}),
   };
 }
 
@@ -630,23 +631,34 @@ export async function runRLMLoop(
       originStage,
       `sandbox-${purpose}-${Date.now()}`,
     );
+    const requestId = normalizeMetadataValue(incomingCorrelation?.requestId)
+      ?? correlationBase.requestId;
     const correlatedContext: LLMContext = {
       ...context,
       correlation: {
         ...correlationBase,
         ...(incomingCorrelation ?? {}),
-        callType: incomingCorrelation?.callType
-          ?? incomingCorrelation?.originType
-          ?? correlationBase.callType,
+        requestId,
+        callType: 'tool',
         purpose: incomingCorrelation?.purpose
           ?? incomingCorrelation?.originStage
           ?? correlationBase.purpose,
-        originType: incomingCorrelation?.originType
-          ?? incomingCorrelation?.callType
-          ?? correlationBase.originType,
+        originType: 'tool',
         originStage: incomingCorrelation?.originStage
           ?? incomingCorrelation?.purpose
           ?? correlationBase.originStage,
+        ...(requestMetadata.icpCorrelation
+          ? {
+              icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                requestMetadata.icpCorrelation,
+                {
+                  requestId,
+                  costPurpose: 'tool',
+                  costOriginStage: requestMetadata.icpCorrelation.costOriginStage,
+                },
+              ),
+            }
+          : {}),
       },
     };
     const response = await llmProvider.complete(correlatedContext, purpose);
@@ -869,7 +881,7 @@ export async function runRLMLoop(
         break;
       }
 
-      const completion = llmProvider.complete(
+      const runCompletion = async () => await llmProvider.complete(
         {
           systemPrompt,
           messages,
@@ -881,6 +893,16 @@ export async function runRLMLoop(
         },
         'reasoning',
       );
+      const completion = iterationNumber > 1
+        ? runWithChargedSurface('analysisWorkbenchExtensionBand', {
+            chargePolicy,
+            details: {
+              iteration: iterationNumber,
+              depth,
+              ...(requestMetadata.turnId ? { turnId: requestMetadata.turnId } : {}),
+            },
+          }, runCompletion)
+        : runCompletion();
       response = timeoutMs === null
         ? await completion
         : await withTimeout(completion, timeoutMs);
@@ -901,16 +923,6 @@ export async function runRLMLoop(
     sharedState.totalOutputTokens += response.outputTokens;
 
     applyCostCharge(response.inputTokens, response.outputTokens);
-    if (iterationNumber > 1) {
-      chargeSurface('analysisWorkbenchExtensionBand', {
-        chargePolicy,
-        details: {
-          iteration: iterationNumber,
-          depth,
-          ...(requestMetadata.turnId ? { turnId: requestMetadata.turnId } : {}),
-        },
-      });
-    }
     refreshBudgetStatus();
 
     const text = response.content;

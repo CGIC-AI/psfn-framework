@@ -6,7 +6,10 @@ import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
-import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
+import {
+  getRunChargeSnapshot,
+  resetRunChargeRollingWindowForTests,
+} from '../../../shared/telemetry/run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
@@ -260,7 +263,11 @@ describe('runRLMLoop', () => {
       {
         turnId: 'turn-1',
         requestId: 'req-1',
+        sessionId: 'logical-session-1',
         channelId: 'discord:123',
+        channelType: 'discord',
+        conversationId: 'logical-session-1',
+        rootInitiationId: 'root-initiation-1',
         toolName: 'analysis_workbench',
         toolCallId: 'tool-1',
         originType: 'tool',
@@ -272,7 +279,11 @@ describe('runRLMLoop', () => {
     expect(calls[0][0].correlation).toMatchObject({
       turnId: 'turn-1',
       requestId: 'req-1:iteration-1',
+      sessionId: 'logical-session-1',
       channelId: 'discord:123',
+      channelType: 'discord',
+      conversationId: 'logical-session-1',
+      rootInitiationId: 'root-initiation-1',
       toolName: 'analysis_workbench',
       toolCallId: 'tool-1',
       callType: 'tool',
@@ -280,6 +291,79 @@ describe('runRLMLoop', () => {
       originStage: 'repl.analysis_workbench.iteration',
       purpose: 'repl.analysis_workbench.iteration',
     });
+  });
+
+  it('binds ICP analysis iterations and sandbox subqueries to child tool costs', async () => {
+    const localCompanionId = '11111111-1111-4111-8111-111111111111';
+    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const icpCorrelation = {
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-peer',
+      channelId,
+      turnId: 'turn-analysis',
+      messageId: 'message-analysis',
+      requestId: 'request-analysis',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'allow' as const,
+    };
+    const llm = sequentialLLM([
+      '```repl\nconst query = await llm_query("q1"); print(query);\n```',
+      'sub-result',
+      'FINAL("parent conclusion")',
+    ]);
+
+    await runRLMLoop(
+      'ICP analysis descendants',
+      makeDeps(llm, {
+        chargePolicy: makeChargePolicy(),
+      }),
+      {
+        companionId: localCompanionId,
+        turnId: icpCorrelation.turnId,
+        requestId: icpCorrelation.requestId,
+        channelId,
+        conversationId: icpCorrelation.conversationId,
+        rootInitiationId: icpCorrelation.rootInitiationId,
+        chargeLane: icpCorrelation.chargeLane,
+        toolName: 'analysis_workbench',
+        toolCallId: 'tool-analysis',
+        originType: 'tool',
+        originStage: 'repl.analysis_workbench.tool',
+        icpCorrelation,
+      },
+    );
+
+    const correlations = (llm.complete as ReturnType<typeof vi.fn>).mock.calls
+      .map(call => call[0].correlation);
+    expect(correlations).toHaveLength(3);
+    for (const correlation of correlations) {
+      expect(correlation).toMatchObject({
+        callType: 'tool',
+        originType: 'tool',
+        conversationId: icpCorrelation.conversationId,
+        rootInitiationId: icpCorrelation.rootInitiationId,
+        icpCorrelation: {
+          conversationId: icpCorrelation.conversationId,
+          rootInitiationId: icpCorrelation.rootInitiationId,
+          localCompanionId,
+          peerCompanionId,
+          peerContactId: icpCorrelation.peerContactId,
+          costPurpose: 'tool',
+          costOriginStage: 'reply',
+        },
+      });
+      expect(correlation?.icpCorrelation?.requestId).toBe(correlation?.requestId);
+    }
+    expect(correlations.some(correlation => correlation?.originStage === 'repl.sandbox.llm_query'))
+      .toBe(true);
   });
 
   it('handles multi-iteration with code execution', async () => {
@@ -475,19 +559,31 @@ describe('runRLMLoop', () => {
   });
 
   it('propagates structured origin metadata into sandbox llm_query calls', async () => {
-    const llm = sequentialLLM([
+    const responses = [
       '```repl\nvar r = await llm_query("q1"); print(r);\n```',
       'sub-result',
       'FINAL("done")',
-    ]);
+    ];
+    const activeSurfaces: Array<string | undefined> = [];
+    const llm: LLMProviderPort = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => {
+        activeSurfaces.push(getRunChargeSnapshot()?.surface);
+        return mockResponse(responses.shift() ?? 'FINAL("fallback")');
+      }),
+    };
 
     await runRLMLoop(
       'Sandbox metadata route test',
-      makeDeps(llm),
+      makeDeps(llm, { chargePolicy: makeChargePolicy() }),
       {
         turnId: 'turn-2',
         requestId: 'req-2',
+        sessionId: 'logical-session-2',
         channelId: 'discord:456',
+        channelType: 'discord',
+        conversationId: 'logical-session-2',
+        rootInitiationId: 'root-initiation-2',
         toolName: 'analysis_workbench',
         toolCallId: 'tool-2',
         originType: 'tool',
@@ -499,7 +595,11 @@ describe('runRLMLoop', () => {
     expect(calls[1][0].correlation).toMatchObject({
       turnId: 'turn-2',
       requestId: 'req-2:sandbox-subquery:1',
+      sessionId: 'logical-session-2',
       channelId: 'discord:456',
+      channelType: 'discord',
+      conversationId: 'logical-session-2',
+      rootInitiationId: 'root-initiation-2',
       toolName: 'llm_query',
       toolCallId: 'tool-2',
       callType: 'tool',
@@ -507,6 +607,11 @@ describe('runRLMLoop', () => {
       originStage: 'repl.sandbox.llm_query',
       purpose: 'repl.sandbox.llm_query',
     });
+    expect(activeSurfaces).toEqual([
+      undefined,
+      'externalModelConsult',
+      'analysisWorkbenchExtensionBand',
+    ]);
   });
 
   it('runs nested_analysis with isolated child context and conclusion-only return when policy allows it', async () => {

@@ -73,6 +73,39 @@ describe('identity-literal scan', () => {
     expect(result.allowlisted).toHaveLength(0);
   });
 
+  it('still rejects a new runtime identity literal beside a narrow allowlisted contract', () => {
+    const result = scanIdentityLiteralEntries(
+      [
+        {
+          path: 'src/runtime.ts',
+          text: [
+            "export const HEADER = 'x-psfn-existing-contract';",
+            "export const NEW_DEFAULT = 'PSFN';",
+          ].join('\n'),
+        },
+      ],
+      {
+        allowlist: [
+          {
+            path: 'src/runtime.ts',
+            contains: "HEADER = 'x-psfn-existing-contract'",
+            reason: 'existing protocol contract',
+            pattern: 'identity-legacy-slug',
+          },
+        ],
+      },
+    );
+
+    expect(result.allowlisted).toHaveLength(1);
+    expect(result.violations).toEqual([
+      expect.objectContaining({
+        file: 'src/runtime.ts',
+        line: 2,
+        pattern: 'identity-proper-name',
+      }),
+    ]);
+  });
+
   it('scopes allowlist suppression by pattern to avoid masking other hits on the same line', () => {
     const result = scanIdentityLiteralEntries(
       [

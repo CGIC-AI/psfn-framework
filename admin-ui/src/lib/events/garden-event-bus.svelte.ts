@@ -9,6 +9,7 @@ import {
 const MAX_GARDEN_EVENTS = 750;
 
 type GardenEventListener = (event: GardenEventEnvelope) => void;
+type GardenEventConnectionListener = (connected: boolean) => void;
 
 interface GardenEventSubscription {
   listener: GardenEventListener;
@@ -20,6 +21,15 @@ let connected = $state(false);
 let paused = $state(false);
 let socket: ReconnectingWebSocket | null = null;
 const subscriptions = new Set<GardenEventSubscription>();
+const connectionSubscriptions = new Set<GardenEventConnectionListener>();
+
+function setGardenEventBusConnected(nextConnected: boolean): void {
+  if (connected === nextConnected) return;
+  connected = nextConnected;
+  for (const listener of connectionSubscriptions) {
+    listener(nextConnected);
+  }
+}
 
 function publishGardenEvent(event: GardenEventEnvelope): void {
   if (!paused) {
@@ -75,25 +85,25 @@ export function connectGardenEventBus(): void {
     const nextSocket = new ReconnectingWebSocket('/api/admin/events');
     nextSocket.onMessage(handleSocketMessage);
     nextSocket.onConnectionChange((nextConnected) => {
-      connected = nextConnected;
+      setGardenEventBusConnected(nextConnected);
     });
     socket = nextSocket;
   }
 
   socket.connect();
-  connected = socket.connected;
+  setGardenEventBusConnected(socket.connected);
 }
 
 export function disconnectGardenEventBus(): void {
   if (!socket) {
-    connected = false;
+    setGardenEventBusConnected(false);
     return;
   }
 
   const closingSocket = socket;
   socket = null;
   closingSocket.close();
-  connected = false;
+  setGardenEventBusConnected(false);
 }
 
 export function clearGardenEventBus(): void {
@@ -115,4 +125,11 @@ export function subscribeGardenEvents(
   const subscription: GardenEventSubscription = { listener, filter };
   subscriptions.add(subscription);
   return () => subscriptions.delete(subscription);
+}
+
+export function subscribeGardenEventBusConnection(
+  listener: GardenEventConnectionListener,
+): () => void {
+  connectionSubscriptions.add(listener);
+  return () => connectionSubscriptions.delete(listener);
 }

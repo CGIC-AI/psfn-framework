@@ -40,8 +40,15 @@ export class ShardToolSyncHelper {
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
-        if (this.isShardMemoryImportTool(tool.name, params)) {
-          return this.quarantineShardMemoryImport(tool.name, toolCallId, params, memoryReviewContext);
+        const memoryOperation = this.resolveShardToolSyncOperation(tool.name, params);
+        if (memoryOperation === 'memory_write' || memoryOperation === 'memory_import_batch') {
+          return this.quarantineShardMemoryMutation(
+            memoryOperation,
+            tool.name,
+            toolCallId,
+            params,
+            memoryReviewContext,
+          );
         }
         this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
@@ -52,39 +59,33 @@ export class ShardToolSyncHelper {
     };
   }
 
-  private isShardMemoryImportTool(toolName: string, params: unknown): boolean {
-    if (toolName === 'memory_import_batch') {
-      return true;
-    }
-    if (toolName !== 'memory' || typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return false;
-    }
-    const paramRecord = params as Record<string, unknown>;
-    const action = typeof paramRecord.action === 'string'
-      ? paramRecord.action.trim().toLowerCase()
-      : '';
-    return action === 'import';
-  }
-
-  private async quarantineShardMemoryImport(
+  private async quarantineShardMemoryMutation(
+    operation: 'memory_write' | 'memory_import_batch',
     toolName: string,
     toolCallId: string,
     params: unknown,
     memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
   ): Promise<AgentToolResult<any>> {
     if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return textResultWithError('Error: records must be a non-empty array', true);
+      const message = operation === 'memory_import_batch'
+        ? 'Error: records must be a non-empty array'
+        : 'Error: memory write must contain valid text and type';
+      return textResultWithError(message, true);
     }
 
     const input = params as Record<string, unknown>;
     const rawRecords = input.records;
-    if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
+    if (
+      operation === 'memory_import_batch'
+      && (!Array.isArray(rawRecords) || rawRecords.length === 0)
+    ) {
       return textResultWithError('Error: records must be a non-empty array', true);
     }
 
-    const directPromotionDecision = this.evaluateShardMemoryImportPromotionPolicy(
+    const directPromotionDecision = this.evaluateShardMemoryPromotionPolicy(
       memoryReviewContext.lineage.shardId,
       toolCallId,
+      operation,
     );
     const stagedOutputs = resolveStagedShardMemoryOutputs(
       memoryReviewContext,
@@ -96,7 +97,10 @@ export class ShardToolSyncHelper {
       },
     );
     if (stagedOutputs.length === 0) {
-      return textResultWithError('Error: memory import batch must contain valid records', true);
+      const message = operation === 'memory_import_batch'
+        ? 'Error: memory import batch must contain valid records'
+        : 'Error: memory write must contain valid text and type';
+      return textResultWithError(message, true);
     }
 
     const reviewTimestamp = Date.now();
@@ -106,14 +110,19 @@ export class ShardToolSyncHelper {
       taggedOutputs: stagedOutputs,
       mergeReview,
     });
-    this.deps.auditTrail?.append('shard.memory.import.quarantined', {
-      shardId: memoryReviewContext.lineage.shardId,
-      toolName,
-      toolCallId,
-      pendingTaggedOutputCount: stagedOutputs.length,
-      blockedCorePromotionReason: directPromotionDecision.reason,
-      blockingReasons,
-    });
+    this.deps.auditTrail?.append(
+      operation === 'memory_import_batch'
+        ? 'shard.memory.import.quarantined'
+        : 'shard.memory.write.quarantined',
+      {
+        shardId: memoryReviewContext.lineage.shardId,
+        toolName,
+        toolCallId,
+        pendingTaggedOutputCount: stagedOutputs.length,
+        blockedCorePromotionReason: directPromotionDecision.reason,
+        blockingReasons,
+      },
+    );
     if (this.deps.foldReviewController) {
       await this.deps.foldReviewController.recordPendingMemoryCandidates({
         shardId: memoryReviewContext.lineage.shardId,
@@ -125,7 +134,9 @@ export class ShardToolSyncHelper {
       });
     }
 
-    const summary = `Memory import quarantined: ${stagedOutputs.length} record(s) staged as pending fold review.`;
+    const summary = operation === 'memory_import_batch'
+      ? `Memory import quarantined: ${stagedOutputs.length} record(s) staged as pending fold review.`
+      : `Memory write quarantined: ${stagedOutputs.length} candidate(s) staged as pending fold review.`;
     return {
       content: [{ type: 'text', text: summary }],
       details: {
@@ -149,16 +160,17 @@ export class ShardToolSyncHelper {
     };
   }
 
-  private evaluateShardMemoryImportPromotionPolicy(
+  private evaluateShardMemoryPromotionPolicy(
     shardId: string,
     toolCallId: string,
+    operation: 'memory_write' | 'memory_import_batch',
   ): ShardSessionMemorySyncDecision {
     const decision = this.deps.contextPackHelper.evaluateSyncPolicy({
       version: SHARD_SYNC_POLICY_VERSION,
       syncClass: 'derived_memory',
       direction: 'shard_to_prime',
       authority: 'shard',
-      operation: 'memory_import_batch',
+      operation,
       shardId,
       sourceId: `shard:${shardId}`,
       targetId: SHARD_SYNC_MEMORY_TARGET,
@@ -166,13 +178,13 @@ export class ShardToolSyncHelper {
         'shard_tool_sync',
         shardId,
         toolCallId,
-        'memory_import_batch',
+        operation,
       ]),
       requestedAt: Date.now(),
     });
     if (decision.allowed) {
       throw new Error(
-        `Shard session/memory sync unexpectedly allowed for memory_import_batch (${decision.reason}).`,
+        `Shard session/memory sync unexpectedly allowed for ${operation} (${decision.reason}).`,
       );
     }
     return decision;

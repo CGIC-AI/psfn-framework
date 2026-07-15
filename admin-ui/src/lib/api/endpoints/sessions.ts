@@ -4,6 +4,7 @@ import type {
   AdminCogSecRemediationApplyData,
   AdminCogSecRemediationInput,
   AdminCogSecRemediationPreviewData,
+  AdminSessionDetailData,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionRouteListData,
@@ -15,6 +16,9 @@ import type {
 
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
 export const SESSION_SEARCH_LIMIT = 100;
+
+let cachedSessionList: AdminSessionListData | null = null;
+let sessionListRevalidation: Promise<AdminSessionListData> | null = null;
 
 export interface SessionMessagesRequest {
   limit?: number;
@@ -30,6 +34,44 @@ export interface SessionMessagesRequest {
 
 export function listSessions(): Promise<AdminSessionListData> {
   return apiGet<AdminSessionListData>('/api/admin/sessions');
+}
+
+/**
+ * The cache lives only for the current Garden JavaScript session. Revalidation
+ * still uses apiGet, whose `no-cache` request contract lets the browser send
+ * the shared admin ETag and reuse the body after a 304 response.
+ */
+export function getCachedSessionList(): AdminSessionListData | null {
+  return cachedSessionList;
+}
+
+export function clearSessionListCache(): void {
+  cachedSessionList = null;
+  sessionListRevalidation = null;
+}
+
+export function revalidateSessionList(
+  fetchList: () => Promise<AdminSessionListData> = listSessions,
+): Promise<AdminSessionListData> {
+  if (sessionListRevalidation) return sessionListRevalidation;
+  const current = fetchList()
+    .then((data) => {
+      cachedSessionList = data;
+      return data;
+    })
+    .finally(() => {
+      if (sessionListRevalidation === current) sessionListRevalidation = null;
+    });
+  sessionListRevalidation = current;
+  return current;
+}
+
+export function buildSessionDetailPath(sessionId: string): string {
+  return `/api/admin/sessions/${encodeURIComponent(sessionId)}/detail`;
+}
+
+export function getSessionDetail(sessionId: string): Promise<AdminSessionDetailData> {
+  return apiGet<AdminSessionDetailData>(buildSessionDetailPath(sessionId));
 }
 
 export function buildSessionMessagesPath(

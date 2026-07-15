@@ -12,6 +12,7 @@ import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   composeGatewayIntakeScreening,
   resolveIntakeScreenerBackend,
@@ -21,6 +22,10 @@ import { GatewayServer } from './server.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
+import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -48,9 +53,12 @@ export interface GatewayPrivilegedCore {
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
-    discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
+    discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
+    /** Shared durable authority for the ICP autonomy broker. */
+    icpAutonomyStore?: IcpSharedAutonomyStorePort;
+    icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
   }): GatewayServer;
 }
 
@@ -86,6 +94,16 @@ export async function buildGatewayPrivilegedCore(
           });
         });
       },
+      onIcpConversationCostDecision: (event) => {
+        eventBus.emit('icp.conversation.cost.decision', event).catch((error) => {
+          input.logger.error('Failed to emit ICP conversation cost decision telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            conversationId: event.conversationId,
+            reason: event.reason,
+            outcome: event.outcome,
+          });
+        });
+      },
     },
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });
@@ -108,6 +126,11 @@ export async function buildGatewayPrivilegedCore(
     // credentials (providers.json openrouter apiBaseUrl + apiKeyRef, key
     // resolved through the credential vault with process-env fallback).
     screenerBackend: resolveIntakeScreenerBackend(input.config),
+    onQuarantineHeld: () => emitGardenQueueChanged(
+      eventBus,
+      'intake-quarantine',
+      input.config.companionId,
+    ),
   });
 
   // htm9.18: durable CogSec event store for the canary egress tripwire. Shares
@@ -124,10 +147,19 @@ export async function buildGatewayPrivilegedCore(
     privilegedServices,
     intakeScreening,
     auditDb: null,
-    createGatewayServer: ({ discordAdapter, discordAccountDocks, companionChannels }) => new GatewayServer({
+    createGatewayServer: ({
+      discordAdapter,
+      discordAccountDocks,
+      companionChannels,
+      icpAutonomyStore,
+      icpInitiationPolicyAuthority,
+    }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
+      ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
+      ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
       socketPath: input.bootstrap.socketPath,
+      companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,
       embeddingService: privilegedServices.embeddingProvider,

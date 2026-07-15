@@ -45,6 +45,30 @@ function makeFleet(): CompanionsFleetConfig {
   };
 }
 
+function makeResolvedFleet() {
+  return {
+    persistenceRoot: '/runtime',
+    workspacesRoot: '/runtime/workspaces',
+    sharedWorkspacePath: '/runtime/workspaces/shared',
+    companions: [
+      {
+        companionId: COMPANION_A,
+        companionDataDir: `/runtime/companion-data/${COMPANION_A}`,
+        characterCardPath: `/runtime/companion-data/${COMPANION_A}/character.json`,
+        postgresSchema: 'companion_alpha',
+        personalWorkspacePath: `/runtime/workspaces/personal/${COMPANION_A}`,
+      },
+      {
+        companionId: COMPANION_B,
+        companionDataDir: `/runtime/companion-data/${COMPANION_B}`,
+        characterCardPath: `/runtime/companion-data/${COMPANION_B}/character.json`,
+        postgresSchema: 'companion_beta',
+        personalWorkspacePath: `/runtime/workspaces/personal/${COMPANION_B}`,
+      },
+    ],
+  };
+}
+
 function makeBackupConfig(overrides: Partial<BackupRuntimeConfig> = {}): BackupRuntimeConfig {
   return {
     intervalMs: 60_000,
@@ -123,7 +147,7 @@ describe('resolveGroupCompanionDataDir', () => {
 
 describe('buildFleetBackupRunOptions', () => {
   const baseParams = () => ({
-    fleet: makeFleet(),
+    fleet: makeResolvedFleet(),
     ownCompanionId: COMPANION_A,
     ownResolvedCompanionDataDir: `/runtime/companion-data/${COMPANION_A}`,
     systemDataDir: '/runtime/system-data',
@@ -144,6 +168,9 @@ describe('buildFleetBackupRunOptions', () => {
     // Session / journal / card-history derive from each companion's own dir.
     expect(options.companions[0].sessionsDir).toContain(`companion-data/${COMPANION_A}`);
     expect(options.companions[0].memoriesJournalPath).toContain(`companion-data/${COMPANION_A}`);
+    expect(options.companions[0].personalWorkspacePath)
+      .toBe(`/runtime/workspaces/personal/${COMPANION_A}`);
+    expect(options.sharedWorkspacePath).toBe('/runtime/workspaces/shared');
     expect(options.systemDataDir).toBe('/runtime/system-data');
     expect(options.backupRootDir).toBe('/runtime/backups');
   });
@@ -164,6 +191,7 @@ describe('buildFleetBackupRunOptions', () => {
     });
     expect(options.groupMode).toBe(true);
     expect(options.groupCompanionDataDir).toBe('/runtime/companion-data');
+    expect(options.groupWorkspacesRoot).toBe('/runtime/workspaces');
   });
 
   it('derives a restore-verify scratch db only when verifyRestore is on', () => {
@@ -212,8 +240,10 @@ const FLEET_OPTIONS: FleetBackupRunOptions = {
     postgresSchema: 'companion_alpha',
     companionDataDir: `/runtime/companion-data/${COMPANION_A}`,
     sessionsDir: `/runtime/companion-data/${COMPANION_A}/state/sessions`,
+    personalWorkspacePath: `/runtime/workspaces/personal/${COMPANION_A}`,
   }],
   systemDataDir: '/runtime/system-data',
+  sharedWorkspacePath: '/runtime/workspaces/shared',
   backupRootDir: '/runtime/backups',
 };
 

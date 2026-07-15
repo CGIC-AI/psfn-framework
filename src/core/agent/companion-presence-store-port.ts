@@ -1,4 +1,5 @@
 import type { PlaceKind } from '../../shared/contracts/places-registry.js';
+import { LOWERCASE_RFC4122_COMPANION_ID_PATTERN } from '../../shared/routing/companion-id.js';
 
 // ── Cross-companion presence store port (sprint 10, W5a) ──
 //
@@ -17,7 +18,7 @@ import type { PlaceKind } from '../../shared/contracts/places-registry.js';
  * than as an opaque database type error.
  */
 export const COMPANION_PRESENCE_COMPANION_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  LOWERCASE_RFC4122_COMPANION_ID_PATTERN;
 
 /**
  * Read-side staleness TTL. A presence row not refreshed within this window is
@@ -30,7 +31,7 @@ export const COMPANION_PRESENCE_COMPANION_ID_PATTERN =
  * only preserves `since` while the previous row is still fresh under this
  * TTL. That keeps `since` meaning exactly "start of the current uninterrupted
  * presence window" — the single clock presence-windowed private-room delivery
- * keys on (psfn-framework-s10rm). Defined here (dependency-free) so the
+ * keys on (bead s10rm). Defined here (dependency-free) so the
  * Postgres store, the agent presence runtime, and the gateway delivery lane
  * all share one value.
  */
@@ -50,7 +51,7 @@ export interface CompanionPresenceRecord {
    * companion was "gone" in every reader's eyes, so returning opens a NEW
    * window), and by row delete + reinsert (graceful shutdown / restart).
    * Private-room windowed delivery uses this value directly as the join time —
-   * there is no second clock (psfn-framework-s10rm).
+   * there is no second clock (bead s10rm).
    */
   since: string;
   /**

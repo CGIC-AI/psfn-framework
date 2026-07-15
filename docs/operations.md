@@ -48,7 +48,8 @@ scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
 
 Each spawned agent gets a scrubbed environment plus `COMPANION_ID`,
 `COMPANION_DATA_DIR`, `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`,
-`ADMIN_TRANSPORT_SOCKET`, and `ADMIN_PORT` from the plan. The supervisor is
+its derived personal `WORKSPACE_PATH`, `ADMIN_TRANSPORT_SOCKET`, and
+`ADMIN_PORT` from the plan. The supervisor is
 shared-fate: if any supervised process exits, the whole fleet is torn down.
 Manifest-relative data/card paths are resolved to absolute strict subpaths of
 `PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
@@ -56,12 +57,11 @@ launcher also derives separate role-bound gateway proofs for the agent and its
 session-integrity worker in both single- and multi-companion topologies. These
 proofs are not printed by `--dry-run` and are never passed to Garden operators.
 
-**Workspace warning:** the current plan does not carry a per-companion
-`WORKSPACE_PATH`; the launcher forwards one inherited workspace value to every
-fleet agent. Do not treat personal journals, wikis, managed skills, modules, or
-other workspace files as fleet-isolated. A validated Personal Workspace per
-companion plus a governed Shared Companion Workspace is target work, documented
-in [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
+The plan derives one canonical Personal Workspace per companion beneath
+`<runtime-root>/workspaces/personal/<uuid>`. It provisions the fleet layout
+before process startup and refuses missing, overlapping, symlink-escaping, or
+tuple-mismatched roots. The shared root is Garden-governed and is never exported
+as `WORKSPACE_PATH`.
 
 Per-companion Gardens use socket admin transport only; network admin-transport
 mode is rejected fail-closed under the supervisor.
@@ -317,7 +317,12 @@ Privacy boundaries:
 Multi-companion rooms (charter gate, Law 26 / 8.10):
 
 - Peer companions (contacts flagged `isMachineIntelligence`) may share a room with the companion. When one speaks, it is treated as an OBSERVED participant: its turns are attributed in history, it appears in the participant roster, and group-memory extraction weights it (see `groupMemory.autoDetection.includeAiCompanions`). It is never selected as the canonical human for any binding (DM/room scope contact, core-memory participant subject, or contact-continuity fallback). A companion binds normally only in a genuine 1:1 DM with that companion.
-- Companions replying to companions in a live conversational room is a separate, gated capability. It is governed by the FatigueBudgetPort epic (relationship/channel fatigue budgets that bound machine-intelligence-triggered turns and prevent companion-to-companion reply loops). Observation is always supported; autonomous companion-to-companion conversation is bounded by the fatigue budget so a companion cannot loop nonsense at a peer after the salient things are said.
+- Companions replying to companions in a live conversational room is a separate,
+  gated capability. The shipped fatigue, social-continuation, permit, and cost
+  gates bound machine-intelligence-triggered turns and prevent recursive
+  companion-to-companion reply loops. Observation is always supported;
+  autonomous replies and initiation are allowed only while the deterministic
+  policy and recovery-safe permit state remain eligible.
 
 ### Machine-intelligence auto-tagging (E7.3)
 
@@ -340,6 +345,57 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 - A human message in the room resets the dynamics: it is free, and recent human participation unlocks the bounded overcharge reserve for subsequent machine-to-machine replies.
 - Per-room fatigue state is readable in Garden via `GET /api/admin/charges`, which returns the fatigue ledger scope summaries and a tuning report. Filter to one room/peer/day with `channelId`, `peerContactId`, `localCompanionId`, and `dayKey` query parameters. The fatigue ledger is a companion-data JSONL file (`fatigue-ledger.jsonl`), scoped per (companion, peer, channel, UTC day) and reset daily.
 
+### Operating same-cluster autonomous initiation
+
+Autonomous initiation is disabled in the shipped seed. Enable it only after the
+fleet identities, canonical machine-intelligence contacts, bilateral trust,
+ordinary companion channels, and fatigue/charge policy are ready:
+
+1. Edit `scheduler.json > icpAutonomy` through the canonical Settings owner-file
+   editor. `enabled`, candidate TTL/retry cadence/attempt limit, permit TTL, and
+   operator availability-lease TTL are strict JSON-owned settings. Unknown or
+   malformed fields fail closed. There is no `.env` equivalent.
+2. Review `charge-policy.json`: `runChargeQuotaByLane.companion_social`,
+   `surfaceCosts.companionSocialContinuation`, `fatigue` social regulation and
+   overcharge reserve, `fatigue.socialRegulation.continuationEvidence`, and
+   `icpCostBreaker` are the charge owners. Structured recent-human,
+   active-work/research, and explicit-peer-invitation evidence can be allowed or
+   denied independently; prose cannot invent continuation evidence.
+3. Confirm the runtime tier grants `external.companion` and review the existing
+   contact trust/block plus `channels.json` authorization. Enablement never
+   bypasses those gates.
+4. Restart the companion agent. Garden's **Autonomy** page reports effective
+   versus on-disk scheduler and charge state and marks restart divergence.
+
+Routine operation:
+
+- Garden **Autonomy** (`GET /api/admin/icp-autonomy`) shows at most 50 recent
+  records in each bounded lifecycle: the local coarse availability lease, local
+  candidates, and local-participant content-free episodes/provenance, permit
+  status without bearer IDs, fatigue aggregates, latest durable cost decisions,
+  and reason/failure counts. Unrelated peer↔peer rows are excluded and do not
+  influence quiet/failure summaries. Empty candidates are reported as healthy
+  quiet, not guessed failure.
+- `POST /api/admin/icp-autonomy/candidates/:candidateId/cancel` accepts only the
+  current local candidate revision. A permitted candidate's issued permit is
+  revoked before the candidate transitions to cancelled. Stale or terminal
+  state conflicts fail closed.
+- `POST /api/admin/icp-autonomy/do-not-disturb` accepts an empty object. It
+  publishes a local operator lease and atomically invalidates outstanding
+  permits involving the local companion.
+- `POST /api/admin/icp-autonomy/emergency-disable` accepts an empty object. It
+  first narrows live source authority, then applies DND/permit invalidation and
+  persists `scheduler.json > icpAutonomy.enabled=false`. Re-enabling is an
+  owner-file edit plus restart; the endpoint cannot enable autonomy.
+- Every successful or denied mutation is recorded as an `autonomy_control`
+  Garden audit entry. Controls never accept a target companion or cluster.
+
+Privacy boundary: the autonomy API and page do not expose private candidate
+motivation, peer-contact IDs, permit bearer IDs, messages, transcripts, model
+prompts, private reasoning, or chain-of-thought. Investigation links go to the
+ordinary Sessions, Charge / Budget, and Models pages, which retain their own
+authorization and redaction contracts.
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
@@ -349,13 +405,13 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 - System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `channels.json`, `backup.json`, `skills.json`, `trust-policy.json`, `charge-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
-- The configured `WORKSPACE_PATH` is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its configured docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and the canonical `knowledge/wiki/` store. In a current fleet it is one shared configured tree, not a per-companion backup unit. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
+- The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
 - Workspace backup fails closed if `WORKSPACE_PATH` overlaps runtime data roots, logs, temp, backup output, the mirror target, or other protected runtime paths. Keep personal wiki/reference documents under `WORKSPACE_PATH/knowledge/wiki/`; do not rely on the external Obsidian bridge for canonical storage or backup coverage.
 - With `verifyRestore` enabled, every scheduled cycle verifies the plaintext staging area before encryption: it restores the dump into a dedicated scratch database (`<dbname>_restore_verify`, derived from the runtime database URL) and asserts schema, pgvector functionality on restored vectors, critical-table presence, and that tables populated at the source restored non-empty. One-time setup: `CREATE DATABASE <dbname>_restore_verify OWNER <runtime-role>` and `CREATE EXTENSION vector` in it as superuser (the extension survives wipes; user tables/sequences/views are dropped each run). The dump archive table of contents is also checked via `pg_restore --list`; companion-tree, workspace-tree, system-config, backup-contents, and Helm manifests are re-verified; and the L0 session-archive snapshot must parse as JSONL.
 - After verification, the retained backup set contains `encrypted-backup.json` plus `snapshot.tar.gz.enc`; the plaintext staging directory is removed. Mirrors receive the encrypted package, not the plaintext tree.
 - `npm run verify:backup-restore -- --backup-dir <snapshot> --postgres-restore-url <scratch-url> [--postgres-source-url <url>]` decrypts encrypted backup sets using the manifest key reference and runs the same fidelity verification (the decant rehearsal).
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
-- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump plus its own companion-data tree) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, and the Helm recovery bundle when applicable; Helm files never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing that system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Per-companion fleet restore build-out is a tracked follow-up. Fleet backups do not yet have separate Personal Workspace or Shared Companion Workspace units; those must be added with the workspace-isolation implementation rather than assumed covered by the current shared `WORKSPACE_PATH`.
+- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump, companion-data tree, and Personal Workspace) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, the Shared Companion Workspace, and the Helm recovery bundle when applicable; Helm files and peer Personal Workspaces never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing the complete workspace family and system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Destination-aware restore helpers in `src/persistence/backups/fleet-restore.ts` restore exactly one companion, cluster, or group scope after verifying the backup manifests and reject existing or overlapping destination roots rather than merging them.
 - Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:
@@ -513,9 +569,10 @@ non-personal write fail-closed). The dedicated caretaker layer described in the
 design notes is not built yet — shared-world writes happen only through these
 operator maintenance commands:
 
-This site-scoped knowledge base is not the future Shared Companion Workspace;
-that broader installation-owned file domain remains unwired and must not be
-simulated by putting personal files under `system-data`.
+This site-scoped knowledge base is not the Shared Companion Workspace. The
+broader installation-owned file domain is separately rooted, review-published,
+and read through the authenticated shared-workspace surface; never simulate it
+by putting personal files under `system-data`.
 
 ```bash
 npm run wiki:publish:places          # dry-run: report only

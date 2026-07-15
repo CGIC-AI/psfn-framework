@@ -86,6 +86,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       imagesService: config.services.images,
       auditHistoryService: config.services.auditHistory,
       chargeLedgerService: config.services.charges,
+      chargeCostReconciliationService: config.services.chargeCosts,
       modelUsageService: config.services.modelUsage,
       observerEvalSidecarService: config.services.observerEvalSidecar,
       actionPipeService: config.services.actionPipe,
@@ -104,8 +105,10 @@ export class GardenAdminTransportServer implements Lifecycle {
       graphProposalsService: config.services.graphProposals ?? null,
       subsystemHealthService: config.services.subsystemHealth ?? null,
       toolConformanceService: config.services.toolConformance ?? null,
+      icpAutonomyService: config.services.icpAutonomy ?? null,
       diagnosticsService: config.services.diagnostics,
       settingsService: config.services.settings,
+      sharedWorkspaceService: config.services.sharedWorkspace ?? null,
       intakeQuarantineService: config.services.intakeQuarantine,
       driftReviewService: config.services.driftReviews,
       identityService: config.services.identity,
@@ -172,6 +175,7 @@ export class GardenAdminTransportServer implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    await this.config.services.icpAutonomy?.close?.();
     return await new Promise((resolve, reject) => {
       this.server.closeAllConnections();
       this.telemetryTransport.close(() => {

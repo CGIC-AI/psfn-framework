@@ -1,6 +1,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
+import {
+  createSanitizedPostgresChildEnv,
+  redactPostgresCredential,
+  sanitizePostgresConnection,
+  type SanitizedPostgresConnection,
+} from './postgres-connection.js';
 
 const execFileAsync = promisify(execFile);
 const PSQL_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -69,18 +75,33 @@ function describeExecError(error: unknown): string {
 
 async function runPsql(
   binary: string,
-  databaseUrl: string,
+  connection: SanitizedPostgresConnection,
   sql: string,
 ): Promise<string> {
   try {
     const { stdout } = await execFileAsync(
       binary,
-      ['--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-t', '-A', '-c', sql, databaseUrl],
-      { maxBuffer: PSQL_MAX_BUFFER_BYTES },
+      [
+        '--no-password',
+        '--no-psqlrc',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-t',
+        '-A',
+        '-c',
+        sql,
+        '--dbname',
+        connection.connectionArg,
+      ],
+      {
+        env: createSanitizedPostgresChildEnv(connection.password),
+        maxBuffer: PSQL_MAX_BUFFER_BYTES,
+      },
     );
     return stdout.trim();
   } catch (error) {
-    throw new Error(`psql failed (${sql.slice(0, 80)}…): ${describeExecError(error)}`);
+    const message = redactPostgresCredential(describeExecError(error), connection.password);
+    throw new Error(`psql failed (${sql.slice(0, 80)}…): ${message}`);
   }
 }
 
@@ -108,8 +129,11 @@ BEGIN
 END $$;
 `;
 
-async function wipeScratchSchema(binary: string, scratchDatabaseUrl: string): Promise<void> {
-  await runPsql(binary, scratchDatabaseUrl, WIPE_SCRATCH_OBJECTS_SQL);
+async function wipeScratchSchema(
+  binary: string,
+  scratchConnection: SanitizedPostgresConnection,
+): Promise<void> {
+  await runPsql(binary, scratchConnection, WIPE_SCRATCH_OBJECTS_SQL);
 }
 
 /**
@@ -128,8 +152,15 @@ export async function verifyPostgresDumpRestore(
   const psqlBinary = options.psqlBinary?.trim() || 'psql';
   const pgRestoreBinary = options.pgRestoreBinary?.trim() || 'pg_restore';
   const criticalTables = options.criticalTables ?? DEFAULT_RESTORE_CRITICAL_TABLES;
+  const scratchConnection = sanitizePostgresConnection(
+    options.scratchDatabaseUrl,
+    'Postgres restore verification',
+  );
+  const sourceConnection = options.sourceDatabaseUrl
+    ? sanitizePostgresConnection(options.sourceDatabaseUrl, 'Postgres restore verification source')
+    : undefined;
 
-  await wipeScratchSchema(psqlBinary, options.scratchDatabaseUrl);
+  await wipeScratchSchema(psqlBinary, scratchConnection);
   try {
     // --no-owner/--no-acl restores under the scratch role; pg_restore can exit
     // non-zero on ignorable ownership noise, so the assertions below — not the
@@ -138,23 +169,36 @@ export async function verifyPostgresDumpRestore(
     try {
       const { stderr } = await execFileAsync(
         pgRestoreBinary,
-        ['--no-owner', '--no-acl', `--dbname=${options.scratchDatabaseUrl}`, options.dumpPath],
-        { maxBuffer: PSQL_MAX_BUFFER_BYTES },
+        [
+          '--no-password',
+          '--no-owner',
+          '--no-acl',
+          '--dbname',
+          scratchConnection.connectionArg,
+          options.dumpPath,
+        ],
+        {
+          env: createSanitizedPostgresChildEnv(scratchConnection.password),
+          maxBuffer: PSQL_MAX_BUFFER_BYTES,
+        },
       );
-      restoreWarnings = stderr.trim() || null;
+      const redactedWarnings = redactPostgresCredential(stderr.trim(), scratchConnection.password);
+      restoreWarnings = redactedWarnings || null;
     } catch (error) {
       const execError = error as NodeJS.ErrnoException & { stderr?: string };
       if (execError.code === 'ENOENT') {
-        throw new Error(`pg_restore failed: ${describeExecError(error)}`);
+        const message = redactPostgresCredential(describeExecError(error), scratchConnection.password);
+        throw new Error(`pg_restore failed: ${message}`);
       }
-      restoreWarnings = typeof execError.stderr === 'string' && execError.stderr.trim()
+      const rawWarnings = typeof execError.stderr === 'string' && execError.stderr.trim()
         ? execError.stderr.trim()
         : describeExecError(error);
+      restoreWarnings = redactPostgresCredential(rawWarnings, scratchConnection.password);
     }
 
     const restoredTableCount = Number(await runPsql(
       psqlBinary,
-      options.scratchDatabaseUrl,
+      scratchConnection,
       "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'",
     ));
     if (!Number.isFinite(restoredTableCount) || restoredTableCount === 0) {
@@ -163,7 +207,7 @@ export async function verifyPostgresDumpRestore(
 
     const vectorExtensionPresent = await runPsql(
       psqlBinary,
-      options.scratchDatabaseUrl,
+      scratchConnection,
       "SELECT count(*) FROM pg_extension WHERE extname='vector'",
     ) === '1';
     if (!vectorExtensionPresent) {
@@ -181,7 +225,7 @@ export async function verifyPostgresDumpRestore(
       try {
         restored = Number(await runPsql(
           psqlBinary,
-          options.scratchDatabaseUrl,
+          scratchConnection,
           `SELECT count(*) FROM ${quoteIdentifier(table)}`,
         ));
       } catch (error) {
@@ -189,10 +233,10 @@ export async function verifyPostgresDumpRestore(
       }
 
       let source: number | undefined;
-      if (options.sourceDatabaseUrl) {
+      if (sourceConnection) {
         source = Number(await runPsql(
           psqlBinary,
-          options.sourceDatabaseUrl,
+          sourceConnection,
           `SELECT count(*) FROM ${quoteIdentifier(table)}`,
         ));
         if (source > 0 && restored === 0) {
@@ -207,7 +251,7 @@ export async function verifyPostgresDumpRestore(
     let vectorColumnChecked: string | null = null;
     const vectorColumn = await runPsql(
       psqlBinary,
-      options.scratchDatabaseUrl,
+      scratchConnection,
       "SELECT a.attrelid::regclass || '.' || a.attname FROM pg_attribute a JOIN pg_type t ON a.atttypid = t.oid JOIN pg_class c ON a.attrelid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid WHERE t.typname = 'vector' AND a.attnum > 0 AND NOT a.attisdropped AND n.nspname = 'public' AND c.relkind = 'r' LIMIT 1",
     );
     if (vectorColumn) {
@@ -215,7 +259,7 @@ export async function verifyPostgresDumpRestore(
       if (table && column) {
         const distance = await runPsql(
           psqlBinary,
-          options.scratchDatabaseUrl,
+          scratchConnection,
           `SELECT ${quoteIdentifier(column)} <=> ${quoteIdentifier(column)} FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(column)} IS NOT NULL LIMIT 1`,
         );
         if (distance !== '' && Number(distance) !== 0) {
@@ -234,7 +278,7 @@ export async function verifyPostgresDumpRestore(
       restoreWarnings,
     };
   } finally {
-    await wipeScratchSchema(psqlBinary, options.scratchDatabaseUrl).catch(() => {
+    await wipeScratchSchema(psqlBinary, scratchConnection).catch(() => {
       // The next run wipes before restoring; a failed cleanup must not mask
       // the verification outcome.
     });

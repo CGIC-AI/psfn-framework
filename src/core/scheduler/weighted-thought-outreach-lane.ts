@@ -16,6 +16,7 @@ import type { WeightedThoughtStorePort } from '../intention/weighted-thought-sto
 import {
   runWeightedThoughtOutreachOnce,
   type NudgeEvaluator,
+  type IcpWeightedThoughtCandidateAdapter,
   type OutreachChannelPolicy,
 } from '../intention/weighted-thought-outreach.js';
 import type { WeightedThoughtOutreachConfig } from '../../system/config/scheduler-config.js';
@@ -34,6 +35,7 @@ export interface WeightedThoughtOutreachTaskOptions {
   quietHours?: ProactiveQuietHoursConfig | null;
   store: WeightedThoughtStorePort;
   nudgeEvaluator: NudgeEvaluator;
+  icpCandidateAdapter?: IcpWeightedThoughtCandidateAdapter;
   channelPolicy: OutreachChannelPolicy;
   contactId?: string;
   now?: () => number;
@@ -102,6 +104,7 @@ export async function runWeightedThoughtOutreachTick(
       quietHours: options.quietHours ?? null,
       channelPolicy: options.channelPolicy,
       nudgeEvaluator: options.nudgeEvaluator,
+      ...(options.icpCandidateAdapter ? { icpCandidateAdapter: options.icpCandidateAdapter } : {}),
       ...(options.contactId ? { contactId: options.contactId } : {}),
     },
     nowMs,
@@ -166,6 +169,16 @@ export async function runWeightedThoughtOutreachTick(
       thoughtId: produced.thoughtId,
       target: produced.target,
       channelId: produced.channelId,
+    });
+  }
+
+  for (const candidate of result.icpCandidates) {
+    log.info('Weighted thought routed to ICP initiation candidate broker', {
+      thoughtId: candidate.thoughtId,
+      candidateId: candidate.result.candidateId,
+      outcome: candidate.result.outcome,
+      status: candidate.result.status,
+      ...(candidate.result.reasonCode ? { reasonCode: candidate.result.reasonCode } : {}),
     });
   }
 

@@ -78,6 +78,7 @@ interface ProjectionRecord {
 export interface PostgresTranscriptProjectionOptions {
   pool?: Pool;
   applicationName?: string;
+  schema?: string;
 }
 
 export interface PostgresSessionAdapters {
@@ -528,6 +529,7 @@ export async function createPostgresTranscriptProjection(
   const pool = options.pool ?? createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-session-search',
     allowExitOnIdle: true,
+    ...(options.schema ? { schema: options.schema } : {}),
   });
   await ensurePostgresSchema(pool, POSTGRES_TRANSCRIPT_MIGRATIONS);
   const [messageMetadataByChannel, driftByChannel] = await Promise.all([

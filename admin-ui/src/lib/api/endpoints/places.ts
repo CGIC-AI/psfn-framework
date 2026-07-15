@@ -8,7 +8,7 @@ import type {
   AdminSatelliteRebindResult,
 } from '../../../../../src/operator/garden/services/places-service.js';
 
-// Re-export the canonical admin view types (no shadow DTO mirror — see PSFN-00yo.1).
+// Re-export the canonical admin view types (no shadow DTO mirror — see 00yo.1).
 export type {
   AdminAffordanceView,
   AdminBoundSatelliteView,

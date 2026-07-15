@@ -2997,7 +2997,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
+  it('allows participated group memories in the primary partner DM and blocks unparticipated rooms', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
@@ -3093,7 +3093,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('fails closed for DM access when room participation proof is missing', async () => {
+  it('allows the primary partner subject memory when origin-channel proof is missing', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     const blockedGroupMemory = makeMemory({
       id: 'group-x-memory',
@@ -3121,17 +3121,15 @@ describe('MemoryRetriever room-scoped visibility', () => {
       vegaId,
     );
 
-    expect(result).not.toContain('private server migration plan');
-    expect(result).toContain('Memory context note:');
-    expect(result).toContain('room visibility boundary');
+    expect(result).toContain('Room X discussed a private server migration plan.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
-    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
-    expect(telemetry.withheldReasonCounts).toMatchObject({
-      'room_visibility.blocked': 1,
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'room_visibility.blocked': expect.any(Number),
     });
-    expect(telemetry.reason).toBe('trust_filtered');
-    expect(telemetry.returnedCount).toBe(0);
+    expect(telemetry.reason).toBe('ok');
+    expect(telemetry.returnedCount).toBe(1);
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {

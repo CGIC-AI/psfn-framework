@@ -31,6 +31,13 @@ interface ChainRewriteManifest {
   files: ChainRewriteFile[];
 }
 
+function isChainRewritePhase(value: unknown): value is ChainRewriteManifest['phase'] {
+  return value === 'staging'
+    || value === 'prepared'
+    || value === 'committed'
+    || value === 'rolled_back';
+}
+
 function manifestPathForRoot(rootPath: string): string {
   return `${rootPath}${CHAIN_REWRITE_MANIFEST_SUFFIX}`;
 }
@@ -107,7 +114,7 @@ function parseManifest(manifestPath: string): ChainRewriteManifest {
   if (
     !isRecord(parsed)
     || parsed.version !== 1
-    || !['staging', 'prepared', 'committed', 'rolled_back'].includes(String(parsed.phase))
+    || !isChainRewritePhase(parsed.phase)
     || typeof parsed.transactionId !== 'string'
     || !/^[a-zA-Z0-9-]+$/.test(parsed.transactionId)
     || typeof parsed.rootPath !== 'string'

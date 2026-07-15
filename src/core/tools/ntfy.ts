@@ -21,6 +21,12 @@ import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import {
+  COMPANION_NOTIFY_TARGET_KIND,
+  executeCompanionNotify,
+} from './notify-companion-handoff.js';
+import { executeCompanionCandidateConsider } from './notify-companion-candidate.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -117,7 +123,11 @@ export interface NotifyDispatcherOptions {
 }
 
 interface NotifyToolParams {
-  action: NotifyAction | 'notify_operator';
+  action: NotifyAction | 'consider';
+  target_kind?: 'external' | 'companion';
+  contact_id?: string;
+  initiation_permit?: string;
+  reason_summary?: string;
   message?: string;
   title?: string;
   priority?: number;
@@ -384,7 +394,6 @@ function buildContextBlockReason(): string | null {
 function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
   switch (params.action) {
     case 'brief':
-    case 'notify_operator':
       return {
         action: 'brief',
         message: params.message ?? '',
@@ -438,7 +447,6 @@ function formatNotifyToolSuccess(result: NotifyDispatchResult): string {
 function normalizeAction(value: string): NotifyAction {
   switch (value.trim()) {
     case 'brief':
-    case 'notify_operator':
       return 'brief';
     case 'send':
     case 'approval_request':
@@ -622,7 +630,77 @@ export function createHttpNotificationPortFromEnv(
 
 export interface NotifyToolOptions {
   gatewayMode?: boolean;
+  companionOutreach?: AgentFacingIcpAutonomyRuntime;
+  companionCandidateEnabled?: boolean;
+  isCompanionCandidateAuthorized?: () => boolean;
 }
+
+const notifyToolParameters = Type.Union([
+  Type.Object({
+    action: Type.Literal('brief'),
+    message: Type.String({ description: 'Body text for the operator brief.' }),
+    title: Type.Optional(Type.String({ description: 'Optional ntfy title.' })),
+    priority: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
+    topic: Type.Optional(Type.String({ description: 'Optional ntfy topic override.' })),
+    budget_channel: Type.Optional(Type.Unsafe<ExternalCommunicationChannel>({
+      type: 'string',
+      enum: ['discord', 'email'],
+      description: 'Optional safeguard budget to charge. Default: discord.',
+    })),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Optional(Type.Literal('external')),
+    message: Type.String({ description: 'Body text for the outbound notification.' }),
+    delivery_channel: Type.Unsafe<NotifyDeliveryChannel>({
+      type: 'string',
+      enum: ['discord', 'email'],
+    }),
+    delivery_target: Type.String({
+      minLength: 1,
+      description: 'Explicit external channel id or address.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    contact_id: Type.String({
+      minLength: 1,
+      description: 'Exact canonical contact ID from contact lookup.',
+    }),
+    initiation_permit: Type.String({
+      minLength: 1,
+      description: 'Broker-issued one-use UUID.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('consider'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    contact_id: Type.String({
+      minLength: 1,
+      description: 'Exact canonical contact ID from contact lookup.',
+    }),
+    reason_summary: Type.String({
+      minLength: 1,
+      maxLength: 1_000,
+      description: 'Private bounded reason for considering contact; never shared with the peer or gateway.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('approval_request'),
+    approval_id: Type.String({ minLength: 1 }),
+    approval_method: Type.String({ minLength: 1 }),
+    approval_action: Type.String({ minLength: 1 }),
+    approval_scope: Type.String({ minLength: 1 }),
+    approval_reason: Type.String({ minLength: 1 }),
+    approval_expires_at: Type.Optional(Type.Integer({
+      description: 'Optional approval expiry as epoch milliseconds.',
+    })),
+    review_path: Type.Optional(Type.String({
+      description: 'Optional admin review path. Default: /confirmations.',
+    })),
+  }, { additionalProperties: false }),
+]);
 
 export function createNotifyTool(
   dispatcher: NotifyDispatcher,
@@ -632,99 +710,23 @@ export function createNotifyTool(
     name: 'notify',
     label: 'notify',
     description:
-      'Unified notification surface for operator briefs, lightweight outbound sends, and approval escalation. '
-      + 'Use action="brief" to replace the legacy notify_operator behavior.',
-    parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal('brief'),
-        Type.Literal('notify_operator'),
-        Type.Literal('send'),
-        Type.Literal('approval_request'),
-      ], {
-        description: 'Notification action: brief, send, or approval_request. Legacy notify_operator maps to brief.',
-      }),
-      message: Type.Optional(
-        Type.String({
-          description: 'Required for brief/send. Body text for the notification.',
-        }),
-      ),
-      title: Type.Optional(
-        Type.String({
-          description: 'Optional ntfy title for brief notifications.',
-        }),
-      ),
-      priority: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 5,
-          description: 'Optional ntfy priority for brief notifications.',
-        }),
-      ),
-      topic: Type.Optional(
-        Type.String({
-          description: 'Optional ntfy topic override for brief notifications.',
-        }),
-      ),
-      budget_channel: Type.Optional(
-        Type.Unsafe<ExternalCommunicationChannel>({
-          type: 'string',
-          enum: ['discord', 'email'],
-          description: 'Optional safeguard budget to charge for brief notifications. Default: discord.',
-        }),
-      ),
-      delivery_channel: Type.Optional(
-        Type.Unsafe<NotifyDeliveryChannel>({
-          type: 'string',
-          enum: ['discord', 'email'],
-          description: 'Required for send. Explicit outbound delivery channel.',
-        }),
-      ),
-      delivery_target: Type.Optional(
-        Type.String({
-          description: 'Required for send. Explicit external channel id or address.',
-        }),
-      ),
-      approval_id: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Stable approval or confirmation id.',
-        }),
-      ),
-      approval_method: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Underlying method awaiting review.',
-        }),
-      ),
-      approval_action: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Human-readable action awaiting review.',
-        }),
-      ),
-      approval_scope: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Scope awaiting approval.',
-        }),
-      ),
-      approval_reason: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Why operator review is needed.',
-        }),
-      ),
-      approval_expires_at: Type.Optional(
-        Type.Integer({
-          description: 'Optional approval expiry as epoch milliseconds.',
-        }),
-      ),
-      review_path: Type.Optional(
-        Type.String({
-          description: 'Optional admin review path. Default: /confirmations.',
-        }),
-      ),
-    }),
+      'Unified notification surface for operator briefs, lightweight outbound sends, approval escalation, and permit-governed companion outreach. '
+      + 'To form private intent without sending, use {"action":"consider","target_kind":"companion","contact_id":"<exact contactId>","reason_summary":"<private reason>"}; it is evaluated only after the current turn reaches idle. '
+      + 'For a known companion peer, use exactly {"action":"send","target_kind":"companion","contact_id":"<exact contactId from contact lookup>","initiation_permit":"<broker-issued UUID>"}. '
+      + 'Companion outreach never accepts message content; the ordinary target-channel turn authors it.',
+    parameters: notifyToolParameters,
     execute: async (
       _toolCallId: string,
       rawParams: NotifyToolParams,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      if (rawParams.action === 'consider') {
+        return executeCompanionCandidateConsider(
+          rawParams,
+          options.companionCandidateEnabled === true,
+          options.isCompanionCandidateAuthorized?.() === true,
+        );
+      }
       let action: NotifyAction;
       try {
         action = normalizeAction(rawParams.action);
@@ -742,6 +744,16 @@ export function createNotifyTool(
         }
       }
 
+      if (action === 'send' && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+        if (!options.companionOutreach) {
+          return textResultWithError('notify: companion outreach is not wired in this runtime.', true);
+        }
+        return await executeCompanionNotify({
+          runtime: options.companionOutreach,
+          params: rawParams,
+        });
+      }
+
       try {
         const result = await dispatcher.dispatch(buildNotifyToolRequest({
           ...rawParams,
@@ -756,7 +768,15 @@ export function createNotifyTool(
 
   const wirable = tool as WirableTool;
   wirable.wiringMeta = {
-    ...(options.gatewayMode ? { requiredGatewayMethods: ['discord.send', 'notify.ntfy'] } : {}),
+    ...(options.gatewayMode
+      ? {
+          requiredGatewayMethods: [
+            'discord.send',
+            'notify.ntfy',
+            'companion.initiation.permit.prepare_handoff',
+          ],
+        }
+      : {}),
     requiredServices: ['ntfy'],
   };
 
@@ -764,9 +784,11 @@ export function createNotifyTool(
     const action = typeof params.action === 'string' ? params.action.trim() : '';
     switch (action) {
       case 'brief':
-      case 'notify_operator':
         return 'external.web';
       case 'send': {
+        if (params.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+          return 'external.companion';
+        }
         const channel = typeof params.delivery_channel === 'string'
           ? params.delivery_channel.trim()
           : '';
@@ -778,6 +800,8 @@ export function createNotifyTool(
         }
         return ['external.discord', 'external.email'] as const;
       }
+      case 'consider':
+        return 'external.companion';
       case 'approval_request':
         return 'external.web';
       default:

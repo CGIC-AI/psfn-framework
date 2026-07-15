@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
@@ -16,6 +17,10 @@ import {
 import { SatelliteHubClient } from '../lib/api/client.js';
 import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
+import {
+  getServiceWorkerUpdateReady,
+  subscribeToServiceWorkerUpdates,
+} from '../lib/service-worker-updates.js';
 import {
   createInitialHubStreamState,
   HubStreamStore,
@@ -27,12 +32,12 @@ import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
+import { readCompanionUiRuntimeConfig } from './config.js';
 import { AttachmentTray, ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
 import { SettingsDrawer } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
-import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
@@ -52,6 +57,11 @@ export function App() {
   const [touchError, setTouchError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
+  const updateReady = useSyncExternalStore(
+    subscribeToServiceWorkerUpdates,
+    getServiceWorkerUpdateReady,
+    () => false,
+  );
   const storeRef = useRef<HubStreamStore | null>(null);
   const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
   const headpatReactionTimerRef = useRef<number | null>(null);
@@ -265,6 +275,7 @@ export function App() {
         onApprovalDecision={decideApproval}
         onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}
+        updateReady={updateReady}
         voiceNotice={composer.voiceNotice}
       />
 

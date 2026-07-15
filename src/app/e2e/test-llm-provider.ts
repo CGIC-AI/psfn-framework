@@ -42,6 +42,14 @@ function makeResponse(content: string, inputTokens = 96, outputTokens = 24): LLM
 }
 
 function renderChatResponse(promptText: string): string {
+  if (promptText.includes('private consent moment')) {
+    return '{"action":"send"}';
+  }
+
+  if (promptText.includes('initiate one natural message to the peer')) {
+    return 'I wanted to check in and share a quiet hello.';
+  }
+
   if (promptText.includes('favorite dessert') || promptText.includes('tiramisu')) {
     return 'I heard the primary user\'s favorite dessert is tiramisu.';
   }

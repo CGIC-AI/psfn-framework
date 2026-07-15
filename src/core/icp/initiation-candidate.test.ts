@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  assertIcpInitiationCandidateStatusTransition,
+  parseIcpInitiationCandidate,
+  toIcpInitiationCandidateSharedMetadata,
+  type IcpInitiationCandidate,
+} from './initiation-candidate.js';
+
+const COMPANION_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const COMPANION_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PROVENANCE_HANDLE = 'icp-prov:44444444-4444-4444-8444-444444444444';
+
+describe('private ICP initiation candidate contract', () => {
+  const rawCandidate = {
+    candidateId: '11111111-1111-4111-8111-111111111111',
+    rootInitiationId: '33333333-3333-4333-8333-333333333333',
+    localCompanionId: COMPANION_A,
+    peerContactId: 'contact-artemis',
+    peerCompanionId: COMPANION_B,
+    preferredChannel: 'dm',
+    source: 'weighted_thought',
+    provenanceRef: PROVENANCE_HANDLE,
+    continuationTaskKind: 'research',
+    reasonSummary: 'I want to follow up on our shared research question.',
+    createdAtMs: 10_000,
+    expiresAtMs: 70_000,
+    status: 'pending',
+    revision: 1,
+  } as const;
+
+  it('strictly parses private motivation and rejects stale or unknown data', () => {
+    const candidate = parseIcpInitiationCandidate(rawCandidate, {
+      nowMs: 11_000,
+      requireCurrent: true,
+    });
+    expect(candidate.reasonSummary).toContain('shared research');
+    expect(candidate.continuationTaskKind).toBe('research');
+    expect(() => parseIcpInitiationCandidate({ ...rawCandidate, chainOfThought: 'secret' }))
+      .toThrow('unknown keys');
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      peerCompanionId: COMPANION_A,
+    })).toThrow('must target a different companion');
+    expect(() => parseIcpInitiationCandidate(rawCandidate, {
+      nowMs: 70_000,
+      requireCurrent: true,
+    })).toThrow('expired');
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      provenanceRef: 'icp-prov:private motivation must not cross',
+    })).toThrow(/opaque provenance handle/i);
+    expect(() => parseIcpInitiationCandidate({
+      ...rawCandidate,
+      provenanceRef: `${PROVENANCE_HANDLE}:private`,
+    })).toThrow(/opaque provenance handle/i);
+  });
+
+  it('projects only content-free metadata for shared arbitration', () => {
+    const shared = toIcpInitiationCandidateSharedMetadata(
+      parseIcpInitiationCandidate(rawCandidate),
+    );
+    expect(shared).not.toHaveProperty('reasonSummary');
+    expect(shared).not.toHaveProperty('peerContactId');
+    expect(shared).not.toHaveProperty('continuationTaskKind');
+    expect(JSON.stringify(shared)).not.toContain('shared research');
+    expect(JSON.stringify(shared)).not.toContain('research');
+    expect(shared.candidateId).toBe(rawCandidate.candidateId);
+
+    const hostile = {
+      ...parseIcpInitiationCandidate(rawCandidate),
+      hostileExtra: 'must-not-cross',
+    } as IcpInitiationCandidate;
+    const hostileProjection = toIcpInitiationCandidateSharedMetadata(hostile);
+    expect(hostileProjection).not.toHaveProperty('hostileExtra');
+    expect(JSON.stringify(hostileProjection)).not.toContain('must-not-cross');
+  });
+
+  it('enforces candidate lifecycle transitions', () => {
+    expect(() => assertIcpInitiationCandidateStatusTransition('pending', 'permitted'))
+      .not.toThrow();
+    expect(() => assertIcpInitiationCandidateStatusTransition('deferred', 'pending'))
+      .not.toThrow();
+    expect(() => assertIcpInitiationCandidateStatusTransition('consumed', 'pending'))
+      .toThrow('Invalid ICP candidate status transition');
+  });
+});

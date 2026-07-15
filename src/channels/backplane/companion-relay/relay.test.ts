@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
@@ -56,6 +56,7 @@ describe('CompanionEventRelay', () => {
     const toolsOnly = collect(['tool.activity']);
 
     await eventBus.emit('companion.approval.requested', {
+      companionId: 'test-companion',
       payload: {
         id: 'conf-1',
         title: 'write file: /workspace/todo.txt',
@@ -110,8 +111,63 @@ describe('CompanionEventRelay', () => {
     expect(received).toHaveLength(1);
     expect(JSON.stringify(received[0])).not.toContain(filePath);
     const source = relay.getPreviewSource('art-1');
-    expect(source?.localPath).toBe(filePath);
     expect(source?.previewable).toBe(true);
+    expect(source?.bytes).toEqual(Buffer.alloc(100));
+  });
+
+  it('binds multi-companion previews to the authenticated companion Personal Workspace', async () => {
+    relay.stop();
+    const companionA = join(tempDir, 'comp-a', 'images');
+    const companionB = join(tempDir, 'comp-b', 'images');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    const ownPath = join(companionA, 'own.png');
+    const peerPath = join(companionB, 'peer.png');
+    const peerSymlink = join(companionA, 'peer-link.png');
+    writeFileSync(ownPath, Buffer.alloc(10));
+    writeFileSync(peerPath, Buffer.alloc(10));
+    symlinkSync(peerPath, peerSymlink);
+    relay = new CompanionEventRelay({
+      eventBus,
+      previewRootByCompanionId: { 'comp-a': companionA, 'comp-b': companionB },
+    });
+    const payload = (id: string) => ({
+      id,
+      label: `${id}.png`,
+      mediaType: 'image/png',
+      provenance: 'image_generation',
+      createdAt: new Date(3).toISOString(),
+      previewable: true,
+    });
+
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('peer-attempt'),
+      preview: { artifactId: 'peer-attempt', localPath: peerPath, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('symlink-attempt'),
+      preview: { artifactId: 'symlink-attempt', localPath: peerSymlink, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.artifact.created', {
+      payload: payload('own-preview'),
+      preview: { artifactId: 'own-preview', localPath: ownPath, mediaType: 'image/png', sizeBytes: 10 },
+      companionId: 'comp-a',
+      timestamp: Date.now(),
+    });
+
+    expect(relay.getPreviewSource('peer-attempt')).toBeNull();
+    expect(relay.getPreviewSource('symlink-attempt')).toBeNull();
+    expect(relay.getPreviewSource('own-preview')?.bytes).toEqual(Buffer.alloc(10));
+
+    unlinkSync(ownPath);
+    symlinkSync(peerPath, ownPath);
+    // The registry owns an immutable snapshot; later path replacement cannot
+    // redirect the preview into a peer workspace.
+    expect(relay.getPreviewSource('own-preview')?.bytes).toEqual(Buffer.alloc(10));
   });
 
   it('rejects preview registrations outside every preview root (fail closed)', async () => {
@@ -137,7 +193,7 @@ describe('CompanionEventRelay', () => {
 
   it('marks oversized previews non-previewable', async () => {
     const filePath = join(tempDir, 'big.png');
-    writeFileSync(filePath, Buffer.alloc(10));
+    writeFileSync(filePath, Buffer.alloc(5_000));
     await eventBus.emit('companion.artifact.created', {
       payload: {
         id: 'art-3',
@@ -156,6 +212,29 @@ describe('CompanionEventRelay', () => {
       timestamp: Date.now(),
     });
     expect(relay.getPreviewSource('art-3')?.previewable).toBe(false);
+  });
+
+  it('rejects a preview whose declared size does not match the opened file', async () => {
+    const filePath = join(tempDir, 'mismatch.png');
+    writeFileSync(filePath, Buffer.alloc(10));
+    await eventBus.emit('companion.artifact.created', {
+      payload: {
+        id: 'art-size-mismatch',
+        label: 'mismatch.png',
+        mediaType: 'image/png',
+        provenance: 'image_generation',
+        createdAt: new Date(5).toISOString(),
+        previewable: true,
+      },
+      preview: {
+        artifactId: 'art-size-mismatch',
+        localPath: filePath,
+        mediaType: 'image/png',
+        sizeBytes: 11,
+      },
+      timestamp: Date.now(),
+    });
+    expect(relay.getPreviewSource('art-size-mismatch')).toBeNull();
   });
 
   it('drops a subscriber whose handler throws instead of failing the publish', async () => {

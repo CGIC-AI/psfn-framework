@@ -4,7 +4,7 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import AuditSurfaceMap from '$lib/components/telemetry/AuditSurfaceMap.svelte';
-  import { getAuditHistory } from '$lib/api/endpoints/audit-history';
+  import { getAuditHistory, getAuditHistoryDetail } from '$lib/api/endpoints/audit-history';
   import {
     getEvents,
     isConnected,
@@ -16,7 +16,15 @@
     clearEvents,
     filterEvents,
   } from '$lib/stores/telemetry.svelte';
-  import type { AuditEntry, AuditActionType, AuditDecision, AuditHistoryData, AuditHistorySource, AuditTimeRange } from '$lib/types';
+  import type {
+    AuditEntry,
+    AuditActionType,
+    AuditDecision,
+    AuditHistoryData,
+    AuditHistoryDetailData,
+    AuditHistorySource,
+    AuditTimeRange,
+  } from '$lib/types';
 
   // ── Tab State ──
   type TabId = 'live' | 'audit';
@@ -121,6 +129,11 @@
   let auditError = $state<string | null>(null);
   let auditOffset = $state(0);
   let auditRequestSeq = 0;
+  let expandedAuditEntryId = $state<string | null>(null);
+  let auditDetail = $state<AuditHistoryDetailData | null>(null);
+  let auditDetailLoading = $state(false);
+  let auditDetailError = $state<string | null>(null);
+  let auditDetailRequestSeq = 0;
   let lastAuditFilterKey = '';
   const AUDIT_PAGE_SIZE = 100;
 
@@ -357,6 +370,7 @@
         offset: auditOffset,
       });
       if (requestId !== auditRequestSeq) return;
+      clearAuditDetail();
       auditHistory = result;
     } catch (error) {
       if (requestId !== auditRequestSeq) return;
@@ -365,6 +379,41 @@
     } finally {
       if (requestId === auditRequestSeq) {
         auditLoading = false;
+      }
+    }
+  }
+
+  function clearAuditDetail(): void {
+    auditDetailRequestSeq += 1;
+    expandedAuditEntryId = null;
+    auditDetail = null;
+    auditDetailLoading = false;
+    auditDetailError = null;
+  }
+
+  async function toggleAuditDetail(entryId: string): Promise<void> {
+    if (expandedAuditEntryId === entryId) {
+      clearAuditDetail();
+      return;
+    }
+    const requestId = ++auditDetailRequestSeq;
+    expandedAuditEntryId = entryId;
+    auditDetail = null;
+    auditDetailLoading = true;
+    auditDetailError = null;
+    try {
+      const result = await getAuditHistoryDetail(entryId);
+      if (requestId !== auditDetailRequestSeq) return;
+      if (result.entry.id !== entryId) {
+        throw new Error('Audit history detail did not match the selected entry.');
+      }
+      auditDetail = result;
+    } catch (error) {
+      if (requestId !== auditDetailRequestSeq) return;
+      auditDetailError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (requestId === auditDetailRequestSeq) {
+        auditDetailLoading = false;
       }
     }
   }
@@ -758,6 +807,25 @@
             {#if entry.details}
               <p class="text-sm text-shadow-600 mt-1 font-mono">{entry.details}</p>
             {/if}
+            <div class="mt-3">
+              <button
+                type="button"
+                onclick={() => void toggleAuditDetail(entry.id)}
+                aria-expanded={expandedAuditEntryId === entry.id}
+                class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium transition-colors"
+              >
+                {expandedAuditEntryId === entry.id ? 'Hide raw detail' : 'Show raw detail'}
+              </button>
+              {#if expandedAuditEntryId === entry.id}
+                {#if auditDetailLoading}
+                  <p class="text-sm text-shadow-600 mt-2">Loading raw detail…</p>
+                {:else if auditDetailError}
+                  <p class="text-sm text-wilt-600 mt-2">{auditDetailError}</p>
+                {:else if auditDetail}
+                  <pre class="mt-2 max-h-80 overflow-auto rounded-lg bg-shadow-900 p-3 text-xs text-bark-100 whitespace-pre-wrap break-all">{formatJson(auditDetail.raw)}</pre>
+                {/if}
+              {/if}
+            </div>
           </article>
         {/each}
       </div>

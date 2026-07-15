@@ -1,6 +1,6 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 
 const log = createComponentLogger('OutreachOutbox');
@@ -47,6 +47,7 @@ export interface OutreachOutboxStore {
   append(input: OutreachOutboxAppendInput): OutreachOutboxRecord;
   hasTerminal(dedupeKey: string): boolean;
   getTerminal(dedupeKey: string): OutreachOutboxRecord | undefined;
+  getIcpDeliveredCompletion(pendingFollowUpId: string): OutreachOutboxRecord | undefined;
   listRecent(limit?: number): OutreachOutboxRecord[];
 }
 
@@ -115,14 +116,31 @@ function normalizeRecord(value: unknown): OutreachOutboxRecord | null {
   return record;
 }
 
+function deliveredIcpPendingFollowUpId(record: OutreachOutboxRecord): string | undefined {
+  if (record.phase !== 'sent' || !record.metadata) return undefined;
+  if (record.metadata.kind !== 'icp_candidate_delivery'
+    || record.metadata.disposition !== 'delivered'
+    || record.metadata.candidateStatus !== 'consumed'
+    || typeof record.metadata.candidateId !== 'string'
+    || !isRfc4122Uuid(record.metadata.candidateId)) {
+    return undefined;
+  }
+  return normalizeNonEmptyString(record.metadata.pendingFollowUpId);
+}
+
 export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore {
   const records: OutreachOutboxRecord[] = [];
   const terminalByDedupeKey = new Map<string, OutreachOutboxRecord>();
+  const icpDeliveredByPendingFollowUpId = new Map<string, OutreachOutboxRecord>();
 
   const remember = (record: OutreachOutboxRecord): void => {
     records.push(record);
     if (TERMINAL_PHASES.has(record.phase)) {
       terminalByDedupeKey.set(record.dedupeKey, record);
+    }
+    const pendingFollowUpId = deliveredIcpPendingFollowUpId(record);
+    if (pendingFollowUpId) {
+      icpDeliveredByPendingFollowUpId.set(pendingFollowUpId, record);
     }
   };
 
@@ -157,6 +175,10 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
     },
     getTerminal(dedupeKey) {
       const record = terminalByDedupeKey.get(dedupeKey.trim());
+      return record ? { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) } : undefined;
+    },
+    getIcpDeliveredCompletion(pendingFollowUpId) {
+      const record = icpDeliveredByPendingFollowUpId.get(pendingFollowUpId.trim());
       return record ? { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) } : undefined;
     },
     listRecent(limit = 25) {

@@ -68,6 +68,8 @@ import {
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { IcpFatigueRegulationReservationPort } from '../../core/agent/fatigue/regulation-reservation.js';
+import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
   createActiveMemoryRefreshFailureAlertHandler,
@@ -83,8 +85,11 @@ import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sideca
 import {
   resolveContactsDir,
   resolveContactBlockListPath,
+  resolveIntrospectionConsentLedgerPath,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
+import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
+import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -106,6 +111,11 @@ import { createPerceptionNoteDeliverer } from '../../core/agent/perception/prese
 import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
+import {
+  createAgentFacingIcpAutonomyRuntime,
+  type AgentFacingIcpAutonomyRuntime,
+} from '../../core/icp/agent-facing-autonomy.js';
+import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -154,6 +164,7 @@ export interface AgentCoreRuntime {
   memoryStore: MemoryStorePort;
   contactStore: ContactStorePort;
   coreMemoryStore: CoreMemoryStorePort;
+  introspectionConsentStore: IntrospectionConsentStore;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
@@ -166,7 +177,9 @@ export interface AgentCoreRuntime {
   sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
+  icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -189,6 +202,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionProviders,
   } = options;
   const contactTrackingGate = options.contactTrackingGate ?? null;
+  const icpAutonomyRuntime = config.multiCompanion === true && options.contactStore
+    ? createAgentFacingIcpAutonomyRuntime({
+        contactStore: options.contactStore,
+        gateway,
+        command: icpTargetChannelInitiationCommand,
+      })
+    : undefined;
   const episodicStore = options.episodicStore ?? (() => {
     throw new Error('PostgreSQL core runtime requires an injected episodic store');
   })();
@@ -214,6 +234,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
   const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
+  const fatigueRegulationReservations = config.multiCompanion === true
+    ? await PostgresIcpFatigueRegulationReservationStore.connect(postgresDatabaseUrl)
+    : null;
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
@@ -269,6 +292,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       }),
     },
     fatigueBudget: fatigueRuntime.fatigueBudget,
+    ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     emotionRuntime,
     observerEvalSidecar,
     appCache,
@@ -301,6 +325,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
         persistenceBackend: config.persistenceBackend,
         postgresDatabaseUrl,
+        companionId: config.companionId,
       });
     }
     return cachedModelUsageStore;
@@ -338,6 +363,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       getModelUsageQuery,
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
+    ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
@@ -349,7 +375,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,
     searchQueryJson: createWebSearchQueryJson(llmProvider),
-    // Explicit backend selection (bead psfn-framework-htm9.10): when OpenRouter
+    // Explicit backend selection (bead htm9.10): when OpenRouter
     // web tools are configured, the search action uses the gateway web.search
     // server-tool path instead of the local-crawler LLM planner.
     backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',
@@ -413,6 +439,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     blockList: new ContactBlockListStore(
       resolveContactBlockListPath(pathSnapshot.companionDataDir),
     ),
+    ...(config.multiCompanion === true ? { permitInvalidation: gateway } : {}),
+    ...(icpAutonomyRuntime ? { peerAvailability: icpAutonomyRuntime } : {}),
     getIntakeSinkGate: () => intakeSinkGate,
     ...(primaryTelegramUserId
       ? {
@@ -481,11 +509,21 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pendingFollowUpProvider: null,
     behavioralPatternProvider: null,
   });
+  const introspectionConsentStore = new IntrospectionConsentStore(
+    resolveIntrospectionConsentLedgerPath(pathSnapshot.companionDataDir),
+  );
+  // Read the complete append-only chain at startup. Corruption or tampering is
+  // fatal; an absent ledger remains safely unconfigured/disabled.
+  introspectionConsentStore.load();
+  const introspectionTurnSensitivityDecisions = new IntrospectionTurnSensitivityDecisions();
+  agentLoop.setIntrospectionTurnSensitivityDecisions(introspectionTurnSensitivityDecisions);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
     config,
     concernStore: intentionRuntime.concernStore,
+    introspectionConsentStore,
+    introspectionTurnSensitivityDecisions,
   });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
@@ -538,6 +576,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
@@ -549,6 +588,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
+    ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
+    ...(icpAutonomyRuntime ? { icpAutonomyRuntime } : {}),
   };
 }

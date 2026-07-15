@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { TurnSnapshotRecord } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import { backfillLegacyTurnId } from '../../core/turns/id.js';
 import { createTurnRecordSharedStore } from './turn-record-shared-store.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import {
@@ -132,6 +133,63 @@ describe('turn-records', () => {
     expect(read[0]?.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
   });
 
+  it('round-trips a durable ICP suppression correlation', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-icp-correlation-'));
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${companionA}:${companionB}`;
+    const turnId = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+    const requestId = 'companion-reply-11111111-1111-4111-8111-111111111111-prior-turn';
+    const record = createTurnRecord({
+      channelId,
+      channelType: 'companion',
+      turnId,
+      requestId,
+      assistantMessage: undefined,
+      icpCorrelation: {
+        conversationId: '33333333-3333-4333-8333-333333333333',
+        rootInitiationId: '44444444-4444-4444-8444-444444444444',
+        initiatedByCompanionId: companionA,
+        localCompanionId: companionB,
+        peerCompanionId: companionA,
+        peerContactId: 'contact-a',
+        channelId,
+        turnId,
+        messageId: requestId,
+        requestId,
+        chargeLane: 'companion_social',
+        surface: 'companion_dm',
+        costPurpose: 'conversation_turn',
+        costOriginStage: 'reply',
+        fatigueDecision: 'suppress',
+        fatigueReasonCode: 'fatigue_exhausted',
+      },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(channelId, 5)).toEqual([record]);
+  });
+
+  it('round-trips logical session provenance and pages past the newest records', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'turn-records-session-provenance-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const records = Array.from({ length: 4 }, (_, index) => createTurnRecord({
+      turnId: `019d2326-d9e1-701d-bcee-250d2cbb0e${index + 1}e`,
+      requestId: `request-${index + 1}`,
+      sessionId: 'session:logical-after-reset',
+      completedAt: 1_700_000_000_100 + index,
+    }));
+    for (const record of records) turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 0)).toEqual(records.slice(2));
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 2)).toEqual(records.slice(0, 2));
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 4)).toEqual([]);
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 1)[0]?.sessionId)
+      .toBe('session:logical-after-reset');
+  });
+
   it('omits location for turns that carried no place binding (legacy rows load fine)', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-nolocation-'));
     const record = createTurnRecord();
@@ -142,6 +200,47 @@ describe('turn-records', () => {
     const read = turnRecordStore.readRecentTurnRecords(record.channelId, 5);
     expect(read).toEqual([record]);
     expect(read[0]).not.toHaveProperty('location');
+  });
+
+  it('finds an old durable completion marker without a recent-record cap', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-marker-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir, {
+      segmentMaxBytes: 8,
+    });
+    const old = createTurnRecord({ turnId: backfillLegacyTurnId('old-completion-marker') });
+    turnRecordStore.appendTurnRecord(old);
+    for (let index = 0; index < 40; index += 1) {
+      turnRecordStore.appendTurnRecord(createTurnRecord({
+        turnId: backfillLegacyTurnId(`newer-turn-${index}`),
+        requestId: `newer-request-${index}`,
+        startedAt: old.startedAt + index + 1,
+        completedAt: old.completedAt + index + 1,
+      }));
+    }
+
+    expect(turnRecordStore.findTurnRecord(old.channelId, old.turnId)).toEqual(old);
+  });
+
+  it('round-trips assistant runtime fallback provenance', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-runtime-fallback-'));
+    const record = createTurnRecord({
+      assistantMessage: {
+        role: 'assistant',
+        content: 'The image reader failed before I could inspect the attachment.',
+        timestamp: 1_742_000_000_500,
+        runtimeFallbackProvenance: {
+          schemaVersion: 1,
+          authoredBy: 'runtime',
+          model: 'runtime-fallback',
+          strategy: 'runtime_nonfabricating_notice',
+        },
+      },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
   });
 });
 

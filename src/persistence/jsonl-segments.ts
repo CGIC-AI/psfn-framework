@@ -1,12 +1,19 @@
 import {
   closeSync,
+  existsSync,
   fstatSync,
   openSync,
   readSync,
+  readdirSync,
 } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 
 const NEWLINE_BYTE = 0x0a;
 
+export interface NumberedJsonlSegment {
+  segmentNumber: number;
+  path: string;
+}
 export interface JsonlReadStats {
   bytesRead: number;
   readCalls?: number;
@@ -25,6 +32,37 @@ export interface JsonlLineAtOffset {
   endOffset: number;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function fileIdentityKey(stat: { dev: number | bigint; ino: number | bigint }): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+/**
+ * Discover sealed siblings for an active JSONL file using the hgw3 contract:
+ * `<stem>.00001.jsonl`, `<stem>.00002.jsonl`, ... Higher numbers are newer.
+ * The directory listing is authoritative; there is deliberately no manifest.
+ */
+export function listNumberedJsonlSegments(activePath: string): NumberedJsonlSegment[] {
+  const directory = dirname(activePath);
+  if (!existsSync(directory)) return [];
+  const activeName = basename(activePath);
+  const extension = extname(activeName);
+  const stem = activeName.slice(0, -extension.length);
+  const pattern = new RegExp(`^${escapeRegExp(stem)}\\.(\\d{5,})${escapeRegExp(extension)}$`);
+  const segments: NumberedJsonlSegment[] = [];
+  for (const name of readdirSync(directory)) {
+    const match = pattern.exec(name);
+    if (!match) continue;
+    segments.push({
+      segmentNumber: Number(match[1]),
+      path: join(directory, name),
+    });
+  }
+  return segments;
+}
 function recordFileRead(stats: JsonlReadStats | undefined): void {
   if (stats?.filesRead !== undefined) stats.filesRead += 1;
 }
@@ -35,13 +73,13 @@ function recordChunkRead(stats: JsonlReadStats | undefined, bytesRead: number): 
   if (stats.readCalls !== undefined) stats.readCalls += 1;
 }
 
-function claimFile(
+function claimFileIdentity(
   fd: number,
   stats: JsonlReadStats | undefined,
   scannedFileIdentities: Set<string> | undefined,
 ): { claimed: boolean; size: number } {
   const fileStat = fstatSync(fd);
-  const identity = `${fileStat.dev}:${fileStat.ino}`;
+  const identity = fileIdentityKey(fileStat);
   if (scannedFileIdentities?.has(identity)) {
     return { claimed: false, size: fileStat.size };
   }
@@ -50,7 +88,10 @@ function claimFile(
   return { claimed: true, size: fileStat.size };
 }
 
-/** Scan newline-delimited bytes from newest to oldest. */
+/**
+ * Scan newline-delimited bytes from newest to oldest. Lines larger than the
+ * chunk size and multi-byte UTF-8 text are reassembled before decoding.
+ */
 export function scanJsonlFileBackward(
   path: string,
   options: JsonlScanOptions & { endOffset?: number },
@@ -58,7 +99,7 @@ export function scanJsonlFileBackward(
 ): boolean {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFile(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
     if (!claimed.claimed || claimed.size <= 0) return false;
 
     const buffer = Buffer.allocUnsafe(options.chunkBytes);
@@ -88,7 +129,11 @@ export function scanJsonlFileBackward(
   }
 }
 
-/** Read the complete JSONL row starting at or after a byte offset. */
+/**
+ * Read the complete JSONL row starting at or after a byte offset. When the
+ * offset lands inside a row, that partial row is skipped. The returned end
+ * offset is immediately after the row's newline (or EOF).
+ */
 export function readJsonlLineAtOrAfter(
   path: string,
   offset: number,
@@ -96,7 +141,7 @@ export function readJsonlLineAtOrAfter(
 ): JsonlLineAtOffset | null {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFile(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
     if (claimed.size <= 0) return null;
 
     const buffer = Buffer.allocUnsafe(options.chunkBytes);
@@ -159,7 +204,7 @@ export function readJsonlLineBefore(
 ): JsonlLineAtOffset | null {
   const fd = openSync(path, 'r');
   try {
-    const claimed = claimFile(fd, options.stats, options.scannedFileIdentities);
+    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
     let position = Math.min(claimed.size, Math.max(0, Math.floor(exclusiveOffset)));
     if (position <= 0) return null;
 
@@ -199,6 +244,44 @@ export function readJsonlLineBefore(
         endOffset: rowEnd + (rowEnd < exclusiveOffset ? 1 : 0),
       }
       : null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Scan newline-delimited bytes from oldest to newest with the same accounting. */
+export function scanJsonlFileForward(
+  path: string,
+  options: JsonlScanOptions,
+  onLine: (line: string) => boolean | void,
+): boolean {
+  const fd = openSync(path, 'r');
+  try {
+    const claimed = claimFileIdentity(fd, options.stats, options.scannedFileIdentities);
+    if (!claimed.claimed || claimed.size <= 0) return false;
+
+    const buffer = Buffer.allocUnsafe(options.chunkBytes);
+    let position = 0;
+    let remainder = Buffer.alloc(0);
+
+    while (position < claimed.size) {
+      const bytesToRead = Math.min(options.chunkBytes, claimed.size - position);
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
+      if (bytesRead <= 0) break;
+      position += bytesRead;
+      recordChunkRead(options.stats, bytesRead);
+
+      const combined = Buffer.concat([remainder, buffer.subarray(0, bytesRead)]);
+      let lineStart = 0;
+      for (let index = 0; index < combined.length; index += 1) {
+        if (combined[index] !== NEWLINE_BYTE) continue;
+        if (onLine(combined.subarray(lineStart, index).toString('utf8'))) return true;
+        lineStart = index + 1;
+      }
+      remainder = combined.subarray(lineStart);
+    }
+
+    return remainder.length > 0 ? Boolean(onLine(remainder.toString('utf8'))) : false;
   } finally {
     closeSync(fd);
   }

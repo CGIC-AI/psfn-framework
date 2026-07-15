@@ -595,6 +595,7 @@ describe('SessionStore', () => {
       reason: 'privacy request',
     });
     expect(store.getRecentTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([secondTurnId]);
 
     await store.restoreTurn(channelId, firstTurnId, {
       actor: 'admin:test',
@@ -604,6 +605,69 @@ describe('SessionStore', () => {
       firstTurnId,
       secondTurnId,
     ]);
+    expect(store.getRecentSourceTurnRecords(channelId, 10).map(record => record.turnId)).toEqual([
+      firstTurnId,
+      secondTurnId,
+    ]);
+  });
+
+  it('applies logical-session tombstones to routed physical-source records after disk reload', async () => {
+    const sourceChannelId = 'discord:public-room';
+    const logicalSessionId = 'session:logical-after-reset';
+    const redactedTurnId = createTurnId(1_700_000_000_000);
+    const visibleTurnId = createTurnId(1_700_000_000_100);
+    store.append({
+      channelId: logicalSessionId,
+      role: 'user',
+      content: 'logical session owner',
+      timestamp: 1_700_000_000_000,
+      turnId: redactedTurnId,
+    });
+    for (const [turnId, requestId, completedAt] of [
+      [redactedTurnId, 'req-redacted', 1_700_000_000_010],
+      [visibleTurnId, 'req-visible', 1_700_000_000_110],
+    ] as const) {
+      store.appendTurnRecord({
+        schemaVersion: 1,
+        turnId,
+        requestId,
+        sessionId: logicalSessionId,
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        startedAt: completedAt - 10,
+        completedAt,
+        status: 'completed',
+        userMessage: { role: 'user', content: requestId, timestamp: completedAt - 10 },
+        assistantMessage: { role: 'assistant', content: 'reply', timestamp: completedAt },
+        toolCalls: [],
+        extractedMemoryIds: [],
+        concernDeltaRefs: [],
+        contactDeltaRefs: [],
+        versionPointers: { model: 'test/model' },
+        provenanceRefs: [],
+      });
+    }
+
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
+      .toEqual([logicalSessionId, logicalSessionId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(true);
+    await store.redactTurn(logicalSessionId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
+      .toBe(true);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+    expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
   });
 
   it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {
@@ -617,6 +681,7 @@ describe('SessionStore', () => {
           requestedLimits.push(limit);
           return basePort.readRecentTurnRecords(channel, limit);
         },
+        findTurnRecord: (channel, turnId) => basePort.findTurnRecord(channel, turnId),
       },
     });
 
@@ -1346,6 +1411,269 @@ describe('SessionStore', () => {
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
   }, 20_000);
 
+  it('reads a bounded entry-id range without fully loading a large channel', () => {
+    const channelId = 'api:bounded-range';
+    appendSessionMessages(store, channelId, 1_500);
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const matchingReadSpy = vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+    matchingReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 10, 12).map(entry => entry.id)).toEqual([
+      10,
+      11,
+      12,
+    ]);
+    expect(matchingReadSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('stops a bounded range scan below the requested IDs when the range contains a marker', () => {
+    const channelId = 'api:bounded-range-marker';
+    appendSessionMessages(store, channelId, 1_490);
+    store.insertExtractionMarker(channelId, 1_490);
+    appendSessionMessages(store, channelId, 9, 'Tail');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const originalRead = archivePort.readJournalMatchingEntriesBackward.bind(archivePort);
+    const visitedIds = new Set<number>();
+    vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward').mockImplementation((archive, options) => (
+      originalRead(archive, {
+        ...options,
+        matches: (entry) => {
+          visitedIds.add(entry.id);
+          return options.matches(entry);
+        },
+        stopAfter: (entry) => {
+          visitedIds.add(entry.id);
+          return options.stopAfter?.(entry) ?? false;
+        },
+      })
+    ));
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 1_490, 1_500).map(entry => entry.id)).toEqual([
+      1_490,
+      1_492,
+      1_493,
+      1_494,
+      1_495,
+      1_496,
+      1_497,
+      1_498,
+      1_499,
+      1_500,
+    ]);
+    expect(Math.min(...visitedIds)).toBe(1_489);
+    expect(visitedIds.size).toBeLessThanOrEqual(12);
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads entries before a cursor without loading the complete journal', () => {
+    const channelId = 'api:before-cursor';
+    appendSessionMessages(store, channelId, 8);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 3);
+
+    expect(entries.map(entry => entry.id)).toEqual([4, 5, 6]);
+    expect(entries.map(entry => entry.content)).toEqual(['Message 3', 'Message 4', 'Message 5']);
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(beforeSpy).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 7,
+      messageLimit: 3,
+      includeBoundaryEntry: true,
+    });
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to canonical replay when a bounded integrity window is tampered', () => {
+    const channelId = 'api:before-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'signed');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const journalPath = findSessionJournalPath(dir, 'before-integrity');
+    const lines = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[4].content = 'tampered selected message';
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).toHaveBeenCalledOnce();
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered selected message');
+  });
+
+  it('does not let an unauthenticated first-row id exclude a signed before-cursor page', () => {
+    const channelId = 'api:before-first-row-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-first-row-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'signed');
+
+    const journalPath = findSessionJournalPath(dir, 'before-first-row-integrity');
+    const lines = readFileSync(journalPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[0].id = 999;
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries.map(entry => entry.content)).toEqual(['signed 4', 'signed 5']);
+  });
+
+  it('uses segmented canonical replay when a sealed before-cursor window is tampered', () => {
+    const channelId = 'api:before-sealed-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:before-sealed-integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 8, 'sealed');
+
+    const journalPath = findSessionJournalPath(dir, 'before-sealed-integrity');
+    const lines = readFileSync(journalPath, 'utf8').trim().split('\n');
+    const sealedRows = lines.slice(0, 6).map(line => JSON.parse(line) as Record<string, unknown>);
+    sealedRows[4].content = 'tampered sealed message';
+    const sealedPath = journalPath.replace(/\.jsonl$/u, '.00001.jsonl');
+    writeFileSync(sealedPath, `${sealedRows.map(row => JSON.stringify(row)).join('\n')}\n`, 'utf8');
+    writeFileSync(journalPath, `${lines.slice(6).join('\n')}\n`, 'utf8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const entries = reloaded.getEntriesBefore(channelId, 7, 2);
+
+    expect(entries.map(entry => entry.id)).toEqual([5, 6]);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[0].content).toContain('tampered sealed message');
+    expect(entries[1].content).toBe('sealed 5');
+  });
+
+  it('preserves tombstone filtering during bounded cursor reads', async () => {
+    const channelId = 'api:before-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'redacted user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'redacted assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const beforeSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    beforeSpy.mockClear();
+    fullReadSpy.mockClear();
+
+    const entries = reloaded.getEntriesBefore(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['visible user']);
+    expect(beforeSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes sibling-writer tombstones before bounded pages without a full replay', async () => {
+    const channelId = 'api:before-sibling-tombstone';
+    const redactedTurnId = createTurnId();
+    const visibleTurnId = createTurnId();
+    const turnMetadata = (turnId: string, role: 'user' | 'assistant'): string => JSON.stringify({
+      turn: { schemaVersion: 1, turnId, requestId: `req-${turnId}`, role },
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'sibling secret user',
+      timestamp: 1_000,
+      metadata: turnMetadata(redactedTurnId, 'user'),
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'sibling secret assistant',
+      timestamp: 1_100,
+      metadata: turnMetadata(redactedTurnId, 'assistant'),
+    });
+    store.append({
+      channelId,
+      role: 'user',
+      content: 'sibling visible user',
+      timestamp: 1_200,
+      metadata: turnMetadata(visibleTurnId, 'user'),
+    });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reader = new SessionStore(dir, { sessionArchivePort: archivePort });
+    expect(reader.getEntriesBefore(channelId, 10, 10).map(entry => entry.content)).toEqual([
+      'sibling secret user',
+      'sibling secret assistant',
+      'sibling visible user',
+    ]);
+    fullReadSpy.mockClear();
+
+    await store.redactTurn(channelId, redactedTurnId, { timestamp: 1_300 });
+    const entries = reader.getEntriesBefore(channelId, 10, 10);
+
+    expect(entries.map(entry => entry.content)).toEqual(['sibling visible user']);
+    expect(entries.every(entry => !entry.content.includes('sibling secret'))).toBe(true);
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';
     appendSessionMessages(store, channelId, 8);
@@ -1433,9 +1761,9 @@ describe('SessionStore', () => {
 
     expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
     expect(tailSpy).toHaveBeenCalledTimes(2);
-    // The chain-aware path fingerprints once for journal-authoritative
-    // tombstones, before/after the bounded read, and before/after cache use.
-    expect(fingerprintSpy).toHaveBeenCalledTimes(5);
+    // The chain-aware path fingerprints around tombstone-authority validation,
+    // its malformed-archive safe fallback, the bounded read, and cache use.
+    expect(fingerprintSpy).toHaveBeenCalledTimes(9);
     const tailResult = tailSpy.mock.results.at(-1)?.value as { quarantined?: Array<{ raw: string }> } | undefined;
     expect(tailResult?.quarantined).toEqual([expect.objectContaining({ raw: '{bad' })]);
   });

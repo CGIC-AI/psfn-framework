@@ -26,6 +26,7 @@ interface ActiveConcernRow {
   next_review_at: string | null;
   merged_from_ids: unknown;
   split_from_id: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 interface PendingFollowUpRow {
@@ -45,6 +46,9 @@ interface PendingFollowUpRow {
   wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+  dampened_at: string | null;
+  dampening_reason: string | null;
+  origin_icp_root_initiation_id: string | null;
 }
 
 interface PendingFollowUpQuarantineRow {
@@ -91,8 +95,22 @@ class FakeIntentionPool {
     });
   }
 
+  async connect(): Promise<{
+    query: FakeIntentionPool['query'];
+    release(): void;
+  }> {
+    return {
+      query: this.query.bind(this),
+      release() {},
+    };
+  }
+
   async query<Row>(text: string, values: readonly unknown[] = []): Promise<QueryResult<Row>> {
     const normalized = text.replace(/\s+/g, ' ').trim();
+
+    if (normalized === 'BEGIN' || normalized === 'COMMIT' || normalized === 'ROLLBACK') {
+      return { rows: [] };
+    }
 
     if (normalized.startsWith('INSERT INTO active_concerns')) {
       const [
@@ -115,6 +133,7 @@ class FakeIntentionPool {
         nextReviewAt,
         mergedFromIds,
         splitFromId,
+        originIcpRootInitiationId,
       ] = values as [
         string,
         string,
@@ -134,6 +153,7 @@ class FakeIntentionPool {
         string,
         string | null,
         unknown,
+        string | null,
         string | null,
       ];
       this.activeConcerns.set(id, {
@@ -157,6 +177,7 @@ class FakeIntentionPool {
         next_review_at: nextReviewAt,
         merged_from_ids: mergedFromIds,
         split_from_id: splitFromId,
+        origin_icp_root_initiation_id: originIcpRootInitiationId,
       });
       return { rows: [this.activeConcerns.get(id)! as Row] };
     }
@@ -241,7 +262,8 @@ class FakeIntentionPool {
         nextReviewAt,
         mergedFromIds,
         splitFromId,
-      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null];
+        originIcpRootInitiationId,
+      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null, string | null];
       row.priority = priority;
       row.status = status;
       row.expires_at = expiresAt;
@@ -253,6 +275,7 @@ class FakeIntentionPool {
       row.next_review_at = nextReviewAt;
       row.merged_from_ids = mergedFromIds;
       row.split_from_id = splitFromId;
+      row.origin_icp_root_initiation_id = originIcpRootInitiationId;
       return { rows: [row as Row] };
     }
 
@@ -272,6 +295,7 @@ class FakeIntentionPool {
         sourceMessageId,
         contextSummary,
         wakeConditions,
+        originIcpRootInitiationId,
       ] = values as [
         string,
         string,
@@ -282,6 +306,7 @@ class FakeIntentionPool {
         string,
         string,
         string,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -303,8 +328,11 @@ class FakeIntentionPool {
         source_message_id: sourceMessageId,
         context_summary: contextSummary,
         wake_conditions: wakeConditions,
+        origin_icp_root_initiation_id: originIcpRootInitiationId,
         activated_at: null,
         activation_reason: null,
+        dampened_at: null,
+        dampening_reason: null,
       });
       return { rows: [this.pendingFollowUps.get(id)! as Row] };
     }
@@ -362,6 +390,7 @@ class FakeIntentionPool {
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
       const rows = [...this.pendingFollowUps.values()]
         .filter(row => row.activated_at === null)
+        .filter(row => row.dampened_at === null)
         .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
         .map(row => row as Row);
@@ -384,6 +413,7 @@ class FakeIntentionPool {
           sourceMessageId,
           contextSummary,
           wakeConditions,
+          originIcpRootInitiationId,
         ] = values as [
           string,
           string,
@@ -398,9 +428,10 @@ class FakeIntentionPool {
           string | null,
           string | null,
           string | null,
+          string | null,
         ];
         const row = this.pendingFollowUps.get(id);
-        if (!row || row.activated_at !== null) {
+        if (!row || row.activated_at !== null || row.dampened_at !== null) {
           return { rows: [] };
         }
         row.content = content;
@@ -415,11 +446,22 @@ class FakeIntentionPool {
         row.source_message_id = sourceMessageId;
         row.context_summary = contextSummary;
         row.wake_conditions = wakeConditions;
+        row.origin_icp_root_initiation_id = originIcpRootInitiationId;
+        return { rows: [row as Row] };
+      }
+      if (normalized.includes('SET dampened_at = $2')) {
+        const [id, dampenedAt, dampeningReason] = values as [string, string, string];
+        const row = this.pendingFollowUps.get(id);
+        if (!row || row.activated_at !== null || row.dampened_at !== null) {
+          return { rows: [] };
+        }
+        row.dampened_at = dampenedAt;
+        row.dampening_reason = dampeningReason;
         return { rows: [row as Row] };
       }
       const [id, activatedAt, activationReason] = values as [string, string, string | null];
       const row = this.pendingFollowUps.get(id);
-      if (!row || row.activated_at !== null) {
+      if (!row || row.activated_at !== null || row.dampened_at !== null) {
         return { rows: [] };
       }
       row.activated_at = activatedAt;
@@ -597,6 +639,7 @@ describe('postgres intention adapters', () => {
       text: 'Check hydration reminder',
       contactId: 'contact-a',
       source: 'agent',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(created.id).toBeTruthy();
 
@@ -609,6 +652,7 @@ describe('postgres intention adapters', () => {
       priority: 'medium',
       source: 'agent',
       status: 'active',
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const duplicate = await ports.concernStore.create({
@@ -623,7 +667,14 @@ describe('postgres intention adapters', () => {
       priority: 'high',
       status: 'blocked',
       evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
+
+    await expect(ports.concernStore.create({
+      text: 'Check the hydration reminder again',
+      contactId: 'contact-a',
+      originIcpRootInitiationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    })).rejects.toThrow('conflicting ICP roots');
 
     const resolved = await ports.concernStore.resolveConcern(created.id, {
       outcome: 'Handled already',
@@ -700,6 +751,7 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       dueAt: '2026-03-28T03:00:00.000Z',
     });
     expect(followUp).toMatchObject({
@@ -708,11 +760,19 @@ describe('postgres intention adapters', () => {
       sourceMessageId: 'msg-3',
       contextSummary: 'Medication check-in context',
       wakeConditions: ['next_user_turn'],
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
 
     const pending = await ports.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);
     expect(pending[0]?.id).toBe(followUp.id);
+
+    const restartedPorts = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:30:00.000Z'),
+    });
+    await expect(restartedPorts.pendingFollowUpStore.peek(followUp.id)).resolves.toMatchObject({
+      originIcpRootInitiationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
 
     const activated = await ports.pendingFollowUpStore.dequeue(followUp.id, {
       activationReason: 'post_turn_action',

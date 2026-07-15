@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_ENROLLMENT_MIGRATIONS,
+  POSTGRES_INTENTION_MIGRATIONS,
+  POSTGRES_INTROSPECTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
@@ -17,6 +19,27 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('creates append-only introspection landmark and audit-decision ledgers', () => {
+    const sql = migrationSql(POSTGRES_INTROSPECTION_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS introspection_landmarks');
+    expect(sql).toContain('UNIQUE (id, source_ref)');
+    expect(sql).toContain("CHECK (divergence_type IN ('affective', 'substantive'))");
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS introspection_audit_decisions');
+    expect(sql).toContain('source_ref TEXT PRIMARY KEY');
+    expect(sql).toContain("CHECK (outcome IN ('no_divergence', 'below_confidence', 'landmark_created'))");
+    expect(sql).toContain('FOREIGN KEY (landmark_id, source_ref)');
+    expect(sql).toContain('REFERENCES introspection_landmarks(id, source_ref)');
+    expect(sql).toContain("CHECK (provenance_json <> '{}'::jsonb)");
+    expect(sql).toContain('CHECK (octet_length(provenance_json::text) <= 65536)');
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION reject_introspection_ledger_mutation()');
+    expect(sql).toContain("IF TG_OP IN ('UPDATE', 'DELETE', 'TRUNCATE')");
+    expect(sql).toContain('CREATE TRIGGER introspection_landmarks_append_only');
+    expect(sql).toContain('CREATE TRIGGER introspection_landmarks_no_truncate');
+    expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_append_only');
+    expect(sql).toContain('CREATE TRIGGER introspection_audit_decisions_no_truncate');
+  });
+
   it('upgrades existing l2 memory tables with scoped memory columns before indexed use', () => {
     const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
 
@@ -107,6 +130,37 @@ describe('Postgres live schema migrations', () => {
       sql.indexOf('CREATE TABLE IF NOT EXISTS companion_presence'),
     );
     expect(sql).toContain("VALUES (2, 'companion-presence')");
+  });
+
+  it('adds restart-durable ICP autonomy state without sharing private candidate text', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+    const localSql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
+
+    for (const table of [
+      'icp_autonomy_invalidation_fences',
+      'icp_availability_leases',
+      'icp_conversation_episodes',
+      'icp_initiation_permits',
+      'icp_fatigue_turn_reservations',
+    ]) {
+      expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+    expect(sharedSql).toContain("VALUES (4, 'icp-autonomy-control-plane')");
+    expect(sharedSql).toContain("VALUES (5, 'icp-autonomy-invalidation-fences')");
+    expect(sharedSql).toContain("VALUES (6, 'icp-fatigue-turn-reservations')");
+    expect(sharedSql).toContain("VALUES (7, 'icp-fatigue-delivery-fence')");
+    expect(sharedSql).toContain("'delivering'");
+    expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
+    expect(sharedSql).toContain('UNIQUE (candidate_id)');
+    expect(sharedSql).toContain('idx_icp_initiation_permits_outstanding_pair');
+    expect(sharedSql).toContain("WHERE status = 'issued'");
+    expect(sharedSql).not.toContain('reason_summary');
+    expect(sharedSql).not.toContain('continuation_task_kind');
+
+    expect(localSql).toContain('CREATE TABLE IF NOT EXISTS icp_initiation_candidates');
+    expect(localSql).toContain('reason_summary TEXT NOT NULL');
+    expect(localSql).toContain('continuation_task_kind TEXT');
+    expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
   });
 
   it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {

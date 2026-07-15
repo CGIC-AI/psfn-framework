@@ -14,6 +14,7 @@
   } from '$lib/types';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
 
   // ── Queue state ──
   let items = $state<AdminIntakeQuarantineItemView[]>([]);
@@ -190,19 +191,21 @@
     }
   }
 
-  // ── Auto-refresh every 15s (batched, async — never interrupt-driven) ──
-  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+  const queueRefresh = createGardenQueueRefresh({
+    queue: 'intake-quarantine',
+    refresh: () => {
+      // Don't reshuffle the queue mid-decision.
+      if (confirmStage === 'idle') return loadData();
+    },
+    intervalMs: 15_000,
+  });
 
   onMount(() => {
-    loadData();
-    refreshInterval = setInterval(() => {
-      // Don't reshuffle the queue mid-decision.
-      if (confirmStage === 'idle') void loadData();
-    }, 15_000);
+    queueRefresh.start();
   });
 
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    queueRefresh.stop();
   });
 </script>
 

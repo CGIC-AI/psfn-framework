@@ -40,7 +40,7 @@ export interface VaultPolicyConfig {
 }
 
 /**
- * Resolved OpenRouter server-tools web backend (bead psfn-framework-htm9.10).
+ * Resolved OpenRouter server-tools web backend (bead htm9.10).
  * Secret-bearing; gateway-internal only — never serialized to the agent process
  * or written to audit logs.
  */
@@ -252,7 +252,7 @@ export function evaluateShardSessionMemorySyncPolicy(
     return { allowed: true, reason: 'allowed_prime_memory_seed' };
   }
   if (envelope.operation === 'memory_write') {
-    return { allowed: true, reason: 'allowed_shard_memory_write' };
+    return { allowed: false, reason: 'denied_operation' };
   }
   return { allowed: false, reason: 'denied_operation' };
 }

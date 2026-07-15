@@ -33,6 +33,7 @@ import type {
 } from '../../faculties/memory/social-graph/proposals.js';
 import type { CompanionPresenceTurnPort } from '../../core/agent/companion-presence-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -340,6 +341,9 @@ export function buildAgentSchedulerRuntime(
           ...telemetry,
           timestamp: Date.now(),
         });
+        if (telemetry.proposed > 0 || telemetry.conflicts > 0) {
+          emitGardenQueueChanged(options.eventBus, 'graph-proposals');
+        }
       },
     });
     scheduler.register({
@@ -379,7 +383,6 @@ export function buildAgentSchedulerRuntime(
     });
   });
 
-  scheduler.start();
   log.info(`Memory system enabled (${options.gateway.dims}d embeddings via gateway)`);
   return {
     scheduler,

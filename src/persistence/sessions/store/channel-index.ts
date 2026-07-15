@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   journalToSessionEntry,
   journalToTurnTombstoneEntry,
   journalToMarkerEntry,
+  fingerprintJournalArchive,
   readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
@@ -97,19 +98,9 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
 export function fingerprintArchivePaths(filePaths: readonly string[]): string | null {
   const fingerprints: string[] = [];
   for (const filePath of filePaths) {
-    try {
-      const stats = statSync(filePath);
-      fingerprints.push(`${filePath}=${[
-        stats.dev,
-        stats.ino,
-        stats.size,
-        stats.mtimeMs,
-        stats.ctimeMs,
-      ].join(':')}`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
+    const fingerprint = fingerprintJournalArchive(filePath);
+    if (!fingerprint) return null;
+    fingerprints.push(`${filePath}=${fingerprint}`);
   }
   return fingerprints.length > 0 ? fingerprints.join('|') : null;
 }

@@ -1,56 +1,14 @@
 import type {
   DashboardCostWindow,
-  DashboardCostWindowTotals,
   DashboardCostWindowUsage,
 } from '../types.js';
+import type { ModelUsageTotals } from '../../../shared/telemetry/model-usage.js';
 
 export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month'];
-
-export interface DashboardUsageSample {
-  timestampMs: number;
-  llmCalls: number;
-  toolCalls: number;
-  estimatedCostUsd: number;
-}
+export const DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS = 15_000;
 
 const DAY_MS = 86_400_000;
 const DASHBOARD_COST_WINDOW_SET = new Set<DashboardCostWindow>(DASHBOARD_COST_WINDOWS);
-
-function emptyUsage(): DashboardCostWindowUsage {
-  return {
-    turns: 0,
-    llmCalls: 0,
-    toolCalls: 0,
-    estimatedCostUsd: 0,
-  };
-}
-
-function sanitizeCount(value: number): number {
-  return Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
-    : 0;
-}
-
-function sanitizeCost(value: number): number {
-  return Number.isFinite(value) && value > 0
-    ? value
-    : 0;
-}
-
-function addUsage(target: DashboardCostWindowUsage, sample: DashboardUsageSample): void {
-  target.turns += 1;
-  target.llmCalls += sanitizeCount(sample.llmCalls);
-  target.toolCalls += sanitizeCount(sample.toolCalls);
-  target.estimatedCostUsd += sanitizeCost(sample.estimatedCostUsd);
-}
-
-export function createEmptyDashboardCostWindowTotals(): DashboardCostWindowTotals {
-  return {
-    today: emptyUsage(),
-    week: emptyUsage(),
-    month: emptyUsage(),
-  };
-}
 
 export function isDashboardCostWindow(value: string): value is DashboardCostWindow {
   return DASHBOARD_COST_WINDOW_SET.has(value as DashboardCostWindow);
@@ -79,29 +37,34 @@ export function startOfDashboardUtcMonth(nowMs: number): number {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
 }
 
-export function aggregateDashboardCostWindows(
-  samples: readonly DashboardUsageSample[],
+export function resolveDashboardCostWindowRange(
+  window: DashboardCostWindow,
   nowMs: number,
-): DashboardCostWindowTotals {
-  const totals = createEmptyDashboardCostWindowTotals();
-  const monthStartMs = startOfDashboardUtcMonth(nowMs);
-  const weekStartMs = startOfDashboardUtcWeek(nowMs);
-  const dayStartMs = startOfDashboardUtcDay(nowMs);
-
-  for (const sample of samples) {
-    const timestampMs = Number.isFinite(sample.timestampMs) ? sample.timestampMs : Number.NaN;
-    if (!Number.isFinite(timestampMs) || timestampMs < monthStartMs) {
-      continue;
-    }
-
-    addUsage(totals.month, sample);
-    if (timestampMs >= weekStartMs) {
-      addUsage(totals.week, sample);
-    }
-    if (timestampMs >= dayStartMs) {
-      addUsage(totals.today, sample);
-    }
+): { sinceMs: number; untilMs: number } {
+  switch (window) {
+    case 'today':
+      return { sinceMs: startOfDashboardUtcDay(nowMs), untilMs: nowMs + 1 };
+    case 'week':
+      return { sinceMs: startOfDashboardUtcWeek(nowMs), untilMs: nowMs + 1 };
+    case 'month':
+      return { sinceMs: startOfDashboardUtcMonth(nowMs), untilMs: nowMs + 1 };
   }
+}
 
-  return totals;
+export function mapModelUsageTotalsToDashboardUsage(
+  totals: ModelUsageTotals,
+): DashboardCostWindowUsage {
+  return {
+    calls: totals.calls,
+    successfulCalls: totals.successfulCalls,
+    failedCalls: totals.failedCalls,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cacheReadTokens: totals.cacheReadTokens,
+    cacheWriteTokens: totals.cacheWriteTokens,
+    totalTokens: totals.totalTokens,
+    providerCostUsd: totals.providerCostUsd,
+    estimatedCostUsd: totals.estimatedCostUsd,
+    effectiveCostUsd: totals.totalCostUsd,
+  };
 }

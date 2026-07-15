@@ -12,10 +12,26 @@ import { createEligibilityGate } from '../../../system/capabilities/eligibility.
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
-  registerPostTurnSubagentSpawnRuntime,
   wirePostTurnActionRuntime,
 } from './post-turn-actions.js';
 import { resetCompletionHandoffDedupeForTests } from '../../../core/agent/completion-handoff.js';
+import {
+  isDeferredCompanionOutreachExecutionAuthorized,
+  registerDeferredCompanionOutreachRuntime,
+  type DeferredCompanionOutreachAuthorizationEvidence,
+  type DeferredCompanionOutreachAuthorizationRuntime,
+} from '../../../core/tools/notify-companion-handoff.js';
+
+const COMPANION_OUTREACH_PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const COMPANION_OUTREACH_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
+  version: 1,
+  toolName: 'notify',
+  toolScope: 'extended',
+  activationSource: 'extended_loaded',
+  requiredCapability: 'external.companion',
+  originToolCallId: 'call-outreach-before-restart',
+  originTurnId: 'turn-before-restart',
+};
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -962,6 +978,105 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('executes restored companion outreach through the real handler with an empty adaptive overlay cache', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_250_000);
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-outreach-restart-'));
+    const persistencePath = join(tempDir, 'queue.json');
+    const actionKind = 'notify.companion_outreach';
+    try {
+      const firstBus = new EventBus();
+      const firstScheduler = new Scheduler(firstBus, {
+        tickIntervalMs: 5,
+        heartbeatIntervalMs: 1_000,
+      });
+      wirePostTurnActionRuntime({
+        eventBus: firstBus,
+        scheduler: firstScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      await firstBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [makeAction({
+          id: 'persisted-companion-outreach',
+          kind: actionKind,
+          payload: {
+            contactId: 'contact-b',
+            permitId: COMPANION_OUTREACH_PERMIT_ID,
+            candidateOrigin: {
+              candidateId: '11111111-1111-4111-8111-111111111111',
+              rootInitiationId: '22222222-2222-4222-8222-222222222222',
+              source: 'intention',
+              provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+              continuationTaskKind: 'research',
+            },
+            authorization: COMPANION_OUTREACH_AUTHORIZATION,
+          },
+          dedupeKey: `${actionKind}:fingerprint`,
+          runAt: 1_700_000_250_000,
+        })],
+      });
+
+      const restartedBus = new EventBus();
+      const restartedScheduler = new Scheduler(restartedBus, {
+        tickIntervalMs: 5,
+        heartbeatIntervalMs: 1_000,
+      });
+      const restartedRuntime = wirePostTurnActionRuntime({
+        eventBus: restartedBus,
+        scheduler: restartedScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      const executeCompanionOutreach = vi.fn().mockResolvedValue(undefined);
+      const restartedAdaptiveState = { activeTools: [] as Array<{ toolName: string }> };
+      const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+        hasExternalCompanionCapability: () => true,
+        isNotifyToolRegistered: () => true,
+        isNotifyOverlayEligible: () => true,
+        getNotifyActivationSource: () => {
+          const active = restartedAdaptiveState.activeTools.find(tool => tool.toolName === 'notify');
+          return active ? 'extended_loaded' : null;
+        },
+      };
+      const dispose = registerDeferredCompanionOutreachRuntime({
+        agentLoop: {},
+        postTurnActions: restartedRuntime,
+        runtime: { executeCompanionOutreach } as never,
+        resolveOriginActivationSource: () => null,
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          authorizationRuntime,
+        ),
+      });
+      restartedScheduler.start();
+      try {
+        await vi.waitFor(() => expect(executeCompanionOutreach).toHaveBeenCalledOnce());
+      } finally {
+        await restartedScheduler.stop();
+        dispose();
+      }
+
+      expect(restartedAdaptiveState.activeTools).toEqual([]);
+      expect(executeCompanionOutreach).toHaveBeenCalledWith(
+        'contact-b',
+        COMPANION_OUTREACH_PERMIT_ID,
+        expect.objectContaining({
+          candidateId: '11111111-1111-4111-8111-111111111111',
+          continuationTaskKind: 'research',
+        }),
+        expect.any(Function),
+      );
+      expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when persisted queue entries are invalid', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-invalid-'));
     const persistencePath = join(tempDir, 'queue.json');
@@ -1140,190 +1255,6 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
-  it('routes post-turn subagent spawn actions through explicit policy and records status', async () => {
-    const eventBus = new EventBus();
-    const handoffEvents: Array<Record<string, any>> = [];
-    eventBus.on('agent.completion_handoff', event => {
-      handoffEvents.push(event);
-    });
-    const scheduler = new Scheduler(eventBus, {
-      tickIntervalMs: 100,
-      heartbeatIntervalMs: 1_000,
-    });
-    const runtime = wirePostTurnActionRuntime({
-      eventBus,
-      scheduler,
-      agentLoop: {
-        waitForIdle: vi.fn().mockResolvedValue(undefined),
-      },
-      intervalMs: 1,
-    });
-    const executeSubagent = vi.fn(async () => ({
-      subagentId: 'subagent-1',
-      name: 'research',
-      content: 'finished',
-      model: 'mock-model',
-      inputTokens: 11,
-      outputTokens: 13,
-      durationMs: 37,
-      turns: 2,
-      lifecycleState: 'ready' as const,
-      health: 'healthy' as const,
-      stateReason: 'completed',
-      capabilities: ['analysis'],
-      requiredCapabilities: ['analysis'],
-    }));
-    registerPostTurnSubagentSpawnRuntime({
-      postTurnActions: runtime,
-      subagentExecutionPort: { executeSubagent },
-    });
-
-    await eventBus.emit('agent.post_turn.actions.inferred', {
-      message: makeMessage(),
-      response: makeResponse(),
-      actions: [makeSubagentSpawnAction()],
-    });
-
-    expect(runtime.listQueued()).toEqual([
-      expect.objectContaining({
-        actionId: 'spawn-action-1',
-        actionKind: POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
-        capability: 'subagent_spawn',
-        runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
-      }),
-    ]);
-    expect(runtime.getActionStatus('spawn-action-1')).toMatchObject({
-      state: 'ready',
-      cancellable: true,
-      capability: 'subagent_spawn',
-      queuedSubagentSpawn: {
-        requestName: 'research',
-        policyMode: 'post_turn_action_pipe',
-        policyAllowed: true,
-        budgetMaxTurns: 2,
-        requestedMaxTurns: 2,
-      },
-    });
-
-    await scheduler.tick();
-    await Promise.resolve();
-
-    expect(executeSubagent).toHaveBeenCalledWith({
-      name: 'research',
-      task: 'inspect the logs',
-      maxTurns: 2,
-      capabilities: ['analysis'],
-      requiredCapabilities: ['analysis'],
-    });
-    expect(runtime.listQueued()).toHaveLength(0);
-    expect(runtime.getActionStatus('spawn-action-1')).toMatchObject({
-      state: 'succeeded',
-      cancellable: false,
-      detail: 'subagent research completed with ready/healthy',
-      subagentSpawn: {
-        subagentId: 'subagent-1',
-        name: 'research',
-        lifecycleState: 'ready',
-        health: 'healthy',
-        stateReason: 'completed',
-        model: 'mock-model',
-        inputTokens: 11,
-        outputTokens: 13,
-        durationMs: 37,
-        turns: 2,
-      },
-    });
-    expect(runtime.getStatus()).toMatchObject({
-      completions: {
-        completedCount: 1,
-        recentCompletions: [
-          expect.objectContaining({
-            actionId: 'spawn-action-1',
-            capability: 'subagent_spawn',
-            subagentSpawn: expect.objectContaining({
-              subagentId: 'subagent-1',
-            }),
-          }),
-        ],
-      },
-    });
-    // Bookkeeping handoffs are event-bus records only: no session writes, no
-    // companion-facing notices.
-    expect(handoffEvents).toHaveLength(1);
-    expect(handoffEvents[0]).toMatchObject({
-      targetChannelId: 'test-channel',
-      noticeBuffered: false,
-      handoff: expect.objectContaining({
-        source: 'post_turn_action',
-        status: 'completed',
-        task: expect.objectContaining({ subagentId: 'subagent-1' }),
-        privacy: expect.objectContaining({
-          partnerNotification: 'policy_gated_companion_authored',
-        }),
-      }),
-    });
-  });
-
-  it('rejects malformed post-turn subagent spawn actions without invoking the port', async () => {
-    const eventBus = new EventBus();
-    const scheduler = new Scheduler(eventBus, {
-      tickIntervalMs: 100,
-      heartbeatIntervalMs: 1_000,
-    });
-    const runtime = wirePostTurnActionRuntime({
-      eventBus,
-      scheduler,
-      agentLoop: {
-        waitForIdle: vi.fn().mockResolvedValue(undefined),
-      },
-      intervalMs: 1,
-    });
-    const executeSubagent = vi.fn();
-    registerPostTurnSubagentSpawnRuntime({
-      postTurnActions: runtime,
-      subagentExecutionPort: { executeSubagent },
-    });
-
-    await eventBus.emit('agent.post_turn.actions.inferred', {
-      message: makeMessage(),
-      response: makeResponse(),
-      actions: [
-        makeSubagentSpawnAction({
-          id: 'spawn-missing-policy',
-          dedupeKey: `${POST_TURN_SUBAGENT_SPAWN_ACTION_KIND}:missing-policy`,
-          payload: {
-            request: {
-              name: 'research',
-              task: 'inspect the logs',
-            },
-          },
-        }),
-      ],
-    });
-
-    await scheduler.tick();
-
-    expect(executeSubagent).not.toHaveBeenCalled();
-    expect(runtime.listQueued()).toHaveLength(0);
-    expect(runtime.getActionStatus('spawn-missing-policy')).toMatchObject({
-      state: 'failed',
-      capability: 'subagent_spawn',
-      detail: 'Error: Post-turn subagent spawn requires explicit policy.',
-    });
-    expect(runtime.getStatus()).toMatchObject({
-      failures: {
-        failedCount: 1,
-        recentFailures: [
-          expect.objectContaining({
-            actionId: 'spawn-missing-policy',
-            capability: 'subagent_spawn',
-            reason: 'retries_exhausted',
-          }),
-        ],
-      },
-    });
-  });
-
   it('cancels queued post-turn subagent spawn actions before execution and exposes terminal status', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
@@ -1338,12 +1269,6 @@ describe('wirePostTurnActionRuntime', () => {
       },
       intervalMs: 1,
     });
-    const executeSubagent = vi.fn();
-    registerPostTurnSubagentSpawnRuntime({
-      postTurnActions: runtime,
-      subagentExecutionPort: { executeSubagent },
-    });
-
     await eventBus.emit('agent.post_turn.actions.inferred', {
       message: makeMessage(),
       response: makeResponse(),
@@ -1359,7 +1284,6 @@ describe('wirePostTurnActionRuntime', () => {
     expect(runtime.cancel('spawn-cancelled', 'operator cancelled background spawn')).toBe(true);
     await scheduler.tick();
 
-    expect(executeSubagent).not.toHaveBeenCalled();
     expect(runtime.getActionStatus('spawn-cancelled')).toMatchObject({
       state: 'cancelled',
       cancellable: false,

@@ -1,6 +1,10 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
-import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
+import type { CompletionPurpose, ContextMessage, CorrelationMetadata, LLMResponse } from '../../shared/contracts/runtime.js';
+import {
+  deriveChildIcpConversationCostCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { DeterministicGateEvent } from '../../shared/event-bus.js';
 import {
@@ -62,6 +66,7 @@ export interface EmotionAppraisalInput {
   personalityTraits?: Record<string, string>;
   turnId?: string;
   now?: number;
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface EmotionAppraisalResult {
@@ -295,14 +300,7 @@ function normalizeAppraisalSummary(value: unknown, maxChars: number): string {
 
 interface CompletionProviderWithOptions extends LLMProviderPort {
   complete(context: LLMContextLike, purpose: CompletionPurpose, options?: {
-    correlation?: {
-      purpose: string;
-      callType: 'background';
-      originType: 'background';
-      originStage: string;
-      channelId: string;
-      turnId?: string;
-    };
+    correlation?: Partial<CorrelationMetadata>;
   }): Promise<LLMResponse>;
 }
 
@@ -447,12 +445,27 @@ export class EmotionAppraisal {
     };
     const response = await this.llmProvider.complete(context, 'background', {
       correlation: {
+        ...(input.icpCorrelation
+          ? { requestId: `${input.icpCorrelation.requestId}:emotion-appraisal` }
+          : {}),
         purpose: 'emotion.appraisal',
         callType: 'background',
         originType: 'background',
         originStage: 'emotion.appraisal',
         channelId: sessionId,
         ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(input.icpCorrelation
+          ? {
+              icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                input.icpCorrelation,
+                {
+                  requestId: `${input.icpCorrelation.requestId}:emotion-appraisal`,
+                  costPurpose: 'sidecar',
+                  costOriginStage: 'post_turn',
+                },
+              ),
+            }
+          : {}),
       },
     });
     const summary = normalizeAppraisalSummary(response.content, this.maxSummaryChars);

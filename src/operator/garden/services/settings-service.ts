@@ -60,6 +60,8 @@ import type {
   AdminVoiceProviderOption,
   ConfigUpdateResult,
   EffectiveChargeQuotaState,
+  EffectiveIcpAutonomySettingsState,
+  IcpAutonomyChargeOwnerProjection,
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
@@ -346,6 +348,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     config: SubstrateConfig;
     configStore: ConfigStorePort;
     getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
+    effectiveSchedulerConfig?: import('../../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
   }) {}
 
   private updateDivergences(
@@ -824,6 +827,15 @@ export class AdminSettingsDataService implements AdminSettingsService {
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
       effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
+      effectiveIcpAutonomy: this.buildEffectiveIcpAutonomyState(editors),
+      workspaceLayout: {
+        mode: this.deps.config.multiCompanion === true ? 'fleet' : 'single',
+        personalWorkspacePath: this.deps.config.workspacePath?.trim() || null,
+        sharedWorkspacePath: this.deps.config.sharedWorkspacePath?.trim() || null,
+        companionSharedAccess: this.deps.config.sharedWorkspacePath ? 'read_only' : 'none',
+        executableAutoLoad: false,
+        promptAutoLoad: false,
+      },
     };
   }
 
@@ -845,6 +857,39 @@ export class AdminSettingsDataService implements AdminSettingsService {
       effectiveChargeQuotaByLane,
       onDiskChargeQuotaByLane,
       restartRequired,
+    };
+  }
+
+  private buildEffectiveIcpAutonomyState(
+    onDisk: Pick<SettingsConfigEditors, 'scheduler' | 'chargePolicy'>,
+  ): EffectiveIcpAutonomySettingsState {
+    const projectCharge = (policy: ChargePolicyConfig): IcpAutonomyChargeOwnerProjection => ({
+      companionSocialQuota: policy.runChargeQuotaByLane.companion_social,
+      companionSocialContinuationCost: policy.surfaceCosts.companionSocialContinuation,
+      fatigue: structuredClone(policy.fatigue),
+      costBreaker: structuredClone(policy.icpCostBreaker),
+    });
+    const effectiveScheduler = this.deps.effectiveSchedulerConfig?.icpAutonomy ?? null;
+    const onDiskScheduler = onDisk.scheduler.icpAutonomy;
+    const effectiveCharge = this.deps.config.chargePolicy
+      ? projectCharge(this.deps.config.chargePolicy)
+      : null;
+    const onDiskCharge = projectCharge(onDisk.chargePolicy);
+    return {
+      scheduler: {
+        ownerFile: 'scheduler.json',
+        effectiveValue: effectiveScheduler,
+        onDiskValue: onDiskScheduler,
+        restartRequired: effectiveScheduler !== null
+          && JSON.stringify(effectiveScheduler) !== JSON.stringify(onDiskScheduler),
+      },
+      chargePolicy: {
+        ownerFile: 'charge-policy.json',
+        effectiveValue: effectiveCharge,
+        onDiskValue: onDiskCharge,
+        restartRequired: effectiveCharge !== null
+          && JSON.stringify(effectiveCharge) !== JSON.stringify(onDiskCharge),
+      },
     };
   }
 
@@ -1094,8 +1139,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
             : { ok: false, message: result.message };
         }
         case 'charge-policy': {
-          const saved = this.deps.configStore.saveChargePolicy(parsed);
-          this.deps.config.chargePolicy = saved;
+          this.deps.configStore.saveChargePolicy(parsed);
           return { ok: true, message: 'charge-policy.json saved' };
         }
         case 'backup': {

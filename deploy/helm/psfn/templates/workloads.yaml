@@ -77,6 +77,7 @@ spec:
               containerPort: {{ .Values.ports.gatewayRpc }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlEnv" . | nindent 12 }}
             {{- include "psfn.providerSecretEnv" . | nindent 12 }}
             {{- if .Values.persistence.modelCache.enabled }}
             - name: PSFN_INJECTION_MODEL_DIR
@@ -233,6 +234,7 @@ spec:
               containerPort: {{ .Values.ports.agentAdmin }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlFileEnv" . | nindent 12 }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
               value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
             - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
@@ -319,6 +321,9 @@ spec:
           resources:
             {{- toYaml .Values.workloads.agent.resources | nindent 12 }}
           volumeMounts:
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
             - name: companion-data

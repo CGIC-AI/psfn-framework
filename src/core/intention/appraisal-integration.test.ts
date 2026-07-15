@@ -158,6 +158,7 @@ function registerOutboundHandlerHarness(options: {
         }),
         hasTerminal: vi.fn((dedupeKey: string) => Boolean(options.terminalRecord && options.terminalRecord.dedupeKey === dedupeKey)),
         getTerminal,
+        getIcpDeliveredCompletion: vi.fn(() => undefined),
         listRecent: vi.fn(() => []),
       },
       sessionManager: {

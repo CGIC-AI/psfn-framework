@@ -1,3 +1,7 @@
+import { assertNoUnknownKeys } from '../../shared/utils/types.js';
+
+export { assertNoUnknownKeys };
+
 type PositiveIntegerFailureKind = 'notInteger' | 'belowMin' | 'aboveMax';
 
 interface PositiveIntegerFailureContext {
@@ -15,10 +19,6 @@ interface PositiveIntegerValidationOptions {
   max?: number;
   message?: PositiveIntegerMessage;
   messages?: Partial<Record<PositiveIntegerFailureKind, PositiveIntegerMessage>>;
-}
-
-interface UnknownKeysOptions {
-  errorPrefix?: string;
 }
 
 function formatPositiveIntegerMessage(
@@ -78,18 +78,4 @@ export function assertPositiveInteger(
     fail('aboveMax');
   }
   return integerValue;
-}
-
-export function assertNoUnknownKeys(
-  value: Record<string, unknown>,
-  allowedKeys: readonly string[],
-  fieldPath: string,
-  options: UnknownKeysOptions = {},
-): void {
-  const allowed = new Set(allowedKeys);
-  const unknown = Object.keys(value).filter(key => !allowed.has(key)).sort();
-  if (unknown.length > 0) {
-    const prefix = options.errorPrefix ? `${options.errorPrefix}: ` : '';
-    throw new Error(`${prefix}${fieldPath} contains unknown keys: ${unknown.join(', ')}`);
-  }
 }

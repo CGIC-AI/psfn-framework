@@ -15,6 +15,7 @@ import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SEED_FILE_NAME,
   CHARGE_POLICY_SURFACE_VALUES,
+  ICP_COST_PURPOSE_VALUES,
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
@@ -27,6 +28,7 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
 
 export {
@@ -35,6 +37,7 @@ export {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SEED_FILE_NAME,
   CHARGE_POLICY_SURFACE_VALUES,
+  ICP_COST_PURPOSE_VALUES,
   FATIGUE_POLICY_CHANNEL_SETTING_VALUES,
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
@@ -48,6 +51,8 @@ export {
   type FatiguePolicyIntent,
   type FatiguePolicyRelationshipClass,
   type FatiguePolicyState,
+  type IcpCostBreakerConfig,
+  type IcpCostPurpose,
 } from '../../shared/contracts/charge-policy.js';
 
 interface ChargePolicyLoadOptions {
@@ -81,6 +86,14 @@ function parseNonNegativeNumber(
     throw new Error(`Invalid charge policy: ${fieldPath} must be a finite number >= 0`);
   }
   return value;
+}
+
+function parsePositiveNumber(value: unknown, fieldPath: string): number {
+  const parsed = parseNonNegativeNumber(value, fieldPath);
+  if (parsed === 0) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be a finite number > 0`);
+  }
+  return parsed;
 }
 
 function parseNonNegativeInteger(
@@ -121,6 +134,66 @@ function parseBoolean(
     throw new Error(`Invalid charge policy: ${fieldPath} must be a boolean`);
   }
   return value;
+}
+
+function parseIcpCostBreakerConfig(
+  raw: unknown,
+  fieldPath: string,
+): IcpCostBreakerConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  const enabled = parseBoolean(raw.enabled, `${fieldPath}.enabled`);
+  if (!enabled) {
+    assertNoUnknownKeys(raw, ['enabled'], fieldPath);
+    return { enabled: false };
+  }
+
+  assertNoUnknownKeys(raw, [
+    'enabled',
+    'warningThresholdUsd',
+    'hardLimitUsd',
+    'finalCloseoutReserveUsd',
+    'pendingReservationStaleAfterMs',
+    'includedCostPurposes',
+  ], fieldPath);
+  const warningThresholdUsd = parsePositiveNumber(
+    raw.warningThresholdUsd,
+    `${fieldPath}.warningThresholdUsd`,
+  );
+  const hardLimitUsd = parsePositiveNumber(raw.hardLimitUsd, `${fieldPath}.hardLimitUsd`);
+  const finalCloseoutReserveUsd = parsePositiveNumber(
+    raw.finalCloseoutReserveUsd,
+    `${fieldPath}.finalCloseoutReserveUsd`,
+  );
+  if (Math.abs((warningThresholdUsd + finalCloseoutReserveUsd) - hardLimitUsd) > 1e-9) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.warningThresholdUsd + `
+      + `${fieldPath}.finalCloseoutReserveUsd must equal ${fieldPath}.hardLimitUsd`,
+    );
+  }
+  const includedCostPurposes = parseFixedObjectMap(
+    raw.includedCostPurposes,
+    `${fieldPath}.includedCostPurposes`,
+    ICP_COST_PURPOSE_VALUES,
+    parseBoolean,
+  );
+  if (!includedCostPurposes.conversation_turn) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.includedCostPurposes.conversation_turn must be true`,
+    );
+  }
+  return {
+    enabled: true,
+    warningThresholdUsd,
+    hardLimitUsd,
+    finalCloseoutReserveUsd,
+    pendingReservationStaleAfterMs: parsePositiveInteger(
+      raw.pendingReservationStaleAfterMs,
+      `${fieldPath}.pendingReservationStaleAfterMs`,
+    ),
+    includedCostPurposes,
+  };
 }
 
 function parseFixedNumericMap<T extends string>(
@@ -356,6 +429,92 @@ function parseFatigueOverchargeConfig(
   };
 }
 
+function parseFatigueSocialRegulationConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatiguePolicyConfig['socialRegulation'] {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, [
+    'relationshipPressureHalfLifeMs',
+    'relationshipPressureWindowMs',
+    'unansweredInitiationAfterMs',
+    'conversationMaturingRatio',
+    'marginalChargeUnits',
+    'declinedPressureUnits',
+    'deferredPressureUnits',
+    'unansweredPressureUnits',
+    'continuationEvidence',
+  ], fieldPath);
+  const relationshipPressureHalfLifeMs = parsePositiveInteger(
+    raw.relationshipPressureHalfLifeMs,
+    `${fieldPath}.relationshipPressureHalfLifeMs`,
+  );
+  const relationshipPressureWindowMs = parsePositiveInteger(
+    raw.relationshipPressureWindowMs,
+    `${fieldPath}.relationshipPressureWindowMs`,
+  );
+  if (relationshipPressureWindowMs < relationshipPressureHalfLifeMs) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.relationshipPressureWindowMs must be >= ${fieldPath}.relationshipPressureHalfLifeMs`);
+  }
+  const conversationMaturingRatio = parseNonNegativeNumber(
+    raw.conversationMaturingRatio,
+    `${fieldPath}.conversationMaturingRatio`,
+  );
+  if (conversationMaturingRatio <= 0 || conversationMaturingRatio >= 1) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.conversationMaturingRatio must be > 0 and < 1`);
+  }
+  const continuationEvidence = raw.continuationEvidence;
+  if (!isRecord(continuationEvidence)) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.continuationEvidence must be an object`);
+  }
+  assertNoUnknownKeys(continuationEvidence, [
+    'recentHumanParticipation',
+    'activeWorkOrResearch',
+    'explicitPeerInvitation',
+  ], `${fieldPath}.continuationEvidence`);
+  return {
+    relationshipPressureHalfLifeMs,
+    relationshipPressureWindowMs,
+    unansweredInitiationAfterMs: parsePositiveInteger(
+      raw.unansweredInitiationAfterMs,
+      `${fieldPath}.unansweredInitiationAfterMs`,
+    ),
+    conversationMaturingRatio,
+    marginalChargeUnits: parsePositiveInteger(
+      raw.marginalChargeUnits,
+      `${fieldPath}.marginalChargeUnits`,
+    ),
+    declinedPressureUnits: parseNonNegativeNumber(
+      raw.declinedPressureUnits,
+      `${fieldPath}.declinedPressureUnits`,
+    ),
+    deferredPressureUnits: parseNonNegativeNumber(
+      raw.deferredPressureUnits,
+      `${fieldPath}.deferredPressureUnits`,
+    ),
+    unansweredPressureUnits: parseNonNegativeNumber(
+      raw.unansweredPressureUnits,
+      `${fieldPath}.unansweredPressureUnits`,
+    ),
+    continuationEvidence: {
+      recentHumanParticipation: parseBoolean(
+        continuationEvidence.recentHumanParticipation,
+        `${fieldPath}.continuationEvidence.recentHumanParticipation`,
+      ),
+      activeWorkOrResearch: parseBoolean(
+        continuationEvidence.activeWorkOrResearch,
+        `${fieldPath}.continuationEvidence.activeWorkOrResearch`,
+      ),
+      explicitPeerInvitation: parseBoolean(
+        continuationEvidence.explicitPeerInvitation,
+        `${fieldPath}.continuationEvidence.explicitPeerInvitation`,
+      ),
+    },
+  };
+}
+
 function parseFatiguePolicyConfig(
   raw: unknown,
   fieldPath: string,
@@ -372,6 +531,7 @@ function parseFatiguePolicyConfig(
       'activityThresholds',
       'stateThresholds',
       'overcharge',
+      'socialRegulation',
     ],
     fieldPath,
   );
@@ -407,6 +567,10 @@ function parseFatiguePolicyConfig(
       raw.overcharge,
       `${fieldPath}.overcharge`,
     ),
+    socialRegulation: parseFatigueSocialRegulationConfig(
+      raw.socialRegulation,
+      `${fieldPath}.socialRegulation`,
+    ),
   };
 }
 
@@ -428,6 +592,7 @@ function validateChargePolicyConfig(
       'moa',
       'referenceModelClassPricing',
       'referenceModelClassPricingRationales',
+      'icpCostBreaker',
       'fatigue',
     ],
     sourcePath,
@@ -480,6 +645,19 @@ function validateChargePolicyConfig(
     `${sourcePath}.referenceModelClassPricing`,
     `${sourcePath}.referenceModelClassPricingRationales`,
   );
+  const fatigue = parseFatiguePolicyConfig(raw.fatigue, `${sourcePath}.fatigue`);
+  const icpCostBreaker = parseIcpCostBreakerConfig(
+    raw.icpCostBreaker,
+    `${sourcePath}.icpCostBreaker`,
+  );
+  if (
+    fatigue.socialRegulation.marginalChargeUnits !==
+    surfaceCosts.companionSocialContinuation
+  ) {
+    throw new Error(
+      `Invalid charge policy at ${sourcePath}: fatigue.socialRegulation.marginalChargeUnits must equal surfaceCosts.companionSocialContinuation`,
+    );
+  }
 
   return {
     schemaVersion: 1,
@@ -497,7 +675,8 @@ function validateChargePolicyConfig(
     ...(referenceModelClassPricingRationales !== undefined
       ? { referenceModelClassPricingRationales }
       : {}),
-    fatigue: parseFatiguePolicyConfig(raw.fatigue, `${sourcePath}.fatigue`),
+    icpCostBreaker,
+    fatigue,
   };
 }
 

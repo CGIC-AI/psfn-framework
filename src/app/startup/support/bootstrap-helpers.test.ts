@@ -16,7 +16,10 @@ import {
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
-import { saveChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import {
+  loadChargePolicySeedDefaults,
+  saveChargePolicyConfig,
+} from '../../../system/config/charge-policy-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import {
   loadSchedulerSeedDefaults,
@@ -1173,6 +1176,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 30,
+        companion_social: 12,
         background: 10,
         maintenance: 0,
         subagent: 5,
@@ -1192,6 +1196,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         shardLaunch: 8,
         externalModelConsult: 1,
         moaRoundBase: 1,
+        companionSocialContinuation: 1,
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -1200,6 +1205,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+        companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
       },
       moa: {
         perRoundMultiplierByReferenceModelClass: {
@@ -1220,6 +1226,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
       fatigue: makeTestFatiguePolicyConfig(),
+      icpCostBreaker: loadChargePolicySeedDefaults().icpCostBreaker,
     });
 
     const result = hydrateCanonicalStartupConfig(config, {

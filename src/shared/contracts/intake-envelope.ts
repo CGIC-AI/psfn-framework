@@ -18,6 +18,7 @@
 // than their parent.
 
 import { randomUUID } from 'node:crypto';
+import { isRecord } from '../utils/types.js';
 
 // ── Source classes ──
 
@@ -388,10 +389,6 @@ const MAX_EXTRACTED_FIELD_VALUE_CHARS = 4096;
 const MAX_REASON_CHARS = 1024;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function invalid(field: string, detail: string): Error {
   return new Error(`Invalid intake envelope: ${field} ${detail}`);
 }
@@ -429,7 +426,7 @@ function normalizeTimestampMs(value: unknown, field: string): number {
 }
 
 function normalizeContentRef(value: unknown, field = 'contentRef'): IntakeContentRef {
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid(field, 'must be an object');
   }
   const unknownKeys = Object.keys(value)
@@ -464,7 +461,7 @@ function normalizeContentRef(value: unknown, field = 'contentRef'): IntakeConten
 }
 
 function normalizeProvenanceHop(value: unknown, field: string): IntakeProvenanceHop {
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid(field, 'must be an object');
   }
   const unknownKeys = Object.keys(value)
@@ -502,7 +499,7 @@ function normalizeProvenanceChain(value: unknown): IntakeProvenanceHop[] {
 
 function normalizeExtractedFields(value: unknown): Record<string, string> {
   if (value === undefined) return {};
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid('extractedFields', 'must be an object');
   }
   const entries = Object.entries(value);
@@ -543,7 +540,7 @@ function normalizeRiskLabels(value: unknown): IntakeRiskLabel[] {
 
 function normalizeScores(value: unknown): Record<string, number> {
   if (value === undefined) return {};
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid('scores', 'must be an object');
   }
   const normalized: Record<string, number> = {};
@@ -561,7 +558,7 @@ function normalizeScores(value: unknown): Record<string, number> {
 }
 
 function normalizeDecision(value: unknown, field = 'decision'): IntakeDecision {
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid(field, 'must be an object');
   }
   const unknownKeys = Object.keys(value)
@@ -586,7 +583,7 @@ function normalizeDecision(value: unknown, field = 'decision'): IntakeDecision {
 }
 
 function normalizeTransitionRecord(value: unknown, field: string): IntakeEnvelopeTransitionRecord {
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid(field, 'must be an object');
   }
   const unknownKeys = Object.keys(value)
@@ -631,7 +628,7 @@ function freezeEnvelope(envelope: IntakeEnvelope): IntakeEnvelope {
  * state.
  */
 export function validateIntakeEnvelope(value: unknown): IntakeEnvelope {
-  if (!isRecordValue(value)) {
+  if (!isRecord(value)) {
     throw invalid('envelope', 'must be an object');
   }
   const knownKeys = [

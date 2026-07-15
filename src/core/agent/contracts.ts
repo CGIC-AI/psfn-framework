@@ -3,6 +3,7 @@
 // This module is intentionally dependency-light to avoid circular imports.
 
 import type { CompletionPurpose, CorrelationMetadata, LLMModelHint, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
@@ -131,6 +132,7 @@ export interface MemoryExtractor {
     canonicalContactId?: string,
     turnId?: TurnID,
     placeId?: string,
+    icpCorrelation?: IcpConversationCorrelation,
   ): Promise<void>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }

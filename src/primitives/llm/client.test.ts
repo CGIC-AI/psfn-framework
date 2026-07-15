@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
+import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { Context } from '@mariozechner/pi-ai';
+import type { CanonicalModelRegistry, CompletionPurpose, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
+import {
+  deriveChildIcpConversationCostCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   createEnvCredentialVault,
@@ -36,11 +43,69 @@ import {
   LLMClient,
   SensitiveImportRoutePolicyError,
 } from './client.js';
-import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
 import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
+import { createSubstrateStreamFn, resolveModel } from '../../core/agent/stream-adapter.js';
+import { GatewayClient } from '../../boundary/gateway/client.js';
+import { registerLLMMethods } from '../../boundary/gateway/methods/llm.js';
+import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
+import type { IcpConversationCostAccountingPort } from '../../shared/telemetry/model-usage.js';
+import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
+import type { GatewayMethodRuntime } from '../../boundary/gateway/methods/types.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import {
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+  runWithChargedSurface,
+} from '../../shared/telemetry/run-charge.js';
+
+function makeModelChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 10,
+      background: 10,
+      maintenance: 10,
+      subagent: 10,
+      shard: 10,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 1,
+      localImageGeneration: 0,
+      paidImageGeneration: 1,
+      analysisWorkbenchExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 1,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 1,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 1,
+    },
+    icpCostBreaker: { enabled: false },
+    fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -108,11 +173,421 @@ function providerCacheSessionId(raw: string): string {
 }
 
 afterEach(() => {
+  resetRunChargeRollingWindowForTests();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) continue;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe('LLMClient ICP conversation cost admission', () => {
+  const correlation: IcpConversationCorrelation = {
+    conversationId: '33333333-3333-4333-8333-333333333333',
+    rootInitiationId: '44444444-4444-4444-8444-444444444444',
+    initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+    localCompanionId: '11111111-1111-4111-8111-111111111111',
+    peerCompanionId: '22222222-2222-4222-8222-222222222222',
+    peerContactId: 'contact-b',
+    channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+    turnId: 'turn-1',
+    messageId: 'message-1',
+    requestId: 'request-1',
+    chargeLane: 'companion_social',
+    surface: 'companion_dm',
+    costPurpose: 'conversation_turn',
+    costOriginStage: 'reply',
+    fatigueDecision: 'allow',
+  };
+  const policy = {
+    enabled: true as const,
+    warningThresholdUsd: 1,
+    hardLimitUsd: 2,
+    finalCloseoutReserveUsd: 1,
+    pendingReservationStaleAfterMs: 60_000,
+    includedCostPurposes: {
+      conversation_turn: true,
+      tool: true,
+      summary: true,
+      extraction: true,
+      sidecar: true,
+    },
+  };
+
+  function makeIcpConfig(): SubstrateConfig {
+    const config = makeConfig({
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+      chargePolicy: {
+        ...makeModelChargePolicy(),
+        icpCostBreaker: policy,
+      },
+    });
+    for (const entry of config.modelRegistry?.models ?? []) {
+      entry.cost = {
+        inputPer1MUsd: 1,
+        outputPer1MUsd: 2,
+        currency: 'USD',
+      };
+    }
+    return config;
+  }
+
+  function projection(projectedTotalCostUsd: number) {
+    return {
+      conversationId: correlation.conversationId,
+      rootInitiationId: correlation.rootInitiationId,
+      actualCostUsd: 0,
+      pendingProjectedCostUsd: projectedTotalCostUsd,
+      projectedTotalCostUsd,
+      warningThresholdUsd: policy.warningThresholdUsd,
+      hardLimitUsd: policy.hardLimitUsd,
+      remainingToHardLimitUsd: Math.max(0, policy.hardLimitUsd - projectedTotalCostUsd),
+      actualAttemptCount: 0,
+      unknownCostAttemptCount: 0,
+      pendingReservationCount: 1,
+      staleReservationCount: 0,
+      settledReservationCount: 0,
+      attributedCompanionCount: 1,
+      enforcementState: projectedTotalCostUsd > policy.warningThresholdUsd
+        ? 'warning' as const
+        : 'normal' as const,
+    };
+  }
+
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: `${provider}:${modelId}`,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('reserves each physical attempt before provider I/O and settles with canonical ICP metadata', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const onDecision = vi.fn();
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => {
+      expect(mocks.streamSimple).not.toHaveBeenCalled();
+      return {
+        allowed: true,
+        replayed: false,
+        reason: 'below_warning',
+        projectedRequestCostUsd: input.projectedCostUsd,
+        projection: projection(input.projectedCostUsd),
+      };
+    });
+    const accounting: IcpConversationCostAccountingPort = {
+      reserveIcpConversationCost,
+      getIcpConversationCostProjection: vi.fn(async () => projection(0)),
+    };
+    const client = new LLMClient(makeIcpConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      icpConversationCostAccounting: accounting,
+      onIcpConversationCostDecision: onDecision,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Continue' }],
+      accounting: {
+        logicalCallId: 'logical-icp-1',
+        attempt: 7,
+        retryOwner: 'caller',
+      },
+      correlation: {
+        callType: 'chat',
+        purpose: 'chat',
+        icpCorrelation: correlation,
+      },
+    })).resolves.toMatchObject({ content: 'ok' });
+
+    expect(reserveIcpConversationCost).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'logical-icp-1',
+      attempt: 7,
+      correlation,
+      policy,
+      projectedCostUsd: expect.any(Number),
+    }));
+    expect(onDecision).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'reserved',
+      logicalCallId: 'logical-icp-1',
+      attempt: 7,
+    }));
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'logical-icp-1',
+      attempt: 7,
+      attribution: expect.objectContaining({
+        companionId: correlation.localCompanionId,
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+      }),
+      metadata: expect.objectContaining({
+        icpCost: {
+          purpose: correlation.costPurpose,
+          originStage: correlation.costOriginStage,
+          fatigueDecision: correlation.fatigueDecision,
+        },
+      }),
+    }));
+  });
+
+  it('does not let a routed endpoint synthetic zero override canonical model pricing', async () => {
+    const config = makeIcpConfig();
+    const primary = config.modelRegistry?.models.find(
+      entry => entry.identity.model === 'z-ai/glm-5',
+    );
+    if (!primary) throw new Error('Expected the primary test model');
+    primary.identity.source.baseUrl = 'http://loopback.test/v1';
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const accounting: IcpConversationCostAccountingPort = {
+      reserveIcpConversationCost: vi.fn(async input => ({
+        allowed: true,
+        replayed: false,
+        reason: 'below_warning',
+        projectedRequestCostUsd: input.projectedCostUsd,
+        projection: projection(input.projectedCostUsd),
+      })),
+      getIcpConversationCostProjection: vi.fn(async () => projection(0)),
+    };
+    const client = new LLMClient(config, {
+      usageRecorder,
+      icpConversationCostAccounting: accounting,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 12,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Continue' }],
+      correlation: { callType: 'chat', icpCorrelation: correlation },
+    });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      providerCost: {},
+      estimatedCost: expect.objectContaining({ total: 0.000014 }),
+      effectiveCost: expect.objectContaining({ total: 0.000014 }),
+      costSource: 'estimate',
+      metadata: expect.objectContaining({ syntheticRoutedEndpointCostIgnored: true }),
+    }));
+  });
+
+  it('suppresses provider I/O when the canonical hard breaker denies the attempt', async () => {
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: {
+        ...projection(2),
+        enforcementState: 'hard_stop',
+      },
+    }));
+    const client = new LLMClient(makeIcpConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      icpConversationCostAccounting: {
+        reserveIcpConversationCost,
+        getIcpConversationCostProjection: vi.fn(async () => projection(2)),
+      },
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Continue' }],
+      correlation: {
+        callType: 'chat',
+        purpose: 'chat',
+        icpCorrelation: correlation,
+      },
+    })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+    expect(mocks.streamSimple).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    costPurpose: IcpConversationCorrelation['costPurpose'];
+    costOriginStage: IcpConversationCorrelation['costOriginStage'];
+    completionPurpose: CompletionPurpose;
+  }>([
+    { costPurpose: 'summary', costOriginStage: 'post_turn', completionPurpose: 'summary' },
+    { costPurpose: 'extraction', costOriginStage: 'post_turn', completionPurpose: 'extraction' },
+    { costPurpose: 'sidecar', costOriginStage: 'post_turn', completionPurpose: 'background' },
+    { costPurpose: 'tool', costOriginStage: 'reply', completionPurpose: 'reasoning' },
+  ])('reserves and hard-suppresses $costPurpose descendants in the parent conversation', async ({
+    costPurpose,
+    costOriginStage,
+    completionPurpose,
+  }) => {
+    const child = deriveChildIcpConversationCostCorrelation(correlation, {
+      requestId: `${correlation.requestId}:${costPurpose}`,
+      costPurpose,
+      costOriginStage,
+    });
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: {
+        ...projection(2),
+        enforcementState: 'hard_stop',
+      },
+    }));
+    const client = new LLMClient(makeIcpConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      icpConversationCostAccounting: {
+        reserveIcpConversationCost,
+        getIcpConversationCostProjection: vi.fn(async () => projection(2)),
+      },
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Run descendant work' }],
+      correlation: {
+        requestId: child.requestId,
+        turnId: child.turnId,
+        channelId: child.channelId,
+        callType: costPurpose === 'tool' ? 'tool' : 'background',
+        originType: costPurpose === 'tool' ? 'tool' : 'background',
+        originStage: `test.${costPurpose}`,
+        icpCorrelation: child,
+      },
+    }, completionPurpose, { disableRetry: true })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+
+    expect(reserveIcpConversationCost).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: expect.objectContaining({
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+        localCompanionId: correlation.localCompanionId,
+        peerCompanionId: correlation.peerCompanionId,
+        peerContactId: correlation.peerContactId,
+        requestId: child.requestId,
+        costPurpose,
+        costOriginStage,
+      }),
+    }));
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('includes cache-write exposure in near-hard admission before completion provider I/O', async () => {
+    const config = makeIcpConfig();
+    if (!config.modelRegistry) throw new Error('test model registry missing');
+    config.modelRegistry.promptCaching = {
+      enabled: true,
+      retention: 'short',
+      scope: 'channel',
+    };
+    for (const entry of config.modelRegistry.models) {
+      entry.cost = {
+        inputPer1MUsd: 0,
+        outputPer1MUsd: 0,
+        cacheReadPer1MUsd: 0,
+        cacheWritePer1MUsd: 1_000,
+        currency: 'USD',
+      };
+    }
+    const child = deriveChildIcpConversationCostCorrelation(correlation, {
+      requestId: `${correlation.requestId}:cache-write-summary`,
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+    });
+    const reserveIcpConversationCost = vi.fn<
+      IcpConversationCostAccountingPort['reserveIcpConversationCost']
+    >(async input => ({
+      allowed: false,
+      replayed: false,
+      reason: 'hard_limit_exceeded',
+      projectedRequestCostUsd: input.projectedCostUsd,
+      projection: {
+        ...projection(2),
+        enforcementState: 'hard_stop',
+      },
+    }));
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      icpConversationCostAccounting: {
+        reserveIcpConversationCost,
+        getIcpConversationCostProjection: vi.fn(async () => projection(2)),
+      },
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'Cacheable system prompt',
+      messages: [{ role: 'user', content: 'Summarize this near-hard conversation' }],
+      correlation: {
+        requestId: child.requestId,
+        turnId: child.turnId,
+        channelId: child.channelId,
+        callType: 'summary',
+        originType: 'summary',
+        originStage: 'test.cache-write-summary',
+        icpCorrelation: child,
+      },
+    }, 'summary', { disableRetry: true })).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event: { reason: 'hard_limit_exceeded' },
+    });
+
+    expect(reserveIcpConversationCost).toHaveBeenCalledWith(expect.objectContaining({
+      projectedCostUsd: expect.any(Number),
+      correlation: child,
+    }));
+    expect(reserveIcpConversationCost.mock.calls[0]?.[0].projectedCostUsd).toBeGreaterThan(0);
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
 });
 
 function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
@@ -808,6 +1283,35 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
     ]);
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({ emptyArgsRetries: 2 }),
+    }));
+  });
+
+  it('does not hide additional physical attempts when the caller owns retry sequencing', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+      accounting: {
+        logicalCallId: 'llm:caller-owned-empty-tool-args',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'llm:caller-owned-empty-tool-args',
+      attempt: 4,
+      metadata: expect.objectContaining({ emptyArgsRetries: 0 }),
     }));
   });
 
@@ -2038,7 +2542,11 @@ describe('LLMClient correlation metadata', () => {
         ],
       },
     });
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'memory ok' }],
       model: 'openrouter:memory/model',
@@ -2064,17 +2572,15 @@ describe('LLMClient correlation metadata', () => {
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1536);
 
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
-    expect(parsed.schemaVersion).toBe(1);
-    expect(parsed.records).toHaveLength(1);
-    expect(parsed.records[0]).toMatchObject({
-      purpose: 'memory',
-      service: 'memory',
-      process: 'memory',
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attribution: expect.objectContaining({
+        purpose: 'memory',
+        service: 'memory',
+        process: 'memory',
+      }),
       inputTokens: 8,
       outputTokens: 5,
-    });
+    }));
   });
 
   it('preserves image input when a background completion is hinted through litellm to a vision-capable routed model', async () => {
@@ -2233,9 +2739,247 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
-  it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
+  it('cost-accounts companion-private calls without persisting source correlation', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'private result' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 25, output: 5, cost: 0.123 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Private background work' }],
+      },
+      'background',
+      {
+        disableRetry: true,
+        correlation: {
+          ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      telemetryVisibility: 'companion_private',
+      inputTokens: 25,
+      outputTokens: 5,
+      providerCostUsd: 0.123,
+    });
+    expect(event?.logicalCallId).not.toContain('source-request');
+    expect(event).not.toHaveProperty('turnId');
+    expect(event).not.toHaveProperty('requestId');
+    expect(event).not.toHaveProperty('channelId');
+  });
+
+  it('uses propagated logical identity and disables nested retries when the caller owns retry sequencing', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 3, retryBaseDelayMs: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      throw new Error('503 provider unavailable');
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Stream this' }],
+      modelHint: {
+        model: 'z-ai/glm-5',
+        provider: 'openrouter',
+        pin: true,
+      },
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 7,
+        retryOwner: 'caller',
+      },
+    })).rejects.toThrow('503 provider unavailable');
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      logicalCallId: 'llm:caller-operation',
+      attempt: 7,
+      status: 'failure',
+    }));
+  });
+
+  it('records adapter fallback attempts under one logical call through the production gateway stack', async () => {
+    const config = makeConfig({
+      litellmBaseUrl: 'http://litellm.test/v1',
+      retryMaxAttempts: 0,
+      retryBaseDelayMs: 0,
+    });
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      models: [
+        ...baseRegistry.models,
+        {
+          id: 'chat-fallback',
+          rank: 20,
+          identity: {
+            provider: 'openrouter',
+            model: 'moonshotai/kimi-k2.5',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 2_048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2_048, contextWindow: 128_000 },
+        },
+      ],
+    };
+    const usageEvents: ModelUsageEventInput[] = [];
+    const gatewayLlmClient = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder: {
+        async recordUsageEvent(event) {
+          usageEvents.push(event);
+        },
+      },
+    });
+
+    let providerAttempt = 0;
+    mocks.streamSimple.mockImplementation(async function* (_model: unknown) {
+      providerAttempt += 1;
+      if (providerAttempt === 1) {
+        throw new Error('403 primary unavailable');
+      }
+      yield {
+        type: 'done',
+        message: {
+          model: 'moonshotai/kimi-k2.5',
+          usage: { input: 7, output: 4, totalTokens: 11 },
+          content: [{ type: 'text', text: 'Recovered on fallback.' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    let receiveFromGateway: ((message: unknown) => void) | undefined;
+    const serverRpc = new JSONRPCServerAndClient(
+      new JSONRPCServer(),
+      new JSONRPCClient(async request => {
+        receiveFromGateway?.(request);
+      }),
+    );
+    const connection: GatewayRpcConnection = Object.assign(new EventEmitter(), {
+      send(message: unknown): boolean {
+        void serverRpc.receiveAndSend(message);
+        return true;
+      },
+      onMessage(handler: (message: unknown) => void): void {
+        receiveFromGateway = handler;
+      },
+      destroy(): void {},
+      get destroyed(): boolean {
+        return false;
+      },
+    });
+    const gatewayClient = new GatewayClient(connection, 2, { keepaliveIntervalMs: 60_000 });
+    const runtime: GatewayMethodRuntime = {
+      target: serverRpc,
+      llmProvider: gatewayLlmClient,
+      embeddingService: {
+        dims: 2,
+        async embed() {
+          return new Float32Array([0, 0]);
+        },
+        async embedBatch() {
+          return [];
+        },
+      },
+      modelDiscovery: { getAvailableModels: vi.fn(async () => []), invalidateCache: vi.fn() },
+      discordAdapter: {
+        id: 'test',
+        outbound: {
+          textChunkLimit: 2_000,
+          async sendText() {},
+        },
+      },
+      policyConfig: { workspacePath: process.cwd() },
+      workspacePath: process.cwd(),
+      sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test' } },
+      approvalBoundary: {
+        listPendingConfirmations: () => [],
+        listConfirmationHistory: () => [],
+        resolveConfirmation: async () => ({
+          id: 'noop',
+          status: 'not_found',
+          message: 'noop',
+          executed: false,
+        }),
+        gate: options => options.handler,
+      },
+      notifyRequester(method, params) {
+        receiveFromGateway?.({ jsonrpc: '2.0', method, params });
+      },
+      listPendingConfirmations: () => [],
+      listConfirmationHistory: () => [],
+      resolveConfirmation: async () => ({
+        id: 'noop',
+        status: 'not_found',
+        message: 'noop',
+        executed: false,
+      }),
+      sendNtfy: async () => ({ status: 'debounced', topic: 'test' }),
+      getRuntimeHealth: () => ({ checkedAt: 0, services: [] }),
+      nextStreamRequestId: () => 'gateway-stream-1',
+      audited: (_method, handler) => handler,
+    };
+    registerLLMMethods(runtime);
+
+    try {
+      const streamFn = createSubstrateStreamFn(config, { transport: gatewayClient });
+      const context: Context = {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
+      };
+      const stream = await streamFn(resolveModel(config, 'chat'), context, {});
+      for await (const _event of stream as AsyncIterable<unknown>) {
+        // Drain the public stream to completion.
+      }
+    } finally {
+      gatewayClient.destroy();
+    }
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents).toMatchObject([
+      {
+        logicalCallId: expect.stringMatching(/^llm:/),
+        attempt: 1,
+        status: 'failure',
+        provider: 'openrouter',
+        model: 'z-ai/glm-5',
+      },
+      {
+        logicalCallId: expect.stringMatching(/^llm:/),
+        attempt: 2,
+        status: 'success',
+        provider: 'openrouter',
+        model: 'moonshotai/kimi-k2.5',
+      },
+    ]);
+    expect(usageEvents[0]?.logicalCallId).toBe(usageEvents[1]?.logicalCallId);
+  });
+
+  it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'gateway-default' }), {
       litellmBaseUrl: 'http://litellm.test/v1',
       usageRecorder,
     });
@@ -2264,10 +3008,15 @@ describe('LLMClient model budget gates and usage metering', () => {
       systemPrompt: 'System',
       messages: [{ role: 'user', content: 'Hello there' }],
       correlation: {
+        companionId: 'companion-a',
+        sessionId: 'session-openrouter-usage-1',
         turnId: 'turn-openrouter-usage-1',
         requestId: 'req-openrouter-usage-1',
         channelId: 'channel-openrouter-usage-1',
+        channelType: 'api',
         callType: 'chat',
+        conversationId: 'conversation-openrouter-usage-1',
+        rootInitiationId: 'root-openrouter-usage-1',
       },
     });
 
@@ -2293,17 +3042,69 @@ describe('LLMClient model budget gates and usage metering', () => {
       cacheReadTokens: 7,
       cacheWriteTokens: 11,
       totalTokens: 196,
+      attribution: expect.objectContaining({
+        companionId: 'companion-a',
+        sessionId: 'session-openrouter-usage-1',
+        channelId: 'channel-openrouter-usage-1',
+        channelType: 'api',
+        callType: 'chat',
+        conversationId: 'conversation-openrouter-usage-1',
+        rootInitiationId: 'root-openrouter-usage-1',
+      }),
       providerCostUsd: 0.95,
       costSource: 'provider',
       metadata: expect.objectContaining({
         routeKind: 'configured_litellm_proxy',
         backendProvider: 'litellm',
         backendBaseUrl: 'http://litellm.test/v1',
-        providerCost: { total: 0.95 },
+        providerCost: { total: 0.95, currency: 'USD' },
         rawUsage: expect.objectContaining({
           cost: 0.95,
           cost_details: { upstream_inference_cost: 19 },
         }),
+      }),
+    }));
+  });
+
+  it('persists the charged provider surface without caller-supplied correlation metadata', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ companionId: 'companion-a' }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 2, output: 1, totalTokens: 3 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await runWithChargeContext({
+      chargePolicy: makeModelChargePolicy(),
+      lane: 'interactive',
+      runId: 'charged-root',
+    }, async () => await runWithChargedSurface('externalModelConsult', {
+      details: { source: 'sandbox_llm_query' },
+    }, async () => {
+      await client.stream({
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Hello there' }],
+        correlation: { callType: 'tool', purpose: 'repl.sandbox.llm_query' },
+      });
+    }));
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attribution: expect.objectContaining({
+        chargeLane: 'interactive',
+        chargeSurface: 'externalModelConsult',
+        chargeEventId: expect.any(String),
+        chargeRunId: 'charged-root',
+        chargeRootRunId: 'charged-root',
       }),
     }));
   });
@@ -2421,6 +3222,345 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
+  it('records failed and successful fallback attempts under one logical call', async () => {
+    const config = makeConfig({ retryMaxAttempts: 0 });
+    config.modelRegistry = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'requested-primary',
+          rank: 10,
+          identity: {
+            provider: 'litellm',
+            model: 'primary-model',
+            source: { type: 'litellm' },
+          },
+          purposes: [{ purpose: 'background', primary: true }],
+          capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 1024 },
+          cost: {
+            inputPer1MUsd: 2,
+            outputPer1MUsd: 8,
+            cacheReadPer1MUsd: 0.2,
+            cacheWritePer1MUsd: 2.5,
+            currency: 'USD',
+          },
+        },
+        {
+          id: 'routed-fallback',
+          rank: 20,
+          identity: {
+            provider: 'openrouter',
+            model: 'fallback-model',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'background', primary: false }],
+          capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 1024 },
+          cost: {
+            inputPer1MUsd: 1,
+            outputPer1MUsd: 4,
+            cacheReadPer1MUsd: 0.1,
+            cacheWritePer1MUsd: 1.25,
+            currency: 'USD',
+          },
+        },
+      ],
+    };
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple
+      .mockRejectedValueOnce(new Error('503 primary unavailable'))
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'done' }],
+        model: 'fallback-model',
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 3,
+          cacheWrite: 2,
+          totalTokens: 20,
+          cost: { total: 0.25, currency: 'USD' },
+        },
+        stopReason: 'stop',
+      });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Do the work' }],
+      correlation: {
+        requestId: 'request-fallback-accounting',
+        callType: 'background',
+      },
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(2);
+    const [failed, succeeded] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+    expect(failed).toMatchObject({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'unknown',
+      provider: 'litellm',
+      model: 'primary-model',
+      requestedProvider: 'litellm',
+      requestedModel: 'primary-model',
+      costSource: 'none',
+    });
+    expect(succeeded).toMatchObject({
+      attempt: 2,
+      status: 'success',
+      settlement: 'complete',
+      provider: 'openrouter',
+      model: 'fallback-model',
+      requestedProvider: 'litellm',
+      requestedModel: 'primary-model',
+      providerCost: { total: 0.25, currency: 'USD' },
+      effectiveCost: { total: 0.25, currency: 'USD' },
+      costSource: 'provider',
+    });
+    expect(failed.logicalCallId).toBe(succeeded.logicalCallId);
+    expect(succeeded.estimatedCost).toEqual({
+      input: 0.00001,
+      output: 0.00002,
+      cacheRead: 0.0000003,
+      cacheWrite: 0.0000025,
+      total: 0.0000328,
+      currency: 'USD',
+    });
+  });
+
+  it('settles a stream failure after emitted text as one partial attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'text_delta', delta: 'partial provider output' };
+      yield {
+        type: 'error',
+        error: { errorMessage: 'provider stream disconnected' },
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Stream this' }],
+      correlation: {
+        requestId: 'request-partial-stream',
+        callType: 'chat',
+      },
+    })).rejects.toThrow('provider stream disconnected');
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'partial',
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+      requestedProvider: 'openrouter',
+      requestedModel: 'z-ai/glm-5',
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        partialOutputChars: 23,
+      }),
+    });
+    expect(event.inputTokens).toBeGreaterThan(0);
+    expect(event.outputTokens).toBeGreaterThan(0);
+    expect(event.totalTokens).toBe(
+      event.inputTokens + event.outputTokens + event.cacheReadTokens + event.cacheWriteTokens,
+    );
+  });
+
+  it('records a completed provider response with malformed usage as failed unknown economics', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider returned content' }],
+      model: 'z-ai/glm-5',
+      usage: { bananas: 7 },
+      stopReason: 'stop',
+    });
+
+    await expect(client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true })).rejects.toThrow('Unsupported provider usage shape');
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      attempt: 1,
+      status: 'failure',
+      settlement: 'complete',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costSource: 'none',
+      errorMessage: 'Unsupported provider usage shape',
+      metadata: expect.objectContaining({
+        malformedRawUsage: { bananas: 7 },
+      }),
+    }));
+  });
+
+  it('settles late gateway-captured provider cost into the durable attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({
+        providerCost: { total: 0.42, currency: 'USD' },
+        providerCostEvidence: {
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+      }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      providerCost: { total: 0.42, currency: 'USD' },
+      effectiveCost: { total: 0.42, currency: 'USD' },
+      providerCostUsd: 0.42,
+      effectiveCostUsd: 0.42,
+      costSource: 'provider',
+    }));
+  });
+
+  it('quarantines contradictory response and gateway-captured cost from durable totals', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({
+        providerCost: { total: 0.42, currency: 'USD' },
+        providerCostEvidence: {
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+      }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        input: 20,
+        output: 4,
+        totalTokens: 24,
+        cost: { total: 0.21, currency: 'USD' },
+      },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      effectiveCost: {},
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        providerCostEvidence: {
+          responseUsage: { total: 0.21, currency: 'USD' },
+          gatewayCapture: { total: 0.42, currency: 'USD' },
+        },
+        providerCostEvidenceConflict: { fields: ['total'] },
+      }),
+    }));
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event.providerCostUsd).toBeUndefined();
+    expect(event.effectiveCostUsd).toBeUndefined();
+  });
+
+  it('keeps malformed gateway cost evidence unresolved instead of estimating a complete attempt', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: {},
+        providerCostEvidenceConflict: { fields: ['header.x-litellm-response-cost'] },
+      }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      metadata: expect.objectContaining({
+        providerCostEvidenceConflict: { fields: ['header.x-litellm-response-cost'] },
+      }),
+    }));
+  });
+
+  it('quarantines malformed direct-provider response cost instead of settling a complete estimate', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        input: 20,
+        output: 4,
+        totalTokens: 24,
+        cost: { total: 'not-money', currency: 'USD' },
+      },
+      stopReason: 'stop',
+    });
+
+    await client.complete({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Complete this' }],
+    }, 'background', { disableRetry: true });
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      settlement: 'partial',
+      providerCost: {},
+      costSource: 'none',
+      metadata: expect.objectContaining({
+        rawUsage: expect.objectContaining({
+          cost: { total: 'not-money', currency: 'USD' },
+        }),
+        providerCostEvidenceConflict: { fields: ['responseUsage.cost.total'] },
+      }),
+    }));
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event.providerCostUsd).toBeUndefined();
+    expect(event.effectiveCostUsd).toBeUndefined();
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;
@@ -2471,6 +3611,18 @@ describe('LLMClient model budget gates and usage metering', () => {
     const client = new LLMClient(config, {
       litellmBaseUrl: 'http://litellm.test/v1',
       onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
+      usageBudgetQuery: {
+        async getModelBudgetSpend() {
+          return {
+            dayKey: '2026-07-13',
+            monthKey: '2026-07',
+            dailyEstimatedCostUsd: 0,
+            monthlyEstimatedCostUsd: 0,
+            dailyUnknownCostAttempts: 0,
+            monthlyUnknownCostAttempts: 0,
+          };
+        },
+      },
     });
 
     mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamOk() {
@@ -2527,6 +3679,50 @@ describe('LLMClient model budget gates and usage metering', () => {
       estimatedRequestCostUsd: expect.any(Number),
     });
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('stops all fallback candidates when canonical budget accounting is unavailable', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      budgetPolicy: {
+        enabled: true,
+        dailyUsdLimit: 10,
+        monthlyUsdLimit: 100,
+        currency: 'USD',
+      },
+      models: [
+        ...baseRegistry.models,
+        {
+          id: 'chat-fallback-accounting-unavailable',
+          rank: 500,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-4.1-mini',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: false }],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+          cost: { inputPer1MUsd: 0.01, outputPer1MUsd: 0.01, currency: 'USD' },
+        },
+      ],
+    };
+    const blockedEvents: Array<Record<string, unknown>> = [];
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      onBudgetBlocked: event => blockedEvents.push(event as unknown as Record<string, unknown>),
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Do not call a provider' }],
+    })).rejects.toThrow('accounting_unavailable');
+
+    expect(mocks.streamSimple).not.toHaveBeenCalled();
+    expect(blockedEvents).toHaveLength(1);
+    expect(blockedEvents[0]).toMatchObject({ reason: 'accounting_unavailable' });
   });
 
   it('falls back to a secondary chat candidate when the primary stream returns no text', async () => {
@@ -2957,9 +4153,13 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(streamedText.join('')).toBe(content);
   });
 
-  it('persists usage ledger records after successful completion call', async () => {
+  it('records successful completion only through the canonical usage recorder', async () => {
     const config = makeConfig();
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
       model: 'deepseek/deepseek-v3.2',
@@ -2976,18 +4176,17 @@ describe('LLMClient model budget gates and usage metering', () => {
       { disableRetry: true },
     );
 
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
-    expect(parsed.schemaVersion).toBe(1);
-    expect(parsed.records).toHaveLength(1);
-    expect(parsed.records[0]).toMatchObject({
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'openrouter',
       model: 'deepseek/deepseek-v3.2',
-      purpose: 'background',
-      service: 'background',
+      attribution: expect.objectContaining({
+        purpose: 'background',
+        service: 'background',
+      }),
       inputTokens: 13,
       outputTokens: 7,
-    });
+    }));
   });
 
   it('skips preflight token estimation when model budget policy is disabled', async () => {
@@ -3002,7 +4201,11 @@ describe('LLMClient model budget gates and usage metering', () => {
         currency: 'USD',
       },
     };
-    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
     const estimateSpy = vi.spyOn(client as any, 'estimateBudgetInputTokens');
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'done' }],
@@ -3021,12 +4224,10 @@ describe('LLMClient model budget gates and usage metering', () => {
     );
 
     expect(estimateSpy).not.toHaveBeenCalled();
-    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
-    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
-    expect(parsed.records[0]).toMatchObject({
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       inputTokens: 13,
       outputTokens: 7,
-    });
+    }));
   });
 
   it('routes completion through injected transport without calling direct provider transport', async () => {
@@ -3168,6 +4369,11 @@ describe('LLMClient model budget gates and usage metering', () => {
       {
         systemPrompt: 'System',
         messages: [{ role: 'user', content: 'Stream this reply' }],
+        accounting: {
+          logicalCallId: 'llm:transport-caller',
+          attempt: 5,
+          retryOwner: 'caller',
+        },
       },
       callbacks,
     );
@@ -3181,6 +4387,11 @@ describe('LLMClient model budget gates and usage metering', () => {
           pin: true,
           maxTokens: 4096,
         }),
+        accounting: {
+          logicalCallId: 'llm:transport-caller',
+          attempt: 5,
+          retryOwner: 'caller',
+        },
       }),
       callbacks,
     );

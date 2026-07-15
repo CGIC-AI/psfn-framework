@@ -2,7 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import type { AdminBodyReader } from './types.js';
 import { buildAdminSessionRoutes } from './session-routes.js';
-import { AdminSessionTurnNotFoundError } from '../services/session-service.js';
+import {
+  AdminSessionNotFoundError,
+  AdminSessionTurnNotFoundError,
+} from '../services/session-service.js';
 import type { AdminSessionService } from '../services/types.js';
 
 class CapturingResponse {
@@ -167,9 +170,10 @@ describe('admin session turn-detail route', () => {
   });
 
   it('forwards includeTurns=false on the generic messages route', async () => {
-    const getSessionMessages = vi.fn().mockReturnValue({ sessionId: 'api:target', turns: [] });
+    const getSessionMessagesForAdminRead = vi.fn()
+      .mockResolvedValue({ sessionId: 'api:target', turns: [] });
     const path = '/api/admin/sessions/api%3Atarget';
-    const route = findFirstMatch({ getSessionMessages }, path);
+    const route = findFirstMatch({ getSessionMessagesForAdminRead }, path);
     if (!route) throw new Error('messages route not matched');
 
     const res = new CapturingResponse();
@@ -181,7 +185,63 @@ describe('admin session turn-detail route', () => {
     await res.done;
 
     expect(res.statusCode).toBe(200);
-    expect(getSessionMessages).toHaveBeenCalledWith('api:target', { includeTurns: false });
+    expect(getSessionMessagesForAdminRead).toHaveBeenCalledWith('api:target', { includeTurns: false });
+  });
+});
+
+describe('admin selected-session detail route', () => {
+  function findFirstMatch(service: Partial<AdminSessionService>, path: string) {
+    const routes = makeRoutes(service, undefined);
+    return routes.find(candidate => candidate.method === 'GET' && candidate.match(path));
+  }
+
+  it('loads contact display detail from a focused route without invoking the message reader', async () => {
+    const getSessionDetail = vi.fn().mockResolvedValue({
+      channel: {
+        sessionId: 'api:target',
+        channelId: 'api:target',
+        messageCount: 2,
+        linkedContactId: 'contact-1',
+        linkedContactName: 'Selected Person',
+      },
+    });
+    const getSessionMessages = vi.fn();
+    const path = '/api/admin/sessions/api%3Atarget/detail';
+    const route = findFirstMatch({ getSessionDetail, getSessionMessages }, path);
+    if (!route) throw new Error('selected-session detail route not matched');
+
+    const res = new CapturingResponse();
+    route.handle(
+      { headers: {}, url: path } as IncomingMessage,
+      res as unknown as ServerResponse,
+      route.match(path) ?? {},
+    );
+    await res.done;
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      channel: { linkedContactName: 'Selected Person' },
+    });
+    expect(getSessionDetail).toHaveBeenCalledWith('api:target');
+    expect(getSessionMessages).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 without contact detail when the selected session no longer exists', async () => {
+    const getSessionDetail = vi.fn(async () => {
+      throw new AdminSessionNotFoundError('api:missing');
+    });
+
+    const result = await invokeRoute(
+      { getSessionDetail },
+      'GET',
+      '/api/admin/sessions/api%3Amissing/detail',
+      undefined,
+    );
+
+    expect(result).toEqual({
+      statusCode: 404,
+      body: { error: 'Session "api:missing" not found' },
+    });
   });
 });
 

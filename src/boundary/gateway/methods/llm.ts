@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
+import { GatewayErrors } from '../protocol.js';
 import type {
   LLMChatParams,
   LLMCompleteParams,
@@ -7,6 +10,7 @@ import type {
   LLMInvalidateModelDiscoveryParams,
   LLMInvalidateModelDiscoveryResult,
   LLMChunkNotification,
+  GatewayCorrelationParams,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import type {
@@ -14,6 +18,7 @@ import type {
   CorrelationMetadata,
   CompletionPurpose,
   LLMModelHint,
+  LLMUsageDetails,
   ObservabilityCallType,
 } from '../../../shared/contracts/runtime.js';
 import { registerAuditedDescriptors } from './register.js';
@@ -21,31 +26,74 @@ import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
-import { createComponentLogger } from '../../../shared/logger.js';
 import {
   applyGatewayCapturedProviderCost,
   withGatewayLLMCostCapture,
 } from '../llm-cost-capture.js';
-import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { GatewayErrors } from '../protocol.js';
 import {
   GatewayInlineImageRetentionMissError,
   resolveGatewayInlineImageReferences,
 } from '../inline-image-retention.js';
+import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accounting-context.js';
+import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
+import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
+import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
-const log = createComponentLogger('GatewayLLMMethods');
+async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ModelBudgetExceededError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.MODEL_BUDGET_BLOCKED,
+        error.event,
+      );
+    }
+    if (error instanceof IcpConversationCostBreakerError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        error.event,
+      );
+    }
+    throw error;
+  }
+}
+
+async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
+  params: P,
+  runtime: GatewayMethodRuntime,
+): Promise<P> {
+  if (!params.icpCorrelation) return params;
+  if (!runtime.authorizeIcpConversationCorrelation) {
+    throw new JSONRPCErrorException(
+      'ICP conversation cost correlation authorization is unavailable',
+      GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+    );
+  }
+  return {
+    ...params,
+    icpCorrelation: await runtime.authorizeIcpConversationCorrelation(params.icpCorrelation),
+  };
+}
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
       const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
       const purpose = normalizePurpose(params.purpose) ?? (shardRouting ? 'shard.execution' : 'chat');
       const modelHint = extractModelHintFromParams(params);
+      const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
+        ...params,
         turnId: params.turnId,
         requestId,
         channelId: params.channelId,
@@ -55,15 +103,17 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await runtime.llmProvider.stream(
+        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.stream(
           {
             systemPrompt: params.systemPrompt,
             messages,
             ...(params.tools?.length ? { tools: params.tools } : {}),
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
+            ...(accounting ? { accounting } : {}),
             correlation,
           },
           params.stream ? {
@@ -71,9 +121,12 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
               runtime.notifyRequester('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
             },
           } : undefined,
-        ),
+        )),
       );
-      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
+      const response = applyGatewayCapturedProviderCost(
+        captured.result,
+        captured.finalAttemptProviderCostEvidence,
+      );
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -93,6 +146,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       model: p.model,
       stream: p.stream,
       ...toSummaryCorrelation(buildCorrelation({
+        ...p,
         turnId: p.turnId,
         requestId: p.requestId,
         channelId: p.channelId,
@@ -102,17 +156,21 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: normalizePurpose(p.purpose) ?? (resolveShardChannelRouting(p.channelId) ? 'shard.execution' : 'chat'),
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      params = await authorizeIcpCorrelation(params, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
       const modelHint = extractModelHintFromParams(params);
+      const accounting = normalizeLLMCallAccountingContext(params.accounting);
       const correlation = buildCorrelation({
+        ...params,
         turnId: params.turnId,
         requestId: params.requestId ?? params.turnId,
         channelId: params.channelId,
@@ -124,20 +182,25 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose: params.purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await runtime.llmProvider.complete(
+        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.complete(
           {
             systemPrompt: params.systemPrompt,
             messages,
             ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
+            ...(accounting ? { accounting } : {}),
             correlation,
           },
           params.purpose,
-        ),
+        )),
       );
-      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
+      const response = applyGatewayCapturedProviderCost(
+        captured.result,
+        captured.finalAttemptProviderCostEvidence,
+      );
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -154,6 +217,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       ...(p.companionId?.trim() ? { companionId: p.companionId.trim() } : {}),
       purpose: p.purpose,
       ...toSummaryCorrelation(buildCorrelation({
+        ...p,
         turnId: p.turnId,
         requestId: p.requestId ?? p.turnId,
         channelId: p.channelId,
@@ -168,6 +232,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: p.purpose,
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
@@ -175,14 +240,46 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime) => {
       const startedAtMs = Date.now();
+      const logicalCallId = `embedding:${randomUUID()}`;
+      const recordsUsageInternally = embeddingRecordsUsageInternally(runtime);
+      const correlation = buildCorrelation({
+        ...params,
+        callType: params.callType ?? 'memory',
+        purpose: params.purpose ?? 'embedding',
+        originType: params.originType ?? 'memory',
+        originStage: params.originStage ?? 'embedding',
+      });
+      let result: EmbeddingBatchProviderUsageResult;
       try {
-        const embeddings = await runtime.embeddingService.embedBatch(params.texts);
-        recordEmbeddingUsage(runtime, params, startedAtMs, 'success');
-        return { embeddings: embeddings.map(e => Array.from(e)) };
+        result = await runWithRequestContext(
+          correlation,
+          async () => await embedBatchWithProviderUsage(runtime, params.texts),
+        );
       } catch (error) {
-        recordEmbeddingUsage(runtime, params, startedAtMs, 'failure', error);
+        if (!recordsUsageInternally) {
+          await recordEmbeddingUsage(
+            runtime,
+            params,
+            logicalCallId,
+            startedAtMs,
+            'failure',
+            extractProviderAttemptUsageDetails(error),
+            error,
+          );
+        }
         throw error;
       }
+      if (!recordsUsageInternally) {
+        await recordEmbeddingUsage(
+          runtime,
+          params,
+          logicalCallId,
+          startedAtMs,
+          'success',
+          result.usageDetails,
+        );
+      }
+      return { embeddings: result.embeddings.map(e => Array.from(e)) };
     },
     summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
   },
@@ -242,28 +339,17 @@ function requireModelDiscovery(
   return runtime.modelDiscovery;
 }
 
-function buildCorrelation(params: {
-  turnId?: string;
-  requestId?: string;
-  channelId?: string;
+function buildCorrelation(params: GatewayCorrelationParams & {
   callType: ObservabilityCallType;
-  originType?: ObservabilityCallType;
-  originStage?: string;
-  toolName?: string;
-  toolCallId?: string;
   purpose: string;
+  telemetryVisibility?: CorrelationMetadata['telemetryVisibility'];
 }): CorrelationMetadata {
   return resolveCorrelationMetadata(
     {
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      ...(params.requestId ? { requestId: params.requestId } : {}),
-      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...params,
       callType: params.callType,
-      ...(params.originType ? { originType: params.originType } : {}),
-      ...(params.originStage ? { originStage: params.originStage } : {}),
-      ...(params.toolName ? { toolName: params.toolName } : {}),
-      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       purpose: params.purpose,
+      ...(params.telemetryVisibility ? { telemetryVisibility: params.telemetryVisibility } : {}),
     },
     undefined,
     params.purpose === 'chat' ? 'chat' : 'background',
@@ -277,13 +363,40 @@ function inferCallType(
   return inferCorrelationCallType(purpose, channelId);
 }
 
-function recordEmbeddingUsage(
+interface EmbeddingBatchProviderUsageResult {
+  embeddings: Float32Array[];
+  usageDetails?: LLMUsageDetails;
+}
+
+function embeddingRecordsUsageInternally(runtime: GatewayMethodRuntime): boolean {
+  return (runtime.embeddingService as { recordsModelUsageInternally?: unknown })
+    .recordsModelUsageInternally === true;
+}
+
+async function embedBatchWithProviderUsage(
+  runtime: GatewayMethodRuntime,
+  texts: string[],
+): Promise<EmbeddingBatchProviderUsageResult> {
+  const provider = runtime.embeddingService as GatewayMethodRuntime['embeddingService'] & {
+    embedBatchWithUsage?: (input: string[]) => Promise<EmbeddingBatchProviderUsageResult>;
+  };
+  if (provider.embedBatchWithUsage) {
+    return await provider.embedBatchWithUsage(texts);
+  }
+  return { embeddings: await provider.embedBatch(texts) };
+}
+
+async function recordEmbeddingUsage(
   runtime: GatewayMethodRuntime,
   params: LLMEmbedParams,
+  logicalCallId: string,
   startedAtMs: number,
   status: 'success' | 'failure',
+  usageDetails?: LLMUsageDetails,
   error?: unknown,
-): void {
+): Promise<void> {
+  const recorder = runtime.modelUsageRecorder;
+  if (!recorder) return;
   const completedAtMs = Date.now();
   const embeddingMetadata = runtime.embeddingService as unknown as { kind?: unknown; model?: unknown };
   const provider = typeof embeddingMetadata.kind === 'string'
@@ -292,30 +405,56 @@ function recordEmbeddingUsage(
   const model = typeof embeddingMetadata.model === 'string'
     ? embeddingMetadata.model
     : `dims:${runtime.embeddingService.dims}`;
-  const logicalCallId = [
-    'embedding',
-    process.pid,
-    completedAtMs,
-    Math.random().toString(16).slice(2, 10),
-  ].join(':');
-  void runtime.modelUsageRecorder?.recordUsageEvent({
+  await recorder.recordUsageEvent({
     logicalCallId,
+    attempt: 1,
     recordedAtMs: completedAtMs,
     startedAtMs,
     completedAtMs,
     durationMs: Math.max(0, completedAtMs - startedAtMs),
     status,
+    settlement: usageDetails
+      ? (hasProviderCostEvidenceConflict(usageDetails.raw) ? 'partial' : 'complete')
+      : 'unknown',
     callKind: 'embedding',
-    callType: 'memory',
-    purpose: 'embedding',
-    originType: 'memory',
-    originStage: 'embedding',
-    service: 'memory',
-    process: 'embedding',
+    attribution: {
+      ...(params.companionId ? { companionId: params.companionId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.channelType ? { channelType: params.channelType } : {}),
+      callType: params.callType ?? 'memory',
+      purpose: params.purpose ?? 'embedding',
+      originType: params.originType ?? 'memory',
+      originStage: params.originStage ?? 'embedding',
+      service: params.service ?? 'memory',
+      process: params.process ?? 'embedding',
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.requestId ? { requestId: params.requestId } : {}),
+      ...(params.toolName ? { toolName: params.toolName } : {}),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
+      ...(params.chargeSurface ? { chargeSurface: params.chargeSurface } : {}),
+      ...(params.chargeEventId ? { chargeEventId: params.chargeEventId } : {}),
+      ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
+      ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
+      ...(params.chargeParentRunId ? { chargeParentRunId: params.chargeParentRunId } : {}),
+      ...(params.shardId ? { shardId: params.shardId } : {}),
+      ...(params.subagentId ? { subagentId: params.subagentId } : {}),
+      ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+      ...(params.rootInitiationId ? { rootInitiationId: params.rootInitiationId } : {}),
+      ...(params.workloadType ? { workloadType: params.workloadType } : {}),
+      ...(params.workloadId ? { workloadId: params.workloadId } : {}),
+    },
     provider,
     model,
-    totalTokens: 0,
-    costSource: 'none',
+    requestedProvider: provider,
+    requestedModel: model,
+    inputTokens: usageDetails?.input ?? 0,
+    outputTokens: usageDetails?.output ?? 0,
+    cacheReadTokens: usageDetails?.cacheRead ?? 0,
+    cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
+    totalTokens: usageDetails?.totalTokens ?? 0,
+    ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
     ...(error
       ? {
           errorCode: error instanceof Error ? error.name : 'EmbeddingError',
@@ -326,13 +465,8 @@ function recordEmbeddingUsage(
       textCount: params.texts.length,
       totalInputChars: params.texts.reduce((total, text) => total + text.length, 0),
       dims: runtime.embeddingService.dims,
+      ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
     },
-  }).catch((recordError) => {
-    log.warn('Failed to persist embedding usage event', {
-      error: recordError instanceof Error ? recordError.message : String(recordError),
-      provider,
-      model,
-    });
   });
 }
 

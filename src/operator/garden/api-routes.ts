@@ -29,6 +29,7 @@ import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminToolConformanceRoutes } from './routes/tool-conformance-routes.js';
+import { buildAdminIcpAutonomyRoutes } from './routes/icp-autonomy-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
@@ -43,6 +44,7 @@ import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminAuditHistoryService,
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminConcernService,
@@ -52,6 +54,7 @@ import type {
   AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
+  AdminIcpAutonomyService,
   AdminMemoryService,
   AdminModelUsageService,
   AdminPromptsService,
@@ -85,6 +88,8 @@ import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
+import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 
 export type { AdminApiRoute } from './routes/types.js';
 
@@ -255,6 +260,7 @@ export function buildAdminApiRoutes(options: {
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  chargeCostReconciliationService?: AdminChargeCostReconciliationService | null;
   modelUsageService?: AdminModelUsageService | null;
   observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
@@ -274,7 +280,9 @@ export function buildAdminApiRoutes(options: {
   concernService?: AdminConcernService | null;
   subsystemHealthService?: AdminSubsystemHealthService | null;
   toolConformanceService?: AdminToolConformanceService | null;
+  icpAutonomyService?: AdminIcpAutonomyService | null;
   settingsService: AdminSettingsService;
+  sharedWorkspaceService?: AdminSharedWorkspaceService | null;
   /** Intake quarantine approval queue (htm9.11); always wired in production. */
   intakeQuarantineService?: AdminIntakeQuarantineService | null;
   /** Slow-poisoning drift review cards (htm9.14). */
@@ -306,6 +314,7 @@ export function buildAdminApiRoutes(options: {
     imagesService,
     auditHistoryService,
     chargeLedgerService,
+    chargeCostReconciliationService,
     modelUsageService,
     observerEvalSidecarService,
     actionPipeService,
@@ -325,7 +334,9 @@ export function buildAdminApiRoutes(options: {
     concernService,
     subsystemHealthService,
     toolConformanceService,
+    icpAutonomyService,
     settingsService,
+    sharedWorkspaceService,
     intakeQuarantineService,
     driftReviewService,
     identityService,
@@ -409,11 +420,15 @@ export function buildAdminApiRoutes(options: {
   };
 
   return [
+    ...(sharedWorkspaceService
+      ? buildAdminSharedWorkspaceRoutes({ service: sharedWorkspaceService, withBody })
+      : []),
     ...buildAdminOverviewRoutes({
       config,
       dashboardService,
       auditHistoryService,
       chargeLedgerService,
+      chargeCostReconciliationService,
       modelUsageService,
       observerEvalSidecarService,
       actionPipeService,
@@ -801,6 +816,13 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
+    ...(icpAutonomyService
+      ? buildAdminIcpAutonomyRoutes({
+        service: icpAutonomyService,
+        appendAuditTimelineEntry,
+        withBody,
+      })
+      : []),
     // ── Skills ──
     {
       method: 'GET',

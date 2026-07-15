@@ -107,6 +107,7 @@ function normalizeAdjustedType(raw: string | undefined): SocialRelationshipKind 
 export function createAdminGraphProposalsService(options: {
   proposalStore: SocialGraphProposalStore;
   contactStore: EdgeWriteContactPort | null;
+  onQueueChanged?: () => void;
 }): AdminGraphProposalsService {
   const { proposalStore, contactStore } = options;
 
@@ -175,6 +176,7 @@ export function createAdminGraphProposalsService(options: {
         relationshipType,
         decidedBy: 'operator',
       });
+      options.onQueueChanged?.();
       return { ok: true, edgeId: edge.id, relationshipType };
     },
 
@@ -183,6 +185,7 @@ export function createAdminGraphProposalsService(options: {
       if (!rejected) {
         return { ok: false, message: 'Graph proposal not found' };
       }
+      options.onQueueChanged?.();
       return { ok: true };
     },
   };

@@ -29,6 +29,12 @@ import {
   resolveAdminTransportMode,
   resolveAdminTransportServerEndpoint,
 } from '../../operator/garden/transport-paths.js';
+import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { resolveSharedWorkspaceCredentials } from '../../operator/garden/services/shared-workspace-service.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -40,7 +46,11 @@ export interface StartOptionalAdminTransportServerOptions {
   channelGroupMemory?: ChannelGroupMemoryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
+  chargeLedger: RunChargeLedger;
   scheduler: Scheduler;
+  schedulerConfig: SchedulerRuntimeConfig;
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
@@ -85,7 +95,24 @@ export async function startOptionalAdminTransportServer(
     satelliteRegistry: options.satelliteRegistryConfig,
   };
   const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
+  const fleetCompanionIds = options.config.companionFleet?.companions
+    .map(companion => companion.companionId)
+    ?? (options.config.companionId ? [options.config.companionId] : []);
+  const localCompanionId = options.config.companionId;
+  const icpAdminProjectionStore = options.config.multiCompanion === true
+    && options.config.postgresDatabaseUrl
+    && localCompanionId
+    && fleetCompanionIds.length > 0
+    ? await PostgresIcpAdminProjectionStore.connect(
+      options.config.postgresDatabaseUrl,
+      {
+        localCompanionId,
+        knownCompanionIds: fleetCompanionIds,
+      },
+    )
+    : null;
   const services = createInProcessGardenAdminContract({
+    env,
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
     apiPort: options.apiPort,
@@ -94,10 +121,15 @@ export async function startOptionalAdminTransportServer(
     sessionStore: options.coreRuntime.sessionStore,
     sessionManager: options.coreRuntime.sessionManager,
     scheduler: options.scheduler,
+    effectiveSchedulerConfig: options.schedulerConfig,
+    icpInitiationCandidateStore: options.icpInitiationCandidateStore ?? null,
+    icpAdminProjectionStore,
+    icpRuntimeEnablement: options.icpRuntimeEnablement,
     postTurnActions: options.postTurnActions,
     outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,
     eventBus: options.eventBus,
+    chargeLedger: options.chargeLedger,
     contactStore: options.coreRuntime.contactStore,
     pendingContactApprovals: options.pendingContactApprovals ?? null,
     socialGraphProposals: options.socialGraphProposals ?? null,
@@ -123,6 +155,9 @@ export async function startOptionalAdminTransportServer(
     getCredentialPresence: () => options.gateway.getCredentialPresence(),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
     toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
+    ...(adminConfig.sharedWorkspacePath
+      ? { sharedWorkspaceCredentials: resolveSharedWorkspaceCredentials(env) }
+      : {}),
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),

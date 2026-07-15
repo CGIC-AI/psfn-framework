@@ -2,6 +2,23 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../types.js';
 
 /**
+ * Merge an already authenticated journal window with an unauthenticated
+ * shared tail. Journal rows win for every covered id; Redis may only fill ids
+ * newer than the authenticated window maximum.
+ */
+export function mergeAuthenticatedJournalWithSessionTail(
+  journalEntries: readonly SessionEntry[],
+  tailEntries: readonly SessionEntry[],
+): SessionEntry[] {
+  const journalMaxId = journalEntries.length > 0
+    ? journalEntries[journalEntries.length - 1].id
+    : -1;
+  const newer = tailEntries.filter(entry => entry.id > journalMaxId);
+  if (newer.length === 0) return [...journalEntries];
+  return [...journalEntries, ...newer];
+}
+
+/**
  * Read-side view over a fetched session tail window (psfn-framework-hgw3.5).
  *
  * Wraps a SessionStore for ONE capture so `getRecent`/`getEntriesInRange`
@@ -24,22 +41,6 @@ export function createSessionTailReadStore(
   tailChannelId: string,
   tailEntries: readonly SessionEntry[],
 ): SessionStore {
-  /**
-   * Append tail entries strictly NEWER than the journal window's max id.
-   * Both inputs are ascending by id, so the concatenation stays sorted.
-   */
-  const gapFillFromTail = (
-    journalEntries: readonly SessionEntry[],
-    tailSlice: readonly SessionEntry[],
-  ): SessionEntry[] => {
-    const journalMaxId = journalEntries.length > 0
-      ? journalEntries[journalEntries.length - 1].id
-      : -1;
-    const newer = tailSlice.filter(entry => entry.id > journalMaxId);
-    if (newer.length === 0) return [...journalEntries];
-    return [...journalEntries, ...newer];
-  };
-
   return new Proxy(store, {
     get(target, property, receiver) {
       if (property === 'getRecent') {
@@ -49,7 +50,10 @@ export function createSessionTailReadStore(
           }
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          const merged = gapFillFromTail(target.getRecent(channelId, normalizedLimit), tailEntries);
+          const merged = mergeAuthenticatedJournalWithSessionTail(
+            target.getRecent(channelId, normalizedLimit),
+            tailEntries,
+          );
           if (merged.length <= normalizedLimit) return merged;
           return merged.slice(-normalizedLimit);
         };
@@ -68,7 +72,7 @@ export function createSessionTailReadStore(
             entry => entry.id >= normalizedStart && entry.id <= normalizedEnd,
           );
           if (tailInRange.length === 0) return base;
-          return gapFillFromTail(base, tailInRange);
+          return mergeAuthenticatedJournalWithSessionTail(base, tailInRange);
         };
       }
 

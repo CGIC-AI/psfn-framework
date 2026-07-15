@@ -13,9 +13,13 @@ interface SessionTurnEnvelope {
   turnId?: string;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
   role: SessionEntry['role'];
   speakerRole?: SessionEntry['role'];
+  actorKind?: SessionActorKind;
 }
+
+export type SessionActorKind = 'human' | 'machine_intelligence' | 'system' | 'unknown';
 
 interface SessionMetadataEnvelope {
   turn?: unknown;
@@ -27,6 +31,7 @@ export interface SessionEntryTurnContext {
   turnId: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
 }
 
 
@@ -66,7 +71,9 @@ export function buildSessionMetadataWithTurn(
     turnId: TurnID;
     requestId: string;
     sourceMessageId?: string;
+    replyToMessageId?: string;
     role: SessionEntry['role'];
+    actorKind?: SessionActorKind;
   },
 ): string {
   const base = parseMetadataEnvelope(existingMetadata);
@@ -85,13 +92,34 @@ export function buildSessionMetadataWithTurn(
     requestId,
     role: input.role,
     speakerRole: input.role,
+    ...(input.actorKind ? { actorKind: input.actorKind } : {}),
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
   };
 
   return JSON.stringify({
     ...base,
     turn,
   });
+}
+
+export function resolveSessionEntryActorKind(
+  entry: Pick<SessionEntry, 'metadata'>,
+): SessionActorKind {
+  const metadata = parseMetadataEnvelope(entry.metadata);
+  if (metadata.turn === undefined) return 'unknown';
+  if (!isRecord(metadata.turn)) {
+    throw new Error('Session metadata turn field must be an object');
+  }
+  const actorKind = metadata.turn.actorKind;
+  if (actorKind === undefined) return 'unknown';
+  if (actorKind === 'human'
+    || actorKind === 'machine_intelligence'
+    || actorKind === 'system'
+    || actorKind === 'unknown') {
+    return actorKind;
+  }
+  throw new Error('Session turn metadata field "actorKind" is invalid');
 }
 
 export function buildSessionMetadataWithRoleEnvelopePreview(
@@ -135,11 +163,13 @@ export function resolveSessionEntryTurnContext(
     ?? backfillLegacyTurnId(legacySeed(entry));
   const requestId = parseOptionalStringField(rawTurn.requestId, 'metadata.turn.requestId');
   const sourceMessageId = parseOptionalStringField(rawTurn.sourceMessageId, 'metadata.turn.sourceMessageId');
+  const replyToMessageId = parseOptionalStringField(rawTurn.replyToMessageId, 'metadata.turn.replyToMessageId');
 
   return {
     turnId,
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(replyToMessageId ? { replyToMessageId } : {}),
   };
 }
 

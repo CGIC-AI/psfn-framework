@@ -126,6 +126,8 @@ export async function composeGatewayIntakeScreening(input: {
   screenerBackend?: ScreenerBackend | null;
   /** Test seam for the L2/L3/vision screener transports; production uses global fetch. */
   screenerFetch?: ScreenerFetch;
+  /** Called after a quarantine hold has been atomically persisted. */
+  onQuarantineHeld?: () => void;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayIntakeScreeningComposition> {
   const policy = loadIntakePolicyConfig(input.systemDataDir);
@@ -136,13 +138,25 @@ export async function composeGatewayIntakeScreening(input: {
 
   // Held items land in companion-data/state/intake-quarantine.json; the
   // Garden approval queue reads the same file through its own instance.
-  const quarantine = createIntakeQuarantineStore(
+  const durableQuarantine = createIntakeQuarantineStore(
     resolveIntakeQuarantinePath(input.companionDataDir),
     {
       itemTtlHours: policy.quarantine.itemTtlHours,
       maxHeldItems: policy.quarantine.maxHeldItems,
     },
   );
+  const quarantine: IntakeQuarantineStore = input.onQuarantineHeld
+    ? {
+        hold: (holdInput) => {
+          const held = durableQuarantine.hold(holdInput);
+          input.onQuarantineHeld?.();
+          return held;
+        },
+        list: () => durableQuarantine.list(),
+        getById: (id) => durableQuarantine.getById(id),
+        applyDecision: (decision) => durableQuarantine.applyDecision(decision),
+      }
+    : durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);

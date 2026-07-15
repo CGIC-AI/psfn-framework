@@ -5,6 +5,7 @@
 
 import type { VaultOperations } from './ops.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 
 const log = createComponentLogger('VaultAutoPublish');
 
@@ -47,8 +48,9 @@ function resolveFolder(templateId: string): string {
 }
 
 function formatNoteName(templateName: string, createdAt: Date): string {
-  const date = createdAt.toISOString().slice(0, 10);
-  const time = createdAt.toISOString().slice(11, 16).replace(':', 'h');
+  const activeDateTime = formatActiveDateTimeIso(createdAt);
+  const date = activeDateTime.slice(0, 10);
+  const time = activeDateTime.slice(11, 16).replace(':', 'h');
   // Musing notes get date-only; others get date + time to avoid collisions
   if (/musing/i.test(normalizeTemplateName(templateName))) {
     return `${date} Musing`;
@@ -62,7 +64,7 @@ function buildFrontmatter(input: ReflectionPublishInput): string {
     '---',
     `template: ${templateId}`,
     `mode: ${input.mode}`,
-    `date: ${input.createdAt.toISOString()}`,
+    `date: ${formatActiveDateTimeIso(input.createdAt)}`,
     '---',
   ];
   return lines.join('\n');

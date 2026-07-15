@@ -1,5 +1,6 @@
 import type { JournalOperations } from './ops.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 
 const log = createComponentLogger('JournalAutoPublish');
 
@@ -49,8 +50,9 @@ function slugify(value: string): string {
 }
 
 function formatNotePath(templateName: string, createdAt: Date): string {
-  const date = createdAt.toISOString().slice(0, 10);
-  const time = createdAt.toISOString().slice(11, 16).replace(':', 'h');
+  const activeDateTime = formatActiveDateTimeIso(createdAt);
+  const date = activeDateTime.slice(0, 10);
+  const time = activeDateTime.slice(11, 16).replace(':', 'h');
   const normalizedName = normalizeTemplateName(templateName);
   if (/musing/i.test(normalizedName)) {
     return `${date}-musing.md`;
@@ -64,7 +66,7 @@ function buildFrontmatter(input: ReflectionPublishInput): string {
     '---',
     `template: ${templateId}`,
     `mode: ${input.mode}`,
-    `date: ${input.createdAt.toISOString()}`,
+    `date: ${formatActiveDateTimeIso(input.createdAt)}`,
     '---',
   ];
   return lines.join('\n');

@@ -78,6 +78,8 @@ export interface ContactTrackingGateOptions {
   logger: {
     warn(message: string, meta?: Record<string, unknown>): void;
   };
+  /** Coarse invalidation signal after a new durable approval is enqueued. */
+  onQueueChanged?: () => void;
 }
 
 export function createContactTrackingGate(options: ContactTrackingGateOptions): ContactTrackingGate {
@@ -98,6 +100,8 @@ export function createContactTrackingGate(options: ContactTrackingGateOptions): 
       const { entry, created } = await options.pendingApprovals.recordSighting(sighting);
       if (entry.status === 'denied') return 'denied';
       if (!created) return 'pending';
+
+      options.onQueueChanged?.();
 
       try {
         await options.notifyOperatorPendingContact(entry);

@@ -165,6 +165,7 @@ describe('startup owner-file loaders', () => {
           timing: 'fixed',
           localTime: '08:00',
           timezone: 'local',
+          minPartnerIdleMinutes: 60,
           habit: {
             recentWindowDays: 7,
             extendedWindowDays: 30,
@@ -244,6 +245,7 @@ describe('startup owner-file loaders', () => {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 18,
+        companion_social: 12,
         background: 6,
         maintenance: 0,
         subagent: 4,
@@ -263,6 +265,7 @@ describe('startup owner-file loaders', () => {
         shardLaunch: 7,
         externalModelConsult: 1,
         moaRoundBase: 1,
+        companionSocialContinuation: 1,
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -271,6 +274,7 @@ describe('startup owner-file loaders', () => {
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+        companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
       },
       moa: {
         perRoundMultiplierByReferenceModelClass: {
@@ -410,6 +414,7 @@ describe('startup owner-file loaders', () => {
         schemaVersion: 1,
         runChargeQuotaByLane: {
           interactive: 24,
+          companion_social: 12,
           background: 8,
           maintenance: 0,
           subagent: 6,

@@ -8,6 +8,8 @@ import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { createSessionTool } from './session.js';
+import { executeCompleteFocusAction, type FocusSessionManager } from './focus.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 function makeConfig(dataDir: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -246,4 +248,88 @@ describe('focus tools', () => {
     expect(context.systemPrompt).toContain('Second Project Summary');
     expect(context.systemPrompt).toContain('project context with 2 distilled blocks');
   }, 60_000);
+
+  it('classifies ICP focus completion spend as a child tool call', async () => {
+    const localCompanionId = '11111111-1111-4111-8111-111111111111';
+    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-peer',
+      channelId,
+      turnId: 'turn-focus',
+      messageId: 'message-focus',
+      requestId: 'request-focus',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+    const focusManager: FocusSessionManager = {
+      getActiveContextSession: () => channelId,
+      startFocusSession: () => {
+        throw new Error('not used');
+      },
+      getFocusSessionContext: () => ({
+        session: {
+          focusId: 'focus-1',
+          channelId,
+          scope: 'Investigate ICP costs',
+          startedAt: 1,
+          startEntryId: 1,
+          evidenceCount: 0,
+        },
+        rangeStartId: 1,
+        rangeEndId: 2,
+        entries: [{ id: 1, role: 'user', content: 'Inspect the cost breaker.' }],
+        evidence: [],
+      }),
+      completeFocusSession: () => ({
+        focusId: 'focus-1',
+        channelId,
+        scope: 'Investigate ICP costs',
+        rangeStartId: 1,
+        rangeEndId: 2,
+        knowledgeBlock: { id: 'knowledge-1', evidenceCount: 0, createdAt: 2 },
+        projectContext: {
+          knowledgeBlockCount: 1,
+          totalEvidenceCount: 0,
+          latestKnowledge: 'Durable finding',
+        },
+      }),
+    };
+
+    await runWithRequestContext({
+      companionId: localCompanionId,
+      turnId: icpCorrelation.turnId,
+      requestId: icpCorrelation.requestId,
+      channelId,
+      callType: 'tool',
+      originType: 'tool',
+      purpose: 'agent.turn',
+      toolName: 'session',
+      toolCallId: 'focus-complete',
+      icpCorrelation,
+    }, async () => {
+      await executeCompleteFocusAction(focusManager, llmProvider, { channelId });
+    });
+
+    expect(llmProvider.complete).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: expect.objectContaining({
+        requestId: `${icpCorrelation.requestId}:focus_complete`,
+        callType: 'tool',
+        originType: 'tool',
+        icpCorrelation: {
+          ...icpCorrelation,
+          requestId: `${icpCorrelation.requestId}:focus_complete`,
+          costPurpose: 'tool',
+        },
+      }),
+    }), 'context');
+  });
 });

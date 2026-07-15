@@ -52,6 +52,7 @@ import {
 import { resolveTurnSituatedLocation } from '../../self-model/situated-location.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { LLMProviderPort } from '../contracts.js';
@@ -332,6 +333,7 @@ export class EmotionSelfModelRuntime {
     // scoping will use it (dm vs group binding of relational state); this
     // bead does not change emotion behavior.
     conversationScope?: ConversationScope;
+    icpCorrelation?: IcpConversationCorrelation;
   }): Promise<InternalState> {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
     const pendingFollowUps = this.resolveInternalStatePendingFollowUps(
@@ -482,6 +484,7 @@ export class EmotionSelfModelRuntime {
       internalState: params.internalState,
       recentMessages,
       personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
+      ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {
       this.logger.debug('Post-turn emotion appraisal completed', {

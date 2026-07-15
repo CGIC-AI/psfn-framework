@@ -3,14 +3,17 @@
 
 import type {
   Attachment,
+  ChannelType,
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMCallAccountingContext,
   LLMSystemPromptCacheBoundaries,
   LLMUsageDetails,
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
+  TelemetryVisibility,
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type {
@@ -19,6 +22,10 @@ import type {
   ThinkingContent,
   ToolCall,
 } from '@mariozechner/pi-ai';
+import type {
+  ChargePolicyRuntimeLane,
+  ChargePolicySurface,
+} from '../../shared/contracts/charge-policy.js';
 import type {
   ImageGenerationResult,
   ImageCreateParams as PrimitiveImageCreateParams,
@@ -56,6 +63,24 @@ import type {
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 import type { NotificationSenderMetadata } from './notification-sender.js';
+import type {
+  IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
+  IcpInitiationPermitIssueInput,
+  IcpInitiationPermitIssueResult,
+  IcpInitiationPreflightInput,
+  IcpOwnAvailabilityReadParams,
+  IcpOwnAvailabilityResult,
+  IcpPermitConsumeResult,
+  IcpPeerAvailabilityResult,
+} from './icp-autonomy-contract.js';
+export type { IcpPermitConsumeResult } from './icp-autonomy-contract.js';
+import type {
+  IcpAvailabilityLease,
+  IcpAvailabilityState,
+  IcpAutonomyReasonCode,
+  IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -66,15 +91,34 @@ export interface GatewayCorrelationParams {
    * connection's identified companionId and disconnects on mismatch.
    */
   companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   callType?: ObservabilityCallType;
   originType?: ObservabilityCallType;
   originStage?: string;
   toolName?: string;
   toolCallId?: string;
   purpose?: string;
+  telemetryVisibility?: TelemetryVisibility;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  chargeEventId?: string;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
+  /** Validated, content-free ICP episode and cost classification. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface GatewayInlineImageReferenceContent {
@@ -113,6 +157,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   repetitionPenalty?: number;
   frequencyPenalty?: number;
   tools?: ToolSchema[];
+  accounting?: LLMCallAccountingContext;
 }
 
 export interface LLMCompleteParams extends GatewayCorrelationParams {
@@ -133,9 +178,10 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   topK?: number;
   repetitionPenalty?: number;
   frequencyPenalty?: number;
+  accounting?: LLMCallAccountingContext;
 }
 
-export interface LLMEmbedParams {
+export interface LLMEmbedParams extends GatewayCorrelationParams {
   texts: string[];
 }
 
@@ -680,6 +726,27 @@ export interface CompanionMessageSendParams {
   authorName?: string;
   /** Client-stamped companion identity; verified against the connection binding. */
   companionId?: string;
+  /** Deterministic and gateway-verified for every correlated ICP send. */
+  messageId?: string;
+  /**
+   * Optional autonomous-initiation binding. This still uses the ordinary
+   * companion.message.send lane; the gateway consumes the permit before
+   * routing and mints a stable message id for replay-safe recipient handling.
+   */
+  initiation?: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  };
+  /** Episode-bound lineage for a non-initial autonomous conversation reply. */
+  correlation?: IcpConversationCorrelation;
+  /**
+   * Gateway-issued inbound message id this send directly answers. For room
+   * messages, the gateway may use the matching delivery receipt as a
+   * short-lived, one-shot stale-presence reply capability.
+   */
+  replyToMessageId?: string;
 }
 
 export interface CompanionMessageSendResult {
@@ -688,6 +755,7 @@ export interface CompanionMessageSendResult {
   deliveredTo: string[];
   /** Room recipients present at the place but without a live agent connection. */
   skippedOffline: string[];
+  permitOutcome?: 'consumed' | 'replayed';
 }
 
 export type CompanionDeliveryFailureReason = 'processing_failed' | 'reply_delivery_failed';
@@ -723,6 +791,66 @@ export interface CompanionMessageNotification {
   message: SubstrateMessage;
 }
 
+// ── ICP autonomy control plane (sprint 10, s10mc.6.2) ──
+
+export interface IcpAvailabilityPublishParams {
+  state: IcpAvailabilityState;
+  expiresAtMs: number;
+  revision: number;
+  companionId?: string;
+}
+
+export interface IcpAvailabilityClearParams {
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPeerAvailabilityReadParams {
+  peerCompanionId: string;
+  companionId?: string;
+}
+
+export interface IcpInitiationHandoffPrepareParams {
+  permitId: string;
+  peerContactId: string;
+  companionId?: string;
+}
+
+export type IcpInitiationPreflightParams = IcpInitiationPreflightInput & {
+  companionId?: string;
+};
+
+export type IcpInitiationPermitIssueParams = IcpInitiationPermitIssueInput & {
+  companionId?: string;
+};
+
+export interface IcpPermitConsumeParams {
+  permitId: string;
+  conversationId: string;
+  recipientCompanionId: string;
+  channelId: string;
+  rootInitiationId: string;
+  peerContactId: string;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeParams {
+  permitId: string;
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeResult {
+  status: 'revoked';
+  revision: number;
+  reasonCode: IcpAutonomyReasonCode;
+}
+
+export interface IcpPermitInvalidateSelfParams {
+  reasonCode: 'peer_blocked';
+  companionId?: string;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -736,6 +864,16 @@ export interface GatewayMethods {
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
+  'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
+  'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
+  'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
+  'companion.availability.read_self': [IcpOwnAvailabilityReadParams, IcpOwnAvailabilityResult];
+  'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];
+  'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
+  'companion.initiation.permit.prepare_handoff': [IcpInitiationHandoffPrepareParams, IcpInitiationHandoffPrepareResult];
+  'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
+  'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
+  'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
@@ -898,6 +1036,8 @@ export const GatewayErrors = {
   // leaked into egress (prompt leak / hijack tripwire). The error message is
   // the calm companion-facing soft notice.
   EGRESS_HELD: -32014,
+  MODEL_BUDGET_BLOCKED: -32015,
+  ICP_CONVERSATION_COST_BLOCKED: -32016,
   /** Retained image reference was absent, expired, evicted, or outside its request scope. */
-  INLINE_IMAGE_RETENTION_MISS: -32015,
+  INLINE_IMAGE_RETENTION_MISS: -32017,
 } as const;

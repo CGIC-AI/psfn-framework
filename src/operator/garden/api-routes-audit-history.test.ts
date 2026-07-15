@@ -16,6 +16,7 @@ import type {
   AdminShardFoldReviewService,
 } from './services/types.js';
 import type { AdminChatBootstrapApi } from './admin-contract.js';
+import { AdminAuditHistoryEntryNotFoundError } from './services/audit-history-service.js';
 
 class CapturingResponse {
   status = 0;
@@ -66,7 +67,8 @@ async function invokeAuditRoute(
   url: string,
 ): Promise<CapturingResponse> {
   const response = new CapturingResponse();
-  route.handle(makeRequest(url), response as unknown as ServerResponse, {});
+  const path = new URL(url, 'http://localhost').pathname;
+  route.handle(makeRequest(url), response as unknown as ServerResponse, route.match(path) ?? {});
   await new Promise(resolve => setImmediate(resolve));
   return response;
 }
@@ -75,6 +77,7 @@ describe('audit history admin API route', () => {
   it('returns persistent audit history with filters and paging', async () => {
     const service: AdminAuditHistoryService = {
       appendGardenEntry: vi.fn() as AdminAuditHistoryService['appendGardenEntry'],
+      getAuditHistoryDetail: vi.fn(),
       getAuditHistory: vi.fn(async query => {
         const filters = {
           actionType: query?.actionType ?? 'all',
@@ -127,6 +130,7 @@ describe('audit history admin API route', () => {
   it('rejects invalid audit history filters', async () => {
     const service: AdminAuditHistoryService = {
       appendGardenEntry: vi.fn() as AdminAuditHistoryService['appendGardenEntry'],
+      getAuditHistoryDetail: vi.fn(),
       getAuditHistory: vi.fn(),
     };
     const route = makeRoutes(service).find(candidate => candidate.match('/api/admin/audit/history'));
@@ -149,5 +153,55 @@ describe('audit history admin API route', () => {
     expect(JSON.parse(response.body)).toEqual({
       error: 'Audit history backend unavailable',
     });
+  });
+
+  it('resolves raw detail only through the explicit opaque-id endpoint', async () => {
+    const entryId = `audit_${'a'.repeat(43)}`;
+    const service: AdminAuditHistoryService = {
+      appendGardenEntry: vi.fn() as AdminAuditHistoryService['appendGardenEntry'],
+      getAuditHistory: vi.fn(),
+      getAuditHistoryDetail: vi.fn(async id => ({
+        entry: {
+          id,
+          timestamp: 1_700_000_000_000,
+          source: 'gateway',
+          actionType: 'gateway_policy',
+          decision: 'allowed',
+          narrative: 'Gateway request allowed.',
+        },
+        raw: { paramsJson: '{"authorization":"partner-secret"}' },
+      })),
+    };
+    const route = makeRoutes(service).find(candidate => (
+      candidate.match(`/api/admin/audit/history/${entryId}`)
+    ));
+    expect(route).toBeDefined();
+
+    const response = await invokeAuditRoute(route!, `/api/admin/audit/history/${entryId}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['Cache-Control']).toBe('no-store');
+    expect(service.getAuditHistory).not.toHaveBeenCalled();
+    expect(service.getAuditHistoryDetail).toHaveBeenCalledWith(entryId);
+    expect(JSON.parse(response.body).raw.paramsJson).toContain('partner-secret');
+  });
+
+  it('returns a sanitized not-found response for inaccessible audit detail ids', async () => {
+    const entryId = `audit_${'b'.repeat(43)}`;
+    const service: AdminAuditHistoryService = {
+      appendGardenEntry: vi.fn() as AdminAuditHistoryService['appendGardenEntry'],
+      getAuditHistory: vi.fn(),
+      getAuditHistoryDetail: vi.fn(async () => {
+        throw new AdminAuditHistoryEntryNotFoundError();
+      }),
+    };
+    const route = makeRoutes(service).find(candidate => (
+      candidate.match(`/api/admin/audit/history/${entryId}`)
+    ));
+
+    const response = await invokeAuditRoute(route!, `/api/admin/audit/history/${entryId}`);
+
+    expect(response.status).toBe(404);
+    expect(JSON.parse(response.body)).toEqual({ error: 'Audit history entry not found' });
   });
 });

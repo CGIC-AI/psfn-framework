@@ -4,6 +4,7 @@ export {
 
 export {
   appendJournalEntry,
+  fingerprintJournalArchive,
   parseJournalText,
   persistQuarantinedEntries,
   quarantineSidecarPath,
@@ -11,6 +12,7 @@ export {
   readJournalEntriesBefore,
   readJournalFirstEntry,
   readJournalTailEntries,
+  scanJournalLinesBackward,
   scanJournalFileMetadata,
   writeJournalFileAtomic,
 } from './journal/file-io.js';
@@ -38,6 +40,7 @@ export {
 
 export type {
   JournalFileMetadata,
+  JournalBoundedReadStats,
   JournalIntegrityVerificationResult,
   JournalMarkerEntry,
   JournalTurnTombstoneEntry,
@@ -46,7 +49,6 @@ export type {
   ParsedLegacyChatSource,
   QuarantinedJournalEntry,
   ReadJournalFileOptions,
-  JournalBoundedReadStats,
   ReadJournalBeforeOptions,
   ReadJournalBeforeResult,
   ReadJournalResult,

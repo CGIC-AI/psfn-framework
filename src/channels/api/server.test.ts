@@ -918,6 +918,7 @@ describe('ApiServer', () => {
 
       const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
       expect(call.routing?.channelPrivacy).toBe('public');
+      expect(call.isDirectMessage).toBe(false);
     });
 
     it('rejects the retired broadcast privacy header fail-closed (E3.3: broadcast is a channel-owned flag)', async () => {
@@ -2566,6 +2567,7 @@ describe('ApiServer with auth', () => {
     expect(call.routing?.source).toBe('satellite');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
     expect(call.routing?.channelPrivacy).toBe('private');
+    expect(call.isDirectMessage).toBeUndefined();
     expect(call.routing?.satellite).toMatchObject({
       satelliteId: 'android-phone',
       endpointId: 'companion-app',

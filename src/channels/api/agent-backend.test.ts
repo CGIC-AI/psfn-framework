@@ -55,14 +55,15 @@ describe('AgentApiBackend chat completion deadlines', () => {
           outputTokens: 7,
         },
       };
+      const handleMessage = vi.fn((message) => {
+        setTimeout(() => {
+          void eventBus.emit('agent.turn.end', { message, response } as any);
+        }, 10);
+        return new Promise(() => undefined);
+      });
       const backend = new AgentApiBackend({
         agentLoop: {
-          handleMessage: vi.fn((message) => {
-            setTimeout(() => {
-              void eventBus.emit('agent.turn.end', { message, response } as any);
-            }, 10);
-            return new Promise(() => undefined);
-          }),
+          handleMessage,
           abort: vi.fn(),
         } as any,
         eventBus,
@@ -76,7 +77,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
           messages: [{ role: 'user', content: 'Finish before cleanup' }],
         },
         principal: { id: 'principal-1', mode: 'api_key' },
-        headers: { 'x-session-id': 'completion-session' },
+        headers: {
+          'x-session-id': 'completion-session',
+          'x-channel-privacy': 'public',
+        },
         timeoutMs: 1_000,
       });
 
@@ -89,6 +93,10 @@ describe('AgentApiBackend chat completion deadlines', () => {
           inputTokens: 11,
           outputTokens: 7,
         },
+      });
+      expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
+        isDirectMessage: false,
+        routing: { channelPrivacy: 'public' },
       });
     } finally {
       vi.useRealTimers();

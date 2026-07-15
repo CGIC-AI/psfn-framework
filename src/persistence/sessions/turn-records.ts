@@ -1,13 +1,9 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import {
-  closeSync,
   existsSync,
-  fstatSync,
   linkSync,
-  openSync,
-  readSync,
-  readdirSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
@@ -15,7 +11,8 @@ import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type {
@@ -27,11 +24,18 @@ import type {
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
   createTurnRecordSharedStore,
   resolveTurnRecordToolDefinitions,
   slimTurnRecordToolDefinitionsForAppend,
 } from './turn-record-shared-store.js';
+import {
+  fileIdentityKey,
+  listNumberedJsonlSegments,
+  scanJsonlFileBackward,
+  type NumberedJsonlSegment,
+} from '../jsonl-segments.js';
 
 const log = createComponentLogger('TurnRecords');
 
@@ -54,8 +58,6 @@ export const TURN_RECORD_SEGMENT_MAX_BYTES = 64 * 1024 * 1024;
  * how many syscalls a tail read costs.
  */
 const TURN_RECORD_TAIL_SCAN_CHUNK_BYTES = 256 * 1024;
-
-const NEWLINE_BYTE = 0x0a;
 
 /**
  * Rotation lock parameters. Rotation shares the mkdir-based cross-process lock
@@ -191,6 +193,79 @@ function parseOptionalLocation(value: unknown): TurnRecordLocation | undefined {
   };
 }
 
+function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "auditPrivacy" must be an object');
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error('TurnRecord field "auditPrivacy.schemaVersion" must be 1');
+  }
+  const contentMode = value.contentMode;
+  if (contentMode !== 'verbatim_public' && contentMode !== 'emotional_signal_only') {
+    throw new Error('TurnRecord field "auditPrivacy.contentMode" is invalid');
+  }
+  const reason = value.reason;
+  const validReasons: TurnRecordAuditPrivacy['reason'][] = [
+    'explicit_public_non_dm',
+    'direct_message',
+    'non_public_channel',
+    'intimate_content',
+    'missing_or_ambiguous_content_sensitivity',
+    'missing_or_ambiguous_privacy',
+  ];
+  if (!validReasons.includes(reason as TurnRecordAuditPrivacy['reason'])) {
+    throw new Error('TurnRecord field "auditPrivacy.reason" is invalid');
+  }
+  const channelPrivacy = value.channelPrivacy;
+  if (channelPrivacy !== undefined && !isChannelPrivacy(channelPrivacy)) {
+    throw new Error('TurnRecord field "auditPrivacy.channelPrivacy" is invalid');
+  }
+  const contentSensitivity = value.contentSensitivity;
+  if (
+    contentSensitivity !== 'non_intimate'
+    && contentSensitivity !== 'intimate'
+    && contentSensitivity !== 'ambiguous'
+  ) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivity" is invalid');
+  }
+  const contentSensitivityActor = value.contentSensitivityActor;
+  if (contentSensitivityActor !== undefined && (
+    !isRecord(contentSensitivityActor)
+    || contentSensitivityActor.kind !== 'companion'
+    || Object.keys(contentSensitivityActor).length !== 3
+    || Object.keys(contentSensitivityActor).some(key => !['kind', 'turnId', 'requestId'].includes(key))
+  )) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivityActor" is invalid');
+  }
+  const normalizedSensitivityActor = contentSensitivityActor === undefined
+    ? undefined
+    : {
+      kind: 'companion' as const,
+      turnId: parseRequiredString(contentSensitivityActor.turnId, 'auditPrivacy.contentSensitivityActor.turnId') as TurnID,
+      requestId: parseRequiredString(contentSensitivityActor.requestId, 'auditPrivacy.contentSensitivityActor.requestId'),
+    };
+  if (
+    contentMode === 'verbatim_public'
+    && (
+      channelPrivacy !== 'public'
+      || contentSensitivity !== 'non_intimate'
+      || !normalizedSensitivityActor
+      || reason !== 'explicit_public_non_dm'
+    )
+  ) {
+    throw new Error('TurnRecord auditPrivacy verbatim mode requires explicit non-intimate public provenance');
+  }
+  return {
+    schemaVersion: 1,
+    contentMode,
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+    contentSensitivity,
+    ...(normalizedSensitivityActor ? { contentSensitivityActor: normalizedSensitivityActor } : {}),
+    reason: reason as TurnRecordAuditPrivacy['reason'],
+  };
+}
+
 function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMessage {
   if (!isRecord(value)) {
     throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
@@ -207,6 +282,7 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   const sourceMessageId = value.sourceMessageId;
   const authorId = value.authorId;
   const authorName = value.authorName;
+  const runtimeFallbackProvenance = value.runtimeFallbackProvenance;
 
   return {
     role,
@@ -223,6 +299,14 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
       : {}),
     ...(typeof authorName === 'string' && authorName.trim().length > 0
       ? { authorName: authorName.trim() }
+      : {}),
+    ...(runtimeFallbackProvenance !== undefined
+      ? {
+        runtimeFallbackProvenance: normalizeRuntimeFallbackProvenance(
+          runtimeFallbackProvenance,
+          `${fieldName}.runtimeFallbackProvenance`,
+        ),
+      }
       : {}),
   };
 }
@@ -468,6 +552,9 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
 
   const turnId = parseTurnIdOrBackfill(raw, channelId);
   const requestId = parseRequiredString(raw.requestId, 'requestId');
+  const sessionId = raw.sessionId === undefined
+    ? undefined
+    : parseRequiredString(raw.sessionId, 'sessionId');
   const startedAt = parseRequiredTimestamp(raw.startedAt, 'startedAt');
   const completedAt = parseRequiredTimestamp(raw.completedAt, 'completedAt');
 
@@ -487,21 +574,43 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   const observability = parseTurnObservability(raw.observability, {
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
+  const icpCorrelation = raw.icpCorrelation === undefined
+    ? undefined
+    : parseIcpConversationCorrelation(raw.icpCorrelation);
+  if (icpCorrelation
+    && (icpCorrelation.channelId !== channelId
+      || icpCorrelation.turnId !== turnId
+      || icpCorrelation.requestId !== requestId)) {
+    throw new Error('TurnRecord ICP correlation does not match its channel/turn/request binding');
+  }
+  const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
+  if (
+    auditPrivacy?.contentSensitivityActor
+    && (
+      auditPrivacy.contentSensitivityActor.turnId !== turnId
+      || auditPrivacy.contentSensitivityActor.requestId !== requestId
+    )
+  ) {
+    throw new Error('TurnRecord auditPrivacy sensitivity actor must match the owning turn');
+  }
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
     channelType: channelType as ChannelType,
     startedAt,
     completedAt,
     status: status as TurnRecord['status'],
     ...(location ? { location } : {}),
+    ...(auditPrivacy ? { auditPrivacy } : {}),
     userMessage,
     ...(assistantMessage ? { assistantMessage } : {}),
     toolCalls,
@@ -518,6 +627,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
       ? { roleEnvelopeRefs }
       : {}),
     ...(observability ? { observability } : {}),
+    ...(icpCorrelation ? { icpCorrelation } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
   };
@@ -531,31 +641,14 @@ function segmentFileName(sanitizedChannelId: string, segmentNumber: number): str
   return `${sanitizedChannelId}.${String(segmentNumber).padStart(5, '0')}.jsonl`;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-interface RotatedSegment {
-  segmentNumber: number;
-  path: string;
-}
-
 /**
  * Discover rotated segments for a channel via a strict filename pattern.
  * Active file: `<sanitized>.jsonl`. Rotated segments: `<sanitized>.00001.jsonl`,
  * `<sanitized>.00002.jsonl`, ... where a higher number is newer. No manifest —
  * the directory listing is the source of truth.
  */
-function listRotatedSegments(dir: string, sanitizedChannelId: string): RotatedSegment[] {
-  if (!existsSync(dir)) return [];
-  const pattern = new RegExp(`^${escapeRegExp(sanitizedChannelId)}\\.(\\d{5,})\\.jsonl$`);
-  const segments: RotatedSegment[] = [];
-  for (const name of readdirSync(dir)) {
-    const match = pattern.exec(name);
-    if (!match) continue;
-    segments.push({ segmentNumber: Number(match[1]), path: join(dir, name) });
-  }
-  return segments;
+function listRotatedSegments(dir: string, sanitizedChannelId: string): NumberedJsonlSegment[] {
+  return listNumberedJsonlSegments(join(dir, `${sanitizedChannelId}.jsonl`));
 }
 
 function nextFreeSegmentNumber(dir: string, sanitizedChannelId: string): number {
@@ -568,10 +661,6 @@ function nextFreeSegmentNumber(dir: string, sanitizedChannelId: string): number 
     candidate += 1;
   }
   return candidate;
-}
-
-function fileIdentityKey(stat: { dev: number | bigint; ino: number | bigint }): string {
-  return `${stat.dev}:${stat.ino}`;
 }
 
 /**
@@ -754,65 +843,22 @@ function scanSegmentBackward(
   const collected: TurnRecord[] = [];
   if (limit <= 0) return collected;
 
-  const fd = openSync(path, 'r');
-  try {
-    const fileStat = fstatSync(fd);
-    // Dedupe by (dev, ino) within one logical read: a rotation between the
-    // active-file scan and the segment listing can surface the SAME inode
-    // twice (once under the active name, once under its new segment name),
-    // which would duplicate every record in it.
-    const identity = fileIdentityKey(fileStat);
-    if (scannedFileIdentities.has(identity)) return collected;
-    scannedFileIdentities.add(identity);
-    const fileSize = fileStat.size;
-    if (fileSize <= 0) return collected;
-
-    // Returns true once `limit` records are collected (caller should stop).
-    const handleLine = (lineBytes: Buffer): boolean => {
-      const text = lineBytes.toString('utf8').trim();
-      if (text.length === 0) return false;
-      try {
-        const parsed = JSON.parse(text) as unknown;
-        collected.push(normalizeTurnRecord(parsed, channelId));
-      } catch (error) {
-        quarantineTurnRecordLine(path, channelId, text, error);
-        return false;
-      }
-      return collected.length >= limit;
-    };
-
-    const buffer = Buffer.allocUnsafe(chunkBytes);
-    let position = fileSize;
-    // Bytes to the LEFT (older) of everything processed so far in the current
-    // window that have not yet been terminated by a preceding newline.
-    let remainder = Buffer.alloc(0);
-
-    while (position > 0) {
-      const bytesToRead = Math.min(chunkBytes, position);
-      position -= bytesToRead;
-      const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
-      if (bytesRead <= 0) break;
-      if (stats) stats.bytesRead += bytesRead;
-
-      // Freshly-read (older) bytes on the left, carried remainder (newer) on the right.
-      const combined = Buffer.concat([buffer.subarray(0, bytesRead), remainder]);
-      let lineEnd = combined.length;
-      for (let i = combined.length - 1; i >= 0; i--) {
-        if (combined[i] !== NEWLINE_BYTE) continue;
-        if (handleLine(combined.subarray(i + 1, lineEnd))) return collected;
-        lineEnd = i;
-      }
-      // Everything before the earliest newline is an unterminated fragment that
-      // continues into the next (older) chunk.
-      remainder = combined.subarray(0, lineEnd);
+  scanJsonlFileBackward(path, {
+    chunkBytes,
+    stats,
+    scannedFileIdentities,
+  }, (line) => {
+    const text = line.trim();
+    if (text.length === 0) return false;
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      collected.push(normalizeTurnRecord(parsed, channelId));
+    } catch (error) {
+      quarantineTurnRecordLine(path, channelId, text, error);
+      return false;
     }
-
-    if (remainder.length > 0) {
-      handleLine(remainder);
-    }
-  } finally {
-    closeSync(fd);
-  }
+    return collected.length >= limit;
+  });
 
   return collected;
 }
@@ -909,6 +955,77 @@ export function readRecentTurnRecordsAcrossSegments(
   }
 }
 
+function findTurnRecordOnce(
+  dir: string,
+  sanitized: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): TurnRecord | null {
+  const scannedFileIdentities = new Set<string>();
+  const scanOne = (path: string): TurnRecord | null => {
+    if (!existsSync(path)) return null;
+    let found: TurnRecord | null = null;
+    scanJsonlFileBackward(path, {
+      chunkBytes,
+      scannedFileIdentities,
+    }, (rawLine) => {
+      const line = rawLine.trim();
+      if (line.length === 0) return false;
+      try {
+        const record = normalizeTurnRecord(JSON.parse(line) as unknown, channelId);
+        if (record.turnId !== turnId) return false;
+        found = record;
+        return true;
+      } catch (error) {
+        quarantineTurnRecordLine(path, channelId, line, error);
+        return false;
+      }
+    });
+    return found;
+  };
+
+  const activeMatch = scanOne(join(dir, `${sanitized}.jsonl`));
+  if (activeMatch) return activeMatch;
+  const rotated = listRotatedSegments(dir, sanitized).sort(
+    (left, right) => right.segmentNumber - left.segmentNumber,
+  );
+  for (const segment of rotated) {
+    const match = scanOne(segment.path);
+    if (match) return match;
+  }
+  return null;
+}
+
+function findTurnRecordAcrossSegments(
+  sessionsDir: string,
+  channelId: string,
+  turnId: string,
+  chunkBytes: number,
+): TurnRecord | null {
+  const sanitized = sanitizeChannelId(channelId);
+  const dir = turnRecordsDir(sessionsDir);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return findTurnRecordOnce(dir, sanitized, channelId, turnId, chunkBytes);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (attempt >= TAIL_READ_ROTATION_RETRIES) {
+        throw new Error(
+          `Turn-record lookup for channel ${channelId} kept losing races with segment rotation `
+          + `after ${TAIL_READ_ROTATION_RETRIES} restarts: ${toErrorMessage(error)}`,
+        );
+      }
+      log.warn('turn-record lookup raced a rotation; restarting from a fresh segment listing', {
+        channelId,
+        turnId,
+        attempt: attempt + 1,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+}
+
 /**
  * Append a turn record to the active segment, rotating first if the active file
  * has reached the size cap. Rotation hard-links the active file to the next
@@ -955,12 +1072,34 @@ export function createFilesystemTurnRecordStorePort(
       );
       appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
     },
-    readRecentTurnRecords: (channelId, limit) => (
+    readRecentTurnRecords: (channelId, limit, offset = 0) => {
+      if (limit <= 0 || offset < 0) return [];
+      // #49 introspection auditing pages back through history via `offset`.
+      // Read `limit + offset` newest records (oldest-first) across segments,
+      // then drop the newest `offset` — the trailing entries of the ascending
+      // window — to land on the requested page.
+      const rows = readRecentTurnRecordsAcrossSegments(
+        sessionsDir,
+        channelId,
+        limit + offset,
+        { scanChunkBytes },
+      );
+      const windowed = offset > 0
+        ? rows.slice(0, Math.max(0, rows.length - offset))
+        : rows;
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      readRecentTurnRecordsAcrossSegments(sessionsDir, channelId, limit, { scanChunkBytes })
-        .map(record => resolveTurnRecordToolDefinitions(record, sharedStore))
-    ),
+      return windowed.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
+    },
+    findTurnRecord: (channelId, turnId) => {
+      const record = findTurnRecordAcrossSegments(
+        sessionsDir,
+        channelId,
+        turnId,
+        scanChunkBytes,
+      );
+      return record ? resolveTurnRecordToolDefinitions(record, sharedStore) : null;
+    },
   };
 }

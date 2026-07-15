@@ -7,10 +7,8 @@ import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline';
 import { loadConfig } from '../../system/config/load-config.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
-import { LLMClient } from '../../primitives/llm/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import {
@@ -19,16 +17,18 @@ import {
 } from '../startup/support/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import {
+  createInteractiveTerminalMessage,
+  INTERACTIVE_TERMINAL_CHANNEL_ID,
+} from './interactive-terminal-message.js';
+import {
   composeIdentity,
   composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
-  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-
-const CHANNEL_ID = 'cli:chat';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -48,12 +48,9 @@ async function main(): Promise<void> {
   console.log(`[CLI] Loaded character: ${companionName}`);
 
   // Core components
-  const llmClient = new LLMClient(config);
+  const { llmClient, embeddingProvider } = createProviderRuntimeServices({ config });
   const sessionComposition = await composeSessionRuntimeAsync({ config });
   const { sessionStore, sessionManager } = sessionComposition;
-
-  // Embeddings
-  const embeddingProvider = createEmbeddingProviderFromConfig(config);
 
   const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 
@@ -147,9 +144,9 @@ async function main(): Promise<void> {
     }
 
     if (input === '/sessions') {
-      const count = sessionStore.count(CHANNEL_ID);
-      const recent = sessionStore.getRecent(CHANNEL_ID, 5);
-      console.log(`[Session] ${count} entries in ${CHANNEL_ID}`);
+      const count = sessionStore.count(INTERACTIVE_TERMINAL_CHANNEL_ID);
+      const recent = sessionStore.getRecent(INTERACTIVE_TERMINAL_CHANNEL_ID, 5);
+      console.log(`[Session] ${count} entries in ${INTERACTIVE_TERMINAL_CHANNEL_ID}`);
       for (const e of recent) {
         console.log(`  [${e.role}] ${e.content.slice(0, 80)}${e.content.length > 80 ? '...' : ''}`);
       }
@@ -158,15 +155,11 @@ async function main(): Promise<void> {
       return;
     }
 
-    const message: SubstrateMessage = {
+    const message = createInteractiveTerminalMessage({
       id: `cli-${Date.now()}`,
-      channelId: CHANNEL_ID,
-      channelType: 'terminal',
-      authorId: 'primary-user',
-      authorName: 'PrimaryUser',
       content: input,
       timestamp: new Date(),
-    };
+    });
 
     try {
       // Newline before streaming output

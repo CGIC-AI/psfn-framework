@@ -21,6 +21,7 @@ import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
+  createCompanionId,
   createGatewayRoutingEnvelope,
   type GatewayRoutingEnvelope,
   type ShardLineage,
@@ -156,6 +157,15 @@ interface ActiveSubagentHandle {
   completion: Promise<SubagentResult>;
   resolveCompletion: (result: SubagentResult) => void;
   settled: boolean;
+  /**
+   * Follow-up/steer turns dispatched onto this subagent's SubstrateAgent
+   * (via `message`) run as fresh ordinary turns that are not part of the
+   * bounded `runHandle` loop. They still write to the subagent session, so
+   * the faculty must await them before reporting the subagent terminal —
+   * otherwise a "completed" subagent can keep writing to a session whose
+   * backing store the caller has already disposed (psfn-framework-k510).
+   */
+  outstandingTurns: Promise<void>[];
 }
 
 export class SubagentFaculty implements SubagentControlPort {
@@ -267,6 +277,7 @@ export class SubagentFaculty implements SubagentControlPort {
       completion: completion.promise,
       resolveCompletion: completion.resolve,
       settled: false,
+      outstandingTurns: [],
     };
     this.activeHandles.set(subagentId, handle);
     queueMicrotask(() => {
@@ -283,7 +294,7 @@ export class SubagentFaculty implements SubagentControlPort {
     const content = normalizeRequiredText(message, 'message');
     const followUp = this.buildControlMessage(handle.channelId, content);
     if (handle.agentLoop) {
-      handle.agentLoop.followUp(followUp);
+      this.trackOutstandingTurn(handle, handle.agentLoop.followUp(followUp), followUp.id);
     } else {
       handle.pendingMessages.push(followUp);
     }
@@ -480,7 +491,7 @@ export class SubagentFaculty implements SubagentControlPort {
       const gatewayRouting = createGatewayRoutingEnvelope({
         companionId: request.gatewayRouting?.companionId
           ?? request.message.routing?.gateway?.companionId
-          ?? DEFAULT_COMPANION_ID,
+          ?? createCompanionId(DEFAULT_COMPANION_ID, 'Default companionId'),
         ...(request.gatewayRouting?.shard || request.message.routing?.gateway?.shard
           ? { shard: request.gatewayRouting?.shard ?? request.message.routing?.gateway?.shard }
           : {}),
@@ -590,14 +601,56 @@ export class SubagentFaculty implements SubagentControlPort {
     if (!handle.agentLoop || handle.pendingMessages.length === 0) return;
     const pendingMessages = handle.pendingMessages.splice(0, handle.pendingMessages.length);
     for (const message of pendingMessages) {
-      handle.agentLoop.followUp(message);
+      this.trackOutstandingTurn(handle, handle.agentLoop.followUp(message), message.id);
+    }
+  }
+
+  /**
+   * Records a fresh-ordinary turn dispatched onto the subagent's SubstrateAgent
+   * so `finishHandle` can await it before the subagent is reported terminal.
+   * Failures are recorded (never swallowed) but must not surface as an unhandled
+   * rejection, so the tracked promise is settled here and the raw error is
+   * routed to the audit trail.
+   */
+  private trackOutstandingTurn(
+    handle: ActiveSubagentHandle,
+    turn: Promise<unknown>,
+    followUpMessageId: string,
+  ): void {
+    const settled = turn.then(
+      () => undefined,
+      (error: unknown) => {
+        this.auditTrail?.append('subagent.followup_turn.failed', {
+          subagentId: handle.subagentId,
+          channelId: handle.channelId,
+          followUpMessageId,
+          error: toErrorMessage(error),
+        });
+      },
+    );
+    handle.outstandingTurns.push(settled);
+  }
+
+  private async drainOutstandingTurns(handle: ActiveSubagentHandle): Promise<void> {
+    // Follow-up turns can themselves dispatch further follow-ups, so drain
+    // until the set is stable rather than snapshotting once.
+    while (handle.outstandingTurns.length > 0) {
+      const inFlight = handle.outstandingTurns.splice(0, handle.outstandingTurns.length);
+      await Promise.all(inFlight);
     }
   }
 
   private async finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): Promise<void> {
     if (handle.settled) return;
     handle.settled = true;
+    // Remove from the active set first so no further follow-up turns can be
+    // enqueued via `message` once we begin draining.
     this.activeHandles.delete(handle.subagentId);
+    // Drain any follow-up/steer turns still writing to the subagent session
+    // before reporting terminality. Without this, `wait`/`execute`/`cancel`
+    // resolve while a detached turn is mid-write, and a caller that disposes
+    // the session store races an in-flight journal write (psfn-framework-k510).
+    await this.drainOutstandingTurns(handle);
     this.storeRecentResult(result);
     await this.emitCompletionHandoff(handle, result);
     handle.resolveCompletion(cloneSubagentResult(result));

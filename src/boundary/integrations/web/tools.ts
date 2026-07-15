@@ -57,7 +57,7 @@ function normalizeSearchMaxResults(value: unknown): number | undefined {
 }
 
 /**
- * Web backend selection (bead psfn-framework-htm9.10). Explicit config chooses
+ * Web backend selection (bead htm9.10). Explicit config chooses
  * how the search action discovers sources: `openrouter` uses the gateway
  * web.search server-tool path; `self_hosted` keeps the LLM planner + fetch loop.
  */

@@ -138,6 +138,9 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   }
 
   const expiresAt = new Date(claims.exp * 1000);
+  const replayFenceExpiresAt = new Date(
+    (claims.exp + parsedConfig.clockSkewSeconds) * 1000,
+  );
   const assertionDigest = createHash('sha256').update(input.token, 'utf8').digest('hex');
   const consumption = await input.replayStore.consume({
     issuer: claims.iss,
@@ -145,11 +148,8 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
     assertionDigest,
     deviceId: claims.device_id,
     enrollmentVersion: claims.enrollment_version,
-    expiresAt,
+    expiresAt: replayFenceExpiresAt,
   });
-  if (consumption.outcome === 'replayed') {
-    throw new Error('Hub device assertion replay was rejected');
-  }
   if (consumption.outcome === 'mismatch') {
     throw new Error('Hub device assertion mutated replay was rejected');
   }

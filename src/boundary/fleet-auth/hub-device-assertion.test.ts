@@ -80,8 +80,10 @@ function signTokenObjects(header: Record<string, unknown>, claims: Record<string
 
 class ReplayStore implements HubDeviceAssertionReplayStore {
   readonly seen = new Map<string, string>();
+  lastExpiresAt: Date | undefined;
 
   async consume(input: { issuer: string; jti: string; assertionDigest: string; expiresAt: Date }) {
+    this.lastExpiresAt = input.expiresAt;
     const key = `${input.issuer}\0${input.jti}`;
     const previous = this.seen.get(key);
     if (previous === undefined) {
@@ -112,13 +114,14 @@ describe('Hub device assertion trust boundary', () => {
 
   it('verifies the Hub public ring and atomically consumes one device principal', async () => {
     const replayStore = new ReplayStore();
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    const first = await verifyAndConsumeHubDeviceAssertion({
       token: token(),
       config: config(),
       expected,
       replayStore,
       nowSeconds: NOW,
-    })).resolves.toEqual({
+    });
+    expect(first).toEqual({
       kind: 'hub_device',
       issuer: 'psfn-satellite-hub',
       keyId: 'hub-2026-07',
@@ -135,7 +138,15 @@ describe('Hub device assertion trust boundary', () => {
     });
     await expect(verifyAndConsumeHubDeviceAssertion({
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
-    })).rejects.toThrow(/replay/i);
+    })).resolves.toEqual(first);
+  });
+
+  it('retains the replay fence through the verifier clock-skew acceptance window', async () => {
+    const replayStore = new ReplayStore();
+    await verifyAndConsumeHubDeviceAssertion({
+      token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
+    });
+    expect(replayStore.lastExpiresAt).toEqual(new Date((NOW + 22) * 1000));
   });
 
   it.each([

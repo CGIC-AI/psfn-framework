@@ -500,10 +500,24 @@ CREATE INDEX hub_device_assertion_replays_expiry_idx
   ON hub_device_assertion_replays (expires_at);
 `;
 
+const HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL = `
+ALTER TABLE hub_device_assertion_replays
+  ADD COLUMN replay_count BIGINT NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+  ADD COLUMN last_replayed_at TIMESTAMPTZ,
+  ADD COLUMN mismatch_count BIGINT NOT NULL DEFAULT 0 CHECK (mismatch_count >= 0),
+  ADD COLUMN last_mismatch_digest TEXT CHECK (last_mismatch_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN last_mismatch_at TIMESTAMPTZ,
+  ADD CONSTRAINT hub_device_assertion_replay_audit_consistency
+    CHECK ((replay_count = 0) = (last_replayed_at IS NULL)),
+  ADD CONSTRAINT hub_device_assertion_mismatch_audit_consistency
+    CHECK ((mismatch_count = 0) = (last_mismatch_digest IS NULL AND last_mismatch_at IS NULL));
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
   { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
   { version: 5, name: 'hub_device_assertion_replay', sql: HUB_DEVICE_ASSERTION_REPLAY_SQL },
+  { version: 6, name: 'hub_device_assertion_replay_audit', sql: HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL },
 ] as const;

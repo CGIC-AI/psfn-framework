@@ -114,7 +114,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -165,6 +165,27 @@ describe('fleet_auth Postgres authority boundary', () => {
       expect(outcomes.filter(result => result.outcome === 'replayed')).toHaveLength(7);
       await expect(store.consume({ ...input, assertionDigest: 'b'.repeat(64) }))
         .resolves.toEqual({ outcome: 'mismatch' });
+      const audit = await pool.query<{
+        assertion_digest: string;
+        replay_count: string;
+        last_replayed_at: Date | null;
+        mismatch_count: string;
+        last_mismatch_digest: string | null;
+        last_mismatch_at: Date | null;
+      }>(`
+        SELECT assertion_digest, replay_count, last_replayed_at,
+               mismatch_count, last_mismatch_digest, last_mismatch_at
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+        WHERE issuer = $1 AND jti = $2
+      `, [input.issuer, input.jti]);
+      expect(audit.rows).toEqual([expect.objectContaining({
+        assertion_digest: input.assertionDigest,
+        replay_count: '7',
+        last_replayed_at: expect.any(Date),
+        mismatch_count: '1',
+        last_mismatch_digest: 'b'.repeat(64),
+        last_mismatch_at: expect.any(Date),
+      })]);
     } finally {
       await pool.end();
     }

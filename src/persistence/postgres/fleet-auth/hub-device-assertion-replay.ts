@@ -52,8 +52,27 @@ export class PostgresHubDeviceAssertionReplayStore implements HubDeviceAssertion
       );
       const digest = existing.rows.at(0)?.assertion_digest;
       if (!digest) throw new Error('Hub device assertion replay ledger conflict was not readable');
+      const outcome = digest === input.assertionDigest ? 'replayed' : 'mismatch';
+      if (outcome === 'replayed') {
+        await client.query(
+          `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+           SET replay_count = replay_count + 1,
+               last_replayed_at = clock_timestamp()
+           WHERE issuer = $1 AND jti = $2`,
+          [input.issuer, input.jti],
+        );
+      } else {
+        await client.query(
+          `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+           SET mismatch_count = mismatch_count + 1,
+               last_mismatch_digest = $3,
+               last_mismatch_at = clock_timestamp()
+           WHERE issuer = $1 AND jti = $2`,
+          [input.issuer, input.jti, input.assertionDigest],
+        );
+      }
       await client.query('COMMIT');
-      return { outcome: digest === input.assertionDigest ? 'replayed' : 'mismatch' };
+      return { outcome };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;

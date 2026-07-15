@@ -14,6 +14,35 @@ export interface FleetAuthDatabaseRoles {
   backupRestore: string;
 }
 
+// The fleet-auth runtime, migration, and backup/restore credentials are
+// least-privilege LOGIN roles. Their exact attribute contract is: LOGIN only,
+// with NONE of PostgreSQL's cluster-wide authority attributes. Each of these
+// attributes places a role outside the runtime/migration/backup authority
+// boundary and is rejected fail-closed before any schema or data work:
+//   - SUPERUSER    bypasses every privilege and RLS check.
+//   - CREATEROLE   can mint or alter roles (including granting itself authority).
+//   - CREATEDB     can create databases outside the fleet_auth boundary.
+//   - REPLICATION  can call pg_create_physical_replication_slot and stream WAL
+//                  (cluster WAL disclosure and storage-exhaustion vectors).
+//   - BYPASSRLS    skips row-level security.
+const FORBIDDEN_ROLE_ATTRIBUTES = [
+  { column: 'rolsuper', label: 'SUPERUSER' },
+  { column: 'rolcreaterole', label: 'CREATEROLE' },
+  { column: 'rolcreatedb', label: 'CREATEDB' },
+  { column: 'rolreplication', label: 'REPLICATION' },
+  { column: 'rolbypassrls', label: 'BYPASSRLS' },
+] as const;
+
+interface RoleAttributeRow {
+  current_user: string;
+  rolcanlogin: boolean;
+  rolsuper: boolean;
+  rolcreaterole: boolean;
+  rolcreatedb: boolean;
+  rolreplication: boolean;
+  rolbypassrls: boolean;
+}
+
 export const FLEET_AUTH_DURABLE_TABLES = [
   'authority_state',
   'human_principals',
@@ -96,8 +125,15 @@ async function assertCurrentRole(
   authority: string,
   roles: FleetAuthDatabaseRoles,
 ): Promise<void> {
-  const result = await pool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(`
-    SELECT current_user, rol.rolsuper, rol.rolbypassrls
+  const result = await pool.query<RoleAttributeRow>(`
+    SELECT
+      current_user,
+      rol.rolcanlogin,
+      rol.rolsuper,
+      rol.rolcreaterole,
+      rol.rolcreatedb,
+      rol.rolreplication,
+      rol.rolbypassrls
     FROM pg_roles AS rol
     WHERE rol.rolname = current_user
   `);
@@ -105,8 +141,17 @@ async function assertCurrentRole(
   if (!row || row.current_user !== expectedRole) {
     throw new Error(`${authority} credential must authenticate as PostgreSQL role ${expectedRole}`);
   }
-  if (row.rolsuper || row.rolbypassrls) {
-    throw new Error(`${authority} PostgreSQL role must not be superuser or BYPASSRLS`);
+  if (!row.rolcanlogin) {
+    throw new Error(`${authority} PostgreSQL role ${expectedRole} must be a LOGIN role`);
+  }
+  const forbiddenAttributes = FORBIDDEN_ROLE_ATTRIBUTES
+    .filter(attribute => row[attribute.column])
+    .map(attribute => attribute.label);
+  if (forbiddenAttributes.length > 0) {
+    throw new Error(
+      `${authority} PostgreSQL role ${expectedRole} must not hold cluster authority attributes: `
+      + forbiddenAttributes.join(', '),
+    );
   }
   const forbiddenMemberships = Object.values(roles).filter(role => role !== expectedRole);
   const memberships = await pool.query<{ role_name: string }>(`

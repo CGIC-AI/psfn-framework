@@ -691,6 +691,7 @@ describe('SubstrateAgent construction', () => {
     };
     const mockExtractor: MemoryExtractor = {
       maybeExtract: vi.fn<any>().mockResolvedValue(undefined),
+      getBoundedExtractionSnapshotLimit: () => 10,
     };
     const mockContactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
@@ -2724,6 +2725,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const mockExtractor: MemoryExtractor = {
       maybeExtract: vi.fn<any>().mockResolvedValue(undefined),
+      getBoundedExtractionSnapshotLimit: () => 10,
     };
 
     const agent = new SubstrateAgent(

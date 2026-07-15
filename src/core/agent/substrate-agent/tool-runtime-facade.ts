@@ -444,10 +444,6 @@ export class ToolRuntimeFacade {
     }
   }
 
-  getToolUsageRanking(): ToolUsageRanking | null {
-    return this.toolUsageRanking;
-  }
-
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     const candidateContext = this.getCandidateTurnContext();
     if (candidateContext) {

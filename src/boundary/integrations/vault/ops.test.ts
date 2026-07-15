@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  resetActiveTimezone,
+  setActiveTimezone,
+} from '../../../shared/time/active-timezone.js';
 import { VaultOps, validateVaultCliPath } from './ops.js';
 
 // Mock child_process — the vault ops must spawn WITHOUT a shell (shell: false)
@@ -9,6 +13,7 @@ vi.mock('node:child_process', () => ({
 
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
+const ORIGINAL_TZ = process.env.TZ;
 
 /** Convenience: the (file, args, options) tuple of the Nth execFileSync call. */
 function callAt(index: number): { file: string; args: string[]; options: Record<string, unknown> } {
@@ -20,11 +25,19 @@ describe('VaultOps', () => {
   let ops: VaultOps;
 
   beforeEach(() => {
+    setActiveTimezone('America/New_York');
     ops = new VaultOps({ vaultName: 'TestVault' });
     mockExecFileSync.mockReset();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    resetActiveTimezone();
+    if (ORIGINAL_TZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
     vi.restoreAllMocks();
   });
 
@@ -163,6 +176,26 @@ describe('VaultOps', () => {
   });
 
   describe('daily', () => {
+    it('reports the active calendar day during the late-evening UTC rollover', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-03T04:30:00.000Z'));
+      mockExecFileSync.mockReturnValue('Daily content\n');
+
+      const result = await ops.daily();
+
+      expect(result.date).toBe('2026-03-02');
+    });
+
+    it('keeps the UTC calendar day when daytime is the same active calendar day', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-02T14:30:00.000Z'));
+      mockExecFileSync.mockReturnValue('Daily content\n');
+
+      const result = await ops.daily();
+
+      expect(result.date).toBe('2026-03-02');
+    });
+
     it('reads daily note when no content provided', async () => {
       mockExecFileSync.mockReturnValue('Daily content\n');
       const result = await ops.daily();

@@ -18,7 +18,10 @@ import type {
   SatelliteRoutingMetadata,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
-import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type {
+  SubstrateAgent,
+  SubstrateAgentAbortResult,
+} from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusSensorIngestPort, type SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -116,7 +119,7 @@ interface IdentityClaimHeaders {
 interface ActiveRequestState {
   channelId: string;
   /** Direct model-room completions abort via their own controller instead of the agent loop. */
-  abort?: () => boolean;
+  abort?: () => SubstrateAgentAbortResult;
 }
 
 interface ObservedTurnCompletion {
@@ -235,11 +238,11 @@ export class AgentApiBackend {
     active: ActiveRequestState,
     reason: 'timeout' | 'client_disconnected',
   ): Promise<boolean> {
-    let cancelled = false;
+    let abortResult: SubstrateAgentAbortResult | null = null;
     try {
-      cancelled = active.abort
+      abortResult = active.abort
         ? active.abort()
-        : this.abortActiveTurn(active.channelId);
+        : this.abortActiveTurn(requestId, active.channelId);
     } catch (error) {
       log.error('API turn cancellation failed', {
         requestId,
@@ -247,6 +250,7 @@ export class AgentApiBackend {
         error: toErrorMessage(error),
       });
     }
+    const cancelled = abortResult?.status === 'signaled';
     if (cancelled) {
       await this.eventBus.emit('api.turn.abort', {
         channelId: active.channelId,
@@ -520,9 +524,9 @@ export class AgentApiBackend {
     const activeRequest: ActiveRequestState = {
       channelId,
       abort: () => {
-        if (abortController.signal.aborted) return false;
+        if (abortController.signal.aborted) return { status: 'already_aborted' };
         abortController.abort();
-        return true;
+        return { status: 'signaled' };
       },
     };
     const onExternalAbort = () => {
@@ -763,14 +767,17 @@ export class AgentApiBackend {
     };
   }
 
-  private abortActiveTurn(channelId: string): boolean {
-    const maybeAbortable = this.agentLoop as unknown as { abort?: () => void };
-    if (typeof maybeAbortable.abort !== 'function') {
-      log.warn('API turn cancellation requested but agent loop has no abort capability', { channelId });
-      return false;
+  private abortActiveTurn(requestId: string, channelId: string): SubstrateAgentAbortResult {
+    const result = this.agentLoop.abort(requestId);
+    if (result.status === 'not_signaled') {
+      log.error('API turn cancellation did not trip the active agent signal', { channelId });
+    } else if (result.status !== 'signaled') {
+      log.debug('API turn cancellation found no newly abortable parent run', {
+        channelId,
+        status: result.status,
+      });
     }
-    maybeAbortable.abort();
-    return true;
+    return result;
   }
 
   private deriveChannelId(headers: ApiRpcHeaders, principal: ApiAuthPrincipal): string {

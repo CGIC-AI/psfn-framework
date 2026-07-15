@@ -12,6 +12,7 @@
 
 import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from '../../core/agent/scheduled-agent-loop.js';
 import {
   ParentTurnContinuationFuse,
@@ -77,6 +78,7 @@ type PatchedAgent = {
     promise: Promise<void>;
     resolve: () => void;
     abortController: AbortController;
+    requestId?: string;
   };
   _state: {
     model: unknown;
@@ -95,6 +97,49 @@ type PatchedAgent = {
   };
   streamFn: Parameters<typeof agentLoopWithScheduler>[4];
 };
+
+export type AgentRunAbortResult =
+  | { status: 'signaled' }
+  | { status: 'already_aborted' }
+  | { status: 'not_active' }
+  | { status: 'owner_mismatch' }
+  | { status: 'not_signaled' };
+
+function hasObservedAbort(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+/**
+ * Abort the canonical parent run and report what the active AbortSignal proves.
+ *
+ * `Agent.abort()` is intentionally void upstream, so invoking it alone cannot
+ * distinguish a real active-run transition from its documented idle no-op.
+ * AbortSignal changes synchronously; checking the exact signal captured before
+ * the call keeps cancellation acknowledgements truthful without exposing the
+ * patched agent's private `activeRun` shape outside this boundary.
+ *
+ * API callers must supply the request they intend to cancel. Runs whose owner
+ * differs or was not captured fail closed; unscoped callers remain available
+ * for internal timeout paths that intentionally abort whichever run is active.
+ */
+export function abortActiveAgentRun(
+  agent: Agent,
+  expectedRequestId?: string,
+): AgentRunAbortResult {
+  const activeRun = (agent as unknown as PatchedAgent).activeRun;
+  if (!activeRun) return { status: 'not_active' };
+  if (expectedRequestId !== undefined && activeRun.requestId !== expectedRequestId) {
+    return { status: 'owner_mismatch' };
+  }
+
+  const signal = activeRun.abortController.signal;
+  if (hasObservedAbort(signal)) return { status: 'already_aborted' };
+
+  agent.abort();
+  return hasObservedAbort(signal)
+    ? { status: 'signaled' }
+    : { status: 'not_signaled' };
+}
 
 export function installAgentToolSchedulerPatch(
   agent: Agent,
@@ -123,6 +168,7 @@ export function installAgentToolSchedulerPatch(
 
     const continuationFuse = new ParentTurnContinuationFuse(continuationFuseLimits);
     const abortController = new AbortController();
+    const requestId = getRequestContext()?.requestId;
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
@@ -144,7 +190,12 @@ export function installAgentToolSchedulerPatch(
     const runPromise = new Promise<void>((resolve) => {
       resolveRun = resolve;
     });
-    this.activeRun = { promise: runPromise, resolve: resolveRun, abortController };
+    this.activeRun = {
+      promise: runPromise,
+      resolve: resolveRun,
+      abortController,
+      ...(requestId !== undefined ? { requestId } : {}),
+    };
     this._state.isStreaming = true;
     this._state.streamingMessage = undefined;
     this._state.errorMessage = undefined;

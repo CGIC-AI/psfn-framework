@@ -53,7 +53,11 @@ import {
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
-import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
+import {
+  abortActiveAgentRun,
+  installAgentToolSchedulerPatch,
+  type AgentRunAbortResult,
+} from '../../boundary/pi-agent/agent-loop-patch.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingress.js';
@@ -254,6 +258,8 @@ export interface SubstrateAgentOptions {
   placesRegistryConfig?: PlacesRegistryConfig;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+
+export type SubstrateAgentAbortResult = AgentRunAbortResult;
 
 // ── SubstrateAgent ──
 
@@ -1209,10 +1215,10 @@ export class SubstrateAgent {
     return this.turnSupportRuntime.registerIntentionPostTurnHook(hook);
   }
 
-  /** Abort the current prompt, cancelling streaming and tool execution */
-  abort(): void {
+  /** Abort the expected request's prompt and report whether its signal was actually tripped. */
+  abort(expectedRequestId?: string): SubstrateAgentAbortResult {
     this.turnRunReservation.assertActiveRunMutationAllowed('abort');
-    this.agent.abort();
+    return abortActiveAgentRun(this.agent, expectedRequestId);
   }
 
   async handleMessage(

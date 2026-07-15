@@ -322,7 +322,7 @@ async function waitForSessionStartAck(ws, expectedSessionId, timeoutMs) {
           return;
         }
 
-        if (parsed?.wire !== 'voice-wire-v1') return;
+        if (parsed?.wire !== 'voice-wire-v2') return;
         if (parsed?.type !== 'ack') return;
         if (parsed?.ackType !== 'session.start') return;
         if (parsed?.sessionId !== expectedSessionId) return;
@@ -362,7 +362,7 @@ async function runVoiceHandshakeCheck(options, bootstrap) {
   try {
     await waitForWebSocketOpen(ws, options.voiceTimeoutMs);
     ws.send(JSON.stringify({
-      wire: 'voice-wire-v1',
+      wire: 'voice-wire-v2',
       type: 'session.start',
       sessionId,
       timestampMs: Date.now(),

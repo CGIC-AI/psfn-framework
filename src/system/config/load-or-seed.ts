@@ -161,25 +161,42 @@ export function getCachedJsonValueDiagnostics(path: string): CachedJsonDiagnosti
   };
 }
 
-export function loadRequiredJsonCached<T>(options: LoadRequiredJsonOptions<T>): T {
+export interface CachedJsonLoadResult<T> {
+  value: T;
+  loadedFromDisk: boolean;
+}
+
+export function loadRequiredJsonCachedWithMetadata<T>(
+  options: LoadRequiredJsonOptions<T>,
+): CachedJsonLoadResult<T> {
   const fingerprint = readJsonFileFingerprint(options.dataPath);
   const cached = cachedJsonValues.get(options.dataPath);
   const diagnostics = cachedJsonDiagnostics.get(options.dataPath) ?? { hits: 0, misses: 0 };
   cachedJsonDiagnostics.set(options.dataPath, diagnostics);
   if (cached && sameFingerprint(cached.fingerprint, fingerprint)) {
     diagnostics.hits += 1;
-    return cloneJsonValue(cached.value as T);
+    return {
+      value: cloneJsonValue(cached.value as T),
+      loadedFromDisk: false,
+    };
   }
   diagnostics.misses += 1;
 
   try {
     const loaded = loadRequiredJson(options);
     cacheJsonValue(options.dataPath, loaded);
-    return cloneJsonValue(loaded);
+    return {
+      value: cloneJsonValue(loaded),
+      loadedFromDisk: true,
+    };
   } catch (error) {
     invalidateCachedJsonValue(options.dataPath);
     throw error;
   }
+}
+
+export function loadRequiredJsonCached<T>(options: LoadRequiredJsonOptions<T>): T {
+  return loadRequiredJsonCachedWithMetadata(options).value;
 }
 
 /**

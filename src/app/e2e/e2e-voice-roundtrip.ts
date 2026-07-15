@@ -24,11 +24,15 @@ import { composeSubstrateAgent, composeIdentity, composeSessionRuntimeAsync } fr
 import { ElevenLabsTtsClient } from '../../primitives/voice/elevenlabs.js';
 import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
-import { serializeVoiceWireFrame } from '../../primitives/voice/transports/websocket/serializer.js';
+import {
+  parseVoiceWireFrame,
+  serializeVoiceWireFrame,
+} from '../../primitives/voice/transports/websocket/serializer.js';
 import {
   VOICE_WIRE_PROTOCOL,
   type VoiceWireFrame,
   type VoiceWireInboundFrame,
+  type VoiceWireTransportData,
   type WebSocketVoiceConnection,
 } from '../../primitives/voice/transports/websocket/types.js';
 import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/backplane/http/auth.js';
@@ -59,10 +63,10 @@ const WAIT_TIMEOUT_MS = 180_000;
 
 class InMemoryVoiceConnection implements WebSocketVoiceConnection {
   readonly id: string;
-  readonly outboundRaw: string[] = [];
+  readonly outboundRaw: VoiceWireTransportData[] = [];
   readonly outboundFrames: VoiceWireFrame[] = [];
 
-  private readonly messageHandlers = new Set<(data: string) => void>();
+  private readonly messageHandlers = new Set<(data: VoiceWireTransportData) => void>();
   private readonly closeHandlers = new Set<() => void>();
   private closed = false;
 
@@ -70,15 +74,11 @@ class InMemoryVoiceConnection implements WebSocketVoiceConnection {
     this.id = id;
   }
 
-  send(data: string): void {
+  send(data: VoiceWireTransportData): void {
     if (this.closed) return;
 
     this.outboundRaw.push(data);
-    try {
-      this.outboundFrames.push(JSON.parse(data) as VoiceWireFrame);
-    } catch {
-      // Keep raw payload even if parse fails.
-    }
+    this.outboundFrames.push(parseVoiceWireFrame(data, Number.MAX_SAFE_INTEGER));
   }
 
   close(): void {
@@ -91,7 +91,7 @@ class InMemoryVoiceConnection implements WebSocketVoiceConnection {
     this.messageHandlers.clear();
   }
 
-  onMessage(handler: (data: string) => void): () => void {
+  onMessage(handler: (data: VoiceWireTransportData) => void): () => void {
     this.messageHandlers.add(handler);
     return () => this.messageHandlers.delete(handler);
   }
@@ -242,7 +242,7 @@ function collectPlaybackAudio(frames: VoiceWireFrame[]): Buffer {
 
   if (playback.length === 0) return Buffer.alloc(0);
 
-  const buffers = playback.map((chunk) => Buffer.from(chunk.audioBase64, 'base64'));
+  const buffers = playback.map((chunk) => Buffer.from(chunk.audio));
   return Buffer.concat(buffers);
 }
 
@@ -300,7 +300,7 @@ async function runSystemVoiceTurn(params: {
         type: 'audio.chunk',
         sessionId,
         seq,
-        audioBase64: chunk.toString('base64'),
+        audio: new Uint8Array(chunk),
       });
     }
 

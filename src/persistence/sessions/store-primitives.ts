@@ -51,6 +51,8 @@ export interface CachedRecentEntries {
 export interface ChannelIndexEntry {
   channelId?: string;
   filename: string;
+  fileMtimeMs?: number;
+  fileSize?: number;
   messageCount?: number;
   activeTurnTombstoneCount?: number;
   lastTimestamp?: number;
@@ -143,7 +145,7 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 3;
+export const CHANNEL_INDEX_VERSION = 4;
 export const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 export function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -284,6 +286,8 @@ export function parseImportManifestLine(line: string): LegacyChatImportManifest 
 export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, right: ChannelIndexEntry): boolean {
   if (!left) return false;
   return left.filename === right.filename
+    && left.fileMtimeMs === right.fileMtimeMs
+    && left.fileSize === right.fileSize
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
     && left.lastTimestamp === right.lastTimestamp

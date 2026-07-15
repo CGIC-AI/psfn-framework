@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -63,6 +63,12 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
     entry.channelId = row.channelId.trim();
   }
 
+  const fileMtimeMs = normalizeOptionalNonNegativeNumber(row.fileMtimeMs);
+  if (fileMtimeMs !== undefined) entry.fileMtimeMs = fileMtimeMs;
+
+  const fileSize = normalizeOptionalNonNegativeNumber(row.fileSize);
+  if (fileSize !== undefined) entry.fileSize = fileSize;
+
   const messageCount = normalizeOptionalNonNegativeNumber(row.messageCount);
   if (messageCount !== undefined) entry.messageCount = messageCount;
 
@@ -115,7 +121,10 @@ export function loadChannelIndex(
     const parsed = JSON.parse(raw) as ChannelIndexFile;
     const version = (parsed as { version?: unknown }).version;
 
-    if ((version !== 1 && version !== 2 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
+    if (
+      (version !== 1 && version !== 2 && version !== 3 && version !== CHANNEL_INDEX_VERSION)
+      || typeof parsed.channels !== 'object'
+    ) {
       log.warn('Ignoring invalid channel index payload', {
         path: channelIndexPath,
         version,
@@ -186,6 +195,32 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   return true;
 }
 
+interface JournalFileFingerprint {
+  mtimeMs: number;
+  size: number;
+}
+
+function readJournalFileFingerprint(filePath: string): JournalFileFingerprint | null {
+  try {
+    const stats = statSync(filePath);
+    return {
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function indexEntryMatchesFile(
+  entry: ChannelIndexEntry,
+  fingerprint: JournalFileFingerprint,
+): boolean {
+  return entry.fileMtimeMs === fingerprint.mtimeMs
+    && entry.fileSize === fingerprint.size;
+}
+
 function readLastMessageEntry(filePath: string): JournalEntry | null {
   const tail = readJournalTailEntries(filePath, {
     messageLimit: 1,
@@ -239,6 +274,7 @@ export function buildIndexEntry(
   ) => void,
 ): ChannelIndexEntry {
   const filename = basename(filePath);
+  const fileFingerprint = readJournalFileFingerprint(filePath);
   const metadata = scanJournalFileMetadata(filePath);
   if (metadata.quarantined.length > 0) {
     warnAboutQuarantinedEntries(channelId, filePath, metadata.quarantined.length, metadata.entryCount);
@@ -250,6 +286,9 @@ export function buildIndexEntry(
   return {
     channelId,
     filename,
+    ...(fileFingerprint
+      ? { fileMtimeMs: fileFingerprint.mtimeMs, fileSize: fileFingerprint.size }
+      : {}),
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
     lastTimestamp: metadata.lastTimestamp,
@@ -540,14 +579,33 @@ export function primeChannelIndexFromDisk(params: {
     loadedCount: number,
   ) => void;
 }): void {
+  const indexedByFilename = new Map(
+    [...params.channelIndex.entries()].map(([sessionId, entry]) => [entry.filename, { sessionId, entry }]),
+  );
   const scannedSessions = readdirSync(params.sessionsDir)
     .filter(isSessionJournalFilename)
     .map((filename) => {
       const filePath = join(params.sessionsDir, filename);
+      const fingerprint = readJournalFileFingerprint(filePath);
+      if (!fingerprint) return null;
+      const known = indexedByFilename.get(filename);
+      if (known && isIndexEntryComplete(known.entry) && indexEntryMatchesFile(known.entry, fingerprint)) {
+        return {
+          filename,
+          filePath,
+          channelId: indexedChannelId(known.sessionId, known.entry),
+          fingerprint,
+        };
+      }
       const channelId = readChannelIdFromFile(filePath);
-      return channelId ? { filename, filePath, channelId } : null;
+      return channelId ? { filename, filePath, channelId, fingerprint } : null;
     })
-    .filter((entry): entry is { filename: string; filePath: string; channelId: string } => entry !== null)
+    .filter((entry): entry is {
+      filename: string;
+      filePath: string;
+      channelId: string;
+      fingerprint: JournalFileFingerprint;
+    } => entry !== null)
     .sort((left, right) => left.filename.localeCompare(right.filename));
 
   const sessionCountsByChannel = new Map<string, number>();
@@ -586,6 +644,7 @@ export function primeChannelIndexFromDisk(params: {
       && indexed.filename === session.filename
       && indexedChannelId(session.sessionId, indexed) === session.channelId
       && isIndexEntryComplete(indexed)
+      && indexEntryMatchesFile(indexed, session.fingerprint)
     ) {
       continue;
     }

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import {
   cacheJsonValue,
   invalidateCachedJsonValue,
-  loadRequiredJsonCached,
+  loadRequiredJsonCachedWithMetadata,
 } from '../config/load-or-seed.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -46,7 +46,7 @@ export function loadSettings(
   const seedDir = options?.seedDir ?? process.env.CONFIG_DIR ?? './config';
   const seedPath = join(seedDir, SETTINGS_SEED_FILE);
 
-  const loaded = loadRequiredJsonCached({
+  const loaded = loadRequiredJsonCachedWithMetadata({
     dataPath: path,
     examplePath: seedPath,
     validate: (raw, sourcePath) => {
@@ -60,8 +60,10 @@ export function loadSettings(
     },
   });
 
-  log.info('Loaded saved settings');
-  return loaded;
+  if (loaded.loadedFromDisk) {
+    log.info('Loaded saved settings');
+  }
+  return loaded.value;
 }
 
 /** Atomic write: write to .tmp then rename. */

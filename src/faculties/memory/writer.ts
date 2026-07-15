@@ -45,6 +45,10 @@ import {
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
 import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  type MemoryRetrievalPolicy,
+} from '../../system/config/memory-retrieval-policy.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
@@ -168,6 +172,7 @@ export interface MemoryWriterOptions {
   maintenanceSchedule?: MemoryMaintenanceSchedulerOptions['schedule'];
   maintenanceNow?: MemoryMaintenanceSchedulerOptions['now'];
   onMaintenanceError?: MemoryMaintenanceSchedulerOptions['onError'];
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
 }
 
 export type MemoryWritePolicyReason =
@@ -241,6 +246,10 @@ export interface MemoryRedactionResult {
 
 export class MemoryWriter {
   private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
+  private readonly memoryRetrievalPolicy:
+    | MemoryRetrievalPolicy
+    | (() => MemoryRetrievalPolicy | undefined)
+    | undefined;
   /**
    * Intake sink gate provider (htm9.3), late-bound by composition (the gate
    * is constructed from intake-policy.json after stores exist). Null means
@@ -255,6 +264,7 @@ export class MemoryWriter {
     private embeddingService: EmbeddingProviderPort,
     options: MemoryWriterOptions = {},
   ) {
+    this.memoryRetrievalPolicy = options.memoryRetrievalPolicy;
     this.maintenanceScheduler = options.maintenanceScheduler === undefined
       ? new MemoryMaintenanceScheduler(memoryStore, {
         schedule: options.maintenanceSchedule,
@@ -262,6 +272,14 @@ export class MemoryWriter {
         onError: options.onMaintenanceError,
       })
       : options.maintenanceScheduler;
+  }
+
+  private resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy {
+    return resolveMemoryRetrievalPolicy(
+      typeof this.memoryRetrievalPolicy === 'function'
+        ? this.memoryRetrievalPolicy()
+        : this.memoryRetrievalPolicy,
+    );
   }
 
   private validateEmbedding(embedding: Float32Array, operation: string): void {
@@ -484,7 +502,11 @@ export class MemoryWriter {
         salience: Math.min(
           1,
           Math.max(
-            calculateEffectiveMemorySalience(existing) + MEMORY_CONFIG.salienceBumpOnAccess,
+            calculateEffectiveMemorySalience(
+              existing,
+              Date.now(),
+              this.resolveMemoryRetrievalPolicy(),
+            ) + MEMORY_CONFIG.salienceBumpOnAccess,
             targetSalience,
           ),
         ),

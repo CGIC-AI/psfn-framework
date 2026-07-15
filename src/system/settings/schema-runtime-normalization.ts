@@ -8,6 +8,7 @@ import {
 } from '../config/runtime-config-contracts.js';
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
+import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
@@ -1075,6 +1076,12 @@ export function normalizeContextControlSettings(
   normalizeShardSettings(normalized, settings);
   normalizeChannelSettings(normalized, settings);
   normalizeObsidianAndMoaSettings(normalized, settings);
+  if ('memoryRetrievalPolicy' in settings) {
+    normalized.memoryRetrievalPolicy = normalizeMemoryRetrievalPolicy(
+      settings.memoryRetrievalPolicy,
+      'memoryRetrievalPolicy',
+    );
+  }
 
   return normalized;
 }

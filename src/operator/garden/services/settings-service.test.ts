@@ -10,6 +10,7 @@ import { loadProvidersConfig } from '../../../system/config/providers-config.js'
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
@@ -166,6 +167,7 @@ describe('AdminSettingsDataService', () => {
       memoryExtractionMaxWrites: 14,
       memoryExtractionTelemetryEnabled: false,
       memoryRetrievalTelemetryEnabled: false,
+      memoryRetrievalPolicy: createDefaultMemoryRetrievalPolicy(),
       groupMemory,
       embeddingProvider: 'api',
       embeddingModel: 'nomic-embed-text',
@@ -407,6 +409,29 @@ describe('AdminSettingsDataService', () => {
     expect(settingsAfter.analysisWorkbenchMaxTokens).toBe(settingsBefore.analysisWorkbenchMaxTokens);
     expect(settingsAfter.analysisWorkbenchMaxWallTimeMs).toBe(settingsBefore.analysisWorkbenchMaxWallTimeMs);
     expect(settingsAfter.analysisWorkbenchMaxSubQueries).toBe(settingsBefore.analysisWorkbenchMaxSubQueries);
+  });
+
+  it('rejects a partial memory retrieval policy without persisting or applying it', () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+    const settingsBefore = loadSettings(root);
+
+    const result = service.updateSettings(JSON.stringify({
+      memoryRetrievalPolicy: {
+        nonTemporalRecencyFloor: 0.4,
+      },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'memoryRetrievalPolicy',
+        code: 'invalid_object',
+      }),
+    ]));
+    expect(loadSettings(root)).toEqual(settingsBefore);
+    expect(config.memoryRetrievalPolicy).toBeUndefined();
   });
 
   it('applies live context controls through the canonical admin settings mutation path', () => {

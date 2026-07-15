@@ -12,6 +12,8 @@ import {
 import { MemoryWriter } from './writer.js';
 import { buildHighImpactLowConfidenceReviewInput } from './maintenance-review.js';
 import { SalienceDecay } from './decay.js';
+import { collectRecentLexicalMemoryCandidates } from './retrieval/candidates.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 
 const postgresMocks = vi.hoisted(() => ({
   activePool: null as any,
@@ -553,6 +555,40 @@ afterEach(() => {
 });
 
 describe('postgres memory store unit coverage', () => {
+  it('paginates lexical augmentation across deterministic Postgres extracted-at ordering', async () => {
+    const pool = new FakeMemoryPool();
+    const baseExtractedAt = 1_800_000_000_000;
+    for (let index = 129; index >= 0; index -= 1) {
+      const memory = makeMemory(`lexical-order-${index}`, index === 110
+        ? 'Greenhouse irrigation schedule needs careful recalibrating'
+        : `Unrelated archived record number ${index}`, {
+        extractedAt: baseExtractedAt - index,
+        lastAccessed: baseExtractedAt - index,
+      });
+      pool.memories.set(memory.id, makeMemoryRow(memory));
+    }
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const listSpy = vi.spyOn(store, 'listActiveMemories');
+    const policy = createDefaultMemoryRetrievalPolicy();
+    policy.lexicalAugment = { pageSize: 50, maxScan: 120, selectedLimit: 12 };
+
+    const candidates = await collectRecentLexicalMemoryCandidates({
+      memoryStore: store,
+      contextText: 'greenhouse irrigation schedule recalibrating',
+      existingIds: new Set(),
+      scopeQuery: undefined,
+      memoryRetrievalPolicy: policy,
+    });
+
+    expect(candidates.map(candidate => candidate.id)).toContain('lexical-order-110');
+    expect(listSpy.mock.calls.map(([options]) => options)).toEqual([
+      { limit: 50, offset: 0 },
+      { limit: 50, offset: 50 },
+      { limit: 20, offset: 100 },
+    ]);
+  });
+
   it('does no Postgres or store scan work on idle decay cycles before the next exp-curve threshold', async () => {
     const now = 1_800_000_000_000;
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -566,8 +602,8 @@ describe('postgres memory store unit coverage', () => {
       await store.insertMemory(makeMemory('pg-idle-decay', 'Idle decay memory', {
         type: 'episodic',
         salience: 1,
-        extractedAt: now - 7 * 24 * 60 * 60_000,
-        lastAccessed: now - 7 * 24 * 60 * 60_000,
+        extractedAt: now - 30 * 24 * 60 * 60_000,
+        lastAccessed: now - 30 * 24 * 60 * 60_000,
       }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
 
       await decay.run();
@@ -583,15 +619,15 @@ describe('postgres memory store unit coverage', () => {
       expect(querySpy).not.toHaveBeenCalled();
       const idleObserved = await store.getById('pg-idle-decay');
       const expectedIdleSalience = Math.exp(
-        (-Math.LN2 * (7 * 24 * 60 * 60_000 + 60_000)) / (7 * 24 * 60 * 60_000),
+        (-Math.LN2 * (30 * 24 * 60 * 60_000 + 60_000)) / (30 * 24 * 60 * 60_000),
       );
       expect(idleObserved?.salience).toBeCloseTo(expectedIdleSalience, 2);
 
       await store.insertMemory(makeMemory('pg-decay-invalidation', 'Mutation invalidates idle decay', {
         type: 'episodic',
         salience: 1,
-        extractedAt: now - 7 * 24 * 60 * 60_000,
-        lastAccessed: now - 7 * 24 * 60 * 60_000,
+        extractedAt: now - 30 * 24 * 60 * 60_000,
+        lastAccessed: now - 30 * 24 * 60 * 60_000,
       }), new Float32Array([0.4, 0.3, 0.2, 0.1]));
       listSpy.mockClear();
       querySpy.mockClear();
@@ -606,7 +642,7 @@ describe('postgres memory store unit coverage', () => {
 
   it('continues the exponential decay curve without double-decaying after restart', async () => {
     const dayMs = 24 * 60 * 60_000;
-    const halflifeMs = 7 * dayMs;
+    const halflifeMs = 30 * dayMs;
     const now = 1_800_000_000_000;
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
     try {
@@ -646,7 +682,7 @@ describe('postgres memory store unit coverage', () => {
 
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = postgresMemoryMigrationSql();
-    expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector;');
+    expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;');
     expect(migrationSql).toContain('embedding VECTOR');
     expect(migrationSql).toContain("source_type TEXT NOT NULL DEFAULT 'unknown'");
     expect(migrationSql).toContain("provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb");

@@ -18,6 +18,11 @@ import {
 import { normalizeRetrievalModes } from './modes.js';
 import type { ScoredMemory } from './types.js';
 import { calculateEffectiveMemorySalience } from '../decay.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  resolveMemoryRetrievalPrior,
+  type MemoryRetrievalPolicy,
+} from '../../../system/config/memory-retrieval-policy.js';
 
 export const SCORE_GUARANTEE_MIN_K = 3;
 export const SCORE_GUARANTEE_FLOOR = 0.01;
@@ -143,13 +148,21 @@ export function computeRetrievalScore(
     scopeQuery?: MemoryScopeQuery;
     callerContext?: RetrievalCallerContext;
     retrievalMode?: RetrievalModeInput;
+    memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+    taskKind?: string;
   },
 ): RetrievalScoreComponents {
   const now = Date.now();
+  const policy = resolveMemoryRetrievalPolicy(options?.memoryRetrievalPolicy);
   const retrievalModes = normalizeRetrievalModes(options?.callerContext, options?.retrievalMode);
   const temporalMode = retrievalModes.has('temporal');
   const reflectionMode = retrievalModes.has('reflection');
-  const recencyBoost = computeRetrievalRecencyBoost(memory.extractedAt, now, temporalMode);
+  const recencyBoost = computeRetrievalRecencyBoost(
+    memory.extractedAt,
+    now,
+    temporalMode,
+    policy,
+  );
   const sameDayEvidenceBoost = temporalMode && hasSameDayTemporalEvidence(memory, now)
     ? TEMPORAL_SAME_DAY_EVIDENCE_BOOST
     : 1;
@@ -159,7 +172,11 @@ export function computeRetrievalScore(
     options?.currentVAD,
     options?.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   );
-  const typePriorityBoost = isBoundaryMemory(memory) ? 1.6 : 1;
+  const typePriorityBoost = resolveMemoryRetrievalPrior(
+    policy,
+    memory.type,
+    options?.taskKind,
+  );
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
@@ -169,7 +186,7 @@ export function computeRetrievalScore(
   const scopeMatchStrength = computeMemoryScopeMatchStrength(memory, options?.scopeQuery);
   const scopeBoost = 1 + (scopeMatchStrength * 0.35);
   const accessReinforcementBoost = deriveAccessReinforcement(memory);
-  const effectiveSalience = calculateEffectiveMemorySalience(memory, now);
+  const effectiveSalience = calculateEffectiveMemorySalience(memory, now, policy);
   const rawBaseScore = (
     memory.similarity *
     recencyBoost *
@@ -227,15 +244,19 @@ export function computeRetrievalScore(
   };
 }
 
-function computeRetrievalRecencyBoost(
+export function computeRetrievalRecencyBoost(
   extractedAt: number,
   now: number,
   temporalMode: boolean,
+  policyInput?: MemoryRetrievalPolicy,
 ): number {
   if (!Number.isFinite(extractedAt)) return 1;
   const ageDays = Math.max(0, (now - extractedAt) / (1000 * 60 * 60 * 24));
   const decayDays = temporalMode ? TEMPORAL_RECENCY_DECAY_DAYS : DEFAULT_RECENCY_DECAY_DAYS;
-  return 1 / (1 + ageDays / decayDays);
+  const recency = 1 / (1 + ageDays / decayDays);
+  return temporalMode
+    ? recency
+    : Math.max(resolveMemoryRetrievalPolicy(policyInput).nonTemporalRecencyFloor, recency);
 }
 
 function hasSameDayTemporalEvidence(

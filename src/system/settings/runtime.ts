@@ -14,6 +14,10 @@ import {
   createDefaultEmotionScopingSettings,
 } from '../config/emotion-scoping-config.js';
 import {
+  cloneMemoryRetrievalPolicy,
+  createDefaultMemoryRetrievalPolicy,
+} from '../config/memory-retrieval-policy.js';
+import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
@@ -216,6 +220,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled:
       config.memoryRetrievalTelemetryEnabled ?? true,
+    memoryRetrievalPolicy: cloneMemoryRetrievalPolicy(
+      config.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
+    ),
     memoryRefreshFailureAlertThreshold:
       config.memoryRefreshFailureAlertThreshold ?? null,
     groupMemory: cloneGroupMemorySettings(
@@ -252,6 +259,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionMaxWrites'
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
+    | 'memoryRetrievalPolicy'
     | 'memoryRefreshFailureAlertThreshold'
     | 'groupMemory'
     | 'emotionScoping'
@@ -560,6 +568,11 @@ function applyCoreSettings(
   if ('emotionScoping' in settings) {
     config.emotionScoping = cloneEmotionScopingSettings(
       settings.emotionScoping ?? createDefaultEmotionScopingSettings(),
+    );
+  }
+  if ('memoryRetrievalPolicy' in settings) {
+    config.memoryRetrievalPolicy = cloneMemoryRetrievalPolicy(
+      settings.memoryRetrievalPolicy ?? createDefaultMemoryRetrievalPolicy(),
     );
   }
   if ('sessionRestartBehavior' in settings) {

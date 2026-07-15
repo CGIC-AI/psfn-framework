@@ -27,6 +27,10 @@ import type {
 } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  type MemoryRetrievalPolicy,
+} from '../../system/config/memory-retrieval-policy.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
@@ -204,6 +208,7 @@ export interface MemoryRetrieverConfig {
   telemetryEnabled?: boolean;
   proactiveRecallProbability?: number;
   proactiveRecallMinTurnsBetween?: number;
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy;
 }
 
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
@@ -252,6 +257,7 @@ export class MemoryRetriever implements MemoryProvider {
   private activeMemoryContexts: Map<string, ActiveMemoryState>;
   private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
   private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
+  private fallbackMemoryRetrievalPolicy: MemoryRetrievalPolicy | undefined;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -268,6 +274,7 @@ export class MemoryRetriever implements MemoryProvider {
     this.costTelemetry = normalizeCostTelemetryPort(costTelemetry);
     if (isSubstrateConfig(config)) {
       this.runtimeConfig = config;
+      this.fallbackMemoryRetrievalPolicy = undefined;
       this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
       this.moodCongruenceWeight = resolveMoodCongruenceWeight(config.moodCongruenceWeight);
@@ -278,6 +285,7 @@ export class MemoryRetriever implements MemoryProvider {
     } else {
       const retrieverConfig = config as MemoryRetrieverConfig | undefined;
       this.runtimeConfig = null;
+      this.fallbackMemoryRetrievalPolicy = retrieverConfig?.memoryRetrievalPolicy;
       this.fallbackBudgetConfig = {
         defaultContextWindow: retrieverConfig?.contextWindow ?? 128_000,
         modelRoster: {},
@@ -342,6 +350,12 @@ export class MemoryRetriever implements MemoryProvider {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): ReturnType<typeof resolveMemoryRetrieverBudget> {
     return resolveMemoryRetrieverBudget(this.runtimeConfig, this.fallbackBudgetConfig, turnBudgetCharacteristics);
+  }
+
+  private resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy {
+    return resolveMemoryRetrievalPolicy(
+      this.runtimeConfig?.memoryRetrievalPolicy ?? this.fallbackMemoryRetrievalPolicy,
+    );
   }
 
   createTurnRetrievalQueryEmbedding(input: {
@@ -597,6 +611,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelEnvelopeLabelsRevision: getRuntimeChannelEnvelopeLabelsRevision(),
         trustPolicyRevision: getRuntimeTrustPolicyRevision(),
         trustPolicy: getRuntimeTrustPolicy(),
+        memoryRetrievalPolicy: this.resolveMemoryRetrievalPolicy(),
       };
       accessPolicyHash = createHash('sha256')
         .update(JSON.stringify(normalizedAccessState), 'utf8')
@@ -839,6 +854,7 @@ export class MemoryRetriever implements MemoryProvider {
       messageText: contextText,
     };
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
+    const memoryRetrievalPolicy = this.resolveMemoryRetrievalPolicy();
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
@@ -924,9 +940,9 @@ export class MemoryRetriever implements MemoryProvider {
         ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
         : await this.resolveEpisodicChains({
           contextText,
-        channelId,
-        trustLevel: effectiveTrust,
-        channelDisclosure,
+          channelId,
+          trustLevel: effectiveTrust,
+          channelDisclosure,
           canonicalContactId,
           scopeQuery: normalizedScopeQuery,
         });
@@ -1019,10 +1035,11 @@ export class MemoryRetriever implements MemoryProvider {
           const recentLexicalStartedAt = performance.now();
           telemetry.searchCalls += 1;
           const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
-          memoryStore: this.memoryStore,
-          contextText,
-          existingIds: new Set(semanticMemories.map(memory => memory.id)),
-          scopeQuery: normalizedScopeQuery,
+            memoryStore: this.memoryStore,
+            contextText,
+            existingIds: new Set(semanticMemories.map(memory => memory.id)),
+            scopeQuery: normalizedScopeQuery,
+            memoryRetrievalPolicy,
           });
           addRetrievalStageTiming(telemetry, 'lexical_search', recentLexicalStartedAt);
           semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
@@ -1272,6 +1289,8 @@ export class MemoryRetriever implements MemoryProvider {
             scopeQuery: normalizedScopeQuery,
             callerContext: effectiveCallerContext,
             retrievalMode: effectiveRetrievalMode,
+            memoryRetrievalPolicy,
+            taskKind: effectiveBudgetTurn.taskKind,
           }),
         }))
         .filter(item => !item.retrievalModeExcluded)
@@ -1379,6 +1398,7 @@ export class MemoryRetriever implements MemoryProvider {
         ranked,
         budget.tokenBudget,
         guaranteedSelectionFloor,
+        memoryRetrievalPolicy,
       );
       const selected = selection.selected;
       addRetrievalStageTiming(telemetry, 'selection', selectionStartedAt);

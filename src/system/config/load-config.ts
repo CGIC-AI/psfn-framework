@@ -32,6 +32,7 @@ import {
 } from './runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
+import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import {
   isMultiCompanionEnabled,
   resolveCompanionFleet,
@@ -408,6 +409,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
+    memoryRetrievalPolicy: createDefaultMemoryRetrievalPolicy(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),
     emotionScoping: createDefaultEmotionScopingSettings(),

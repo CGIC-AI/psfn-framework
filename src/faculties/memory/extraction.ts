@@ -164,7 +164,11 @@ export class MemoryExtractor {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
-    this.writer = new MemoryWriter(memoryStore, embeddingService);
+    this.writer = new MemoryWriter(memoryStore, embeddingService, {
+      ...(config && 'primaryModel' in config
+        ? { memoryRetrievalPolicy: () => config.memoryRetrievalPolicy }
+        : {}),
+    });
     // htm9.3: the extractor's writes gate at the memory_write sink. The gate
     // is late-bound onto the session manager by composition, so the writer
     // follows it through a provider closure.

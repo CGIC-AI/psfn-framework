@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('retrieval salience decay', () => {
   it('scores with live decay from lastAccessed instead of the stored salience snapshot', () => {
-    const now = 1_700_000_000_000 + 7 * 24 * 60 * 60_000;
+    const now = 1_700_000_000_000 + 30 * 24 * 60 * 60_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
     const memory = makeMemory();
 

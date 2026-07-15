@@ -572,7 +572,9 @@ async function main(): Promise<void> {
   });
 
   // Memory write/import tools — intentional memory creation
-  const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  const memoryWriter = new MemoryWriter(memoryStore, gateway, {
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+  });
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;

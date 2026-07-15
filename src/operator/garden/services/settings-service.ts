@@ -32,8 +32,12 @@ import {
   validateCompositionalPolicyConfig,
 } from '../../../system/capabilities/compositional-policy.js';
 import { normalizeImageWorkflowSettings } from '../../../primitives/images/types.js';
+import {
+  normalizeMemoryRetrievalPolicy,
+  resolveMemoryRetrievalPolicy,
+  resolveMemorySalienceFloor,
+} from '../../../system/config/memory-retrieval-policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
-import { MEMORY_CONFIG } from '../../../faculties/memory/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
@@ -408,7 +412,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
     const marker = (configured: boolean): '[set]' | '[not set]' =>
       configured ? '[set]' : '[not set]';
     return {
-      salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
+      salienceFloor: resolveMemorySalienceFloor(
+        resolveMemoryRetrievalPolicy(this.deps.config.memoryRetrievalPolicy),
+        'episodic',
+        0,
+      ),
       salienceDecayIntervalMs: this.deps.config.salienceDecayIntervalMs,
       discordToken: marker(presence.discordToken),
       apiKey: marker(presence.apiKey),
@@ -776,6 +784,21 @@ export class AdminSettingsDataService implements AdminSettingsService {
     this.validateImageWorkflowsField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
     this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
+    if ('memoryRetrievalPolicy' in payload) {
+      try {
+        normalizeMemoryRetrievalPolicy(
+          payload.memoryRetrievalPolicy,
+          'memoryRetrievalPolicy',
+        );
+      } catch (error) {
+        this.pushFieldError(
+          errors,
+          'memoryRetrievalPolicy',
+          toErrorMessage(error),
+          'invalid_object',
+        );
+      }
+    }
 
     const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'
       ? payload.importProcessingRouteMode

@@ -5,6 +5,13 @@ import type {
   MemoryRedactionOperation,
 } from '../../system/trust/types.js';
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
+import {
+  MEMORY_POLICY_TYPES,
+  resolveMemoryRetrievalPolicy,
+  resolveMemorySalienceFloor,
+  type MemoryPolicyType,
+  type MemoryRetrievalPolicy,
+} from '../../system/config/memory-retrieval-policy.js';
 // Re-export for convenience
 export type {
   SensitivityLevel,
@@ -20,14 +27,7 @@ export {
   resolveConsentRedactionBehavior,
 } from '../../system/trust/types.js';
 
-export type MemoryType =
-  | 'episodic'
-  | 'semantic'
-  | 'emotional'
-  | 'procedural'
-  | 'boundary'
-  | 'reflection'
-  | 'relational';
+export type MemoryType = MemoryPolicyType;
 export type MemoryRetentionClass = 'standard' | 'durable';
 export type MemorySourceType =
   | 'unknown'
@@ -222,7 +222,7 @@ const RELATIONAL_TEXT_HINT = /\b(partner|spouse|wife|husband|boyfriend|girlfrien
 const EPISODIC_TEXT_HINT = /\b(yesterday|today|last\s+\w+|ago|on\s+\d{4}-\d{2}-\d{2}|when\s+we)\b/i;
 
 export const VALID_MEMORY_TYPES: MemoryType[] = [
-  'episodic', 'semantic', 'emotional', 'procedural', 'boundary', 'reflection', 'relational',
+  ...MEMORY_POLICY_TYPES,
 ];
 
 export interface PurrMemory {
@@ -321,17 +321,6 @@ const SENSITIVE_PRIVACY_TAG_HINT_LIST = [...SENSITIVE_PRIVACY_TAG_HINTS];
 const PUBLIC_SOURCE_PREFIXES = ['twitter:', 'x:', 'mastodon:', 'bluesky:', 'public:'] as const;
 const PRIVATE_SOURCE_PREFIXES = ['api:', 'subagent:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
 
-// Decay half-lives in milliseconds
-export const DECAY_HALFLIFE: Record<MemoryType, number> = {
-  episodic:   7  * 24 * 60 * 60 * 1000,
-  semantic:   30 * 24 * 60 * 60 * 1000,
-  emotional:  14 * 24 * 60 * 60 * 1000,
-  procedural: 90 * 24 * 60 * 60 * 1000,
-  boundary:   120 * 24 * 60 * 60 * 1000,
-  reflection: 60 * 24 * 60 * 60 * 1000,
-  relational: 60 * 24 * 60 * 60 * 1000,
-};
-
 // Embedding similarity thresholds for dedup per type
 export const DEDUP_THRESHOLD: Record<MemoryType, number> = {
   episodic:   0.92,
@@ -353,13 +342,11 @@ export const MEMORY_CONFIG = {
   retrievalAccessReinforcementMaxBoost: 0.25,
   privacyRiskPenaltyWeight: 0.45,
   maintenanceIntervalMs: 3_600_000,
-  salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
   durableHalflifeMultiplier: 8,
   preferenceDurableSalienceFloor: 0.35,
   preferenceDurableHalflifeMultiplier: 12,
   emotionalIntensityPersistenceMinMultiplier: 1,
-  emotionalIntensityPersistenceMaxMultiplier: 1.8,
   durableAutoImportanceThreshold: 0.75,
   contradictionThresholdOffset: 0.15,
   salienceBumpOnAccess: 0.05,
@@ -926,17 +913,23 @@ export function computeMemoryEmotionalIntensity(
 
 export function getEmotionalIntensityPersistenceMultiplier(
   memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
+  policyInput?: MemoryRetrievalPolicy,
 ): number {
+  const policy = resolveMemoryRetrievalPolicy(policyInput);
   const minMultiplier = Math.max(0.1, MEMORY_CONFIG.emotionalIntensityPersistenceMinMultiplier);
   const maxMultiplier = Math.max(
     minMultiplier,
-    MEMORY_CONFIG.emotionalIntensityPersistenceMaxMultiplier,
+    policy.emotionalIntensityPersistenceMaxMultiplier,
   );
   const intensity = computeMemoryEmotionalIntensity(memory);
   return minMultiplier + ((maxMultiplier - minMultiplier) * intensity);
 }
 
-export function getMemoryDecayProfile(memory: MemoryDecayProfileInput): MemoryDecayProfile {
+export function getMemoryDecayProfile(
+  memory: MemoryDecayProfileInput,
+  policyInput?: MemoryRetrievalPolicy,
+): MemoryDecayProfile {
+  const policy = resolveMemoryRetrievalPolicy(policyInput);
   const retentionClass = inferMemoryRetentionClass({
     type: memory.type,
     tags: memory.tags,
@@ -950,22 +943,32 @@ export function getMemoryDecayProfile(memory: MemoryDecayProfileInput): MemoryDe
     : retentionClass === 'durable'
       ? MEMORY_CONFIG.durableHalflifeMultiplier
       : 1;
-  const emotionalPersistenceMultiplier = getEmotionalIntensityPersistenceMultiplier(memory);
+  const emotionalPersistenceMultiplier = memory.type === 'emotional'
+    ? getEmotionalIntensityPersistenceMultiplier(memory, policy)
+    : 1;
   const halflifeMultiplier = retentionHalflifeMultiplier * emotionalPersistenceMultiplier;
+  const policySalienceFloor = resolveMemorySalienceFloor(
+    policy,
+    memory.type,
+    memory.emotionalValence ?? 0,
+  );
 
   if (retentionClass === 'durable') {
     return {
       retentionClass,
-      salienceFloor: durablePreference
-        ? MEMORY_CONFIG.preferenceDurableSalienceFloor
-        : MEMORY_CONFIG.durableSalienceFloor,
+      salienceFloor: Math.max(
+        policySalienceFloor,
+        durablePreference
+          ? MEMORY_CONFIG.preferenceDurableSalienceFloor
+          : MEMORY_CONFIG.durableSalienceFloor,
+      ),
       halflifeMultiplier,
     };
   }
 
   return {
     retentionClass,
-    salienceFloor: MEMORY_CONFIG.salienceFloor,
+    salienceFloor: policySalienceFloor,
     halflifeMultiplier,
   };
 }

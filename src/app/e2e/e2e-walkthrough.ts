@@ -95,7 +95,9 @@ async function main(): Promise<void> {
       config,
     });
 
-    const salienceDecay = new SalienceDecay(memoryStore);
+    const salienceDecay = new SalienceDecay(memoryStore, {
+      memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+    });
     salienceDecay.start();
 
     wireShardAndThinkRuntime({

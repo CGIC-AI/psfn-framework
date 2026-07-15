@@ -6298,21 +6298,14 @@ describe('SubstrateAgent steering + follow-up', () => {
       release: releaseTool,
     });
 
-    let markPostTurnEntered!: () => void;
-    let releasePostTurn!: () => void;
-    const postTurnEntered = new Promise<void>((resolve) => {
-      markPostTurnEntered = resolve;
-    });
-    const postTurnRelease = new Promise<void>((resolve) => {
-      releasePostTurn = resolve;
-    });
-    const enqueuePostTurnSpy = vi.spyOn(
-      TurnSupportRuntime.prototype,
-      'enqueuePostTurnBackgroundWork',
-    ).mockImplementationOnce(async () => {
-      markPostTurnEntered();
-      await postTurnRelease;
-    });
+    let markPostTurnEntered!: () => void, releasePostTurn!: () => void;
+    const postTurnEntered = new Promise<void>((resolve) => { markPostTurnEntered = resolve; });
+    const postTurnRelease = new Promise<void>((resolve) => { releasePostTurn = resolve; });
+    const enqueuePostTurnSpy = vi.spyOn(TurnSupportRuntime.prototype, 'enqueuePostTurnBackgroundWork')
+      .mockImplementationOnce(async () => {
+        markPostTurnEntered();
+        await postTurnRelease;
+      });
     promptSpy.mockImplementationOnce(async function (this: Agent) {
       expect(agent.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
       appendAssistant(this, 'candidate post-turn phase starting');
@@ -6321,9 +6314,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     try {
       await postTurnEntered;
       await assertDeferredIngressPhase({
-        phase: 'post-turn',
-        candidateRun: candidatePostTurnRun,
-        release: releasePostTurn,
+        phase: 'post-turn', candidateRun: candidatePostTurnRun, release: releasePostTurn,
       });
     } finally {
       releasePostTurn();

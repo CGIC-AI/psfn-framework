@@ -109,6 +109,20 @@ Whole owner files that are semantically per-companion (`capability-tier.json`,
 `scheduler.json`) are relocated to `companionDataDir` by separate work, not this
 overlay.
 
+Separately, the Garden admin surface owns several per-companion state files that
+must resolve under `companionDataDir` to match the runtime and avoid fleet
+collisions (`src/operator/garden/local-admin-contract.ts`,
+`src/operator/garden/services/scheduler-service.ts`): `garden-audit-history.jsonl`,
+the Garden-side `heartbeat-policy.json` (already runtime-rooted under companion
+state via `resolveHeartbeatPolicyPath`), and the reflection-metacognition journal.
+These were previously mis-rooted at the shared system-data root (`config.dataDir`);
+correcting them is a pure path fix. Any pre-existing shared file at the old
+system-data location is left frozen — its mixed-companion contents are not split
+or migrated, and no dual-read fallback is added; each companion's file simply
+starts fresh at the correct root. Model-usage accounting is already per-companion
+through the Postgres `model_usage_events` store (schema-per-companion +
+`companion_id` attribution), so there is no shared JSONL usage ledger to re-root.
+
 ## Postgres tenancy: schema-per-companion + one shared schema
 
 Each agent process pins its runtime persistence to its own schema; there is one

@@ -221,7 +221,7 @@ export function createInProcessGardenAdminContract(
     ? new AdminModelUsageDataService(modelUsageStore)
     : null;
   const auditHistory = new AdminAuditHistoryDataService({
-    gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
+    gardenStore: new GardenAuditHistoryJsonlStore(join(companionDataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
     chargeLedger,
     scopeId: options.config.companionId ?? companionDataDir,
@@ -261,7 +261,11 @@ export function createInProcessGardenAdminContract(
   });
   const schedulerService = new AdminSchedulerService(
     options.scheduler,
-    options.config.dataDir,
+    // Per-companion state (heartbeat-policy.json + reflection-metacognition
+    // journal). Must match the runtime, which roots both under companionDataDir
+    // (agent/main.ts wireHeartbeatRuntime); config.dataDir is the shared
+    // system-data root and would collide across a multi-companion fleet.
+    companionDataDir,
     // Live habit wake-window snapshot: recompute from the current scheduler
     // config + active-session partner timestamps on each read (E7.2).
     () => resolveMorningWakeSnapshot({

@@ -11,6 +11,8 @@ import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { listCanonicalToolSurfaces } from '../tool-surface/registry.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../tool-surface/descriptions.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -83,6 +85,26 @@ function createFacade(
     config: configOverrides,
   };
 }
+
+describe('ToolRuntimeFacade canonical descriptions', () => {
+  it('uses the live registry description for every registered first-party surface', () => {
+    const { facade } = createFacade();
+
+    for (const surface of listCanonicalToolSurfaces()) {
+      facade.registerTool(makeTool(surface.name), surface.exposure);
+    }
+    facade.registerTool(makeTool('third_party_probe'), 'extended');
+
+    const catalog = facade.getToolCatalog();
+    const registered = new Map(
+      [...catalog.core, ...catalog.extended].map(tool => [tool.name, tool.description]),
+    );
+    for (const surface of listCanonicalToolSurfaces()) {
+      expect(registered.get(surface.name), surface.name).toBe(surface.description);
+    }
+    expect(registered.get('third_party_probe')).toBe('third_party_probe description');
+  });
+});
 
 function makeCandidateMessage() {
   const nowMs = Date.now();
@@ -323,23 +345,35 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'initiation_permit',
         'target_kind',
       ]);
-      expect(catalogNotify.description).not.toContain('operator brief');
+      expect(catalogNotify.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
 
       const searchResult = await facade.createToolSearchTool().execute(
         'call-search-notify',
         { query: 'notify' },
       );
-      expect(JSON.stringify(searchResult)).toContain('Permit-governed companion outreach');
-      expect(JSON.stringify(searchResult)).not.toContain('operator brief');
+      const searchMatch = (searchResult.details as {
+        toolSearch?: { matches?: Array<{ description?: string }> };
+      }).toolSearch?.matches?.[0];
+      expect(searchMatch?.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
 
       const describeResult = await facade.createToolsetTool().execute(
         'call-describe-notify',
         { action: 'describe', tool: 'notify' },
       );
-      const described = JSON.stringify(describeResult);
-      expect(described).toContain('initiation_permit');
-      expect(described).not.toContain('approval_request');
-      expect(described).not.toContain('delivery_target');
+      const describedPayload = JSON.parse(describeResult.content[0]?.text ?? '{}') as {
+        tools?: Array<{
+          description?: string;
+          schema?: { actions?: Array<{ name?: string }>; requiredParameters?: string[] };
+        }>;
+      };
+      expect(describedPayload.tools?.[0]?.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify);
+      expect(describedPayload.tools?.[0]?.schema?.actions?.map(action => action.name)).toEqual(['send']);
+      expect(describedPayload.tools?.[0]?.schema?.requiredParameters).toEqual([
+        'action',
+        'target_kind',
+        'contact_id',
+        'initiation_permit',
+      ]);
 
       const activeNotify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
       for (const params of [

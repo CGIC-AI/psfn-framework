@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
@@ -38,9 +39,7 @@ export function createShellTool(ops: ShellOperations): SubstrateAgentTool {
   const tool: SubstrateAgentTool = {
     name: 'shell',
     label: 'shell',
-    description:
-      'Unified shell primitive for direct command execution via the gateway allowlist. '
-      + 'Use action=exec with an explicit command and args. This is distinct from fs/repo tools and does not rely on analysis_workbench fallback semantics.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.shell,
     parameters: Type.Object({
       action: Type.Optional(Type.Literal('exec', {
         description: 'Shell action. Defaults to exec.',

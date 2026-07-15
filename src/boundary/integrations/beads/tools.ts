@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { BeadsActionResult } from '../../gateway/protocol.js';
@@ -124,12 +125,7 @@ export function createBeadsTool(ops: BeadsOperations): SubstrateAgentTool {
   return {
     name: 'beads',
     label: 'beads',
-    description:
-      'Unified tracked-work surface for beads issue discovery and mutation. '
-      + 'Use action=ready|show|create|update|close|sync. '
-      + 'Use id as a plain string such as "PSFN-123" for action=show|update|close; do not pass the whole ready payload or issue object. '
-      + 'If you need an id from action=ready, call ready first, read its tool result, then call show/update/close in a later assistant step. '
-      + 'Legacy issue_* aliases remain accepted as action values only.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.beads,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('ready'),

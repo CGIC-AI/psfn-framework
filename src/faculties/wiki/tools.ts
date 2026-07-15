@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
@@ -122,12 +123,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
   const tool: SubstrateAgentTool = {
     name: 'wiki',
     label: 'wiki',
-    description:
-      'Internal runtime-owned knowledge-base for durable reference documents and personal knowledge notes. '
-      + 'Use action=list|read|search|semantic_search|write|import. search is exact/substring text search; '
-      + 'semantic_search finds conceptually related documents via the pgvector projection and returns similarity scores. '
-      + 'This is separate from L0/L0.1/L2 memory, scratchpad, journal, and Obsidian/Vault. '
-      + 'Imports require source_class and provenance_refs so external notes never masquerade as lived memory.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.wiki,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         WIKI_ACTIONS.map(action => Type.Literal(action)),

@@ -28,6 +28,7 @@ import {
   type EpisodeArc,
 } from '../../shared/contracts/episodic-memory.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -213,7 +214,7 @@ describe('createMemoryTool', () => {
 
     expect(tool.name).toBe('memory');
     expect(tool.label).toBe('memory');
-    expect(tool.description).toContain('Unified long-term memory tool');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory);
     expect(tool.parameters).toBeDefined();
   });
 
@@ -305,10 +306,7 @@ describe('createMemoryTool', () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    expect(tool.description).toContain('action=search with required query');
-    expect(tool.description).toContain('action=write with required text and type');
-    expect(tool.description).toContain('patch/redact/delete use memory_id');
-    expect(tool.description).toContain('restore uses delete_id');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory);
   });
 
   it('searches through action=search and formats results', async () => {

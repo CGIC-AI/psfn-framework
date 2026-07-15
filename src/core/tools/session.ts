@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
@@ -418,11 +419,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
   return {
     name: 'session',
     label: 'session',
-    description:
-      'Unified session continuity surface. Orientation: action=list returns exact sessionId values; action=search requires query; action=grep requires pattern. '
-      + 'Context switching: action=new starts a fresh session; action=resume requires a sessionId from list/search, not preview text. '
-      + 'Continuity: action=wake_return requires summary and can include nextAnchor/facets. Focus workflow: start_focus requires scope; complete_focus can include conclusion. '
-      + `Actions: ${SESSION_TOOL_ACTION_HELP}.`,
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:

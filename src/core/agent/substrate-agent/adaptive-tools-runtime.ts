@@ -22,6 +22,7 @@ import {
   getRetiredToolAlias,
   isRetiredFirstPartyToolAlias,
 } from '../tool-surface/registry.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../tool-surface/descriptions.js';
 import type { PromotedToolMutationResult } from './tool-runtime-contracts.js';
 
 export interface ToolDocumentationSearchEntry extends RuntimeToolCatalogEntry {
@@ -122,9 +123,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): Substrate
   return {
     name: 'tool_search',
     label: 'tool_search',
-    description:
-      'Look up long-form tool documentation by canonical name, purpose, action, or parameter. '
-      + 'All registered core and extended tools are already present in the model tool catalog; this lookup never loads, activates, grants, or otherwise changes tool callability.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.tool_search,
     parameters: Type.Object({
       query: Type.Optional(Type.String({
         description: 'Optional tool name, purpose, action, or parameter term. Omit to browse documentation for the full catalog.',
@@ -413,9 +412,7 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): SubstrateAgentTo
   return withCapabilityRequirement({
     name: 'toolset',
     label: 'toolset',
-    description:
-      'Inspect the callable tool catalog, request an advisory suggestion, or manage persisted presentation-order pins. '
-      + 'Every registered core and extended tool is already callable without activation; pin and unpin only change ordering.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.toolset,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),

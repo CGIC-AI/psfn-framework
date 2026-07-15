@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { FilesystemOperations } from './ops.js';
@@ -78,13 +79,7 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
   return {
     name: 'fs',
     label: 'fs',
-    description:
-      'Unified filesystem primitive for personal-file inspection and safe mutation. '
-      + 'Use action=list|read|search|write|edit. Prefer list/search/read for common file inspection before analysis_workbench. '
-      + 'For action=search, omit glob for the default working-folder search or provide a narrow folder/file glob; do not use bare **/*. '
-      + 'Write/edit paths are relative to the configured personal files root, not DATA or runtime state. '
-      + 'In gateway yolo mode, reads may expose broader codebase paths while writes stay personal-root-relative. '
-      + 'Writes stay explicit, bounded, and fail closed on unsafe overwrite/edit requests.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.fs,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('list'),

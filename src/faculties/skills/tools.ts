@@ -1,5 +1,6 @@
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
 import type { SkillOwnership, SkillSource } from './types.js';
@@ -301,12 +302,7 @@ export function createSkillTool(runtime: SkillsRuntime): SubstrateAgentTool {
   return {
     name: 'skill',
     label: 'skill',
-    description:
-      'Unified skill management surface for list/view/stats/create/update. '
-      + 'Skills capture reusable workflow guidance; tools execute actions. '
-      + 'Created and updated skills are personal skills stored under the configured personal files root, separate from deployment/system skill directories. '
-      + 'Creator workflows such as image or music creation should be modeled as skills loaded with action="view", not as new top-level tools. '
-      + `Use action=${SKILL_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.skill,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SKILL_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:

@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../../boundary/gateway/protocol.js';
@@ -709,11 +710,7 @@ export function createNotifyTool(
   const tool: SubstrateAgentTool = {
     name: 'notify',
     label: 'notify',
-    description:
-      'Unified notification surface for operator briefs, lightweight outbound sends, approval escalation, and permit-governed companion outreach. '
-      + 'To form private intent without sending, use {"action":"consider","target_kind":"companion","contact_id":"<exact contactId>","reason_summary":"<private reason>"}; it is evaluated only after the current turn reaches idle. '
-      + 'For a known companion peer, use exactly {"action":"send","target_kind":"companion","contact_id":"<exact contactId from contact lookup>","initiation_permit":"<broker-issued UUID>"}. '
-      + 'Companion outreach never accepts message content; the ordinary target-channel turn authors it.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
     parameters: notifyToolParameters,
     execute: async (
       _toolCallId: string,

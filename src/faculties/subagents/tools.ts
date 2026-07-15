@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
@@ -29,10 +30,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
   const tool: SubstrateAgentTool = {
     name: 'subagent',
     label: 'subagent',
-    description:
-      'Control bounded short-horizon subagents. action=spawn requires name and task and returns subagent_id; '
-      + 'action=message requires subagent_id and message; wait/cancel/status use subagent_id from spawn or status. '
-      + 'Use status without subagent_id to list visible tasks.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('spawn'),

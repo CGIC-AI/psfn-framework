@@ -3,6 +3,7 @@
 // Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { PromptLayerStatePort } from './prompt-state-port.js';
@@ -528,10 +529,7 @@ export function createIdentityTool(
 
   const tool: SubstrateAgentTool = {
     name: 'identity',
-    description:
-      'Unified identity surface for prompt-layer inspection, prompt-layer mutation, staged prompt commits/cancels, and persona updates. '
-      + 'Mutating actions remain capability-gated, audited, and confirmation/cooling-off guarded. '
-      + 'For action=toggle_layer, the tool result is JSON containing layerId, previousEnabled, enabled, and state.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.identity,
     label: 'identity',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([

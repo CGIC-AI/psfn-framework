@@ -13,6 +13,7 @@ import type {
   ScheduledPromptRecord,
   ScheduledPromptStorePort,
 } from './scheduled-prompt-store-port.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 
 function resultText(result: Awaited<ReturnType<ReturnType<typeof createScheduleTool>['execute']>>): string {
   const content = result.content[0];
@@ -118,7 +119,7 @@ function createTool(options: Partial<Parameters<typeof createScheduleTool>[0]> =
 }
 
 describe('schedule tool', () => {
-  it('groups model-facing actions by schedule domain and required arguments', () => {
+  it('uses the canonical schedule description', () => {
     const tool = createScheduleTool({
       scheduler: {} as any,
       agentLoop: {} as any,
@@ -128,15 +129,7 @@ describe('schedule tool', () => {
       runTemplate: vi.fn(),
     });
 
-    expect(tool.description).toContain('Orientation: action=list');
-    expect(tool.description).toContain('Follow-ups: create_follow_up needs content');
-    expect(tool.description).toContain('channel_type=discord (not prompt-facing discord_text)');
-    expect(tool.description).toContain('activate_follow_up needs follow_up_id');
-    expect(tool.description).toContain('Reminders: create_reminder needs title/content');
-    expect(tool.description).toContain('trigger_reminder needs reminder_id');
-    expect(tool.description).toContain('Templates: list_templates inspects them');
-    expect(tool.description).toContain('update_template uses template_id for existing templates and id only when adding');
-    expect(tool.description).toContain('Scheduled prompts: schedule_prompt needs name, prompt, and exactly one of delay_minutes or run_at');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule);
   });
 
   it('publishes continuity channel types as one canonical enum', () => {

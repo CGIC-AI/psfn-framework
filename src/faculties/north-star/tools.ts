@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import {
@@ -100,10 +101,7 @@ export function createNorthStarTool(store: NorthStarStore): SubstrateAgentTool {
   const tool: SubstrateAgentTool = {
     name: 'north_star',
     label: 'north_star',
-    description:
-      'Manage North Star long-horizon guiding intent. '
-      + 'Use action=list|create|update|delete|reorder. '
-      + 'This surface stays separate from orient and identity and is not for transient session state.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.north_star,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         NORTH_STAR_ACTIONS.map(action => Type.Literal(action)),

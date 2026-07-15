@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { WebFetchLane } from '../../gateway/protocol.js';
@@ -71,9 +72,7 @@ export function createWebTool(
   return {
     name: 'web',
     label: 'web',
-    description:
-      'Unified web primitive for direct remote page work. Use action=fetch for ordinary pages, '
-      + 'action=browse for the explicit local_crawler lane, and action=search for lightweight web research discovery.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.web,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         WEB_ACTIONS.map((value) => Type.Literal(value)),

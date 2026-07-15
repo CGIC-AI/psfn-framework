@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { withCapabilityRequirement, type CapabilityRequirement } from '../../system/capabilities/requirements.js';
@@ -519,12 +520,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
   const tool: SubstrateAgentTool<ScheduleToolResultDetails> = {
     name: 'schedule',
     label: 'schedule',
-    description:
-      'Manage time-based continuity through one schedule surface. Orientation: action=list is safe and can filter by contact_id. '
-      + 'Follow-ups: create_follow_up needs content, channel_id, and canonical channel_type; for Discord DMs or guild channels, use the raw string snowflake and channel_type=discord (not prompt-facing discord_text). contact_id is optional scope; activate_follow_up needs follow_up_id. '
-      + 'Reminders: create_reminder needs title/content; trigger_reminder needs reminder_id. '
-      + 'Templates: list_templates inspects them, update_template uses template_id for existing templates and id only when adding a new template, run_template needs template_id. '
-      + 'Scheduled prompts: schedule_prompt needs name, prompt, and exactly one of delay_minutes or run_at; run_at is ISO-8601 with explicit timezone.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),

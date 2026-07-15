@@ -1,3 +1,5 @@
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from './descriptions.js';
+
 export type CanonicalToolExposure = 'core' | 'extended';
 export type RetiredToolExposure = 'hidden' | 'retired';
 
@@ -117,7 +119,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'tool_search',
     domain: 'adaptive_tooling',
     exposure: 'core',
-    description: 'Canonical on-demand documentation lookup for callable first-party tools.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.tool_search,
     actions: ['search'],
     capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -126,7 +128,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'toolset',
     domain: 'adaptive_tooling',
     exposure: 'core',
-    description: 'Canonical control surface for listing, suggesting, describing, and ordering callable tools.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.toolset,
     actions: ['list', 'suggest', 'describe', 'pin', 'unpin'],
     capabilityMetadata: { kind: 'action_aware', source: TOOLSET_RUNTIME },
     retiredAliases: [
@@ -141,7 +143,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'response_control',
     domain: 'system',
     exposure: 'core',
-    description: 'Canonical response-disposition surface for intentional no-reply decisions.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.response_control,
     actions: ['no_reply'],
     capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -150,7 +152,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'fs',
     domain: 'boundary',
     exposure: 'core',
-    description: 'Canonical filesystem surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.fs,
     actions: ['read', 'list', 'search', 'write', 'edit'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -162,7 +164,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'repo',
     domain: 'boundary',
     exposure: 'extended',
-    description: 'Canonical repository inspection and guarded mutation surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.repo,
     actions: ['inspect', 'patch', 'commit', 'branch', 'publish'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -178,7 +180,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'shell',
     domain: 'boundary',
     exposure: 'extended',
-    description: 'Canonical shell execution surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.shell,
     actions: ['exec'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -189,7 +191,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'web',
     domain: 'boundary',
     exposure: 'core',
-    description: 'Canonical web retrieval and small-scope discovery surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.web,
     actions: ['fetch', 'browse', 'search'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -202,7 +204,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'world',
     domain: 'boundary',
     exposure: 'extended',
-    description: 'Canonical physical/virtual world surface for perceiving and controlling place affordances via Home Assistant.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.world,
     actions: ['perceive', 'list', 'control', 'move'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -211,7 +213,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'analysis_workbench',
     domain: 'analysis',
     exposure: 'core',
-    description: 'Canonical bounded multi-stage analysis surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.analysis_workbench,
     capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },
@@ -219,7 +221,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'orient',
     domain: 'orientation',
     exposure: 'core',
-    description: 'Canonical active-orientation surface for persona, human, goals, values, and active concerns.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.orient,
     actions: [
       'append',
       'replace',
@@ -249,7 +251,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'identity',
     domain: 'identity',
     exposure: 'core',
-    description: 'Canonical identity and prompt-layer surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.identity,
     actions: [
       'list_layers',
       'get_layer',
@@ -272,7 +274,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'memory',
     domain: 'memory',
     exposure: 'core',
-    description: 'Canonical long-term memory surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.memory,
     actions: ['write', 'search', 'census', 'exists', 'timeline', 'import', 'patch', 'redact', 'delete', 'restore'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -288,7 +290,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'scratchpad',
     domain: 'memory',
     exposure: 'core',
-    description: 'Canonical ephemeral working-context surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.scratchpad,
     actions: ['list', 'add', 'replace', 'append', 'remove'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -300,7 +302,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'contact',
     domain: 'contacts',
     exposure: 'core',
-    description: 'Canonical contact, trust, relationship, note, identity-link, channel-privacy, blocking, and known-peer coarse-availability surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.contact,
     actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'set_relationship', 'propose_relationship', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -316,7 +318,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'session',
     domain: 'sessions',
     exposure: 'core',
-    description: 'Canonical session continuity, transcript search, resume, and focus surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session,
     actions: ['list', 'new', 'resume', 'search', 'grep', 'wake_return', 'start_focus', 'complete_focus'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -337,7 +339,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'self_status',
     domain: 'system',
     exposure: 'core',
-    description: 'Canonical companion-facing safe runtime status and coarse availability-control surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status,
     actions: ['snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -346,7 +348,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'system',
     domain: 'system',
     exposure: 'core',
-    description: 'Canonical runtime settings and guarded lifecycle surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.system,
     actions: ['read', 'restart', 'rebuild'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -359,7 +361,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'skill',
     domain: 'knowledge',
     exposure: 'core',
-    description: 'Canonical managed-skill discovery and mutation surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.skill,
     actions: ['list', 'view', 'stats', 'create', 'update'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -371,7 +373,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'wiki',
     domain: 'knowledge',
     exposure: 'core',
-    description: 'Canonical runtime-owned durable reference knowledge surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.wiki,
     actions: ['list', 'read', 'search', 'write', 'import'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -380,7 +382,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'schedule',
     domain: 'scheduler',
     exposure: 'core',
-    description: 'Canonical schedule and heartbeat template surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
     actions: ['list', 'create', 'update', 'delete', 'run'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -392,7 +394,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'north_star',
     domain: 'orientation',
     exposure: 'extended',
-    description: 'Canonical long-horizon guiding-intent surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.north_star,
     actions: ['list', 'create', 'update', 'delete', 'reorder'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -407,7 +409,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'beads',
     domain: 'tracked_work',
     exposure: 'extended',
-    description: 'Canonical tracked-work surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.beads,
     actions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -423,7 +425,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'notify',
     domain: 'notification',
     exposure: 'extended',
-    description: 'Canonical notification and governed companion-outreach surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
     actions: ['brief', 'send', 'approval_request'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -434,7 +436,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'generate_image',
     domain: 'media',
     exposure: 'core',
-    description: 'Canonical generic image generation, editing, and analysis surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.generate_image,
     actions: ['generate', 'edit', 'analyze'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -448,7 +450,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'selfie_create',
     domain: 'self_expression',
     exposure: 'core',
-    description: 'Canonical first-class self-expression image surface with appearance and saved-reference anchoring.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.selfie_create,
     capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },
@@ -456,7 +458,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'subagent',
     domain: 'subagents',
     exposure: 'core',
-    description: 'Canonical bounded-worker control plane.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent,
     actions: ['spawn', 'message', 'wait', 'cancel', 'status'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -467,7 +469,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'vault',
     domain: 'knowledge',
     exposure: 'extended',
-    description: 'Legacy external Obsidian bridge surface, bounded as external source handling.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.vault,
     actions: ['write', 'read', 'search', 'daily'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -481,7 +483,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'journal',
     domain: 'memory',
     exposure: 'core',
-    description: 'Companion journal import/write surface.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.journal,
     actions: ['list', 'read', 'write', 'append', 'search'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],

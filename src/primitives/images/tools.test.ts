@@ -20,6 +20,7 @@ import {
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 
 const tempDirs: string[] = [];
 
@@ -118,15 +119,7 @@ describe('image tools', () => {
 
     expect(tool.name).toBe('generate_image');
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
-    expect(tool.description).toContain('action="generate" requires prompt');
-    expect(tool.description).toContain('action="edit" requires prompt and input_urls');
-    expect(tool.description).toContain('action="analyze" requires input_urls');
-    // Concrete user trigger phrasing plus an explicit when-NOT-to-use line
-    // that routes self-images to selfie_create.
-    expect(tool.description).toContain('"draw me a..."');
-    expect(tool.description).toContain('Do NOT use this for images of yourself');
-    expect(tool.description).toContain('selfie_create');
-    expect(tool.description).toContain('what do you look like right now');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.generate_image);
     expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
     expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
   });
@@ -138,16 +131,7 @@ describe('image tools', () => {
     });
 
     expect(tool.name).toBe('selfie_create');
-    expect(tool.description.length).toBeLessThan(600);
-    expect(tool.description).toContain('Requires prompt');
-    expect(tool.description).toContain('saved-reference anchoring');
-    // Concrete user trigger phrasing plus an explicit when-NOT-to-use line
-    // that routes non-self images to generate_image.
-    expect(tool.description).toContain('"send me a selfie"');
-    expect(tool.description).toContain('what do you look like right now');
-    expect(tool.description).toContain('Do NOT use this for anything that is not you');
-    expect(tool.description).toContain('generate_image');
-    expect(tool.description).not.toContain('content policy');
+    expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.selfie_create);
     expect((tool.parameters as any).properties.edit_model.description.length).toBeLessThan(220);
     expect((tool.parameters as any).properties.edit_model.description).not.toContain('gpt-image-2');
   });

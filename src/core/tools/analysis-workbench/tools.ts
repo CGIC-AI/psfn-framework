@@ -10,17 +10,12 @@ import { runRLMLoop } from './loop.js';
 import { textResultWithError } from '../results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../agent/tool-surface/descriptions.js';
 
 export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool {
   return {
     name: 'analysis_workbench',
-    description:
-      'Bounded analysis workbench for large files, codebases, logs, transcripts, datasets, or evidence sets that would ' +
-      'bloat the main conversation context. Use direct semantic tools first, and use tool_search/toolset ' +
-      'when the active stack is missing a capability. Do not use this for routine reasoning, tool discovery, ' +
-      'schema confusion, routine orient actions, concern maintenance, scheduler/schedule work, simple lookup, ' +
-      'basic file/session inspection, or routine state changes. Pass only the task ' +
-      'or question to analyze; the tool manages its own temporary scratchpad and iterative code sandbox.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.analysis_workbench,
     label: 'analysis_workbench',
     parameters: Type.Object({
       task: Type.String({ description: 'The analytical task or question to reason through' }),

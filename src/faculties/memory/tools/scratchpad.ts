@@ -1,4 +1,5 @@
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../../boundary/pi-agent/index.js';
 
@@ -41,10 +42,7 @@ function formatScratchpadList(
 export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'scratchpad',
-    description:
-      '24h ephemeral working-note workspace for temporary excerpts, summaries, and same-day task context. '
-      + 'Use action=list|add|replace|append|remove. Do not use scratchpad for durable reminders, proactive follow-ups, relationship state, journals, or stable memories. '
-      + 'Use orient concerns/open threads for reminders and proactive follow-ups, memory for stable facts, and journal for durable markdown notes.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.scratchpad,
     label: 'scratchpad',
     parameters: Type.Object({
       action: Type.Unsafe<ScratchpadToolAction>({

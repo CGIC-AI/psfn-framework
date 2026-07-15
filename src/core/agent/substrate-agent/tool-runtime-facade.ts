@@ -59,6 +59,7 @@ import {
 } from '../tool-wiring-validator.js';
 import {
   assertNoModelFacingDriftGuardToolAliases,
+  getCanonicalToolSurface,
   getRetiredToolAlias,
 } from '../tool-surface/registry.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -339,8 +340,12 @@ export class ToolRuntimeFacade {
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
     assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
+    const canonicalSurface = getCanonicalToolSurface(tool.name);
+    const describedTool = canonicalSurface
+      ? { ...tool, description: canonicalSurface.description }
+      : tool;
     const taggedTool = this.withCandidateExecutionGuard(
-      this.withToolConcurrencyMetadata(tagToolWithReversibility(tool), category),
+      this.withToolConcurrencyMetadata(tagToolWithReversibility(describedTool), category),
     );
     if (category === 'core') {
       this.coreTools.push(taggedTool);

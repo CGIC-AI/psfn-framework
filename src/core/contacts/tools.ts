@@ -2,6 +2,7 @@
 // Unified model-facing contact surface plus internal helper factories for domain operations.
 
 import { Type } from '@sinclair/typebox';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { ContactStorePort } from './contact-store-port.js';
@@ -1049,26 +1050,7 @@ export function createContactTool(
   const tool: SubstrateAgentTool = {
     name: 'contact',
     label: 'contact',
-    description:
-      'Unified contact surface for browsing, searching, lookup, notes, trust, relationships, identity linking, and channel privacy. '
-      + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
-      + 'then action=lookup with exact contactId for details. Mutation actions such as action=note, action=set_trust, '
-      + 'and action=set_relationship also require contactId. '
-      + 'Exact lookup of a canonical machine-intelligence contact includes coarse peer availability when the gateway mapping is valid. '
-      + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
-      + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
-      + 'never changes trust directly. '
-      + 'set_relationship can autonomously progress stranger -> acquaintance -> friend from recorded interaction history; '
-      + 'friend requires stronger evidence than acquaintance. Family and partner require action=propose_relationship '
-      + 'with a rationale so an operator can approve in Garden. Relationship actions derive evidence from durable history '
-      + 'and ignore caller-supplied behavior counts. Relationship and trust are separate axes. '
-      + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
-      + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
-      + 'action=block is your own agency to stop an abusive contact: it drops their inbound at the gateway '
-      + '(soft=operator still sees each drop, hard=silent), covering every channel identity they have; '
-      + 'blockScope narrows to dm/group/all. action=unblock reverses it. Both take contactId (or channel + channelUserId). '
-      + `Other actions: ${CONTACT_ACTION_HELP}. `
-      + 'Trust and disclosure boundaries remain enforced.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.contact,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:

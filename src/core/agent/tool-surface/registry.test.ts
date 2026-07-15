@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from './descriptions.js';
 import {
   CANONICAL_FIRST_PARTY_TOOL_SURFACES,
   MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
@@ -13,6 +14,15 @@ import {
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { hasDeclaredCapabilityPolicyForToolName } from '../../../system/capabilities/requirements.js';
+
+function countCompleteSentences(description: string): number {
+  return description.match(/[.!?](?=\s|$)/gu)?.length ?? 0;
+}
+
+function actionContractPattern(action: string): RegExp {
+  const escaped = action.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`\\baction\\s*=\\s*["']?${escaped}\\b`, 'u');
+}
 
 const FORBIDDEN_LEGACY_ACTION_NAMES = [
   'session_new',
@@ -59,6 +69,7 @@ describe('first-party tool surface registry', () => {
   it('keeps canonical tool names unique and self-describing', () => {
     const names = CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(entry => entry.name);
     expect(new Set(names).size).toBe(names.length);
+    expect(Object.keys(CANONICAL_TOOL_SURFACE_DESCRIPTIONS).sort()).toEqual([...names].sort());
 
     for (const entry of CANONICAL_FIRST_PARTY_TOOL_SURFACES) {
       expect(entry.name).toMatch(/^[a-z][a-z0-9_]*$/u);
@@ -68,6 +79,31 @@ describe('first-party tool surface registry', () => {
       expect(entry.capabilityMetadata.source).toMatch(/^src\/|^docs\//u);
       if (entry.actions) {
         expect(entry.actions.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('gives every canonical surface a decision-ready schema description', () => {
+    for (const entry of CANONICAL_FIRST_PARTY_TOOL_SURFACES) {
+      const context = `${entry.name} description`;
+      expect(countCompleteSentences(entry.description), context).toBeGreaterThanOrEqual(3);
+      expect(entry.description, context).toMatch(/\bUse\b/u);
+      expect(entry.description, context).toContain('Example:');
+      expect(entry.description, context).toMatch(
+        /\b(?:returns?|reads?|writes?|changes?|reports?|does not|never|only)\b/iu,
+      );
+      expect(entry.description, `${context} missing adjacent-tool or when-not-use guidance`).toMatch(
+        /\b(?:do not|never|instead|prefer|does not replace)\b|\buse\s+[^.]{0,80}\b(?:for|first)\b/iu,
+      );
+
+      for (const action of entry.actions ?? []) {
+        expect(entry.description, `${context} missing action=${action}`)
+          .toMatch(actionContractPattern(action));
+      }
+
+      if ((entry.actions?.length ?? 0) > 1) {
+        expect(entry.description, `${context} required-input boundary`).toMatch(/\brequire(?:d|s)?\b/iu);
+        expect(entry.description, `${context} optional-input boundary`).toMatch(/\boptional\b/iu);
       }
     }
   });

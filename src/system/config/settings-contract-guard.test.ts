@@ -15,6 +15,7 @@ import {
 } from '../../shared/contracts/settings-garden-contract.js';
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
+import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
 
 describe('settings contract guard', () => {
   it('keeps backend schema, Garden exposure metadata, and owner files aligned', () => {
@@ -40,6 +41,25 @@ describe('settings contract guard', () => {
     expect(adminUiGardenContract.listGardenSettingsFieldExposureKeys).toBe(listGardenSettingsFieldExposureKeys);
     expect(adminUiGardenContract.listGardenSettingsOwnerFileCoverage).toBe(listGardenSettingsOwnerFileCoverage);
     expect(adminUiGardenContract.listGardenSettingsTunableFieldCoverage).toBe(listGardenSettingsTunableFieldCoverage);
+  });
+
+  it('records a global-vs-perCompanion scope for every settings field (dnll.1)', () => {
+    const contractData = buildSettingsContractData();
+    const overlayKeys = new Set<string>(COMPANION_SETTINGS_OVERLAY_WHITELIST);
+
+    for (const field of Object.values(contractData.fields)) {
+      expect(field.scope).toBe(overlayKeys.has(field.key) ? 'perCompanion' : 'global');
+    }
+
+    // Every whitelisted overlay key must exist in the contract and be per-companion.
+    for (const key of overlayKeys) {
+      expect(contractData.fields[key], `missing contract field for overlay key ${key}`).toBeDefined();
+      expect(contractData.fields[key].scope).toBe('perCompanion');
+    }
+
+    // Representative cluster-global keys stay global.
+    expect(contractData.fields.capabilityTier.scope).toBe('global');
+    expect(contractData.fields.sessionHistoryBudgetPct.scope).toBe('global');
   });
 
   it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {
@@ -189,6 +209,7 @@ describe('memory retrieval policy settings compliance', () => {
       ownerSubsystem: 'runtime',
       ownerFile: 'settings.json',
       type: 'object',
+      scope: 'global',
     });
     expect(SETTINGS_GARDEN_FIELD_EXPOSURE.memoryRetrievalPolicy).toEqual({
       sectionId: 'memory',
@@ -237,6 +258,7 @@ describe('home assistant connection settings compliance', () => {
       ownerSubsystem: 'runtime',
       ownerFile: 'settings.json',
       type: 'boolean',
+      scope: 'global',
     });
     for (const key of HA_FIELD_KEYS) {
       expect(contractData.fields[key].deprecated).toBeUndefined();

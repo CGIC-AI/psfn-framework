@@ -8,6 +8,8 @@ import {
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 import { loadCapabilityTierConfig } from './capability-tier-config.js';
 import { loadChargePolicyConfig } from './charge-policy-config.js';
+import { resolveEffectiveRuntimeSettings } from './settings-overlay.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 
 export function hydrateJsonBackedRuntimeConfig(
   config: SubstrateConfig,
@@ -19,7 +21,13 @@ export function hydrateJsonBackedRuntimeConfig(
 
   const savedSettings = loadSettings(dataDir, loadOptions);
   const settingsDomains = splitSettingsByDomain(savedSettings);
-  applySettings(config, settingsDomains.runtime);
+  // Per-companion overlay (dnll.1): merge companion-data/settings.overlay.json
+  // over the global runtime settings. Absent overlay = byte-identical behavior.
+  const effectiveRuntimeSettings = resolveEffectiveRuntimeSettings(
+    settingsDomains.runtime,
+    resolveConfiguredCompanionDataDir(config),
+  );
+  applySettings(config, effectiveRuntimeSettings);
 
   const modelsConfig = loadModelsConfig(dataDir, {
     ...loadOptions,

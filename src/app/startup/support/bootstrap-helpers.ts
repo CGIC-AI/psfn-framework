@@ -32,6 +32,7 @@ import {
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
 import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
+import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings-overlay.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -246,7 +247,14 @@ export function hydrateCanonicalStartupConfig(
   assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
   const startupRuntimeSettings = configStore.loadStartupRuntimeSettings();
   const { settingsDomains } = startupRuntimeSettings;
-  applySettings(config, settingsDomains.runtime);
+  // Per-companion overlay (dnll.1): deep-merge companion-data/settings.overlay.json
+  // over the global runtime settings for the whitelisted keys. Absent overlay =
+  // byte-identical to the global settings.
+  const effectiveRuntimeSettings = resolveEffectiveRuntimeSettings(
+    settingsDomains.runtime,
+    companionDataDir,
+  );
+  applySettings(config, effectiveRuntimeSettings);
   validateObserverEvalSidecarStartupConfig(config, pathSnapshot);
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);

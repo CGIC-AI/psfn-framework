@@ -14,6 +14,7 @@ import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
 import { SKILLS_FILE_NAME } from './skills-config.js';
 import { TRUST_POLICY_FILE_NAME } from './trust-policy-config.js';
+import { isCompanionSettingsOverlayKey } from './settings-overlay.js';
 
 export const IMPORT_PROCESSING_ROUTE_MODE_VALUES = [
   'background',
@@ -54,11 +55,19 @@ export interface SettingsContractSubsystem {
   mode: 'structured' | 'raw_only';
 }
 
+/**
+ * Cluster-global vs per-companion ownership scope for a settings field
+ * (bead dnll.1). `perCompanion` keys may be overridden by a companion's
+ * `settings.overlay.json`; `global` keys are shared across the whole fleet.
+ */
+export type SettingsFieldScope = 'global' | 'perCompanion';
+
 export interface SettingsContractField {
   key: string;
   ownerSubsystem: SettingsSubsystemId;
   ownerFile: string;
   type: SettingsFieldType;
+  scope: SettingsFieldScope;
   minimum?: number;
   maximum?: number;
   enumValues?: string[];
@@ -362,6 +371,7 @@ export function buildSettingsContractData(options: {
       ownerSubsystem,
       ownerFile,
       type: resolveFieldType(key),
+      scope: isCompanionSettingsOverlayKey(key) ? 'perCompanion' : 'global',
     };
     const range = resolveFieldRange(key);
     if (range?.min !== undefined) field.minimum = range.min;

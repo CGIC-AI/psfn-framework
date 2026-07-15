@@ -78,6 +78,37 @@ var. The manifest owns identity, data location, tenant schema, and Garden port;
 the runtime deterministically derives `workspaces/personal/<companionId>` from
 the validated runtime root rather than accepting another path override.
 
+## Per-companion settings overlay
+
+The single-release fleet shares one `settings.json` on the system-data root, so
+every setting is cluster-global by default. A companion can override a scoped
+whitelist of keys with an **optional** `settings.overlay.json` in its own
+`companionDataDir` (`src/system/config/settings-overlay.ts`).
+
+- **Whitelist only.** The overlay may set `activeTimezone`, the `voice*` block
+  (`voiceEnabled`, `ttsProvider`, `voiceId`, `voiceTargetGuildId`,
+  `voiceTargetUserId`, `voiceReadyCueText`, `echoTts*`, `sttProvider`,
+  `deepgram*`, `elevenLabs*`), `observerEvalSidecar`, `emotionScoping`,
+  `uiThemeId`, and `discordTrigger*`. `COMPANION_SETTINGS_OVERLAY_WHITELIST` is
+  the single source of truth; the settings contract derives a `scope`
+  (`global` | `perCompanion`) per field from it.
+- **Fail closed.** Any key outside the whitelist, malformed JSON, or a non-object
+  overlay aborts startup — the runtime never silently drops the offending key or
+  falls back to global settings for a broken overlay.
+- **Deep-merged, re-validated.** Whitelisted keys are deep-merged over the global
+  runtime settings (nested objects merge; arrays/scalars replace) and the result
+  is re-validated through the existing settings normalizer. This is how two fleet
+  companions hold, e.g., different `observerEvalSidecar.adapter.sessionLabel`
+  values (fixing the shared emo_sim session) or different `activeTimezone` clocks.
+- **Absent overlay = byte-identical** to today's global-only behavior. The merge
+  runs in both startup config-hydration paths (`hydrateCanonicalStartupConfig` in
+  `src/app/startup/support/bootstrap-helpers.ts` and `hydrateJsonBackedRuntimeConfig`
+  in `src/system/config/runtime-config.ts`).
+
+Whole owner files that are semantically per-companion (`capability-tier.json`,
+`scheduler.json`) are relocated to `companionDataDir` by separate work, not this
+overlay.
+
 ## Postgres tenancy: schema-per-companion + one shared schema
 
 Each agent process pins its runtime persistence to its own schema; there is one

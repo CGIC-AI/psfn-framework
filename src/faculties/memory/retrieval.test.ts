@@ -2996,7 +2996,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
+  it('allows shared group memories in the primary partner DM without requiring contact-card room proof', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
@@ -3016,7 +3016,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
       similarity: 0.97,
     });
-    const nonParticipatedGroupMemory = makeMemory({
+    const unlistedSharedGroupMemory = makeMemory({
       id: 'group-y-memory',
       text: 'Room Y agreed on a secret budget ceiling.',
       sensitivity: 'public',
@@ -3026,7 +3026,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     });
     const eventBus = makeMockEventBus();
     const retriever = new MemoryRetriever(
-      makeMockStore([dmMemory, participatedGroupMemory, nonParticipatedGroupMemory]),
+      makeMockStore([dmMemory, participatedGroupMemory, unlistedSharedGroupMemory]),
       makeMockEmbedding(),
       { retrievalLimit: 20 },
       eventBus,
@@ -3043,14 +3043,14 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
     expect(result).toContain('Vega DM reminder: prefer short deployment summaries.');
     expect(result).toContain('Room X agreed Vega owns the smoke test checklist.');
-    expect(result).not.toContain('Room Y agreed on a secret budget ceiling.');
+    expect(result).toContain('Room Y agreed on a secret budget ceiling.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
-    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
-    expect(telemetry.withheldReasonCounts).toMatchObject({
-      'room_visibility.blocked': 1,
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'room_visibility.blocked': expect.any(Number),
     });
-    expect(telemetry.returnedCount).toBe(2);
+    expect(telemetry.returnedCount).toBe(3);
   });
 
   it('allows participated group personal memories in the participant DM for regular contacts', async () => {
@@ -3092,7 +3092,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('fails closed for DM access when room participation proof is missing', async () => {
+  it('allows the primary partner subject memory when origin-channel proof is missing', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     const blockedGroupMemory = makeMemory({
       id: 'group-x-memory',
@@ -3120,17 +3120,15 @@ describe('MemoryRetriever room-scoped visibility', () => {
       vegaId,
     );
 
-    expect(result).not.toContain('private server migration plan');
-    expect(result).toContain('Memory context note:');
-    expect(result).toContain('room visibility boundary');
+    expect(result).toContain('Room X discussed a private server migration plan.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
-    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
-    expect(telemetry.withheldReasonCounts).toMatchObject({
-      'room_visibility.blocked': 1,
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'room_visibility.blocked': expect.any(Number),
     });
-    expect(telemetry.reason).toBe('trust_filtered');
-    expect(telemetry.returnedCount).toBe(0);
+    expect(telemetry.reason).toBe('ok');
+    expect(telemetry.returnedCount).toBe(1);
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {

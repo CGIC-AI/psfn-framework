@@ -68,6 +68,21 @@ export const SETTINGS_VALIDATION = {
   voiceSessionTimeoutMs: { min: 5_000, max: 600_000 },
   voiceMaxFrameBytes: { min: 1_024, max: 16_777_216 },
   voiceMaxPendingFrames: { min: 1, max: 4_096 },
+  subagentMaxConcurrent: { min: 1, max: 64 },
+  shardMaxConcurrent: { min: 1, max: 64 },
+  shardHeartbeatStaleAfterMs: { min: 5_000, max: 3_600_000 },
+  shardHeartbeatDisconnectAfterMs: { min: 10_000, max: 10_800_000 },
+  // Max mirrors the API transport ceiling (MAX_FILE_DATA_CHARS in
+  // src/channels/api/request-validation.ts caps one file part at 16 MiB
+  // decoded) — operators may lower the ingest cap but never exceed it.
+  documentIngestMaxBytes: { min: 4_096, max: 16_777_216 },
+  documentIngestTextMaxBytes: { min: 1_024, max: 16_777_216 },
+  documentIngestPromptChars: { min: 1_000, max: 1_000_000 },
+  documentIngestSidecarChars: { min: 1_000, max: 10_000_000 },
+  imageFalTimeoutMs: { min: 10_000, max: 3_600_000 },
+  imageFalPollIntervalMs: { min: 100, max: 60_000 },
+  imageComfyTimeoutMs: { min: 10_000, max: 3_600_000 },
+  imageComfyPollIntervalMs: { min: 100, max: 60_000 },
   obsidianTimeoutMs: { min: 1000, max: 30000 },
   moaMaxRounds: { min: 1, max: 10 },
   moaMaxTokensPerRound: { min: 256, max: 1_000_000 },

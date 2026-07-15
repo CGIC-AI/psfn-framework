@@ -16,6 +16,7 @@ import {
   toDocumentAttachmentCandidate,
   type DocumentAttachmentCandidate,
   type DocumentIngestFailure,
+  type DocumentIngestLimits,
 } from '../../../faculties/file-ingest/index.js';
 import type { SatelliteRoutingMetadata } from '../../../shared/contracts/satellite-registry.js';
 import type { SessionManager } from '../../../core/session/manager.js';
@@ -112,6 +113,8 @@ export interface ApiDocumentIngestConfig {
   personalFilesDir: string;
   /** Null when the intake firewall mode is 'off'. */
   intakeScreening: IntakeScreeningService | null;
+  /** Owner-file backed document ingest caps (zet.7); absent → compiled defaults. */
+  limits?: DocumentIngestLimits;
 }
 
 export interface ApiFilePartExtraction {
@@ -240,6 +243,8 @@ export async function ingestApiDocumentFileParts(input: {
     messageId: input.messageId,
     authorId: input.authorId,
     createdAt: new Date(),
+    // Owner-file backed ingest caps (zet.7).
+    ...(input.documentIngest.limits ? { limits: input.documentIngest.limits } : {}),
   });
   let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
   // htm9.2: screen accepted parsed text before it lands in

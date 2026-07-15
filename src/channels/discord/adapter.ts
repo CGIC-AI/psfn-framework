@@ -43,6 +43,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   appendDocumentIngestToContent,
   ingestDocumentAttachments,
+  resolveDocumentIngestLimits,
   screenDocumentIngestSummary,
 } from '../../faculties/file-ingest/index.js';
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
@@ -813,6 +814,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
         authorId: msg.author.id,
         createdAt: msg.createdAt,
         fetchResource: fetchRemoteResource,
+        // Owner-file backed ingest caps (zet.7).
+        limits: resolveDocumentIngestLimits(this.runtimeConfig),
       });
       // htm9.2: screen accepted parsed text before it lands in
       // <parsed_attachment_text>; the binary-level quarantine above stays.

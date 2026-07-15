@@ -259,6 +259,30 @@ export interface SubstrateConfig {
   observerEvalSidecar?: ObserverEvalSidecarSettings;
   sessionTailCache?: SessionTailCacheSettings;
   shardToolsets?: ShardToolsetConfig;
+  /** Concurrency cap on simultaneously active subagent tasks (zet.7). */
+  subagentMaxConcurrent?: number;
+  /** Concurrency cap on simultaneously active shards (zet.7). */
+  shardMaxConcurrent?: number;
+  /** Shard heartbeat silence (ms) before a shard is marked degraded/stale (zet.7). */
+  shardHeartbeatStaleAfterMs?: number;
+  /** Shard heartbeat silence (ms) before a shard is marked offline (zet.7). */
+  shardHeartbeatDisconnectAfterMs?: number;
+  /** Max document attachment size accepted by file ingest (bytes, zet.7). */
+  documentIngestMaxBytes?: number;
+  /** Max plain-text attachment size accepted by file ingest (bytes, zet.7). */
+  documentIngestTextMaxBytes?: number;
+  /** Char cap on parsed attachment text injected into the prompt (zet.7). */
+  documentIngestPromptChars?: number;
+  /** Char cap on parsed attachment text written to the sidecar file (zet.7). */
+  documentIngestSidecarChars?: number;
+  /** Overall wait cap (ms) for FAL image queue results (zet.7). */
+  imageFalTimeoutMs?: number;
+  /** Poll cadence (ms) for FAL image queue status (zet.7). */
+  imageFalPollIntervalMs?: number;
+  /** Overall wait cap (ms) for ComfyUI workflow completion (zet.7). */
+  imageComfyTimeoutMs?: number;
+  /** Poll cadence (ms) for ComfyUI workflow history (zet.7). */
+  imageComfyPollIntervalMs?: number;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
   discordTriggerWords?: string[];

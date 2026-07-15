@@ -157,12 +157,20 @@ async function readJsonOrThrow(response: Response, label: string): Promise<unkno
 }
 
 export class ComfyUiImageClient {
+  /** Resolved overall wait cap for workflow completion (owner-file backed, zet.7). */
+  readonly timeoutMs: number;
+  /** Resolved poll cadence for workflow history (owner-file backed, zet.7). */
+  readonly pollIntervalMs: number;
+
   constructor(
     private readonly baseUrl: string,
     private readonly workflows: ImageWorkflowSettings,
     private readonly config: ImageRuntimeConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+  ) {
+    this.timeoutMs = config.imageComfyTimeoutMs ?? DEFAULT_COMFY_TIMEOUT_MS;
+    this.pollIntervalMs = config.imageComfyPollIntervalMs ?? DEFAULT_COMFY_POLL_INTERVAL_MS;
+  }
 
   async create(params: ImageCreateParams): Promise<ImageGenerationResult> {
     return await this.execute('create', params, []);
@@ -267,8 +275,8 @@ export class ComfyUiImageClient {
   ): Promise<ComfyHistoryResponse> {
     const startedAt = Date.now();
     const url = new URL(`/history/${promptId}`, this.baseUrl);
-    while (Date.now() - startedAt < DEFAULT_COMFY_TIMEOUT_MS) {
-      await sleep(DEFAULT_COMFY_POLL_INTERVAL_MS);
+    while (Date.now() - startedAt < this.timeoutMs) {
+      await sleep(this.pollIntervalMs);
       const response = await this.fetchImpl(url, {
         headers: { Accept: 'application/json' },
       });
@@ -289,7 +297,7 @@ export class ComfyUiImageClient {
       }
     }
 
-    throw new Error(`ComfyUI ${mode} workflow timed out after ${DEFAULT_COMFY_TIMEOUT_MS}ms`);
+    throw new Error(`ComfyUI ${mode} workflow timed out after ${this.timeoutMs}ms`);
   }
 
   private async uploadImage(

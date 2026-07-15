@@ -68,6 +68,7 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'step_up_challenges',
   'jit_authorization_grants',
   'trusted_host_ceremonies',
+  'hub_device_assertion_replays',
 ] as const;
 
 const FLEET_AUTH_MUTABLE_TABLES = [

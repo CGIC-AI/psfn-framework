@@ -259,6 +259,10 @@ async function createHarness(options: {
             enabled: true as const,
             canonicalOrigin: 'https://fleet.example.test',
             verifierKeys: [],
+            hubDeviceAssertions: {
+              issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
+              maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
+            },
           },
         }
       : {}),

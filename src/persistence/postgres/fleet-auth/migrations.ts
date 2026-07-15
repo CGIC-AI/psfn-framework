@@ -483,9 +483,27 @@ CREATE UNIQUE INDEX contact_binding_one_live_principal
   WHERE state IN ('active', 'pending');
 `;
 
+const HUB_DEVICE_ASSERTION_REPLAY_SQL = `
+CREATE TABLE hub_device_assertion_replays (
+  issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 128),
+  jti UUID NOT NULL,
+  assertion_digest TEXT NOT NULL CHECK (assertion_digest ~ '^[0-9a-f]{64}$'),
+  device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256),
+  enrollment_version BIGINT NOT NULL CHECK (enrollment_version >= 1),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (issuer, jti),
+  CHECK (expires_at > consumed_at)
+);
+
+CREATE INDEX hub_device_assertion_replays_expiry_idx
+  ON hub_device_assertion_replays (expires_at);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
   { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
+  { version: 5, name: 'hub_device_assertion_replay', sql: HUB_DEVICE_ASSERTION_REPLAY_SQL },
 ] as const;

@@ -21,6 +21,12 @@ import {
   type AccountReapprovalResult,
 } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import {
+  verifyAndConsumeHubDeviceAssertion,
+  type HubDeviceAssertionExpectedBinding,
+  type HubDevicePrincipal,
+} from '../../../boundary/fleet-auth/hub-device-assertion.js';
+import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -33,6 +39,10 @@ export interface GatewayFleetAuthPersistence {
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
+  verifyAndConsumeHubDeviceAssertion(
+    token: string,
+    expected: HubDeviceAssertionExpectedBinding,
+  ): Promise<HubDevicePrincipal>;
   close(): Promise<void>;
 }
 
@@ -179,6 +189,7 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
     'discord_evidence_snapshots',
     'oauth_transactions',
     'trusted_host_ceremonies',
+    'hub_device_assertion_replays',
   ]) {
     await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}."${table}"`);
   }
@@ -221,11 +232,12 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     lifecycleWitness.recordDisabledIfPresent();
     return undefined;
   }
+  const config = options.config;
   if (!options.credentialVault) {
     throw new Error('Fleet auth enabled mode requires the gateway credential vault');
   }
   const secrets = resolveGatewayFleetAuthSecrets({
-    config: options.config,
+    config,
     credentialVault: options.credentialVault,
     protectedRestoreRoots: options.protectedRestoreRoots,
     ...(options.companionDatabaseUrl
@@ -234,15 +246,15 @@ export async function initializeGatewayFleetAuthPersistence(options: {
   });
   await migrateFleetAuthSchema({
     databaseUrl: secrets.database.migrationUrl,
-    roles: options.config.databaseRoles,
+    roles: config.databaseRoles,
   });
   await assertFleetAuthRuntimePrivileges(
     secrets.database.runtimeUrl,
-    options.config.databaseRoles,
+    config.databaseRoles,
   );
   await assertFleetAuthBackupRestorePrivileges(
     secrets.database.backupRestoreUrl,
-    options.config.databaseRoles,
+    config.databaseRoles,
   );
 
   const pool = createPostgresPool(secrets.database.runtimeUrl, {
@@ -258,7 +270,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       existingFloor?.trustedHost.lineageId,
     );
     const floor = authorityFloors.open({
-      activationGeneration: options.config.activationGeneration,
+      activationGeneration: config.activationGeneration,
       databaseHasDurableAuthority,
       ...(lifecyclePreparation.lifecycleTransitionId
         ? { lifecycleTransitionId: lifecyclePreparation.lifecycleTransitionId }
@@ -273,6 +285,12 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     return {
       authorityFloors,
       reapproveAccountAuthority: request => executeAccountReapproval(pool, request),
+      verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
+        token,
+        expected,
+        config: config.hubDeviceAssertions,
+        replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
+      }),
       close: async () => await pool.end(),
     };
   } catch (error) {

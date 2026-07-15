@@ -94,6 +94,19 @@ function config(): FleetAuthConfig {
       notAfter: '2099-01-01T00:00:00.000Z',
       status: 'active',
     }],
+    hubDeviceAssertions: {
+      issuer: 'psfn-satellite-hub',
+      audience: 'https://fleet.example.test',
+      maxTtlSeconds: 60,
+      clockSkewSeconds: 2,
+      keys: [{
+        kid: 'hub-gateway-startup-test',
+        publicKeyPem,
+        notBefore: '2026-01-01T00:00:00.000Z',
+        notAfter: '2099-01-01T00:00:00.000Z',
+        status: 'active',
+      }],
+    },
     ttls: {
       oauthTransactionMs: 300_000,
       sessionIdleMs: 1_800_000,

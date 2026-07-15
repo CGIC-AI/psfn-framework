@@ -17,8 +17,8 @@ import {
 // fleet-auth upgrade must prevent. It seeds a database to schema version 3
 // (the state that shipped before the identity registry existed), plants legacy
 // identity evidence that lives only in the immutable history log, and then runs
-// the real migration runner so that version 4 alone is applied as an in-place
-// upgrade. The registry backfill must honor that history and fail closed on
+// the real migration runner so version 4 is applied as an in-place upgrade
+// before any later independent migrations. The registry backfill must honor that history and fail closed on
 // ambiguity before its enforcement triggers are installed.
 
 const TIMEOUT_MS = 120_000;
@@ -91,7 +91,7 @@ async function freshDatabase() {
 
 // Bring a fresh database up to schema version 3 exactly the way the runner
 // would, so that a later migrateFleetAuthSchema call recognizes versions 1-3 as
-// already applied and installs only version 4 as an in-place upgrade.
+// already applied and installs version 4 plus any later independent migrations.
 async function seedToVersionThree(migrationUrl: string): Promise<void> {
   const pool = createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true });
   try {
@@ -175,7 +175,7 @@ describe('fleet_auth v4 provider-subject identity backfill', () => {
       await seed.end();
     }
 
-    // Upgrade v3 -> v4 through the real runner: only version 4 is applied.
+    // Upgrade from v3 through the real runner; v4 remains the identity backfill step.
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
 
     const inspect = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });

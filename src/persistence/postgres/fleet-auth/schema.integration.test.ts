@@ -29,6 +29,7 @@ import {
 import { reconcileFleetAuthAuthorityState } from './gateway-persistence.js';
 import { executeAccountReapproval } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
 import {
   runFleetAuthConsistentBackup,
   restoreFleetAuthSnapshot,
@@ -113,7 +114,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -128,6 +129,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         'browser_sessions',
         'discord_evidence_snapshots',
         'human_principals',
+        'hub_device_assertion_replays',
         'jit_authorization_grants',
         'oauth_transactions',
         'passkey_credentials',
@@ -141,6 +143,30 @@ describe('fleet_auth Postgres authority boundary', () => {
       ]));
     } finally {
       await migration.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('atomically consumes one Hub assertion and distinguishes replay from mutated reuse', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const pool = createPostgresPool(db.runtimeUrl, { max: 8, allowExitOnIdle: true });
+    const store = new PostgresHubDeviceAssertionReplayStore(pool);
+    const input = {
+      issuer: 'psfn-satellite-hub',
+      jti: randomUUID(),
+      assertionDigest: 'a'.repeat(64),
+      deviceId: 'office-device',
+      enrollmentVersion: 7,
+      expiresAt: new Date(Date.now() + 30_000),
+    };
+    try {
+      const outcomes = await Promise.all(Array.from({ length: 8 }, () => store.consume(input)));
+      expect(outcomes.filter(result => result.outcome === 'consumed')).toHaveLength(1);
+      expect(outcomes.filter(result => result.outcome === 'replayed')).toHaveLength(7);
+      await expect(store.consume({ ...input, assertionDigest: 'b'.repeat(64) }))
+        .resolves.toEqual({ outcome: 'mismatch' });
+    } finally {
+      await pool.end();
     }
   }, TIMEOUT_MS);
 

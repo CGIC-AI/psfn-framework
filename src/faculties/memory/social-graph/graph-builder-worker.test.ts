@@ -101,11 +101,24 @@ function makeReader(memories: PurrMemory[]): SocialGraphBuilderMemoryReader {
 const ALICE = 'c-alice';
 const BOB = 'c-bob';
 const GHOST = 'c-ghost';
+const SOURCE_CONTACT = 'contact-source';
+const PARTNER_CONTACT = 'contact-partner';
+const MENTIONED_CONTACT = 'contact-mentioned';
+const SUBJECT_CONTACT = 'contact-subject';
 
 function trackedAliceBob(): Map<string, Contact> {
   return new Map([
     [ALICE, makeContact(ALICE, 'Alice')],
     [BOB, makeContact(BOB, 'Bob')],
+  ]);
+}
+
+function trackedTargetResolutionContacts(): Map<string, Contact> {
+  return new Map([
+    [SOURCE_CONTACT, makeContact(SOURCE_CONTACT, 'Source Contact')],
+    [PARTNER_CONTACT, makeContact(PARTNER_CONTACT, 'Partner Contact')],
+    [MENTIONED_CONTACT, makeContact(MENTIONED_CONTACT, 'Mentioned Contact')],
+    [SUBJECT_CONTACT, makeContact(SUBJECT_CONTACT, 'Subject Contact')],
   ]);
 }
 
@@ -190,21 +203,22 @@ describe('SocialGraphBuilderWorker', () => {
     expect(await proposalStore.list()).toHaveLength(2);
   });
 
-  it('proposes an overheard edge when provenance carries only routedContactId', async () => {
+  it('proposes an overheard edge when the routed contact differs from the trigger contact', async () => {
     const overheard = makeMemory({
-      id: 'ov-routed',
-      text: 'Bob is Alice\'s sister',
+      id: 'overheard-safe-routed',
+      text: 'the subject contact is the source contact\'s sister',
       extractedAt: 2_500,
       provenance: {
         channelId: 'room-1',
         addressMode: 'overheard_room_context',
-        sourceContactId: ALICE,
-        routedContactId: BOB,
+        sourceContactId: SOURCE_CONTACT,
+        triggerContactId: PARTNER_CONTACT,
+        routedContactId: SUBJECT_CONTACT,
       },
     });
     const worker = new SocialGraphBuilderWorker({
       memoryReader: makeReader([overheard]),
-      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
       proposalStore,
       watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
     });
@@ -216,9 +230,43 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals).toHaveLength(1);
     expect(proposals[0]).toMatchObject({
       evidenceClass: 'overheard_interaction',
-      sourceContactId: ALICE,
-      targetContactId: BOB,
-      evidenceMemoryIds: ['ov-routed'],
+      sourceContactId: SOURCE_CONTACT,
+      targetContactId: SUBJECT_CONTACT,
+      evidenceMemoryIds: ['overheard-safe-routed'],
+    });
+  });
+
+  it('proposes an overheard edge to a mention-diverted third-party contact', async () => {
+    const overheard = makeMemory({
+      id: 'overheard-mention-diverted',
+      text: 'the mentioned contact is the source contact\'s sister',
+      contactId: MENTIONED_CONTACT,
+      extractedAt: 2_600,
+      provenance: {
+        channelId: 'room-1',
+        addressMode: 'overheard_room_context',
+        sourceContactId: SOURCE_CONTACT,
+        triggerContactId: PARTNER_CONTACT,
+        routedContactId: PARTNER_CONTACT,
+      },
+    });
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader([overheard]),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(1);
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      evidenceClass: 'overheard_interaction',
+      sourceContactId: SOURCE_CONTACT,
+      targetContactId: MENTIONED_CONTACT,
+      evidenceMemoryIds: ['overheard-mention-diverted'],
     });
   });
 
@@ -345,21 +393,22 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals[0].confidence).toBeCloseTo(0.7);
   });
 
-  it('proposes a named-relationship edge when provenance carries only routedContactId', async () => {
+  it('proposes a named-relationship edge when the routed contact differs from the trigger contact', async () => {
     const named = makeMemory({
-      id: 'named-routed',
-      text: 'my sister Bob came over',
+      id: 'named-safe-routed',
+      text: 'my sibling is the subject contact',
       extractedAt: 6_500,
       provenance: {
         channelId: 'room-1',
         addressMode: 'reply_to_user',
-        sourceContactId: ALICE,
-        routedContactId: BOB,
+        sourceContactId: SOURCE_CONTACT,
+        triggerContactId: PARTNER_CONTACT,
+        routedContactId: SUBJECT_CONTACT,
       },
     });
     const worker = new SocialGraphBuilderWorker({
       memoryReader: makeReader([named]),
-      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
       proposalStore,
       watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
     });
@@ -371,48 +420,109 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals).toHaveLength(1);
     expect(proposals[0]).toMatchObject({
       evidenceClass: 'named_relationship',
-      sourceContactId: ALICE,
-      targetContactId: BOB,
+      sourceContactId: SOURCE_CONTACT,
+      targetContactId: SUBJECT_CONTACT,
       relationshipType: 'sibling',
-      evidenceMemoryIds: ['named-routed'],
+      evidenceMemoryIds: ['named-safe-routed'],
     });
   });
 
-  it('prefers subjectContactId when both target provenance fields are present', async () => {
-    const CARL = 'c-carl';
-    const tracked = new Map([
-      ...trackedAliceBob(),
-      [CARL, makeContact(CARL, 'Carl')] as const,
-    ]);
+  it('proposes a named-relationship edge to a mention-diverted third-party contact', async () => {
+    const named = makeMemory({
+      id: 'named-mention-diverted',
+      text: 'my sibling is the mentioned contact',
+      contactId: MENTIONED_CONTACT,
+      extractedAt: 6_525,
+      provenance: {
+        channelId: 'room-1',
+        addressMode: 'reply_to_user',
+        sourceContactId: SOURCE_CONTACT,
+        triggerContactId: PARTNER_CONTACT,
+        routedContactId: PARTNER_CONTACT,
+      },
+    });
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader([named]),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(1);
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({
+      evidenceClass: 'named_relationship',
+      sourceContactId: SOURCE_CONTACT,
+      targetContactId: MENTIONED_CONTACT,
+      relationshipType: 'sibling',
+      evidenceMemoryIds: ['named-mention-diverted'],
+    });
+  });
+
+  it('does not treat a single-speaker trigger contact as the relationship target', async () => {
+    const named = makeMemory({
+      id: 'named-trigger-target',
+      text: 'my sibling is the partner contact',
+      contactId: PARTNER_CONTACT,
+      extractedAt: 6_550,
+      provenance: {
+        channelId: 'room-1',
+        addressMode: 'reply_to_user',
+        sourceContactId: SOURCE_CONTACT,
+        triggerContactId: PARTNER_CONTACT,
+        routedContactId: PARTNER_CONTACT,
+      },
+    });
+    const worker = new SocialGraphBuilderWorker({
+      memoryReader: makeReader([named]),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
+      proposalStore,
+      watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
+    });
+
+    const result = await worker.run();
+
+    expect(result.proposed).toBe(0);
+    expect(await proposalStore.list()).toHaveLength(0);
+  });
+
+  it('prefers subjectContactId over mention-diverted and routed target signals', async () => {
     const memories = [
       makeMemory({
         id: 'ov-both-targets',
-        text: 'Bob is Alice\'s sister',
+        text: 'the subject contact is the source contact\'s sister',
+        contactId: MENTIONED_CONTACT,
         extractedAt: 6_600,
         provenance: {
           channelId: 'room-1',
           addressMode: 'overheard_room_context',
-          sourceContactId: ALICE,
-          subjectContactId: BOB,
-          routedContactId: CARL,
+          sourceContactId: SOURCE_CONTACT,
+          triggerContactId: PARTNER_CONTACT,
+          subjectContactId: SUBJECT_CONTACT,
+          routedContactId: PARTNER_CONTACT,
         },
       }),
       makeMemory({
         id: 'named-both-targets',
-        text: 'my sister Bob came over',
+        text: 'my sibling is the subject contact',
+        contactId: MENTIONED_CONTACT,
         extractedAt: 6_700,
         provenance: {
           channelId: 'room-1',
           addressMode: 'reply_to_user',
-          sourceContactId: ALICE,
-          subjectContactId: BOB,
-          routedContactId: CARL,
+          sourceContactId: SOURCE_CONTACT,
+          triggerContactId: PARTNER_CONTACT,
+          subjectContactId: SUBJECT_CONTACT,
+          routedContactId: PARTNER_CONTACT,
         },
       }),
     ];
     const worker = new SocialGraphBuilderWorker({
       memoryReader: makeReader(memories),
-      contacts: makeStubContacts({ tracked }),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
       proposalStore,
       watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
     });
@@ -422,36 +532,37 @@ describe('SocialGraphBuilderWorker', () => {
     expect(result.proposed).toBe(2);
     const proposals = await proposalStore.list();
     expect(proposals).toHaveLength(2);
-    expect(proposals.every(proposal => proposal.targetContactId === BOB)).toBe(true);
-    expect(proposals.some(proposal => proposal.targetContactId === CARL)).toBe(false);
+    expect(proposals.every(proposal => proposal.targetContactId === SUBJECT_CONTACT)).toBe(true);
+    expect(proposals.some(proposal => proposal.targetContactId === MENTIONED_CONTACT)).toBe(false);
+    expect(proposals.some(proposal => proposal.targetContactId === PARTNER_CONTACT)).toBe(false);
   });
 
   it('does not fabricate overheard or named-relationship edges without a target contact id', async () => {
     const memories = [
       makeMemory({
         id: 'ov-no-target',
-        text: 'Bob is Alice\'s sister',
+        text: 'the subject contact is the source contact\'s sister',
         extractedAt: 6_800,
         provenance: {
           channelId: 'room-1',
           addressMode: 'overheard_room_context',
-          sourceContactId: ALICE,
+          sourceContactId: SOURCE_CONTACT,
         },
       }),
       makeMemory({
         id: 'named-no-target',
-        text: 'my sister Bob came over',
+        text: 'my sibling is the subject contact',
         extractedAt: 6_900,
         provenance: {
           channelId: 'room-1',
           addressMode: 'reply_to_user',
-          sourceContactId: ALICE,
+          sourceContactId: SOURCE_CONTACT,
         },
       }),
     ];
     const worker = new SocialGraphBuilderWorker({
       memoryReader: makeReader(memories),
-      contacts: makeStubContacts({ tracked: trackedAliceBob() }),
+      contacts: makeStubContacts({ tracked: trackedTargetResolutionContacts() }),
       proposalStore,
       watermarkStore: createFileSocialGraphBuilderWatermarkStore(watermarkPath),
     });

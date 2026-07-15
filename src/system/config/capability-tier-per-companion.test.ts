@@ -131,10 +131,11 @@ describe('capability-tier per-companion rooting (dnll.2)', () => {
 
     const contractData = buildSettingsContractData();
     expect(contractData.subsystems.capabilities.scope).toBe('perCompanion');
-    // Every other subsystem remains cluster-global.
-    for (const [id, subsystem] of Object.entries(contractData.subsystems)) {
-      if (id === 'capabilities') continue;
-      expect(subsystem.scope).toBe('global');
+    // Every subsystem's scope matches the per-companion owner-file registry
+    // (scheduler.json also becomes per-companion in dnll.3).
+    for (const subsystem of Object.values(contractData.subsystems)) {
+      const expected = PER_COMPANION_OWNER_FILES.has(subsystem.ownerFile) ? 'perCompanion' : 'global';
+      expect(subsystem.scope).toBe(expected);
     }
   });
 

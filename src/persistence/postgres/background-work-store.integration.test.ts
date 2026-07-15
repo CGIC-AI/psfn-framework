@@ -1866,6 +1866,117 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   }, 30_000);
 
+  it('reaches a configured interval above ten from bounded post-turn snapshots', async () => {
+    // Regression for psfn-framework-u5bv.10: with a fixed ten-entry bounded
+    // snapshot a configured interval of 11-50 could never accumulate enough
+    // uncovered entries to interval-fire, so every durable receipt completed as a
+    // no-op and memory extraction silently never ran for those configs. The
+    // snapshot must now follow the interval so it stays reachable, still firing
+    // only from the fenced snapshot (never a newer live-history read) and
+    // consuming each uncovered entry exactly once.
+    const database = await harness.createDatabase();
+    const consumerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-interval-reach-'));
+    const consumerStore = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+        consumerPool,
+        'companion_a',
+      ),
+    });
+    const config = {
+      dataDir: sessionsDir,
+      companionDataDir: sessionsDir,
+      sessionMessageLimit: 80,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 25,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 128_000,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 70,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+      },
+    } as SubstrateConfig;
+    const consumer = new SessionManager(consumerStore, config);
+    const channelId = 'api:interval-reach-durable';
+
+    try {
+      const entryIds: number[] = [];
+      for (let n = 1; n <= 26; n++) {
+        const id = consumer.recordUserMessage(
+          channelId,
+          `I am mapping out a museum itinerary detail ${n} for the group visit.`,
+          `human-${n}`,
+          `Human ${n}`,
+          true,
+          undefined,
+          { turnId: createTurnId(), requestId: `req-interval-reach-${n}` },
+        );
+        expect(id).not.toBeNull();
+        entryIds.push(id!);
+      }
+
+      const llmClient = {
+        complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+      } as never;
+      const memoryStore = {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as never;
+      const embeddingService = {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as never;
+      const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as never;
+      const extractor = new MemoryExtractor(
+        llmClient,
+        consumer,
+        memoryStore,
+        embeddingService,
+        eventBus,
+        { extractionInterval: 25 },
+      );
+
+      // The handler sizes the bounded snapshot to the interval, not a fixed ten.
+      const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
+      expect(snapshotLimit).toBe(25);
+
+      // No live-history fallback: a fenced snapshot must never trigger a newer read.
+      const liveSpy = vi.spyOn(consumer, 'getRecentMessages');
+
+      // Exactly the durable post-turn handler's read, now interval-sized.
+      const snapshotEndingAt = (index: number) =>
+        consumer.getRecentMessagesAtOrBefore(channelId, entryIds[index]!, snapshotLimit);
+      const runBounded = (index: number) => extractor.maybeExtract(
+        channelId, undefined, undefined, undefined, undefined, undefined,
+        snapshotEndingAt(index),
+      );
+
+      // Under the old fixed-ten window this snapshot held at most ten entries and
+      // never reached twenty-five; a snapshot of only twenty-four uncovered
+      // entries must still not fire (fires at the configured count, not earlier).
+      await runBounded(23);
+      expect(llmClient.complete).not.toHaveBeenCalled();
+
+      // Twenty-five uncovered bounded entries reach the interval and fire once.
+      await runBounded(24);
+      expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+      // Exactly once: the same fenced snapshot is now fully covered and re-running
+      // it is a durable no-op, never double-counting the consumed entries.
+      await runBounded(24);
+      expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+      expect(liveSpy).not.toHaveBeenCalled();
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await consumerPool.end();
+    }
+  }, 30_000);
+
   it('keeps a permanent accepted-handoff ledger after terminal job cleanup', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {

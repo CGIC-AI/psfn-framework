@@ -769,7 +769,7 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('surfaces expired foreground ownership before a second replica executes an effect', async () => {
+  it('lets a second supervisor claim after one lost-foreground quarantine window', async () => {
     const database = await harness.createDatabase();
     const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
@@ -779,20 +779,25 @@ describe('PostgresBackgroundWorkStore', () => {
     });
     let now = 1_000;
     let foregroundEffectCapable = true;
+    let firstReplicaEffects = 0;
     let secondReplicaEffects = 0;
     const first = new BackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
-      leaseDurationMs: 30,
+      leaseDurationMs: 300_000,
       now: () => now,
-      executor: async () => undefined,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async () => {
+          firstReplicaEffects += 1;
+        });
+      },
     });
     const second = new BackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
-      leaseDurationMs: 30,
+      leaseDurationMs: 300_000,
       now: () => now,
       executor: async ({ effects }) => {
         await effects.run('durable-sink', async () => {
@@ -809,7 +814,7 @@ describe('PostgresBackgroundWorkStore', () => {
       }, { once: true });
       await second.enqueue([makeInput('session-a', 'turn-a')]);
 
-      now = 1_031;
+      now = 301_001;
       await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
       expect(foreground.signal.aborted).toBe(true);
       expect(foregroundEffectCapable).toBe(false);
@@ -817,8 +822,36 @@ describe('PostgresBackgroundWorkStore', () => {
       await second.tick();
       await second.waitForIdle();
       expect(secondReplicaEffects).toBe(0);
+
+      // The foreground operation deliberately ignores abort. Later heartbeats
+      // must not extend its lost lease beyond the one durable quarantine window.
+      now = 401_001;
+      await first.tick();
+      now = 501_001;
+      await first.tick();
+      now = 601_002;
+      await second.tick();
+      await second.waitForIdle();
+      expect(secondReplicaEffects).toBe(1);
+
+      // A replacement foreground owner may arrive before the stale local turn
+      // finally cleans up. Ending the lost lease is idempotent and must leave
+      // that replacement fence intact.
+      const replacementForeground = second.beginForeground('session-a');
+      await replacementForeground.ready;
+      await first.endForeground(foreground);
       await first.endForeground(foreground);
       await first.waitForSessionTransitions();
+      await first.enqueue([makeInput('session-a', 'turn-b')]);
+      await first.tick();
+      await first.waitForIdle();
+      expect(firstReplicaEffects).toBe(0);
+
+      await second.endForeground(replacementForeground);
+      await second.waitForSessionTransitions();
+      await first.tick();
+      await first.waitForIdle();
+      expect(firstReplicaEffects).toBe(1);
       await second.tick();
       await second.waitForIdle();
       expect(secondReplicaEffects).toBe(1);

@@ -803,9 +803,18 @@ export class BackgroundWorkSupervisor {
   }
 
   private markForegroundLeaseLost(leaseId: string): void {
+    // The store grants an observed-expired lease one durable quarantine
+    // extension while omitting it from the renewed ids. Once that loss is
+    // observed locally, the id must never be submitted to another heartbeat:
+    // doing so would turn the bounded quarantine into an immortal lease.
+    this.readyForegroundLeaseIds.delete(leaseId);
     const lease = this.foregroundLeases.get(leaseId);
-    if (!lease || lease.signal.aborted) return;
-    lease.controller.abort(new ForegroundWorkLeaseLostError());
+    if (lease && !lease.signal.aborted) {
+      lease.controller.abort(new ForegroundWorkLeaseLostError());
+    }
+    if (this.running.size === 0 && this.readyForegroundLeaseIds.size === 0) {
+      this.stopHeartbeat();
+    }
   }
 
   private executionDurationMs(job: ClaimedBackgroundWorkJob): number {

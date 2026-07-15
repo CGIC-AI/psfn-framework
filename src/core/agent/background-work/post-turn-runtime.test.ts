@@ -328,6 +328,7 @@ describe('executePostTurnBackgroundWork', () => {
       undefined,
       expect.any(Function),
       recentEntries,
+      expect.any(Function),
     );
   });
 
@@ -578,6 +579,7 @@ describe('executePostTurnBackgroundWork', () => {
       undefined,
       expect.any(Function),
       recentEntries,
+      expect.any(Function),
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);
@@ -1054,7 +1056,9 @@ describe('executePostTurnBackgroundWork', () => {
         signal: base.signal,
         job: makeJob(memoryPayload),
       }, dependencies);
-      const memoryEntries = maybeExtract.mock.calls[0]?.at(-1) as SessionEntry[];
+      // maybeExtract now receives a trailing non-crossing pre-write fence after
+      // recentEntries, so the bounded snapshot is the second-to-last argument.
+      const memoryEntries = maybeExtract.mock.calls[0]?.at(-2) as SessionEntry[];
 
       const emotionPayload: EmotionAppraisalBackgroundPayload = {
         schemaVersion: 1,

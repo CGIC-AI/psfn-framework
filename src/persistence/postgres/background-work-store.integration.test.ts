@@ -1004,6 +1004,159 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('never deletes a boundary-crossed effect receipt on abandon', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    try {
+      // A boundary-crossed (`started`) receipt is durable evidence that a write
+      // may have landed. A post-write handler exception requests abandon, but
+      // deleting it would let a retry replay the write and duplicate the durable
+      // effect (u5bv.6). abandonEffect must leave it in place.
+      const crossedInput = makeInput('session-abandon-started', 'turn-abandon-started');
+      await store.enqueue(crossedInput);
+      const crossedClaim = await store.claimNext({
+        leaseOwner: 'worker',
+        nowMs: 100,
+        leaseDurationMs: 10_000,
+        excludedLogicalSessionIds: [],
+      });
+      await store.beginEffect({
+        jobId: crossedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crossedClaim!.leaseOwner,
+        expectedRevision: crossedClaim!.revision,
+        nowMs: 100,
+      });
+      expect(await store.commitEffectBoundary({
+        jobId: crossedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crossedClaim!.leaseOwner,
+        expectedRevision: crossedClaim!.revision,
+        nowMs: 100,
+      })).toBe('crossed');
+      await store.abandonEffect({
+        jobId: crossedClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: crossedClaim!.leaseOwner,
+        expectedRevision: crossedClaim!.revision,
+        nowMs: 100,
+      });
+      const crossedReceipts = await inspectionPool.query<{ state: string }>(`
+        SELECT state FROM agent_background_work_effect_receipts
+        WHERE job_id = $1 AND effect_key = $2
+      `, [crossedClaim!.jobId, 'durable-sink']);
+      expect(crossedReceipts.rows).toEqual([{ state: 'started' }]);
+
+      // A `pending` receipt, by contrast, proves no write was attempted, so it
+      // is safely abandonable into a cleanly re-runnable state.
+      const pendingInput = makeInput('session-abandon-pending', 'turn-abandon-pending');
+      await store.enqueue(pendingInput);
+      const pendingClaim = await store.claimNext({
+        leaseOwner: 'worker',
+        nowMs: 100,
+        leaseDurationMs: 10_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(await store.beginEffect({
+        jobId: pendingClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: pendingClaim!.leaseOwner,
+        expectedRevision: pendingClaim!.revision,
+        nowMs: 100,
+      })).toBe('execute');
+      await store.abandonEffect({
+        jobId: pendingClaim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: pendingClaim!.leaseOwner,
+        expectedRevision: pendingClaim!.revision,
+        nowMs: 100,
+      });
+      const pendingReceipts = await inspectionPool.query(`
+        SELECT state FROM agent_background_work_effect_receipts
+        WHERE job_id = $1 AND effect_key = $2
+      `, [pendingClaim!.jobId, 'durable-sink']);
+      expect(pendingReceipts.rows).toEqual([]);
+    } finally {
+      await inspectionPool.end();
+      await store.close();
+    }
+  }, 30_000);
+
+  it('writes a durable multi-write effect exactly once across a post-write exception and retry', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const sinkPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    await sinkPool.query(`
+      CREATE TABLE duplicate_probe_effects (
+        id BIGSERIAL PRIMARY KEY,
+        job_id TEXT NOT NULL
+      )
+    `);
+    let sinkWrites = 0;
+    let now = 1_000;
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      leaseOwner: 'worker',
+      retryBaseDelayMs: 10,
+      executor: async ({ job, effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          // First durable write of a multi-write effect: cross the boundary,
+          // land one sink row, then throw as a later write in the same handler
+          // fails. The receipt is now `started` (outcome-ambiguous).
+          await crossBoundary();
+          await sinkPool.query(
+            'INSERT INTO duplicate_probe_effects (job_id) VALUES ($1)',
+            [job.jobId],
+          );
+          sinkWrites += 1;
+          throw new Error('mid-multi-write failure');
+        });
+      },
+    });
+    try {
+      const input = makeInput('session-dup', 'turn-dup');
+      await supervisor.enqueue([input]);
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      // The first attempt landed exactly one row and then failed; the job is
+      // scheduled for retry. A real supervisor + Postgres store + durable sink.
+      expect(sinkWrites).toBe(1);
+
+      now += 10_000;
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+
+      // The retry must fail closed on the surviving `started` receipt instead of
+      // replaying the write: exactly one durable sink row across the retry.
+      const rows = await sinkPool.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM duplicate_probe_effects',
+      );
+      expect(rows.rows[0]!.n).toBe(1);
+      expect(sinkWrites).toBe(1);
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'failed',
+        reasonCode: 'effect_outcome_unknown',
+      });
+    } finally {
+      await supervisor.stop();
+      await sinkPool.end();
+      await store.close();
+    }
+  }, 30_000);
+
   it('linearizes claimed effects with tombstone and uniqueness revocation across stores', async () => {
     const database = await harness.createDatabase();
     const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {

@@ -328,10 +328,10 @@ export interface ProfileRefreshQueueOptions {
   ) => Promise<void>;
 }
 
-export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): void {
-  if (!options.canonicalContactId) return;
-  if (!options.acceptingExtractions) return;
-  if (!options.profileConfig.enabled) return;
+export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): Promise<void> {
+  if (!options.canonicalContactId) return Promise.resolve();
+  if (!options.acceptingExtractions) return Promise.resolve();
+  if (!options.profileConfig.enabled) return Promise.resolve();
 
   const existing = options.inFlightProfileByContact.get(options.canonicalContactId);
   if (existing) {
@@ -342,7 +342,9 @@ export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): voi
         triggerReason: options.triggerReason,
       });
     }
-    return;
+    // Await the in-flight refresh so a coalesced caller still settles behind a
+    // durable child it shares, but swallow its outcome (it is owned elsewhere).
+    return existing.then(() => undefined, () => undefined);
   }
 
   const promise = options.startRefresh(
@@ -354,7 +356,10 @@ export function scheduleProfileRefresh(options: ProfileRefreshQueueOptions): voi
   );
   options.inFlightProfileRefreshes.add(promise);
   options.inFlightProfileByContact.set(options.canonicalContactId, promise);
-  void promise
+  // Returns a settled-when-done promise that never rejects: the caller awaits it
+  // to keep the parent effect receipt open until this durable child completes
+  // (u5bv.6 AC3), while a best-effort synthesis failure never fails that effect.
+  return promise
     .catch((error) => {
       log.error('Profile refresh failed', {
         channelId: options.channelId,

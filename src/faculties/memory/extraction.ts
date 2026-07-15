@@ -257,6 +257,10 @@ export class MemoryExtractor {
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
     recoveredEntries?: readonly SessionEntry[],
+    // NON-crossing durable fence for the pre-write phase (entry, LLM, parse, DB
+    // reads). Separate from `assertEffectAllowed`, which crosses the durable
+    // side-effect boundary and must fire only at the write sites.
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -306,6 +310,7 @@ export class MemoryExtractor {
       // A durable bounded callback may complete an effect receipt only after
       // its own snapshot runs; reusing unrelated channel work would drop it.
       boundedEntries === undefined ? 'coalesce' : 'serialize',
+      assertPreWriteFence,
     );
     if (boundedEntries !== undefined) {
       this.advanceIntervalWatermarkAfterCoverage(
@@ -455,6 +460,7 @@ export class MemoryExtractor {
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
     scheduling: 'coalesce' | 'serialize' = 'coalesce',
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
@@ -474,6 +480,7 @@ export class MemoryExtractor {
       placeId,
       icpCorrelation,
       assertEffectAllowed,
+      assertPreWriteFence,
     );
     const promise = existing
       ? existing.then(start, start)
@@ -517,8 +524,15 @@ export class MemoryExtractor {
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
-    await assertEffectAllowed?.();
+    // Entry guard on the pre-write phase: use the NON-crossing fence so a
+    // transient failure in the LLM/parse/read work below leaves the durable
+    // receipt `pending` (safely retryable) instead of crossing the side-effect
+    // boundary early. The boundary is crossed later, at the first durable write
+    // (processFact / extraction marker), via `assertEffectAllowed`. Callers that
+    // supply no pre-write fence fall back to the prior behavior.
+    await (assertPreWriteFence ?? assertEffectAllowed)?.();
     if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
       log.debug('Skipping stale extraction after session route changed', {
         channelId,
@@ -882,8 +896,11 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
-  ): void {
-    scheduleProfileRefresh({
+  ): Promise<void> {
+    // Returns an awaitable that settles when the (idempotent, contact-id-keyed)
+    // profile upsert completes, so the orchestrator can keep the parent receipt
+    // open until this durable child finishes rather than detaching it (AC3).
+    return scheduleProfileRefresh({
       channelId,
       triggerReason,
       canonicalContactId,
@@ -928,8 +945,14 @@ export class MemoryExtractor {
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ): void {
-    void persistEmotionalStateFromExtraction({
+  ): Promise<void> {
+    // Awaited by the orchestrator inside the effect-guarded region so this
+    // durable child settles before the parent receipt is applied (u5bv.6 AC3).
+    // It swallows its own failures and never rejects, so awaiting cannot fail
+    // the extraction effect; the emotional update stays best-effort. It always
+    // runs after the durable write boundary is crossed, so a crash mid-update
+    // fails the effect closed rather than replaying and double-counting.
+    return persistEmotionalStateFromExtraction({
       canonicalContactId,
       acceptedFacts,
       recentEntries,

@@ -195,15 +195,23 @@ export async function executePostTurnBackgroundWork(
         requireSourceSessionEntry(recentEntries, maxSessionEntryId);
         const extractor = dependencies.getMemoryExtractor();
         if (!extractor) throw new Error('Memory extraction background handler is not wired');
-        await input.effects.run('memory-extraction', async (assertOwned) => {
+        await input.effects.run('memory-extraction', async (crossBoundary) => {
+          // Extraction has a long, failable pre-write phase (LLM call, parse, DB
+          // reads) before its first durable write. Guard that phase with the
+          // NON-crossing `assertOwned` fence so a transient pre-write failure
+          // leaves the receipt `pending` and the job retryable; `crossBoundary`
+          // is called only at the durable write sites, where a post-write crash
+          // must instead fail closed. Passing both keeps pre-write work
+          // retryable while the write phase stays exactly-once.
           await extractor.maybeExtract(
             payload.source.logicalSessionId,
             payload.canonicalContactId,
             record.turnId,
             payload.placeId,
             payload.icpCorrelation,
-            assertOwned,
+            crossBoundary,
             recentEntries,
+            input.effects.assertOwned,
           );
         });
       },

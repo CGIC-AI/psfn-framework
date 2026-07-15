@@ -225,7 +225,12 @@ describe('wirePostTurnActionRuntime', () => {
     expect(runtime.listQueued()).toHaveLength(0);
   });
 
-  it('runs background-capable handlers without waiting for agent idle', async () => {
+  it('awaits foreground idle for a maintenance_reflection action even when the handler declares background execution', async () => {
+    // Regression (mmo9.5.2): the overlap decision is owned by the lane profile
+    // (RuntimeLaneBudgetProfile.requiresForegroundIdle), not by the handler's
+    // executionMode. maintenance_reflection requires foreground idle, so a
+    // 'heartbeat.run_template' action MUST wait even though its handler declared
+    // executionMode:'background'. Before the fix this asserted NOT called.
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -246,6 +251,49 @@ describe('wirePostTurnActionRuntime', () => {
       executionMode: 'background',
     });
 
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [makeAction({ id: 'maintenance-action', dedupeKey: 'maintenance:key' })],
+    });
+
+    const tickPromise = scheduler.tick();
+    await Promise.resolve();
+
+    // Idle wait is in progress and the handler is blocked behind it.
+    expect(agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+
+    idleGate.resolve(undefined);
+    await tickPromise;
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(runtime.listQueued()).toHaveLength(0);
+  });
+
+  it('runs a post_turn_appraisal action without waiting for agent idle', async () => {
+    // The post_turn_appraisal lane sets requiresForegroundIdle=false, so the
+    // action must run immediately without blocking on foreground idle.
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const idleGate = createDeferred<void>();
+    const agentLoop = {
+      waitForIdle: vi.fn().mockImplementation(() => idleGate.promise),
+    };
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop,
+      intervalMs: 10,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('intention.follow_up', handler, {
+      executionMode: 'background',
+    });
+
     const phases: string[] = [];
     eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
       phases.push(phase);
@@ -254,7 +302,12 @@ describe('wirePostTurnActionRuntime', () => {
     await eventBus.emit('agent.post_turn.actions.inferred', {
       message: makeMessage(),
       response: makeResponse(),
-      actions: [makeAction({ id: 'background-action', dedupeKey: 'background:key' })],
+      actions: [makeAction({
+        id: 'appraisal-action',
+        kind: 'intention.follow_up',
+        dedupeKey: 'intention.follow_up:appraisal',
+        payload: {},
+      })],
     });
 
     await scheduler.tick();
@@ -263,6 +316,32 @@ describe('wirePostTurnActionRuntime', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(runtime.listQueued()).toHaveLength(0);
     expect(phases).toEqual(expect.arrayContaining(['queued', 'started', 'succeeded']));
+  });
+
+  it('rejects registering a foreground handler on a lane that does not require foreground idle', () => {
+    // Consistency guard against silent re-drift: declaring executionMode
+    // 'foreground' on a non-idle lane (post_turn_appraisal) must fail closed at
+    // registration time.
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+      intervalMs: 10,
+    });
+
+    expect(() => runtime.registerHandler('intention.follow_up', vi.fn(), {
+      executionMode: 'foreground',
+    })).toThrow(/requiresForegroundIdle=false/);
+
+    // A foreground handler on the maintenance_reflection lane is consistent and allowed.
+    expect(() => runtime.registerHandler('heartbeat.run_template', vi.fn(), {
+      executionMode: 'foreground',
+    })).not.toThrow();
   });
 
   it('drops oldest maintenance work when the maintenance lane queue budget is exceeded', async () => {

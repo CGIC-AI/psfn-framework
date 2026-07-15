@@ -241,16 +241,19 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     const databaseHasDurableAuthority = await hasDurableFleetAuthAuthority(pool);
     const authorityFloors = new FleetAuthAuthorityFloorStore(secrets.authorityFloorRoot);
     const existingFloor = authorityFloors.exists() ? authorityFloors.read() : undefined;
-    const lifecycleTransitionId = lifecycleWitness.prepareEnable(
+    const lifecyclePreparation = lifecycleWitness.prepareEnable(
       existingFloor?.trustedHost.lineageId,
     );
     const floor = authorityFloors.open({
       activationGeneration: options.config.activationGeneration,
       databaseHasDurableAuthority,
-      ...(lifecycleTransitionId ? { lifecycleTransitionId } : {}),
+      ...(lifecyclePreparation.lifecycleTransitionId
+        ? { lifecycleTransitionId: lifecyclePreparation.lifecycleTransitionId }
+        : {}),
     });
     await reconcileFleetAuthAuthorityState(pool, floor, randomUUID());
-    lifecycleWitness.recordEnabled(
+    lifecycleWitness.publishEnabled(
+      lifecyclePreparation,
       floor.trustedHost.lineageId,
       floor.trustedHost.lastLifecycleTransitionId,
     );

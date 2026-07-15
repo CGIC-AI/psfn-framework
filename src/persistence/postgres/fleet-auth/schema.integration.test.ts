@@ -474,7 +474,11 @@ describe('fleet_auth Postgres authority boundary', () => {
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const lifecycle = new FleetAuthLifecycleWitnessStore(floorRoot);
       const initialFloor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
-      lifecycle.recordEnabled(initialFloor.trustedHost.lineageId, null);
+      lifecycle.publishEnabled(
+        lifecycle.prepareEnable(),
+        initialFloor.trustedHost.lineageId,
+        null,
+      );
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
           (principal_id, status, authority_generation)
@@ -540,7 +544,8 @@ describe('fleet_auth Postgres authority boundary', () => {
         [randomUUID(), 'a'.repeat(64)],
       );
 
-      expect(lifecycle.prepareEnable(initialFloor.trustedHost.lineageId)).toBeUndefined();
+      expect(lifecycle.prepareEnable(initialFloor.trustedHost.lineageId).lifecycleTransitionId)
+        .toBeUndefined();
       const ordinaryRestart = floors.open({
         activationGeneration: 1,
         databaseHasDurableAuthority: true,
@@ -552,7 +557,8 @@ describe('fleet_auth Postgres authority boundary', () => {
       expect(beforeDisable.rows[0]?.count).toBe('1');
 
       lifecycle.recordDisabledIfPresent();
-      const lifecycleTransitionId = lifecycle.prepareEnable(initialFloor.trustedHost.lineageId);
+      const lifecyclePreparation = lifecycle.prepareEnable(initialFloor.trustedHost.lineageId);
+      const { lifecycleTransitionId } = lifecyclePreparation;
       expect(lifecycleTransitionId).toMatch(/^[0-9a-f]{64}$/);
       if (!lifecycleTransitionId) throw new Error('disable transition was not recorded');
       const reenabled = floors.open({
@@ -561,6 +567,11 @@ describe('fleet_auth Postgres authority boundary', () => {
         lifecycleTransitionId,
       });
       await reconcileFleetAuthAuthorityState(runtime, reenabled, randomUUID());
+      lifecycle.publishEnabled(
+        lifecyclePreparation,
+        reenabled.trustedHost.lineageId,
+        reenabled.trustedHost.lastLifecycleTransitionId,
+      );
 
       const state = await runtime.query<{
         authority_generation: string;

@@ -664,7 +664,8 @@ describe('BackgroundWorkSupervisor', () => {
     });
   });
 
-  it('signals foreground ownership loss before another replica may cross an effect boundary', async () => {
+  it('stops renewing a locally lost foreground lease after one quarantine window', async () => {
+    vi.useFakeTimers();
     let now = 1_000;
     const store = new MemoryBackgroundWorkStore();
     const first = new BackgroundWorkSupervisor({
@@ -687,27 +688,41 @@ describe('BackgroundWorkSupervisor', () => {
       },
     });
     const foreground = first.beginForeground('session-a');
-    await foreground.ready;
-    const ownershipLost = deferred();
-    foreground.signal.addEventListener('abort', () => ownershipLost.resolve(), { once: true });
-    store.forceForegroundRenewalLoss();
-    now = 1_010;
-    await ownershipLost.promise;
-    expect(foreground.signal.aborted).toBe(true);
+    try {
+      await foreground.ready;
+      store.forceForegroundRenewalLoss();
+      now = 1_031;
+      await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
+      expect(foreground.signal.aborted).toBe(true);
 
-    const input = makeInput('session-a', 'turn-a');
-    await second.enqueue([input]);
-    await second.tick();
-    await second.waitForIdle();
-    expect(effect).not.toHaveBeenCalled();
+      const input = makeInput('session-a', 'turn-a');
+      await second.enqueue([input]);
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).not.toHaveBeenCalled();
 
-    // The turn lifecycle consumes the loss signal by ending local foreground
-    // capability before another replica is allowed to execute the effect.
-    await first.endForeground(foreground);
-    await first.waitForSessionTransitions();
-    await second.tick();
-    await second.waitForIdle();
-    expect(effect).toHaveBeenCalledTimes(1);
+      // Two later heartbeats must not renew the locally lost lease. A foreground
+      // operation may ignore its abort signal, but another replica still recovers
+      // after exactly the one durable quarantine window created above.
+      now = 1_041;
+      await first.tick();
+      now = 1_051;
+      await first.tick();
+      now = 1_062;
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).toHaveBeenCalledTimes(1);
+
+      await first.endForeground(foreground);
+      await first.endForeground(foreground);
+      await first.waitForSessionTransitions();
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.allSettled([first.stop(), second.stop()]);
+      vi.useRealTimers();
+    }
   });
 
   it('commits an effect receipt once when foreground arrives after the effect boundary', async () => {

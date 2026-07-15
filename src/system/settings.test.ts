@@ -44,6 +44,7 @@ function makeConfig(): SubstrateConfig {
     primaryMaxTokens: 16384,
     extractionMaxTokens: 8192,
     maintenanceIntervalMs: 300_000,
+    salienceDecayIntervalMs: 300_000,
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
@@ -333,10 +334,10 @@ describe('settings', () => {
       );
 
       expect(() => saveSettings(tempDir, {
-        maintenanceIntervalMs: 120_000,
+        salienceDecayIntervalMs: 120_000,
         capabilityTier: 'autonomous',
       })).toThrow(
-        'Refusing to save non-runtime keys to settings.json: maintenanceIntervalMs, capabilityTier',
+        'Refusing to save non-runtime keys to settings.json: salienceDecayIntervalMs, capabilityTier',
       );
     });
 
@@ -1539,6 +1540,7 @@ describe('settings', () => {
       expect(persisted).toEqual(expected);
       expect(loaded).toEqual(expected);
       expect(persisted.primaryModel).toBeUndefined();
+      expect(persisted.salienceDecayIntervalMs).toBeUndefined();
       expect(persisted.maintenanceIntervalMs).toBeUndefined();
       expect(persisted.capabilityTier).toBeUndefined();
     });

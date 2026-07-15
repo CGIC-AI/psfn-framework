@@ -377,7 +377,7 @@ describe('startup owner-file loaders', () => {
     writeFileSync(
       join(rootDir, 'settings.json'),
       `${JSON.stringify({
-        maintenanceIntervalMs: 123_000,
+        salienceDecayIntervalMs: 123_000,
         capabilityTier: 'apprentice',
       }, null, 2)}\n`,
       'utf-8',
@@ -393,7 +393,7 @@ describe('startup owner-file loaders', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('settings.json');
     expect(result.errors[0]).toContain('Unsupported cross-domain keys in settings.json');
-    expect(result.errors[0]).toContain('maintenanceIntervalMs->scheduler.json');
+    expect(result.errors[0]).toContain('salienceDecayIntervalMs->scheduler.json');
     expect(result.errors[0]).toContain('capabilityTier->capability-tier.json');
   });
 

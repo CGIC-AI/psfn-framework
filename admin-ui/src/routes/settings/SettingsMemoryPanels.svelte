@@ -30,7 +30,7 @@
     compactionThresholdPct = $bindable(70),
     extractionInterval = $bindable(5),
     compactionEmotionalSalienceThresholdPct = $bindable(75),
-    maintenanceIntervalMs = $bindable(300000),
+    salienceDecayIntervalMs = $bindable(3600000),
     memoryExtractionMinImportance = $bindable(0.3),
     memoryExtractionMinConfidence = $bindable(0.4),
     memoryExtractionMinNovelty = $bindable(0.1),
@@ -67,7 +67,7 @@
     compactionThresholdPct: number;
     extractionInterval: number;
     compactionEmotionalSalienceThresholdPct: number;
-    maintenanceIntervalMs: number;
+    salienceDecayIntervalMs: number;
     memoryExtractionMinImportance: number;
     memoryExtractionMinConfidence: number;
     memoryExtractionMinNovelty: number;
@@ -202,15 +202,15 @@
       </div>
       <div>
         <SettingFieldLabel
-          label="Maintenance Interval (ms)"
-          keys="maintenanceIntervalMs"
-          source={getSource('maintenanceIntervalMs')}
-          forId={settingControlId('maintenanceIntervalMs')}
+          label="Salience Decay Interval (ms)"
+          keys="salienceDecayIntervalMs"
+          source={getSource('salienceDecayIntervalMs')}
+          forId={settingControlId('salienceDecayIntervalMs')}
           class={labelClass}
         />
-        <input id={settingControlId('maintenanceIntervalMs')} type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={inputClass} />
-        <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
-        <SettingAuthorityHint info={getSettingAuthority('maintenanceIntervalMs')} />
+        <input id={settingControlId('salienceDecayIntervalMs')} type="number" min="10000" step="1000" bind:value={salienceDecayIntervalMs} class={inputClass} />
+        <p class="text-sm text-shadow-500 mt-1">Persist salience decay hourly by default (3,600,000 ms); retrieval computes current decay lazily between sweeps.</p>
+        <SettingAuthorityHint info={getSettingAuthority('salienceDecayIntervalMs')} />
       </div>
       <div>
         <SettingFieldLabel

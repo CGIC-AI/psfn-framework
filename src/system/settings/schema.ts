@@ -24,6 +24,7 @@ const LEGACY_MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
 const NON_RUNTIME_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
   ...MODEL_SETTINGS_KEYS,
   ...LEGACY_MODEL_SETTINGS_KEYS,
+  'salienceDecayIntervalMs',
   'maintenanceIntervalMs',
   'capabilityTier',
 ];
@@ -63,8 +64,8 @@ export function splitSettingsByDomain(settings: EditableSettings): SettingsDomai
   return {
     runtime,
     models: extractModelSettings(settings),
-    ...(settings.maintenanceIntervalMs !== undefined
-      ? { maintenanceIntervalMs: settings.maintenanceIntervalMs }
+    ...(settings.salienceDecayIntervalMs !== undefined
+      ? { salienceDecayIntervalMs: settings.salienceDecayIntervalMs }
       : {}),
     ...(settings.capabilityTier !== undefined
       ? { capabilityTier: settings.capabilityTier }

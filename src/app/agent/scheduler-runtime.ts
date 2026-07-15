@@ -82,6 +82,59 @@ export interface BuildAgentSchedulerRuntimeOptions {
   socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
 }
 
+export function registerSalienceDecayTask(input: {
+  scheduler: Scheduler;
+  memoryStore: MemoryStorePort;
+  intervalMs: number;
+}): void {
+  const salienceDecay = new SalienceDecay(input.memoryStore);
+  input.scheduler.register({
+    id: 'salience-decay',
+    name: 'Memory Salience Decay',
+    type: 'every',
+    intervalMs: input.intervalMs,
+    handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
+    state: 'idle',
+  });
+}
+
+async function runCompressionGuidelineReview(
+  options: Pick<BuildAgentSchedulerRuntimeOptions, 'eligibilityGate' | 'sessionManager' | 'gateway'>,
+): Promise<void> {
+  const eligibility = options.eligibilityGate.evaluate(
+    {
+      kind: 'scheduler.task',
+      taskId: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
+      taskName: 'Compression Guideline Review',
+      taskType: 'every',
+    },
+    { requiredTokens: ['memory.write'] },
+  );
+  if (!eligibility.allowed) {
+    log.debug('Compression guideline review skipped', {
+      reason: eligibility.reasonCode,
+      reviewedFailureCount: 0,
+    });
+    return;
+  }
+
+  const result = await options.sessionManager.runPeriodicCompressionGuidelineUpdate(
+    options.gateway,
+  );
+  if (result.status === 'updated') {
+    log.info('Compression guideline updated from failure log review', {
+      version: result.version,
+      reviewedFailureCount: result.reviewedFailureCount,
+    });
+    return;
+  }
+  log.debug('Compression guideline review skipped', {
+    reason: result.reason,
+    reviewedFailureCount: result.reviewedFailureCount,
+  });
+}
+
 export function buildAgentSchedulerRuntime(
   options: BuildAgentSchedulerRuntimeOptions,
 ): AgentSchedulerRuntime {
@@ -96,39 +149,10 @@ export function buildAgentSchedulerRuntime(
     },
   );
 
-  const salienceDecay = new SalienceDecay(options.memoryStore);
-  scheduler.register({
-    id: 'salience-decay',
-    name: 'Memory Salience Decay',
-    type: 'every',
-    intervalMs: options.config.maintenanceIntervalMs,
-    handler: () => salienceDecay.run(),
-    eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
-  });
-  scheduler.register({
-    id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
-    name: 'Compression Guideline Review',
-    type: 'every',
-    intervalMs: options.config.maintenanceIntervalMs,
-    handler: async () => {
-      const result = await options.sessionManager.runPeriodicCompressionGuidelineUpdate(
-        options.gateway,
-      );
-      if (result.status === 'updated') {
-        log.info('Compression guideline updated from failure log review', {
-          version: result.version,
-          reviewedFailureCount: result.reviewedFailureCount,
-        });
-        return;
-      }
-      log.debug('Compression guideline review skipped', {
-        reason: result.reason,
-        reviewedFailureCount: result.reviewedFailureCount,
-      });
-    },
-    eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
+  registerSalienceDecayTask({
+    scheduler,
+    memoryStore: options.memoryStore,
+    intervalMs: options.config.salienceDecayIntervalMs,
   });
 
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
@@ -262,6 +286,7 @@ export function buildAgentSchedulerRuntime(
     // are logged loudly inside the runtime and never thrown, so they can never
     // take down the heartbeat lane.
     await options.companionPresence?.refreshOwnPresence();
+    await runCompressionGuidelineReview(options);
   });
   registerAmbientPresenceTask({
     scheduler,

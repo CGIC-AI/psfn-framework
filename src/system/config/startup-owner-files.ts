@@ -105,6 +105,7 @@ const SETTINGS_OWNER_HINT_BY_KEY: Record<string, string> = {
   modelCatalog: MODELS_FILE_NAME,
   modelRoleAssignments: MODELS_FILE_NAME,
   modelRoster: MODELS_FILE_NAME,
+  salienceDecayIntervalMs: SCHEDULER_FILE_NAME,
   maintenanceIntervalMs: SCHEDULER_FILE_NAME,
   capabilityTier: CAPABILITY_TIER_FILE_NAME,
 };

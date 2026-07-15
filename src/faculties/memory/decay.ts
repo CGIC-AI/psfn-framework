@@ -20,6 +20,21 @@ interface TrackedDecayAnchor {
   salienceFloor: number;
 }
 
+export function calculateEffectiveMemorySalience(
+  memory: PurrMemory,
+  now: number = Date.now(),
+): number {
+  if (!Number.isFinite(memory.lastAccessed) || !Number.isFinite(now)) {
+    return memory.salience;
+  }
+  const profile = getMemoryDecayProfile(memory);
+  const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
+  if (!Number.isFinite(halflife) || halflife <= 0) return memory.salience;
+  const dt = Math.max(0, now - memory.lastAccessed);
+  const decayFactor = Math.exp((-Math.LN2 * dt) / halflife);
+  return Math.max(profile.salienceFloor, memory.salience * decayFactor);
+}
+
 function calculateDecayedSalience(
   anchor: Pick<TrackedDecayAnchor, 'baseSalience' | 'decayEpoch' | 'halflife' | 'salienceFloor'>,
   now: number,
@@ -110,16 +125,7 @@ export class SalienceDecay {
 
         const salienceUpdates: Array<{ id: string; salience: number }> = [];
         for (const memory of memories) {
-          const profile = getMemoryDecayProfile(memory);
-          const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
-          if (!halflife || halflife <= 0) continue;
-
-          const dt = now - memory.lastAccessed;
-          const decayFactor = Math.exp((-Math.LN2 * dt) / halflife);
-          const newSalience = Math.max(
-            profile.salienceFloor,
-            memory.salience * decayFactor,
-          );
+          const newSalience = calculateEffectiveMemorySalience(memory, now);
 
           // Only update if meaningful change
           if (Math.abs(newSalience - memory.salience) > MEANINGFUL_SALIENCE_DELTA) {

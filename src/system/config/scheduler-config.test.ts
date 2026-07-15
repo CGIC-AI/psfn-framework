@@ -121,6 +121,10 @@ describe('config validators', () => {
 });
 
 describe('scheduler config seed defaults', () => {
+  it('checks in an hourly salience-decay default', () => {
+    expect(loadSchedulerSeedDefaults().salienceDecayIntervalMs).toBe(3_600_000);
+  });
+
   it('reads seed defaults without requiring a data directory', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();

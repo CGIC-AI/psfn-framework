@@ -213,7 +213,7 @@ export interface SettingsSimpleFormState {
   capabilityCustomTokens: string;
   extractionInterval: number;
   compactionEmotionalSalienceThresholdPct: number;
-  maintenanceIntervalMs: number;
+  salienceDecayIntervalMs: number;
   memoryExtractionMinImportance: number;
   memoryExtractionMinConfidence: number;
   memoryExtractionMinNovelty: number;
@@ -266,7 +266,7 @@ export function buildAdvancedSettingsSections(input: {
     memory: () => `Extract at ${state.extractionThresholdPct}% every ${state.extractionInterval} turn${state.extractionInterval === 1 ? '' : 's'}`,
     sessions: () => (
       `Compaction at ${state.compactionThresholdPct}%, `
-      + `Maintenance ${Math.round(state.maintenanceIntervalMs / 1000)}s, `
+      + `Salience decay ${fmtMs(state.salienceDecayIntervalMs)}, `
       + `Restart ${state.sessionRestartBehavior === 'new_session' ? 'new session' : 'reuse latest'}`
     ),
     'extraction-tuning': () => `Min importance: ${state.memoryExtractionMinImportance}, Max writes: ${state.memoryExtractionMaxWrites}`,
@@ -333,7 +333,7 @@ export function populateSimpleSettingsForm(settingsData: AdminSettingsData): Set
     capabilityCustomTokens: Array.isArray(capabilities?.customTokens) ? capabilities.customTokens.join(', ') : '',
     extractionInterval: Number(config.extractionInterval ?? 5),
     compactionEmotionalSalienceThresholdPct: Number(config.compactionEmotionalSalienceThresholdPct ?? 75),
-    maintenanceIntervalMs: Number(scheduler?.salienceDecayIntervalMs ?? 300000),
+    salienceDecayIntervalMs: Number(scheduler?.salienceDecayIntervalMs ?? 3600000),
     memoryExtractionMinImportance: Number(config.memoryExtractionMinImportance ?? 0.3),
     memoryExtractionMinConfidence: Number(config.memoryExtractionMinConfidence ?? 0.4),
     memoryExtractionMinNovelty: Number(config.memoryExtractionMinNovelty ?? 0.1),
@@ -405,7 +405,7 @@ export function syncCuratedSettingsField(
     case 'customTokens': return { capabilityCustomTokens: stringFromConfigValue(value) };
     case 'extractionInterval': return { extractionInterval: numberFromConfigValue(value, current.extractionInterval) };
     case 'compactionEmotionalSalienceThresholdPct': return { compactionEmotionalSalienceThresholdPct: numberFromConfigValue(value, current.compactionEmotionalSalienceThresholdPct) };
-    case 'maintenanceIntervalMs': return { maintenanceIntervalMs: numberFromConfigValue(value, current.maintenanceIntervalMs) };
+    case 'salienceDecayIntervalMs': return { salienceDecayIntervalMs: numberFromConfigValue(value, current.salienceDecayIntervalMs) };
     case 'memoryExtractionMinImportance': return { memoryExtractionMinImportance: numberFromConfigValue(value, current.memoryExtractionMinImportance) };
     case 'memoryExtractionMinConfidence': return { memoryExtractionMinConfidence: numberFromConfigValue(value, current.memoryExtractionMinConfidence) };
     case 'memoryExtractionMinNovelty': return { memoryExtractionMinNovelty: numberFromConfigValue(value, current.memoryExtractionMinNovelty) };

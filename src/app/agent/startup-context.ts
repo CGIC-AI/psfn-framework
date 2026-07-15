@@ -154,7 +154,9 @@ export function prepareAgentStartupContext(input: {
   });
   const eventBus = new EventBus();
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: pathSnapshot.systemDataDir,
+    // capability-tier.json is per-companion (dnll.2): root it at the companion
+    // data dir so each fleet companion holds its own maturation tier.
+    dataDir: pathSnapshot.companionDataDir,
     seedDir: input.env.CONFIG_DIR,
   });
   config.capabilityTier = capabilityRuntime.getTier();

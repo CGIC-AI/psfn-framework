@@ -39,6 +39,36 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     );
   }
 
+  it('still validates the scheduler owner even though no scheduler field is projected onto config', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-scheduler-validation-'));
+    TEMP_DIRS.push(dataDir);
+    for (const ownerFile of [
+      'settings.json',
+      'models.json',
+      'providers.json',
+      'scheduler.json',
+      'capability-tier.json',
+      'charge-policy.json',
+    ]) {
+      copyOwnerExample(dataDir, ownerFile);
+    }
+    const schedulerPath = join(dataDir, 'scheduler.json');
+    const scheduler = JSON.parse(readFileSync(schedulerPath, 'utf8')) as Record<string, unknown>;
+    scheduler.backgroundMaintenance = {
+      ...(scheduler.backgroundMaintenance as Record<string, unknown>),
+      intervalMs: 9 * 60 * 60_000,
+    };
+    writeFileSync(schedulerPath, `${JSON.stringify(scheduler, null, 2)}\n`, 'utf8');
+    process.env.DATA_DIR = dataDir;
+    process.env.COMPANION_ID = 'test-companion';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
+    process.env.CONFIG_DIR = 'config';
+
+    expect(() => hydrateJsonBackedRuntimeConfig(loadConfig(), { seedDir: 'config' })).toThrow(
+      /backgroundMaintenance\.intervalMs.*phase-lock/s,
+    );
+  });
+
   it('prefers owner-file models and runtime settings over ignored env defaults', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-'));
     TEMP_DIRS.push(dataDir);
@@ -159,6 +189,9 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       referenceModelClassPricingRationales: {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
+      },
+      icpCostBreaker: {
+        enabled: false,
       },
       fatigue: makeTestFatiguePolicyConfig(),
     }), 'utf8');

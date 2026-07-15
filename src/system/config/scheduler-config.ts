@@ -10,6 +10,7 @@ import {
   parseIcpAutonomySchedulerConfig,
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
+import { MODEL_USAGE_RANGES, type ModelUsageRange } from '../../shared/telemetry/model-usage.js';
 
 export {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
@@ -233,14 +234,42 @@ export interface ArcFormationConfig {
 }
 
 /**
- * Social-graph builder worker cadence (E4.2). Background job in the memory-agent
- * lane that proposes social-graph edges from accumulated room evidence. Runs on
- * a poll interval; the worker itself only acts on memories past its watermark.
- * Optional block — conservative defaults apply when absent.
+ * Shared cadence for cheap background housekeeping. The runtime exposes every
+ * operation attached to this tick in Garden; this is deliberately one honest
+ * knob rather than a hidden alias or one interval per maintenance operation.
+ */
+export interface BackgroundMaintenanceConfig {
+  /** Shared poll interval for every operation listed by the bundled task. */
+  intervalMs: number;
+  /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
+  ambientPresence: {
+    minIdleMinutes: number;
+    minNoteIntervalMinutes: number;
+  };
+  /** Concern-set grooming threshold evaluated on the shared tick. */
+  concernGrooming: {
+    maxActiveConcerns: number;
+  };
+}
+
+export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
+  intervalMs: 3_600_000,
+  ambientPresence: {
+    minIdleMinutes: 180,
+    minNoteIntervalMinutes: 360,
+  },
+  concernGrooming: {
+    maxActiveConcerns: 7,
+  },
+};
+
+/**
+ * Social-graph builder worker tuning (E4.2). The worker proposes social-graph
+ * edges from accumulated room evidence and only acts on memories past its
+ * watermark. Its cadence is the shared `backgroundMaintenance.intervalMs`.
+ * Optional block — conservative thresholds apply when absent.
  */
 export interface SocialGraphBuilderCadenceConfig {
-  /** Poll interval for the background worker (ms). */
-  intervalMs: number;
   /** Distinct co-presence windows required before an acquaintance is proposed. */
   coPresenceMinSessions: number;
   /** Fallback co-presence window size when a memory has no session id (minutes). */
@@ -250,7 +279,6 @@ export interface SocialGraphBuilderCadenceConfig {
 }
 
 export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConfig = {
-  intervalMs: 1_800_000,
   coPresenceMinSessions: 3,
   coPresenceWindowMinutes: 1440,
   scanMemoryLimit: 500,
@@ -565,7 +593,7 @@ export interface WeightedThoughtOutreachConfig {
 
 export const DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG: WeightedThoughtOutreachConfig = {
   enabled: false,
-  checkIntervalMs: 300_000,
+  checkIntervalMs: 1_800_000,
   nudgeThreshold: 1,
   maxNudgesPerRun: 1,
   lifecycle: {
@@ -611,10 +639,35 @@ export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
   reflectionMaxTokens: 300,
 };
 
+/** Durable-usage windows the tool-usage evaluator may aggregate over. */
+export type ToolUsageEvaluatorWindow = Exclude<ModelUsageRange, 'custom'>;
+
+/**
+ * Tool-usage evaluator cadence + thresholds (psfn-framework-b0yl.5). The
+ * evaluator aggregates ACTUAL per-tool invocations from the durable turn-record
+ * stream (every catalog tool, per-companion) and feeds presentation ordering
+ * plus operator-visible pin suggestions. It never gates callability. Opt-in
+ * (fail-closed default) and registered only when enabled, mirroring the
+ * introspection-audit lane. `usageWindow` bounds which turn records count.
+ */
+export interface ToolUsageEvaluatorConfig {
+  enabled: boolean;
+  intervalMs: number;
+  usageWindow: ToolUsageEvaluatorWindow;
+  minPinSuggestionInvocations: number;
+}
+
+export const DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG: ToolUsageEvaluatorConfig = {
+  enabled: false,
+  intervalMs: 21_600_000, // 6h — durable rollup, cheap, no LLM cost
+  usageWindow: 'month',
+  minPinSuggestionInvocations: 25,
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
-  salienceDecayIntervalMs: number;
+  backgroundMaintenance: BackgroundMaintenanceConfig;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   nearTurnMemory: NearTurnMemoryCadenceConfig;
@@ -630,6 +683,7 @@ export interface SchedulerRuntimeConfig {
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
+  toolUsageEvaluator?: ToolUsageEvaluatorConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -970,11 +1024,13 @@ function validateSocialGraphBuilderConfig(
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: socialGraphBuilder must be an object`);
   }
+  if (raw.intervalMs !== undefined) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: socialGraphBuilder.intervalMs was removed; `
+      + 'the worker now uses backgroundMaintenance.intervalMs with the other bundled operations',
+    );
+  }
   return {
-    intervalMs: toInterval(
-      raw.intervalMs ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.intervalMs,
-      'socialGraphBuilder.intervalMs',
-    ),
     coPresenceMinSessions: toPositiveInteger(
       raw.coPresenceMinSessions ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceMinSessions,
       'socialGraphBuilder.coPresenceMinSessions',
@@ -990,6 +1046,47 @@ function validateSocialGraphBuilderConfig(
       'socialGraphBuilder.scanMemoryLimit',
       1,
     ),
+  };
+}
+
+function validateBackgroundMaintenanceConfig(
+  raw: unknown,
+  sourcePath: string,
+): BackgroundMaintenanceConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundMaintenance must be an object`);
+  }
+  if (!isRecord(raw.ambientPresence)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.ambientPresence must be an object`,
+    );
+  }
+  if (!isRecord(raw.concernGrooming)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
+    );
+  }
+  return {
+    intervalMs: toInterval(raw.intervalMs, 'backgroundMaintenance.intervalMs'),
+    ambientPresence: {
+      minIdleMinutes: toPositiveInteger(
+        raw.ambientPresence.minIdleMinutes,
+        'backgroundMaintenance.ambientPresence.minIdleMinutes',
+        1,
+      ),
+      minNoteIntervalMinutes: toPositiveInteger(
+        raw.ambientPresence.minNoteIntervalMinutes,
+        'backgroundMaintenance.ambientPresence.minNoteIntervalMinutes',
+        1,
+      ),
+    },
+    concernGrooming: {
+      maxActiveConcerns: toPositiveInteger(
+        raw.concernGrooming.maxActiveConcerns,
+        'backgroundMaintenance.concernGrooming.maxActiveConcerns',
+        1,
+      ),
+    },
   };
 }
 
@@ -1406,6 +1503,36 @@ function validateWeightedThoughtOutreachConfig(
   };
 }
 
+function toToolUsageEvaluatorWindow(value: unknown, field: string): ToolUsageEvaluatorWindow {
+  if (typeof value !== 'string' || value === 'custom' || !MODEL_USAGE_RANGES.includes(value as ModelUsageRange)) {
+    throw new Error(
+      `Invalid scheduler config: ${field} must be one of `
+      + `${MODEL_USAGE_RANGES.filter(range => range !== 'custom').join(', ')}`,
+    );
+  }
+  return value as ToolUsageEvaluatorWindow;
+}
+
+function validateToolUsageEvaluatorConfig(
+  value: unknown,
+  sourcePath: string,
+): ToolUsageEvaluatorConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: toolUsageEvaluator must be an object`);
+  }
+  return {
+    enabled: toBoolean(value.enabled, 'toolUsageEvaluator.enabled'),
+    intervalMs: toInterval(value.intervalMs, 'toolUsageEvaluator.intervalMs'),
+    usageWindow: toToolUsageEvaluatorWindow(value.usageWindow, 'toolUsageEvaluator.usageWindow'),
+    minPinSuggestionInvocations: toPositiveInteger(
+      value.minPinSuggestionInvocations,
+      'toolUsageEvaluator.minPinSuggestionInvocations',
+      1,
+    ),
+  };
+}
+
 function validateIntrospectionAuditConfig(
   value: unknown,
   sourcePath: string,
@@ -1428,7 +1555,44 @@ function validateIntrospectionAuditConfig(
   };
 }
 
-function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
+function localTimeMinute(value: string): number {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+}
+
+function assertBackgroundMaintenanceRestWindowCoverage(
+  config: Pick<
+    SchedulerRuntimeConfig,
+    'tickIntervalMs' | 'backgroundMaintenance' | 'episodicProcessing'
+  >,
+  sourcePath: string,
+): void {
+  if (!config.episodicProcessing.enabled) return;
+
+  const startMinute = localTimeMinute(config.episodicProcessing.startLocalTime);
+  const endMinute = localTimeMinute(config.episodicProcessing.endLocalTime);
+  // Equal endpoints mean the gate is open all day, so there is no outside
+  // phase for a relative cadence to lock onto.
+  if (startMinute === endMinute) return;
+  const windowMinutes = (endMinute - startMinute + 24 * 60) % (24 * 60);
+  const windowDurationMs = windowMinutes * 60_000;
+  const maximumRelativeGapMs = config.backgroundMaintenance.intervalMs
+    + config.tickIntervalMs;
+
+  // A relative task can start at any phase. Its longest possible gap includes
+  // one scheduler-tick delay, so that gap must be strictly shorter than the
+  // daily rest window or every poll could forever land outside the window.
+  if (maximumRelativeGapMs >= windowDurationMs) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.intervalMs `
+      + `(${config.backgroundMaintenance.intervalMs}) plus tickIntervalMs (${config.tickIntervalMs}) `
+      + `must be less than the episodicProcessing rest-window duration (${windowDurationMs} ms); `
+      + 'otherwise the relative cadence can phase-lock outside every rest window',
+    );
+  }
+}
+
+export function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
   }
@@ -1440,13 +1604,25 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
       + 'Rename the key and remove any heavy-pass expectations from turn cadence.',
     );
   }
+  if (raw.salienceDecayIntervalMs !== undefined) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: salienceDecayIntervalMs was removed; `
+      + 'use backgroundMaintenance.intervalMs, the shared cadence Garden labels with every bundled operation',
+    );
+  }
 
-  return {
-    tickIntervalMs: toInterval(raw.tickIntervalMs, 'tickIntervalMs'),
+  const tickIntervalMs = toInterval(raw.tickIntervalMs, 'tickIntervalMs');
+  const backgroundMaintenance = validateBackgroundMaintenanceConfig(
+    raw.backgroundMaintenance,
+    sourcePath,
+  );
+  const episodicProcessing = validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath);
+  const validated: SchedulerRuntimeConfig = {
+    tickIntervalMs,
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
-    salienceDecayIntervalMs: toInterval(raw.salienceDecayIntervalMs, 'salienceDecayIntervalMs'),
+    backgroundMaintenance,
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
-    episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
+    episodicProcessing,
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
@@ -1462,7 +1638,12 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     ...(raw.introspectionAudit === undefined
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
+    ...(raw.toolUsageEvaluator === undefined
+      ? {}
+      : { toolUsageEvaluator: validateToolUsageEvaluatorConfig(raw.toolUsageEvaluator, sourcePath) }),
   };
+  assertBackgroundMaintenanceRestWindowCoverage(validated, sourcePath);
+  return validated;
 }
 
 export function loadSchedulerConfig(

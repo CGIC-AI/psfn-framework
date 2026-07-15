@@ -19,12 +19,14 @@ import {
 export const SYSTEM_CONFIG_DIR_NAME = 'system-config';
 export const SYSTEM_CONFIG_MANIFEST_NAME = 'system-config-manifest.json';
 
+// Cluster-global owner files rooted at systemDataDir. Per-companion owner files
+// are captured by the companion-tree slice (an exhaustive walk of companionDataDir)
+// and MUST NOT be listed here. capability-tier.json is per-companion (dnll.2);
+// scheduler.json is per-companion (dnll.3).
 export const SYSTEM_CONFIG_OWNER_FILES = [
   'settings.json',
   'models.json',
   'providers.json',
-  'scheduler.json',
-  'capability-tier.json',
   'channels.json',
   'backup.json',
   'skills.json',

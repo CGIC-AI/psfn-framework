@@ -15,6 +15,8 @@ import {
   EligibilityDeniedError,
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
+import { COMPANION_SETTINGS_OVERLAY_FILE_NAME } from '../../../system/config/settings-overlay.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
 import {
   loadChargePolicySeedDefaults,
@@ -134,11 +136,16 @@ const HYDRATION_OWNER_FILES = [
   'charge-policy.json',
 ] as const;
 
-function writeHydrationOwnerExamples(systemDataDir: string): void {
+function writeHydrationOwnerExamples(systemDataDir: string, companionDataDir: string): void {
   for (const ownerFile of HYDRATION_OWNER_FILES) {
     const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+    // Per-companion owner files (capability-tier.json dnll.2, scheduler.json
+    // dnll.3) are rooted at companionDataDir; the rest stay cluster-global at
+    // systemDataDir. Registry-driven via PER_COMPANION_OWNER_FILES so future
+    // per-companion relocations inherit the correct seed target automatically.
+    const targetDir = PER_COMPANION_OWNER_FILES.has(ownerFile) ? companionDataDir : systemDataDir;
     writeFileSync(
-      join(systemDataDir, ownerFile),
+      join(targetDir, ownerFile),
       readFileSync(join(process.cwd(), 'config', exampleFile), 'utf8'),
       'utf-8',
     );
@@ -1016,7 +1023,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
     saveSettings(systemDataDir, {
       voiceEnabled: true,
     });
@@ -1044,7 +1051,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.discordToken = 'discord-secret';
@@ -1069,7 +1076,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1100,7 +1107,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1151,7 +1158,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     saveSettings(systemDataDir, {
@@ -1166,11 +1173,14 @@ describe('hydrateCanonicalStartupConfig', () => {
       2048,
       65_536,
     ));
-    saveSchedulerConfig(systemDataDir, {
+    saveSchedulerConfig(companionDataDir, {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
-      salienceDecayIntervalMs: 123_000,
+      backgroundMaintenance: {
+        ...loadSchedulerSeedDefaults().backgroundMaintenance,
+        intervalMs: 123_000,
+      },
     });
     saveChargePolicyConfig(systemDataDir, {
       schemaVersion: 1,
@@ -1250,8 +1260,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.compactionThresholdPct).toBe(76);
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
-    expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
-    expect(config.salienceDecayIntervalMs).toBe(123_000);
+    expect(result.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.providerRegistry?.providers.length).toBeGreaterThan(0);
     expect(config.litellmBaseUrl).toBeUndefined();
@@ -1271,7 +1280,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const observerEvalSidecar = {
       ...createDefaultObserverEvalSidecarSettings(),
@@ -1313,6 +1322,121 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.observerEvalSidecar).toEqual(observerEvalSidecar);
   });
 
+  it('deep-merges a per-companion settings.overlay.json over the global settings (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-overlay-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+
+    const globalSidecar = {
+      ...createDefaultObserverEvalSidecarSettings(),
+      enabled: true,
+      adapter: {
+        kind: 'emosim_server' as const,
+        serverUrl: 'http://emosim.test:17342',
+        sessionLabel: 'psfn-fleet-shared',
+        agentName: 'fleet',
+        includeWorldState: false,
+      },
+    };
+    saveSettings(systemDataDir, {
+      activeTimezone: 'UTC',
+      uiThemeId: 'default',
+      observerEvalSidecar: globalSidecar,
+    });
+
+    // Per-companion overlay: override the clock, theme, and only the sidecar
+    // sessionLabel (the emosim session-collision fix).
+    writeFileSync(
+      join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME),
+      JSON.stringify({
+        activeTimezone: 'Europe/Berlin',
+        uiThemeId: 'dusk',
+        observerEvalSidecar: { adapter: { sessionLabel: 'psfn-purrsephone' } },
+      }),
+      'utf-8',
+    );
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(config.activeTimezone).toBe('Europe/Berlin');
+    expect(config.uiThemeId).toBe('dusk');
+    // Nested deep-merge: only sessionLabel changes; global sidecar fields survive.
+    expect(config.observerEvalSidecar?.enabled).toBe(true);
+    expect(config.observerEvalSidecar?.adapter.serverUrl).toBe('http://emosim.test:17342');
+    expect(config.observerEvalSidecar?.adapter.agentName).toBe('fleet');
+    expect(config.observerEvalSidecar?.adapter.sessionLabel).toBe('psfn-purrsephone');
+  });
+
+  it('is byte-identical to the global settings when no overlay is present (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-no-overlay-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+
+    saveSettings(systemDataDir, { activeTimezone: 'UTC', uiThemeId: 'default' });
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(config.activeTimezone).toBe('UTC');
+    expect(config.uiThemeId).toBe('default');
+  });
+
+  it('fails closed on a non-whitelisted key in a companion overlay (dnll.1)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-overlay-reject-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+
+    saveSettings(systemDataDir, { activeTimezone: 'UTC' });
+    writeFileSync(
+      join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME),
+      JSON.stringify({ activeTimezone: 'Europe/Berlin', capabilityTier: 'autonomous' }),
+      'utf-8',
+    );
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(/non-whitelisted keys: capabilityTier/);
+  });
+
   it('fails closed when observer eval persistence shares a runtime state root', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-overlap-'));
     const systemDataDir = join(rootDir, 'system-data');
@@ -1322,7 +1446,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, {
       observerEvalSidecar: {
@@ -1364,7 +1488,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     saveSettings(systemDataDir, {
       sessionMessageLimit: 41,
@@ -1376,11 +1500,14 @@ describe('hydrateCanonicalStartupConfig', () => {
       3072,
       131_072,
     ));
-    saveSchedulerConfig(systemDataDir, {
+    saveSchedulerConfig(companionDataDir, {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,
-      salienceDecayIntervalMs: 222_000,
+      backgroundMaintenance: {
+        ...loadSchedulerSeedDefaults().backgroundMaintenance,
+        intervalMs: 222_000,
+      },
     });
 
     const env = {
@@ -1430,7 +1557,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1464,7 +1591,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1501,7 +1628,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
-    writeHydrationOwnerExamples(systemDataDir);
+    writeHydrationOwnerExamples(systemDataDir, companionDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(

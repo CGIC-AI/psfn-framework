@@ -42,11 +42,10 @@ import type { Scheduler } from '../scheduler.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');
 
-export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
-const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
-export const CONTACT_TRUST_DRIFT_REVIEW_TASK_ID = 'contacts.trust-drift-review.rest-window';
-export const DRIFT_VELOCITY_REVIEW_TASK_ID = 'cogsec.drift-velocity-review.rest-window';
-export const SECOND_ARROW_REVIEW_TASK_ID = 'cogsec.second-arrow-review.rest-window';
+export const SLEEPTIME_REST_WINDOW_OPERATION_ID = 'memory.sleeptime.rest-window';
+export const CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID = 'contacts.trust-drift-review.rest-window';
+export const DRIFT_VELOCITY_REVIEW_OPERATION_ID = 'cogsec.drift-velocity-review.rest-window';
+export const SECOND_ARROW_REVIEW_OPERATION_ID = 'cogsec.second-arrow-review.rest-window';
 
 export interface SchedulerOwnedPostTurnLanes {
   sleeptimeAgent: SleeptimeMemoryAgent | null;
@@ -308,12 +307,11 @@ export function registerSchedulerOwnedPostTurnLanes(
 
   if (lanes.sleeptimeAgent) {
     const sleeptimeAgent = lanes.sleeptimeAgent;
-    if (telemetryEventBus && !scheduler.getTask(SLEEPTIME_REST_WINDOW_TASK_ID)) {
-      scheduler.register({
-        id: SLEEPTIME_REST_WINDOW_TASK_ID,
-        name: 'Sleeptime Rest-Window Heavy Passes',
-        type: 'every',
-        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+    if (telemetryEventBus && runtimeOptions.backgroundMaintenance) {
+      runtimeOptions.backgroundMaintenance.registerOperation({
+        id: SLEEPTIME_REST_WINDOW_OPERATION_ID,
+        name: 'Sleeptime Rest-Window Check',
+        description: 'Checks whether rest-window heavy memory passes have become eligible.',
         handler: async () => {
           const actions = sleeptimeAgent.inferIdlePostTurnActions();
           for (const action of actions) {
@@ -353,8 +351,7 @@ export function registerSchedulerOwnedPostTurnLanes(
           }
         },
         eligibility: { requiredTokens: ['memory.write'] },
-        state: 'idle',
-      }, { skipFirstRun: true });
+      });
     }
     postTurnActions.registerHandler(
       SLEEPTIME_MEMORY_ACTION_KIND,
@@ -379,12 +376,11 @@ export function registerSchedulerOwnedPostTurnLanes(
 
   if (lanes.driftReviewLane) {
     const driftReviewLane = lanes.driftReviewLane;
-    if (telemetryEventBus && !scheduler.getTask(CONTACT_TRUST_DRIFT_REVIEW_TASK_ID)) {
-      scheduler.register({
-        id: CONTACT_TRUST_DRIFT_REVIEW_TASK_ID,
-        name: 'Contact Trust-Drift Review',
-        type: 'every',
-        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+    if (telemetryEventBus && runtimeOptions.backgroundMaintenance) {
+      runtimeOptions.backgroundMaintenance.registerOperation({
+        id: CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID,
+        name: 'Contact Trust-Drift Rest-Window Check',
+        description: 'Checks whether the nightly contact trust-drift review has become eligible.',
         handler: async () => {
           const actions = await driftReviewLane.inferIdleActions();
           for (const action of actions) {
@@ -414,8 +410,7 @@ export function registerSchedulerOwnedPostTurnLanes(
           }
         },
         eligibility: { requiredTokens: ['identity.read'] },
-        state: 'idle',
-      }, { skipFirstRun: true });
+      });
     }
     postTurnActions.registerHandler(
       CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
@@ -439,12 +434,11 @@ export function registerSchedulerOwnedPostTurnLanes(
 
   if (lanes.driftVelocityLane) {
     const driftVelocityLane = lanes.driftVelocityLane;
-    if (telemetryEventBus && !scheduler.getTask(DRIFT_VELOCITY_REVIEW_TASK_ID)) {
-      scheduler.register({
-        id: DRIFT_VELOCITY_REVIEW_TASK_ID,
-        name: 'CogSec Drift-Velocity Review',
-        type: 'every',
-        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+    if (telemetryEventBus && runtimeOptions.backgroundMaintenance) {
+      runtimeOptions.backgroundMaintenance.registerOperation({
+        id: DRIFT_VELOCITY_REVIEW_OPERATION_ID,
+        name: 'CogSec Drift-Velocity Rest-Window Check',
+        description: 'Checks whether the nightly drift-velocity review has become eligible.',
         handler: async () => {
           const actions = await driftVelocityLane.inferIdleActions();
           for (const action of actions) {
@@ -474,8 +468,7 @@ export function registerSchedulerOwnedPostTurnLanes(
           }
         },
         eligibility: { requiredTokens: ['identity.read'] },
-        state: 'idle',
-      }, { skipFirstRun: true });
+      });
     }
     postTurnActions.registerHandler(
       DRIFT_VELOCITY_REVIEW_ACTION_KIND,
@@ -496,12 +489,11 @@ export function registerSchedulerOwnedPostTurnLanes(
 
   if (lanes.secondArrowLane) {
     const secondArrowLane = lanes.secondArrowLane;
-    if (telemetryEventBus && !scheduler.getTask(SECOND_ARROW_REVIEW_TASK_ID)) {
-      scheduler.register({
-        id: SECOND_ARROW_REVIEW_TASK_ID,
-        name: 'CogSec Second-Arrow Review',
-        type: 'every',
-        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+    if (telemetryEventBus && runtimeOptions.backgroundMaintenance) {
+      runtimeOptions.backgroundMaintenance.registerOperation({
+        id: SECOND_ARROW_REVIEW_OPERATION_ID,
+        name: 'CogSec Second-Arrow Rest-Window Check',
+        description: 'Checks whether the nightly second-arrow rumination review has become eligible.',
         handler: async () => {
           const actions = await secondArrowLane.inferIdleActions();
           for (const action of actions) {
@@ -531,8 +523,7 @@ export function registerSchedulerOwnedPostTurnLanes(
           }
         },
         eligibility: { requiredTokens: ['identity.read'] },
-        state: 'idle',
-      }, { skipFirstRun: true });
+      });
     }
     postTurnActions.registerHandler(
       SECOND_ARROW_REVIEW_ACTION_KIND,

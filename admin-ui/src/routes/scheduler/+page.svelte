@@ -252,7 +252,7 @@
   }
 
   // ── Protected tasks ──
-  const PROTECTED_TASKS = new Set(['heartbeat', 'salience-decay', 'maintenance']);
+  const PROTECTED_TASKS = new Set(['heartbeat', 'background-maintenance', 'maintenance']);
   function isProtected(id: string): boolean {
     return PROTECTED_TASKS.has(id);
   }
@@ -775,6 +775,24 @@
                 <td class="px-4 py-3">
                   <code class="text-sm font-mono text-shadow-800">{task.name}</code>
                   <span class="text-xs text-shadow-500 block font-mono">{task.id}</span>
+                  {#if task.description}
+                    <p class="mt-1 max-w-xl text-xs text-shadow-600">{task.description}</p>
+                  {/if}
+                  {#if task.scheduleSource}
+                    <p class="mt-1 text-[11px] text-shadow-500">
+                      Shared cadence: <code class="font-mono">{task.scheduleSource}</code>
+                    </p>
+                  {/if}
+                  {#if task.operations?.length}
+                    <ul class="mt-2 space-y-1" aria-label={`${task.name} operations`}>
+                      {#each task.operations as operation (operation.id)}
+                        <li class="text-[11px] text-shadow-600">
+                          <code class="font-mono text-shadow-700">{operation.name}</code>
+                          <span class="block text-shadow-500">{operation.description}</span>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
                 </td>
                 <td class="px-4 py-3">
                   <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium {TYPE_BADGE[task.type] || 'bg-bark-200 text-shadow-600'}">
@@ -783,7 +801,12 @@
                 </td>
                 <td class="px-4 py-3">
                   {#if task.type === 'every'}
-                    {#if hasCadenceControls(task)}
+                    {#if task.scheduleSource}
+                      <div class="space-y-1">
+                        <span class="text-sm text-shadow-700 font-mono">{formatInterval(task)}</span>
+                        <span class="block text-[11px] text-shadow-500">Edit this shared cadence in Settings.</span>
+                      </div>
+                    {:else if hasCadenceControls(task)}
                       {@const cadenceEditor = getCadenceEditor(task)}
                       <div class="space-y-2">
                         <div class="flex flex-wrap items-center gap-2">
@@ -1000,7 +1023,9 @@
                 </td>
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-2">
-                    {#if task.type === 'every'}
+                    {#if task.scheduleSource}
+                      <span class="text-xs text-shadow-500">Read-only · restart after Settings edits</span>
+                    {:else if task.type === 'every'}
                       <button
                         onclick={() => toggleTaskEnabled(task)}
                         disabled={saving === `toggle:${task.id}`}
@@ -1012,7 +1037,7 @@
                         {task.state === 'paused' ? 'Enable' : 'Pause'}
                       </button>
                     {/if}
-                    {#if !isProtected(task.id)}
+                    {#if !task.scheduleSource && !isProtected(task.id)}
                       <button
                         onclick={() => handleRemoveTask(task)}
                         disabled={saving === `remove:${task.id}`}

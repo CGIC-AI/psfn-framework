@@ -58,6 +58,16 @@ import {
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
+  /**
+   * Companion-owned config root (companionDataDir). Roots the per-companion
+   * owner files verified here — capability-tier.json (dnll.2) and scheduler.json
+   * (dnll.3).
+   * When omitted it resolves to {@link StartupOwnerFileLoadOptions.dataDir},
+   * matching the legacy shared-root layout. The underlying loader still fails
+   * closed on a missing per-companion file; this is a rooting default, not a
+   * config fallback.
+   */
+  companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
   /**
@@ -105,6 +115,7 @@ const SETTINGS_OWNER_HINT_BY_KEY: Record<string, string> = {
   modelCatalog: MODELS_FILE_NAME,
   modelRoleAssignments: MODELS_FILE_NAME,
   modelRoster: MODELS_FILE_NAME,
+  backgroundMaintenanceIntervalMs: SCHEDULER_FILE_NAME,
   salienceDecayIntervalMs: SCHEDULER_FILE_NAME,
   maintenanceIntervalMs: SCHEDULER_FILE_NAME,
   capabilityTier: CAPABILITY_TIER_FILE_NAME,
@@ -205,6 +216,10 @@ export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
   const seedDir = ownerFileSeedDir(options);
+  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
+  // owner files: verify them at the companion root. Defaults to dataDir for the
+  // legacy shared-root layout.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
   const checks: Array<{ label: string; dataPath: string; seedPath: string; run: () => unknown }> = [
     {
       label: 'settings',
@@ -239,15 +254,15 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'scheduler',
-      dataPath: join(options.dataDir, SCHEDULER_FILE_NAME),
+      dataPath: join(companionDataDir, SCHEDULER_FILE_NAME),
       seedPath: join(seedDir, 'scheduler.seed.json'),
-      run: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'capability-tier',
-      dataPath: join(options.dataDir, CAPABILITY_TIER_FILE_NAME),
+      dataPath: join(companionDataDir, CAPABILITY_TIER_FILE_NAME),
       seedPath: join(seedDir, 'capability-tier.seed.json'),
-      run: () => loadStartupCapabilityTierOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupCapabilityTierOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'charge-policy',

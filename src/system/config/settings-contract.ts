@@ -14,6 +14,7 @@ import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
 import { SKILLS_FILE_NAME } from './skills-config.js';
 import { TRUST_POLICY_FILE_NAME } from './trust-policy-config.js';
+import { isCompanionSettingsOverlayKey } from './settings-overlay.js';
 
 export const IMPORT_PROCESSING_ROUTE_MODE_VALUES = [
   'background',
@@ -48,17 +49,49 @@ export type SettingsFieldType =
   | 'enum'
   | 'object';
 
+/**
+ * Owner files whose WHOLE file is rooted per-companion (companionDataDir) rather
+ * than cluster-global (systemDataDir). Distinct from settings.overlay.json keys
+ * (dnll.1), which override individual settings.json fields: these relocate the
+ * entire owner file. capability-tier.json is per-companion (dnll.2);
+ * scheduler.json (circadian cadence, rest window, morning wake, freeTime,
+ * sleepConsolidation) is per-companion (dnll.3).
+ */
+export const PER_COMPANION_OWNER_FILES: ReadonlySet<string> = new Set<string>([
+  CAPABILITY_TIER_FILE_NAME,
+  SCHEDULER_FILE_NAME,
+]);
+
+/** Ownership scope for a whole owner file, derived from its rooting. */
+export function ownerFileScope(ownerFile: string): SettingsFieldScope {
+  return PER_COMPANION_OWNER_FILES.has(ownerFile) ? 'perCompanion' : 'global';
+}
+
 export interface SettingsContractSubsystem {
   id: SettingsSubsystemId;
   ownerFile: string;
   mode: 'structured' | 'raw_only';
+  /**
+   * Whether this subsystem's owner file is rooted per-companion or cluster-global
+   * (bead dnll.2). Must equal {@link ownerFileScope}(ownerFile); the settings
+   * contract guard enforces the consistency.
+   */
+  scope: SettingsFieldScope;
 }
+
+/**
+ * Cluster-global vs per-companion ownership scope for a settings field
+ * (bead dnll.1). `perCompanion` keys may be overridden by a companion's
+ * `settings.overlay.json`; `global` keys are shared across the whole fleet.
+ */
+export type SettingsFieldScope = 'global' | 'perCompanion';
 
 export interface SettingsContractField {
   key: string;
   ownerSubsystem: SettingsSubsystemId;
   ownerFile: string;
   type: SettingsFieldType;
+  scope: SettingsFieldScope;
   minimum?: number;
   maximum?: number;
   enumValues?: string[];
@@ -76,56 +109,67 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     id: 'runtime',
     ownerFile: SETTINGS_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(SETTINGS_FILE_NAME),
   },
   models: {
     id: 'models',
     ownerFile: MODELS_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(MODELS_FILE_NAME),
   },
   providers: {
     id: 'providers',
     ownerFile: PROVIDERS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(PROVIDERS_FILE_NAME),
   },
   scheduler: {
     id: 'scheduler',
     ownerFile: SCHEDULER_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(SCHEDULER_FILE_NAME),
   },
   capabilities: {
     id: 'capabilities',
     ownerFile: CAPABILITY_TIER_FILE_NAME,
     mode: 'structured',
+    scope: ownerFileScope(CAPABILITY_TIER_FILE_NAME),
   },
   chargePolicy: {
     id: 'chargePolicy',
     ownerFile: CHARGE_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(CHARGE_POLICY_FILE_NAME),
   },
   skills: {
     id: 'skills',
     ownerFile: SKILLS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(SKILLS_FILE_NAME),
   },
   trustPolicy: {
     id: 'trustPolicy',
     ownerFile: TRUST_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(TRUST_POLICY_FILE_NAME),
   },
   intakePolicy: {
     id: 'intakePolicy',
     ownerFile: INTAKE_POLICY_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(INTAKE_POLICY_FILE_NAME),
   },
   backup: {
     id: 'backup',
     ownerFile: BACKUP_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(BACKUP_FILE_NAME),
   },
   channels: {
     id: 'channels',
     ownerFile: CHANNELS_FILE_NAME,
     mode: 'raw_only',
+    scope: ownerFileScope(CHANNELS_FILE_NAME),
   },
 };
 
@@ -140,7 +184,7 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['modelCatalog', MODELS_FILE_NAME],
   ['modelRoleAssignments', MODELS_FILE_NAME],
   ['modelRoster', MODELS_FILE_NAME],
-  ['salienceDecayIntervalMs', SCHEDULER_FILE_NAME],
+  ['backgroundMaintenanceIntervalMs', SCHEDULER_FILE_NAME],
   ['episodicProcessingEnabled', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowStartLocalTime', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
@@ -160,7 +204,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['modelCatalog', 'models'],
   ['modelRoleAssignments', 'models'],
   ['modelRoster', 'models'],
-  ['salienceDecayIntervalMs', 'scheduler'],
+  ['backgroundMaintenanceIntervalMs', 'scheduler'],
   ['episodicProcessingEnabled', 'scheduler'],
   ['episodicProcessingRestWindowStartLocalTime', 'scheduler'],
   ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
@@ -213,7 +257,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'sessionMirrorActiveWindowMs',
   'continuityMessageLimit',
   'extractionInterval',
-  'salienceDecayIntervalMs',
+  'backgroundMaintenanceIntervalMs',
   'episodicProcessingInactivityThresholdMinutes',
   'extractionThresholdPct',
   'compactionThresholdPct',
@@ -287,6 +331,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
+  'salienceDecayIntervalMs',
   // Canonical model registry is models.json-backed; these are compatibility projections.
   'primaryModel',
   'primaryProvider',
@@ -316,7 +361,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
-  ['salienceDecayIntervalMs', { min: 1_000 }],
+  ['backgroundMaintenanceIntervalMs', { min: 1_000 }],
   ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],
@@ -379,6 +424,7 @@ export function buildSettingsContractData(options: {
       ownerSubsystem,
       ownerFile,
       type: resolveFieldType(key),
+      scope: isCompanionSettingsOverlayKey(key) ? 'perCompanion' : 'global',
     };
     const range = resolveFieldRange(key);
     if (range?.min !== undefined) field.minimum = range.min;

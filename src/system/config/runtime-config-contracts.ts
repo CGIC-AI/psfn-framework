@@ -199,7 +199,6 @@ export interface SubstrateConfig {
   wikiRetrievalGroupSimilarityThreshold?: number;
   extractionInterval: number;
   maintenanceIntervalMs: number;
-  salienceDecayIntervalMs: number;
   defaultContextWindow: number;
   extractionThresholdPct: number;
   compactionThresholdPct: number;

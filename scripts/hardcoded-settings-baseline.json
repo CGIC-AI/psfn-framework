@@ -1145,6 +1145,11 @@
       "value": "4"
     },
     {
+      "file": "src/core/agent/tool-call-correction.ts",
+      "name": "MAX_ECHOED_CATALOG_NAMES",
+      "value": "24"
+    },
+    {
       "file": "src/core/agent/tool-catalog.ts",
       "name": "TOOL_LISTING_DESCRIPTION_MAX_CHARS",
       "value": "160"
@@ -1178,6 +1183,16 @@
       "file": "src/core/agent/tool-suggestion.ts",
       "name": "MIN_CONFIDENT_MATCH_SCORE",
       "value": "18"
+    },
+    {
+      "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
+      "name": "DEFAULT_MAX_TURN_RECORDS_PER_CHANNEL",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
+      "name": "DEFAULT_MAX_TURN_RECORDS_TOTAL",
+      "value": "50_000"
     },
     {
       "file": "src/core/agent/turn-limits.ts",
@@ -2000,11 +2015,6 @@
       "value": "6 * 60 * 60_000"
     },
     {
-      "file": "src/core/scheduler/ambient-presence.ts",
-      "name": "DEFAULT_AMBIENT_PRESENCE_TASK_INTERVAL_MS",
-      "value": "60 * 60_000"
-    },
-    {
       "file": "src/core/scheduler/heartbeat-policy.ts",
       "name": "MAX_INTERVAL_MS",
       "value": "604_800_000"
@@ -2032,11 +2042,6 @@
     {
       "file": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
       "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
-      "value": "5 * 60_000"
-    },
-    {
-      "file": "src/core/scheduler/heartbeat-post-turn-runtime/scheduler-lanes.ts",
-      "name": "SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS",
       "value": "5 * 60_000"
     },
     {
@@ -4223,11 +4228,6 @@
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_RETRY_MAX_ATTEMPTS",
       "value": "3"
-    },
-    {
-      "file": "src/system/config/load-config.ts",
-      "name": "DEFAULT_SALIENCE_DECAY_INTERVAL_MS",
-      "value": "3_600_000"
     },
     {
       "file": "src/system/config/load-config.ts",

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import { BackgroundMaintenanceRegistry } from '../scheduler/background-maintenance.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
-import { groomConcernSet, registerConcernGroomingTask } from './concern-grooming.js';
+import { groomConcernSet, registerConcernGroomingOperation } from './concern-grooming.js';
 
 function makeStore() {
   let counter = 0;
@@ -51,7 +53,7 @@ describe('concern grooming', () => {
     expect(await concernStore.getActiveConcerns()).toHaveLength(3);
   });
 
-  it('registers a daily concern grooming scheduler task', async () => {
+  it('registers concern grooming on the shared background-maintenance task', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
     const concernStore = makeStore();
@@ -65,18 +67,27 @@ describe('concern grooming', () => {
       expiresAt: '2026-06-29T11:00:00.000Z',
     });
 
-    registerConcernGroomingTask({
+    const backgroundMaintenance = new BackgroundMaintenanceRegistry({
       scheduler,
+      eligibilityGate: createEligibilityGate(() => ({
+        getTier: () => 'autonomous',
+        getGrantedTokens: () => new Set(),
+        has: () => true,
+      })),
+      intervalMs: 3_600_000,
+    });
+    registerConcernGroomingOperation({
+      backgroundMaintenance,
       concernStore,
       eventBus,
-      intervalMs: 1,
+      maxActiveConcerns: 7,
     });
 
-    const task = scheduler.getTask('concern-grooming');
+    const task = scheduler.getTask('background-maintenance');
     expect(task).toMatchObject({
-      name: 'Concern Grooming',
+      name: 'Bundled Background Maintenance',
       type: 'every',
-      cadence: { kind: 'daily', hour: 6, minute: 15, timezone: 'local' },
+      operations: [{ id: 'concern-grooming', name: 'Concern Grooming' }],
     });
     expect(task?.handler).toBeDefined();
     await task?.handler();

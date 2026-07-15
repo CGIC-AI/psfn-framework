@@ -189,7 +189,7 @@
   // ── Memory & Extraction ──
   let extractionInterval = $state(5);
   let compactionEmotionalSalienceThresholdPct = $state(75);
-  let salienceDecayIntervalMs = $state(3600000);
+  let backgroundMaintenanceIntervalMs = $state(3600000);
 
   // ── Memory Extraction Tuning ──
   let memoryExtractionMinImportance = $state(0.3);
@@ -260,7 +260,7 @@
       capabilityCustomTokens,
       extractionInterval,
       compactionEmotionalSalienceThresholdPct,
-      salienceDecayIntervalMs,
+      backgroundMaintenanceIntervalMs,
       memoryExtractionMinImportance,
       memoryExtractionMinConfidence,
       memoryExtractionMinNovelty,
@@ -326,7 +326,9 @@
     if (next.capabilityCustomTokens !== undefined) capabilityCustomTokens = next.capabilityCustomTokens;
     if (next.extractionInterval !== undefined) extractionInterval = next.extractionInterval;
     if (next.compactionEmotionalSalienceThresholdPct !== undefined) compactionEmotionalSalienceThresholdPct = next.compactionEmotionalSalienceThresholdPct;
-    if (next.salienceDecayIntervalMs !== undefined) salienceDecayIntervalMs = next.salienceDecayIntervalMs;
+    if (next.backgroundMaintenanceIntervalMs !== undefined) {
+      backgroundMaintenanceIntervalMs = next.backgroundMaintenanceIntervalMs;
+    }
     if (next.memoryExtractionMinImportance !== undefined) memoryExtractionMinImportance = next.memoryExtractionMinImportance;
     if (next.memoryExtractionMinConfidence !== undefined) memoryExtractionMinConfidence = next.memoryExtractionMinConfidence;
     if (next.memoryExtractionMinNovelty !== undefined) memoryExtractionMinNovelty = next.memoryExtractionMinNovelty;
@@ -760,9 +762,13 @@
   }
 
   function buildSchedulerPayload(): Record<string, unknown> {
+    const scheduler = getSchedulerEditorConfig();
     return {
-      ...getSchedulerEditorConfig(),
-      salienceDecayIntervalMs,
+      ...scheduler,
+      backgroundMaintenance: {
+        ...(scheduler.backgroundMaintenance ?? {}),
+        intervalMs: backgroundMaintenanceIntervalMs,
+      },
     };
   }
 
@@ -1142,7 +1148,7 @@
             {getSource} {getSettingAuthority} {toggleSection}
             bind:sessionRestartBehavior bind:sessionHistoryBudgetPct bind:memoryRetrievalBudgetPct
             bind:extractionThresholdPct bind:compactionThresholdPct bind:extractionInterval
-            bind:compactionEmotionalSalienceThresholdPct bind:salienceDecayIntervalMs
+            bind:compactionEmotionalSalienceThresholdPct bind:backgroundMaintenanceIntervalMs
             bind:memoryExtractionMinImportance bind:memoryExtractionMinConfidence bind:memoryExtractionMinNovelty
             bind:memoryExtractionMaxWrites bind:memoryExtractionTelemetryEnabled bind:memoryRetrievalTelemetryEnabled
             bind:profileSynthesisEnabled bind:profileSynthesisRefreshIntervalMs bind:profileSynthesisCooldownMs

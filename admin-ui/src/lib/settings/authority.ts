@@ -9,7 +9,9 @@ export interface SettingAuthorityInfo {
 }
 
 interface SchedulerEditorConfig {
-  salienceDecayIntervalMs?: unknown;
+  backgroundMaintenance?: {
+    intervalMs?: unknown;
+  };
 }
 
 interface CapabilitiesEditorConfig {
@@ -96,17 +98,27 @@ export function resolveSettingAuthority(
 ): SettingAuthorityInfo {
   const fallback = defaultAuthority(data, schema, key);
 
-  if (key === 'salienceDecayIntervalMs') {
+  if (key === 'backgroundMaintenanceIntervalMs') {
     const scheduler = (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
-    const effectiveMs = asInteger(scheduler.salienceDecayIntervalMs)
-      ?? asInteger(asRecord(data?.config)?.salienceDecayIntervalMs);
+    const effectiveState = data?.effectiveBackgroundMaintenance;
+    const liveMs = asInteger(effectiveState?.effectiveIntervalMs);
+    const onDiskMs = asInteger(effectiveState?.onDiskIntervalMs)
+      ?? asInteger(scheduler.backgroundMaintenance?.intervalMs);
+    const effectiveValue = liveMs !== undefined && onDiskMs !== undefined
+      ? `Live: ${liveMs.toLocaleString()} ms · on disk: ${onDiskMs.toLocaleString()} ms`
+      : onDiskMs !== undefined
+        ? `On disk: ${onDiskMs.toLocaleString()} ms · live value unavailable`
+        : undefined;
     return {
       sourceLabel: fallback.sourceLabel,
-      ...(effectiveMs !== undefined ? { effectiveValue: `${effectiveMs.toLocaleString()} ms` } : {}),
+      ...(effectiveValue ? { effectiveValue } : {}),
       detail:
-        'Authoritative source: scheduler.json > salienceDecayIntervalMs. Saving here writes scheduler.json, and the runtime uses that dedicated cadence.',
-      precedence:
-        'scheduler.json wins. Compression-guideline review runs on the bundled heartbeat and does not share this cadence.',
+        'Authoritative source: scheduler.json > backgroundMaintenance.intervalMs. Saving writes the shared cadence on disk; the running Bundled Background Maintenance task is unchanged until restart.',
+      precedence: effectiveState?.restartRequired
+        ? 'Restart required: the running cadence still differs from scheduler.json.'
+        : liveMs !== undefined
+          ? 'Live and on-disk cadences match. Other scheduler lanes keep their own justified triggers.'
+          : 'Restart after saving so the scheduler runtime loads the owner-file cadence.',
     };
   }
 

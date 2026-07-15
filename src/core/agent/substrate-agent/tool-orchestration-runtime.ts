@@ -18,6 +18,7 @@ import type {
   AdaptiveToolSnapshotTool,
 } from '../adaptive-tools-telemetry.js';
 import { resolveToolPresentationRank } from '../tool-surface/registry.js';
+import type { ToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
   ToolConcurrencyClass,
@@ -285,6 +286,13 @@ interface ResolveActiveToolsParams {
   extendedTools: readonly AgentTool<any>[];
   promotedResolution: PromotedToolResolution;
   additionalSkipped?: AdaptiveToolSnapshotSkip[];
+  /**
+   * Durable-usage ordering signal (psfn-framework-b0yl.5). Applied only as a
+   * tie-break INSIDE a presentation band — after explicit pins and after the
+   * social/expressive-first domain rank — so it never overrides deliberate
+   * ordering and never affects callability. Absent => alphabetical tie-break.
+   */
+  usageRanking?: ToolUsageRanking;
 }
 
 export function resolveActiveTools(
@@ -327,6 +335,14 @@ export function resolveActiveTools(
       const rankDelta = resolveToolPresentationRank(left.tool.name)
         - resolveToolPresentationRank(right.tool.name);
       if (rankDelta !== 0) return rankDelta;
+      // Within an identical presentation band, durable usage frequency breaks
+      // the tie (most-used first) before falling back to alphabetical order.
+      // This is the only place usage stats touch ordering; bands above are
+      // untouched, so deliberate ranking and pins are preserved.
+      if (params.usageRanking) {
+        const usageDelta = params.usageRanking.compareWithinBand(left.tool.name, right.tool.name);
+        if (usageDelta !== 0) return usageDelta;
+      }
       return left.tool.name.localeCompare(right.tool.name);
     });
 

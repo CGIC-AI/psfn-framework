@@ -205,6 +205,7 @@ export type {
   AdminSettingsStatusLevel,
   AdminSettingsDivergence,
   AdminSettingsStatus,
+  EffectiveBackgroundMaintenanceState,
   EffectiveChargeQuotaState,
   AdminSettingsData,
   SettingsValidationError,

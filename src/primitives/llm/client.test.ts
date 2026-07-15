@@ -895,6 +895,141 @@ describe('LLMClient provider observability', () => {
     });
   });
 
+  it('records toolcall_start before delayed arguments and ignores later output events', async () => {
+    const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
+    let nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    const partial = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: 'call-1',
+          name: 'memory_lookup',
+          arguments: {},
+        },
+      ],
+    };
+    mocks.streamSimple.mockImplementation(async function* () {
+      nowMs = 2_000;
+      yield { type: 'toolcall_start', contentIndex: 0, partial };
+      nowMs = 9_000;
+      yield { type: 'toolcall_start', contentIndex: 0, partial };
+      yield {
+        type: 'toolcall_delta',
+        contentIndex: 0,
+        delta: '{"query":"hello"}',
+        partial,
+      };
+      yield {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-1',
+          name: 'memory_lookup',
+          arguments: { query: 'hello' },
+        },
+        partial,
+      };
+      yield { type: 'text_delta', contentIndex: 1, delta: 'after tool', partial };
+      yield { type: 'thinking_delta', contentIndex: 2, delta: 'after text', partial };
+      yield {
+        type: 'done',
+        reason: 'toolUse',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 7 },
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-1',
+              name: 'memory_lookup',
+              arguments: { query: 'hello' },
+            },
+            { type: 'text', text: 'after tool' },
+            { type: 'thinking', thinking: 'after text' },
+          ],
+        },
+      };
+    });
+
+    try {
+      await client.stream({
+        systemPrompt: 'System prompt',
+        messages: [{ role: 'user', content: 'Look it up' }],
+      }, { onFirstOutput });
+
+      expect(onFirstOutput).toHaveBeenCalledTimes(1);
+      expect(onFirstOutput).toHaveBeenCalledWith({
+        kind: 'tool',
+        monotonicAtMs: expect.any(Number),
+        timestampMs: 2_000,
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('records toolcall_start when a tool finishes with empty arguments', async () => {
+    const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
+    const partial = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: 'call-empty',
+          name: 'memory_list',
+          arguments: {},
+        },
+      ],
+    };
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'toolcall_start', contentIndex: 0, partial };
+      yield {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: {
+          type: 'toolCall',
+          id: 'call-empty',
+          name: 'memory_list',
+          arguments: {},
+        },
+        partial,
+      };
+      yield {
+        type: 'done',
+        reason: 'toolUse',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 1 },
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-empty',
+              name: 'memory_list',
+              arguments: {},
+            },
+          ],
+        },
+      };
+    });
+
+    await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'List memories' }],
+    }, { onFirstOutput });
+
+    expect(onFirstOutput).toHaveBeenCalledTimes(1);
+    expect(onFirstOutput).toHaveBeenCalledWith({
+      kind: 'tool',
+      monotonicAtMs: expect.any(Number),
+      timestampMs: expect.any(Number),
+    });
+  });
+
   it('does not fabricate first output from a terminal-only completion event', async () => {
     const client = new LLMClient(makeConfig());
     const onFirstOutput = vi.fn();

@@ -1097,6 +1097,10 @@ export class LLMClient {
                     reasoning += event.delta;
                     break;
 
+                  case 'toolcall_start':
+                    markFirstOutput('tool');
+                    break;
+
                   case 'toolcall_delta': {
                     const fragment = (event as { delta?: unknown }).delta;
                     if (typeof fragment === 'string' && fragment.length > 0) {

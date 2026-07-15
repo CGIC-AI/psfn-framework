@@ -12,7 +12,10 @@ import {
   type EnqueueBackgroundWorkInput,
   type MemoryExtractionBackgroundPayload,
 } from '../../core/agent/background-work/types.js';
-import { BackgroundWorkSupervisor } from '../../core/agent/background-work/supervisor.js';
+import {
+  BackgroundWorkDeferredError,
+  BackgroundWorkSupervisor,
+} from '../../core/agent/background-work/supervisor.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { createPostgresPool } from '../postgres.js';
 import {
@@ -813,6 +816,77 @@ describe('PostgresBackgroundWorkStore', () => {
     } finally {
       await Promise.allSettled([first.stop(), second.stop()]);
       await Promise.all([firstStore.close(), secondStore.close()]);
+    }
+  }, 30_000);
+
+  it('leaves a drain-deferred durable extraction retryable and applies its exact effect once on retry', async () => {
+    // Models the u5bv.11 durable receipt outcome end-to-end on a real store: a
+    // queued bounded extraction that finds the extractor draining opens its
+    // effect (`pending`) then fails closed as retryable BEFORE crossing the
+    // boundary. The claim must defer (no consumed attempt), abandon the pending
+    // receipt, and stay retryable — and a later accepting run must apply its
+    // exact effect exactly once with no duplicate.
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    let nowMs = 1_000;
+    let attempts = 0;
+    const sinkWrites: string[] = [];
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'worker',
+      leaseDurationMs: 60_000,
+      now: () => nowMs,
+      executor: async ({ effects }) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await effects.run('memory-extraction', async () => {
+            // Drain requeue: the post-turn seam raises a retryable defer before
+            // any fact write and before crossing the effect boundary.
+            throw new BackgroundWorkDeferredError('source_not_ready', 250);
+          });
+          return;
+        }
+        await effects.run('memory-extraction', async (crossBoundary) => {
+          await crossBoundary();
+          sinkWrites.push('memory');
+        });
+      },
+    });
+    const jobId = makeInput('session-drain', 'turn-drain').jobId;
+    try {
+      await supervisor.enqueue([makeInput('session-drain', 'turn-drain')]);
+
+      // Tick 1: the drain requeue defers the job with no applied effect and no
+      // consumed attempt.
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      expect(await store.get(jobId)).toMatchObject({
+        state: 'deferred',
+        reasonCode: 'source_not_ready',
+        attemptCount: 0,
+      });
+      expect(sinkWrites).toEqual([]);
+
+      // Tick 2 (after the defer window): the exact snapshot runs once, crosses
+      // its boundary, and completes.
+      nowMs = 2_000;
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      expect(await store.get(jobId)).toMatchObject({ state: 'succeeded' });
+      expect(sinkWrites).toEqual(['memory']);
+
+      // Tick 3: a succeeded job never re-runs — no duplicate durable effect.
+      nowMs = 3_000;
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+      expect(sinkWrites).toEqual(['memory']);
+      expect(attempts).toBe(2);
+    } finally {
+      await supervisor.stop();
+      await store.close();
     }
   }, 30_000);
 

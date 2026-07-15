@@ -8,6 +8,7 @@ import { SessionStore } from '../../persistence/sessions/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
+import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
 
 const tempDirs: string[] = [];
 
@@ -2827,5 +2828,148 @@ describe('MemoryExtractor bounded snapshot sizing (u5bv.10)', () => {
     expect(makeExtractor(999).getBoundedExtractionSnapshotLimit()).toBe(50);
     // Never below one — a durable no-op snapshot is not a valid extraction window.
     expect(makeExtractor(0).getBoundedExtractionSnapshotLimit()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('MemoryExtractor durable drain requeue (u5bv.11)', () => {
+  function substantiveEntries(channelId: string, ids: number[]) {
+    return ids.map((id) => {
+      const role = id % 2 === 1 ? 'user' : 'assistant';
+      return {
+        id,
+        channelId,
+        role,
+        authorName: role,
+        content: `Conversation message ${id} with enough substance to extract a durable detail.`,
+        timestamp: id * 1_000,
+      };
+    });
+  }
+
+  function makeDrainHarness(gate: Promise<void>) {
+    const llmClient = {
+      complete: vi.fn().mockImplementation(async () => {
+        await gate;
+        return { content: '<response></response>' };
+      }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(0),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 4, minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+    return { extractor, llmClient, sessionManager };
+  }
+
+  it('fails a queued durable bounded run closed when drain flips acceptance before it starts', async () => {
+    let releaseA!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseA = resolve; });
+    const { extractor, llmClient, sessionManager } = makeDrainHarness(gate);
+    const channelId = 'api:drain-requeue-b';
+
+    // A: an unrelated in-flight extraction on the SAME channel is held via the
+    // gate, so the durable bounded run B queues behind it (serialize scheduling).
+    const aPromise = extractor.extractObservedGroupRange({
+      channelId,
+      triggerReason: 'observed_count',
+      recoveredEntries: substantiveEntries(channelId, [101, 102]) as any,
+      groupWriteCaps: createDefaultGroupMemorySettings().writeCaps,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(extractor.getPendingExtractionPromise(channelId)).not.toBeNull();
+
+    // B: the durable, receipt-bound post-turn extraction (assertEffectAllowed +
+    // bounded snapshot) is enqueued behind A while acceptance is still true.
+    const bCrossBoundary = vi.fn().mockResolvedValue(undefined);
+    const bPromise = extractor.maybeExtract(
+      channelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      bCrossBoundary,
+      substantiveEntries(channelId, [1, 2, 3, 4]) as any,
+    );
+
+    // Graceful shutdown flips acceptance before B's chained run starts.
+    const stopping = extractor.stop({ timeoutMs: 5_000 });
+    releaseA();
+
+    // B fails closed (retryable) instead of resolving as a covered no-op: the
+    // silent-loss bug would resolve normally here and advance B's coverage.
+    await expect(bPromise).rejects.toBeInstanceOf(ExtractionDrainRequeueError);
+    // B never crossed its durable effect boundary and never ran its own LLM.
+    expect(bCrossBoundary).not.toHaveBeenCalled();
+    expect(llmClient.complete).toHaveBeenCalledTimes(1); // A only
+    // The bounded run never fell back to live session history.
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(sessionManager.getMessageCount).not.toHaveBeenCalled();
+
+    // A (no receipt) keeps its intentional silent-skip drain behavior and settles
+    // cleanly; the drain observes both runs and completes within its timeout.
+    await expect(aPromise).resolves.toBe(true);
+    await expect(stopping).resolves.toBe(true);
+  });
+
+  it('re-runs the exact snapshot once and only then advances coverage after a requeue', async () => {
+    // A fresh (accepting) extractor models the process that picks up the deferred
+    // job on restart: B's exact snapshot runs once and advances coverage, and a
+    // reprocess of the same covered range is a no-op.
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(0),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    } as any;
+    const memoryStore = { getMemoriesByChannel: vi.fn().mockResolvedValue([]) } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 4 },
+    );
+    const channelId = 'api:drain-requeue-retry';
+    const cross = vi.fn().mockResolvedValue(undefined);
+    const snapshot = substantiveEntries(channelId, [1, 2, 3, 4]) as any;
+
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, cross, snapshot,
+    );
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    expect(cross).toHaveBeenCalled();
+
+    // The same range is now covered exactly once — reprocessing is a no-op.
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, cross, snapshot,
+    );
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(sessionManager.getMessageCount).not.toHaveBeenCalled();
   });
 });

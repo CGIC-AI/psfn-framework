@@ -175,6 +175,12 @@ function collectCustomEditorFields(editorId: GardenSettingsCustomEditorId): stri
     .map(([fieldKey]) => fieldKey);
 }
 
+function collectAdvancedSectionFields(sectionId: GardenSettingsSectionId): string[] {
+  return Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)
+    .filter(([, exposure]) => exposure.sectionId === sectionId && exposure.surface === 'advanced')
+    .map(([fieldKey]) => fieldKey);
+}
+
 export const SETTINGS_GARDEN_SECTION_FIELDS: Record<GardenSettingsSectionId, string[]> = {
   models: collectSectionFields('models'),
   budget: collectSectionFields('budget'),
@@ -197,6 +203,40 @@ export const SETTINGS_GARDEN_CUSTOM_EDITOR_FIELDS: Record<GardenSettingsCustomEd
   models: collectCustomEditorFields('models'),
   scheduler: collectCustomEditorFields('scheduler'),
   capabilities: collectCustomEditorFields('capabilities'),
+};
+
+/**
+ * Per-section field keys that the generic Garden "All Fields" advanced editor is
+ * responsible for rendering: only fields whose `surface` is `'advanced'`.
+ *
+ * This deliberately excludes `surface: 'custom'` fields (e.g. `modelCatalog`,
+ * `capabilityTier`, `salienceDecayIntervalMs`, the `episodicProcessing*` slots),
+ * which are owned by dedicated custom editors / owner files and must not be
+ * offered as generic runtime-settings inputs — the runtime settings write path
+ * rejects them with a `wrong_owner` validation error.
+ *
+ * Unlike {@link SETTINGS_GARDEN_SECTION_FIELDS} (which lists every field mapped
+ * to a section regardless of surface), this projection is what lets the advanced
+ * editor surface every advanced field a section owns even when that field is not
+ * yet present in the persisted runtime settings, so admins can discover and edit
+ * settings that are still on their built-in defaults.
+ */
+export const SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS: Record<GardenSettingsSectionId, string[]> = {
+  models: collectAdvancedSectionFields('models'),
+  budget: collectAdvancedSectionFields('budget'),
+  memory: collectAdvancedSectionFields('memory'),
+  sessions: collectAdvancedSectionFields('sessions'),
+  compositional: collectAdvancedSectionFields('compositional'),
+  'extraction-tuning': collectAdvancedSectionFields('extraction-tuning'),
+  profile: collectAdvancedSectionFields('profile'),
+  'analysis-workbench': collectAdvancedSectionFields('analysis-workbench'),
+  trust: collectAdvancedSectionFields('trust'),
+  llm: collectAdvancedSectionFields('llm'),
+  import: collectAdvancedSectionFields('import'),
+  fetch: collectAdvancedSectionFields('fetch'),
+  voice: collectAdvancedSectionFields('voice'),
+  obsidian: collectAdvancedSectionFields('obsidian'),
+  channels: collectAdvancedSectionFields('channels'),
 };
 
 export function listGardenSettingsFieldExposureKeys(): string[] {

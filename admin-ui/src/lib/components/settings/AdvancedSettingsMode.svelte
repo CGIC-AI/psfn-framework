@@ -84,11 +84,15 @@
 
   const FIELD_INPUT_CLASS = 'flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300';
 
+  // Render every advanced-surface field a section owns, whether or not it is
+  // present in the persisted runtime settings. Fields on their built-in default
+  // (absent from data.config) render with an empty control that inherits the
+  // default until an admin overrides it; setConfigValue only writes data.config
+  // on edit, so untouched defaults are never spuriously persisted on save.
   function visibleSectionKeys(section: AdvancedSettingsSection): string[] {
+    if (!data) return [];
     return section.keys.filter((key) => (
-      data
-      && key in (data.config as Record<string, unknown>)
-      && !modelOwnedFields.has(key)
+      !modelOwnedFields.has(key)
       && !isDeprecatedField(key)
     ));
   }

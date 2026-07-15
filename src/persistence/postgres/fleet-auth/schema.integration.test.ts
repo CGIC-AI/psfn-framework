@@ -466,6 +466,9 @@ describe('fleet_auth Postgres authority boundary', () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    // The runtime role can no longer mint trusted-host ceremonies; the schema
+    // owner (migration role) authors this fixture ceremony instead.
+    const migration = createPostgresPool(db.migrationUrl, { max: 1 });
     const principalId = randomUUID();
     const sessionId = randomUUID();
     const companionId = randomUUID();
@@ -536,7 +539,7 @@ describe('fleet_auth Postgres authority boundary', () => {
                  1, $5, 1, 1, 1, clock_timestamp() + interval '5 minutes')`,
         [randomUUID(), principalId, sessionId, companionId, '9'.repeat(64)],
       );
-      await runtime.query(
+      await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
           (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
            global_auth_epoch, expires_at)
@@ -609,6 +612,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       })));
     } finally {
       await runtime.end();
+      await migration.end();
       rmSync(floorRoot, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);
@@ -829,6 +833,9 @@ describe('fleet_auth Postgres authority boundary', () => {
         restoredAt: '2026-07-15T12:00:00.000Z',
       });
       const targetRuntime = createPostgresPool(target.runtimeUrl, { max: 1 });
+      // The runtime role can no longer mint trusted-host ceremonies; the schema
+      // owner (migration role) authors the fixture ceremony below.
+      const targetMigration = createPostgresPool(target.migrationUrl, { max: 1 });
       try {
         const principal = await targetRuntime.query<{ status: string; restore_state: string }>(
           `SELECT status, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals WHERE principal_id = $1`,
@@ -883,7 +890,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         );
         const currentEpoch = Number(epochRow.rows[0]!.global_auth_epoch);
         const ceremonyId = randomUUID();
-        await targetRuntime.query(
+        await targetMigration.query(
           `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
             (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
              expected_companion_id, expected_contact_id, exact_scope,
@@ -916,6 +923,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         expect(floors.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
       } finally {
         await targetRuntime.end();
+        await targetMigration.end();
       }
     } finally {
       await sourceMigration.end();
@@ -1033,6 +1041,10 @@ describe('fleet_auth Postgres authority boundary', () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    // The runtime role can no longer mint trusted-host ceremonies; the schema
+    // owner (migration role) authors the fixture ceremonies below. The runtime
+    // pool still invokes the reapproval procedure via EXECUTE.
+    const migration = createPostgresPool(db.migrationUrl, { max: 1 });
     const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-reapprove-'));
     chmodSync(floorRoot, 0o700);
     const principalId = randomUUID();
@@ -1102,7 +1114,7 @@ describe('fleet_auth Postgres authority boundary', () => {
 
       // A ceremony bound to a different provider subject cannot promote this account.
       const wrongCeremonyId = randomUUID();
-      await runtime.query(
+      await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
           (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
            global_auth_epoch, expires_at)
@@ -1125,7 +1137,7 @@ describe('fleet_auth Postgres authority boundary', () => {
 
       // The exact ceremony reapproves the account atomically.
       const ceremonyId = randomUUID();
-      await runtime.query(
+      await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
           (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
            expected_companion_id, expected_contact_id, exact_scope,
@@ -1210,6 +1222,132 @@ describe('fleet_auth Postgres authority boundary', () => {
         auditEventId: randomUUID(),
         at: '2026-07-15T12:10:00.000Z',
       })).rejects.toThrow(/not pending/);
+    } finally {
+      await runtime.end();
+      await migration.end();
+      rmSync(floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects runtime DELETE+INSERT and fresh-PK INSERT quarantine reactivation of contact bindings and role grants', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    const principalId = randomUUID();
+    const bindingId = randomUUID();
+    const grantId = randomUUID();
+    const companionId = randomUUID();
+    try {
+      // A quarantined restore candidate: principal + one binding + one role.
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [principalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'contact-owner', 'quarantined', '{"kind":"verified"}', 1, 'quarantined')`,
+        [bindingId, principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'owner', 'quarantined', 1, 'quarantined')`,
+        [grantId, principalId, companionId],
+      );
+
+      // Runtime cannot DELETE a quarantined row to clear its unique-index slot.
+      await expect(runtime.query(
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1`,
+        [bindingId],
+      )).rejects.toThrow(/quarantined fleet_auth authority row can only be removed/);
+      await expect(runtime.query(
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants WHERE grant_id = $1`,
+        [grantId],
+      )).rejects.toThrow(/quarantined fleet_auth authority row can only be removed/);
+
+      // Runtime cannot INSERT a fresh live/active authority row for a quarantined
+      // principal (a distinct contact_id isolates the trigger as the sole
+      // rejector, so no unique index masks the guard).
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'reactivation-attempt', 'active', '{"kind":"verified"}', 1, 'live')`,
+        [randomUUID(), principalId, companionId],
+      )).rejects.toThrow(/live fleet_auth authority row for a quarantined principal/);
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'owner', 'active', 1, 'live')`,
+        [randomUUID(), principalId, companionId],
+      )).rejects.toThrow(/live fleet_auth authority row for a quarantined principal/);
+
+      // The rows remain quarantined; no reactivation happened.
+      const binding = await runtime.query<{ state: string; restore_state: string }>(
+        `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1`,
+        [bindingId],
+      );
+      expect(binding.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
+      const role = await runtime.query<{ lifecycle: string; restore_state: string }>(
+        `SELECT lifecycle, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants WHERE grant_id = $1`,
+        [grantId],
+      );
+      expect(role.rows[0]).toEqual({ lifecycle: 'quarantined', restore_state: 'quarantined' });
+    } finally {
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies runtime INSERT on trusted_host_ceremonies and blocks a self-minted reapproval', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    // The privilege matrix must still pass with runtime lacking ceremony INSERT.
+    await expect(assertFleetAuthRuntimePrivileges(db.runtimeUrl, ROLES)).resolves.toBeUndefined();
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-noceremony-'));
+    chmodSync(floorRoot, 0o700);
+    const principalId = randomUUID();
+    try {
+      // Provision authority lineage so a reapproval attempt reaches the ceremony
+      // gate rather than failing earlier on an unprovisioned lineage.
+      const floors = new FleetAuthAuthorityFloorStore(floorRoot);
+      const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+
+      // Runtime can no longer author a trusted-host ceremony.
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', '123456789012345678', '{}', 1,
+                 clock_timestamp() + interval '5 minutes')`,
+        [randomUUID(), '1'.repeat(64)],
+      )).rejects.toThrow(/permission denied/);
+
+      // Unable to mint a ceremony, a runtime reapproval attempt cannot pass the
+      // ceremony-consumption gate: the procedure raises before any mutation.
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [principalId],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: randomUUID(),
+        principalId,
+        provider: 'discord',
+        providerSubjectId: '123456789012345678',
+        companionId: randomUUID(),
+        contactId: 'contact-owner',
+        bindingId: randomUUID(),
+        roleGrantId: randomUUID(),
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:00:00.000Z',
+      })).rejects.toThrow(/ceremony not found/);
     } finally {
       await runtime.end();
       rmSync(floorRoot, { recursive: true, force: true });

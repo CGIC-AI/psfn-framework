@@ -6,7 +6,7 @@
 // migration, so the trusted-host reapproval boundary is reasserted on every
 // migration run and is never left half-applied.
 //
-// Two structures make the raw-SQL restore-quarantine bypass impossible:
+// Three structures make the raw-SQL restore-quarantine bypass impossible:
 //
 //   1. restore_quarantine_activation_guard — a BEFORE UPDATE trigger on every
 //      mutable authority table. A quarantined row (restore_state='quarantined')
@@ -25,6 +25,20 @@
 //      rechecks conflicts and tombstones under lock, activates the account,
 //      bumps versions and the auth epoch, revokes affected ephemeral authority,
 //      appends one immutable audit event, and never touches passkey authority.
+//
+//   3. restore_quarantine_insert_guard / restore_quarantine_delete_guard —
+//      BEFORE INSERT and BEFORE DELETE triggers on principal_contact_bindings
+//      and principal_role_grants. A quarantined authority row occupies no live
+//      unique-index slot, so a BEFORE UPDATE trigger alone cannot stop a
+//      non-owner from clearing a quarantined row and re-inserting (or simply
+//      inserting) a fresh live/active row for the same quarantined principal.
+//      The INSERT guard fences a non-owner INSERT that would create a
+//      live/active authority row referencing a quarantined principal; the
+//      DELETE guard forbids a non-owner from removing a quarantined row.
+//      Backup-restored rows (restore_state='quarantined') and legitimate
+//      provisioning for live principals both pass untouched. Only the schema
+//      owner (the SECURITY DEFINER reapproval procedure) may author the
+//      reactivating shape.
 
 export const FLEET_AUTH_REAPPROVE_FUNCTION_NAME = 'fleet_auth.reapprove_account_authority';
 
@@ -123,6 +137,115 @@ DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON passkey_credential
 CREATE TRIGGER restore_quarantine_activation_guard
   BEFORE UPDATE ON passkey_credentials
   FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
+
+-- BEFORE INSERT guard: a non-owner role must not create a live/active authority
+-- row that reactivates a quarantined principal. Must NOT be SECURITY DEFINER:
+-- current_user has to reflect the connected role so a non-owner INSERT is caught.
+CREATE OR REPLACE FUNCTION fleet_auth.restore_quarantine_insert_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, fleet_auth
+AS $$
+DECLARE
+  v_new jsonb := to_jsonb(NEW);
+  v_lifecycle_column text;
+  v_new_lifecycle text;
+  v_schema_owner text;
+  v_principal_restore_state text;
+BEGIN
+  v_lifecycle_column := CASE TG_TABLE_NAME
+    WHEN 'principal_contact_bindings' THEN 'state'
+    WHEN 'principal_role_grants' THEN 'lifecycle'
+    ELSE NULL
+  END;
+  IF v_lifecycle_column IS NULL THEN
+    RAISE EXCEPTION 'fleet_auth restore insert guard is attached to an unexpected table %', TG_TABLE_NAME
+      USING ERRCODE = '42501';
+  END IF;
+  v_new_lifecycle := v_new->>v_lifecycle_column;
+
+  -- Only a live/active row could reactivate a quarantined principal. Rows the
+  -- backup coordinator restores enter as restore_state='quarantined' and are
+  -- never a reactivation, so they are never fenced here.
+  IF (v_new->>'restore_state') IS DISTINCT FROM 'live'
+     OR v_new_lifecycle NOT IN ('active', 'pending') THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT owner_role.rolname INTO v_schema_owner
+  FROM pg_namespace AS namespace
+  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+  WHERE namespace.nspname = 'fleet_auth';
+
+  -- The SECURITY DEFINER reapproval procedure runs as the schema owner; only
+  -- that context may author a live authority row bound to a quarantined
+  -- principal.
+  IF current_user = v_schema_owner THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT restore_state INTO v_principal_restore_state
+  FROM fleet_auth.human_principals
+  WHERE principal_id = NEW.principal_id;
+
+  IF v_principal_restore_state = 'quarantined' THEN
+    RAISE EXCEPTION 'cannot create a live fleet_auth authority row for a quarantined principal; use fleet_auth.reapprove_account_authority'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- BEFORE DELETE guard: a non-owner role must not remove a quarantined authority
+-- row (e.g. to free a live unique-index slot for a reactivating replacement).
+-- Must NOT be SECURITY DEFINER, for the same reason as the insert guard.
+CREATE OR REPLACE FUNCTION fleet_auth.restore_quarantine_delete_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, fleet_auth
+AS $$
+DECLARE
+  v_schema_owner text;
+BEGIN
+  -- Only quarantined restore candidates are fenced from deletion. Deletes of
+  -- live/revoked rows are unaffected.
+  IF (to_jsonb(OLD)->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
+    RETURN OLD;
+  END IF;
+
+  SELECT owner_role.rolname INTO v_schema_owner
+  FROM pg_namespace AS namespace
+  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+  WHERE namespace.nspname = 'fleet_auth';
+
+  IF current_user = v_schema_owner THEN
+    RETURN OLD;
+  END IF;
+
+  RAISE EXCEPTION 'quarantined fleet_auth authority row can only be removed through the schema owner context'
+    USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON principal_contact_bindings;
+CREATE TRIGGER restore_quarantine_insert_guard
+  BEFORE INSERT ON principal_contact_bindings
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_insert_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_delete_guard ON principal_contact_bindings;
+CREATE TRIGGER restore_quarantine_delete_guard
+  BEFORE DELETE ON principal_contact_bindings
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_delete_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON principal_role_grants;
+CREATE TRIGGER restore_quarantine_insert_guard
+  BEFORE INSERT ON principal_role_grants
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_insert_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_delete_guard ON principal_role_grants;
+CREATE TRIGGER restore_quarantine_delete_guard
+  BEFORE DELETE ON principal_role_grants
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_delete_guard();
 
 CREATE OR REPLACE FUNCTION fleet_auth.reapprove_account_authority(
   p_ceremony_id uuid,

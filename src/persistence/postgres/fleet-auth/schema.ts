@@ -164,6 +164,17 @@ async function applyRoleGrants(
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
+  // The runtime broker may invalidate pending trusted-host ceremonies during
+  // reconciliation (DELETE) and observe them (SELECT), but it must never author
+  // or tamper with one: the ceremony is the reapproval procedure's only external
+  // gate, so a runtime able to INSERT/UPDATE a ceremony could self-mint a fully
+  // sanctioned reapproval. Ceremony minting belongs to the schema owner
+  // (migration / SECURITY DEFINER) or a future distinct trusted-host credential.
+  // The reapproval procedure consumes the row as the schema owner, so revoking
+  // the caller's INSERT/UPDATE does not affect it.
+  await client.query(
+    `REVOKE INSERT, UPDATE ON ${qualifiedTable('trusted_host_ceremonies')} FROM ${runtime}`,
+  );
   await client.query(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
@@ -342,7 +353,12 @@ async function assertNoUnexpectedFleetAuthGrantees(
   }
 }
 
-async function assertExactDml(pool: Pool, authority: string): Promise<void> {
+async function assertExactDml(
+  pool: Pool,
+  authority: string,
+  expectedRole: string,
+  roles: FleetAuthDatabaseRoles,
+): Promise<void> {
   const tables = [
     ...FLEET_AUTH_MUTABLE_TABLES,
     ...FLEET_AUTH_IMMUTABLE_TABLES,
@@ -365,14 +381,24 @@ async function assertExactDml(pool: Pool, authority: string): Promise<void> {
   `, [FLEET_AUTH_SCHEMA_NAME, tables, TABLE_PRIVILEGES]);
   const mutable = new Set<string>(FLEET_AUTH_MUTABLE_TABLES);
   const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
-  const drift = result.rows.filter(row => {
-    const expected = mutable.has(row.table_name)
-      ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(row.privilege)
-      : immutable.has(row.table_name)
-        ? ['SELECT', 'INSERT'].includes(row.privilege)
-        : false;
-    return row.present !== expected;
-  });
+  const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
+    if (mutable.has(tableName)) {
+      // The runtime broker cannot author or tamper with trusted-host ceremonies;
+      // it may only SELECT/DELETE them. The backup/restore coordinator retains
+      // full DML on every mutable table and never receives reapproval EXECUTE.
+      if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
+        return new Set(['SELECT', 'DELETE']);
+      }
+      return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+    }
+    if (immutable.has(tableName)) {
+      return new Set(['SELECT', 'INSERT']);
+    }
+    return new Set<string>();
+  };
+  const drift = result.rows.filter(row => (
+    expectedPrivileges(row.table_name).has(row.privilege) !== row.present
+  ));
   if (drift.length > 0) {
     throw new Error(
       `${authority} PostgreSQL exact DML privileges violate the fleet_auth contract: `
@@ -398,7 +424,7 @@ export async function assertFleetAuthRuntimePrivileges(
       roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth runtime');
-    await assertExactDml(pool, 'Fleet auth runtime');
+    await assertExactDml(pool, 'Fleet auth runtime', roles.runtime, roles);
   } finally {
     await pool.end();
   }
@@ -421,7 +447,7 @@ export async function assertFleetAuthBackupRestorePrivileges(
       roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth backup/restore');
-    await assertExactDml(pool, 'Fleet auth backup/restore');
+    await assertExactDml(pool, 'Fleet auth backup/restore', roles.backupRestore, roles);
   } finally {
     await pool.end();
   }

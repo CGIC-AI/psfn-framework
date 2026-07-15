@@ -183,7 +183,7 @@ describe('journal utils', () => {
     expect(parsed.quarantined).toEqual([]);
   });
 
-  it('reads first valid journal entry without full materialization', () => {
+  it('rejects a malformed first physical row as segment seek authority', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
     dirs.push(dir);
     const filePath = join(dir, 'first-entry.jsonl');
@@ -196,9 +196,7 @@ describe('journal utils', () => {
     })) + '\n', 'utf-8');
 
     const first = readJournalFirstEntry(filePath);
-    expect(first).not.toBeNull();
-    expect(first?.channelId).toBe('ch1');
-    expect(first?.id).toBe(2);
+    expect(first).toBeNull();
   });
 
   it('scans journal metadata with bounded memory', () => {

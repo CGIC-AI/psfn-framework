@@ -202,39 +202,63 @@ function readEntriesInRangeFromJournalArchiveChainAttempt(
 ): SessionEntry[] {
   if (archives.length === 0 || endId < startId) return [];
   const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
-  const firstEntries = new Map<number, JournalEntry>();
+  type FirstEntryProbe =
+    | { state: 'trusted'; entry: JournalEntry }
+    | { state: 'empty' }
+    | { state: 'untrusted' };
+  const firstEntries = new Map<number, FirstEntryProbe>();
 
-  const probeFirstEntry = (archiveIndex: number): JournalEntry | null => {
+  const probeFirstEntry = (archiveIndex: number): FirstEntryProbe => {
     const cached = firstEntries.get(archiveIndex);
     if (cached) return cached;
-    const first = context.archivePort.readJournalFirstEntry(archives[archiveIndex]!);
-    if (!first) return null;
+    const archive = archives[archiveIndex]!;
+    const first = context.archivePort.readJournalFirstEntry(archive);
+    if (!first) {
+      const probe: FirstEntryProbe = context.archivePort.archiveByteLength(archive) === 0
+        ? { state: 'empty' }
+        : { state: 'untrusted' };
+      firstEntries.set(archiveIndex, probe);
+      return probe;
+    }
     const normalized = context.normalizeEntry(
       first,
       [previousArchiveHmac(context, archives, archiveIndex)],
     );
-    if (!normalized.verified) return null;
-    firstEntries.set(archiveIndex, first);
-    return first;
+    const probe: FirstEntryProbe = normalized.verified
+      ? { state: 'trusted', entry: first }
+      : { state: 'untrusted' };
+    firstEntries.set(archiveIndex, probe);
+    return probe;
   };
 
   let lastNonEmptyIndex = archives.length - 1;
-  while (lastNonEmptyIndex >= 0 && !probeFirstEntry(lastNonEmptyIndex)) {
+  let segmentSeekTrusted = true;
+  while (lastNonEmptyIndex >= 0) {
+    const probe = probeFirstEntry(lastNonEmptyIndex);
+    if (probe.state === 'untrusted') {
+      segmentSeekTrusted = false;
+      break;
+    }
+    if (probe.state === 'trusted') break;
     lastNonEmptyIndex -= 1;
+  }
+  if (!segmentSeekTrusted) {
+    const loaded = loadJournalArchiveChain(context, archives);
+    return loaded.entries.filter(entry => entry.id >= startId && entry.id <= endId);
   }
   if (lastNonEmptyIndex < 0) return [];
 
   let candidateIndex = -1;
   let low = 0;
   let high = lastNonEmptyIndex;
-  let segmentSeekTrusted = true;
   while (low <= high) {
     const midpoint = low + Math.floor((high - low) / 2);
-    const first = probeFirstEntry(midpoint);
-    if (!first) {
+    const probe = probeFirstEntry(midpoint);
+    if (probe.state !== 'trusted') {
       segmentSeekTrusted = false;
       break;
     }
+    const first = probe.entry;
     if (first.id <= endId) {
       candidateIndex = midpoint;
       low = midpoint + 1;
@@ -300,7 +324,11 @@ function readEntriesInRangeFromJournalArchiveChainAttempt(
     }
 
     const first = firstEntries.get(archiveIndex) ?? probeFirstEntry(archiveIndex);
-    if (first && first.id <= startId) break;
+    if (first.state === 'untrusted') {
+      verificationFailed = true;
+      break;
+    }
+    if (first.state === 'trusted' && first.entry.id <= startId) break;
   }
 
   const afterFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);

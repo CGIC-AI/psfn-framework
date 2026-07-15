@@ -218,6 +218,10 @@ export class SessionStore implements TranscriptSearchPort {
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
   private channelIndexFingerprint: string | null = null;
+  private journalTombstoneAuthority = new Map<string, {
+    archiveFingerprint: string;
+    tombstones: Set<string>;
+  }>();
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
@@ -309,7 +313,69 @@ export class SessionStore implements TranscriptSearchPort {
           loaded,
         );
       },
+      onEntryRebuilt: (id, entry) => this.rememberJournalTombstoneAuthority(id, entry),
     });
+  }
+  private rememberJournalTombstoneAuthority(sessionId: string, entry: ChannelIndexEntry): void {
+    const archiveFingerprint = normalizeOptionalString(entry.archiveFingerprint);
+    if (!archiveFingerprint) return;
+    this.journalTombstoneAuthority.set(sessionId, {
+      archiveFingerprint,
+      tombstones: new Set(entry.activeTurnTombstoneIds ?? []),
+    });
+  }
+  private resolveJournalAuthoritativeTurnTombstones(params: {
+    sessionId: string;
+    channelId: string;
+    filePaths: readonly string[];
+    cache?: ChannelCache;
+  }): ReadonlySet<string> {
+    const archives = params.filePaths.map(filePath => (
+      this.journalRuntime.openArchive(params.channelId, filePath)
+    ));
+    const archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
+    if (!archiveFingerprint) {
+      throw new Error(`Cannot establish turn-tombstone authority for missing L0 session ${params.sessionId}`);
+    }
+    const remembered = this.journalTombstoneAuthority.get(params.sessionId);
+    if (remembered?.archiveFingerprint === archiveFingerprint) {
+      this.syncCacheTurnTombstoneAuthority(params.cache, remembered.tombstones);
+      return new Set(remembered.tombstones);
+    }
+    if (params.cache?.fullyLoaded && params.cache.archiveFingerprint === archiveFingerprint) {
+      const tombstones = new Set(params.cache.turnTombstones);
+      this.journalTombstoneAuthority.set(params.sessionId, { archiveFingerprint, tombstones });
+      return new Set(tombstones);
+    }
+
+    // The channel index is an unsigned derived cache. On a fresh process it
+    // cannot authorize removal of a redaction merely because its archive
+    // fingerprint is current; derive tombstones from canonical journal replay
+    // once per immutable archive generation, then retain only that authority.
+    const loaded = this.journalRuntime.loadChannelChain(archives);
+    const loadedFingerprint = loaded.archiveFingerprint;
+    if (!loadedFingerprint) {
+      throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
+    }
+    const tombstones = new Set(loaded.turnTombstones);
+    this.journalTombstoneAuthority.set(params.sessionId, {
+      archiveFingerprint: loadedFingerprint,
+      tombstones,
+    });
+    this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
+    return new Set(tombstones);
+  }
+  private syncCacheTurnTombstoneAuthority(
+    cache: ChannelCache | undefined,
+    tombstones: ReadonlySet<string>,
+  ): void {
+    if (!cache || cache.fullyLoaded) return;
+    const unchanged = cache.turnTombstones.size === tombstones.size
+      && [...tombstones].every(turnId => cache.turnTombstones.has(turnId));
+    if (unchanged) return;
+    cache.turnTombstones = new Set(tombstones);
+    cache.activeTurnTombstoneCount = tombstones.size;
+    cache.recentEntriesByLimit.clear();
   }
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
     upsertChannelIndex(channelId, entry, this.channelIndexPath, this.channelIndex);
@@ -362,6 +428,7 @@ export class SessionStore implements TranscriptSearchPort {
           loadedCount,
         );
       },
+      onEntryRebuilt: (sessionId, entry) => this.rememberJournalTombstoneAuthority(sessionId, entry),
     });
   }
   private backfillTranscriptProjectionFromDisk(): void {
@@ -982,7 +1049,12 @@ export class SessionStore implements TranscriptSearchPort {
     if (cached) {
       syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
     }
-    const tombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached,
+    });
     if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
     return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
   }
@@ -1056,7 +1128,12 @@ export class SessionStore implements TranscriptSearchPort {
     }
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
-    const tombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached,
+    });
     const recentCacheHit = cached ? this.readCachedRecentEntries(cached, limit) : null;
     if (recentCacheHit) {
       return recentCacheHit;
@@ -1132,7 +1209,12 @@ export class SessionStore implements TranscriptSearchPort {
       resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
       normalizedStart,
       normalizedEnd,
-      new Set(indexEntry.activeTurnTombstoneIds ?? []),
+      this.resolveJournalAuthoritativeTurnTombstones({
+        sessionId: resolved.sessionId,
+        channelId: resolved.channelId,
+        filePaths: resolved.filePaths,
+        cache: cached,
+      }),
     );
   }
   async applyCogSecTombstones(options: CogSecL0TombstoneOptions): Promise<CogSecL0TombstoneResult> {

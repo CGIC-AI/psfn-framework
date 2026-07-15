@@ -291,6 +291,7 @@ export function ensureChannelIndexEntry(params: {
     quarantinedCount: number,
     loadedCount: number,
   ) => void;
+  onEntryRebuilt?: (sessionId: string, entry: ChannelIndexEntry) => void;
 }): ChannelIndexEntry {
   if (params.filePaths.length === 0) {
     throw new Error(`Cannot ensure L0 session index entry ${params.sessionId} without files`);
@@ -333,6 +334,7 @@ export function ensureChannelIndexEntry(params: {
     params.filePaths,
     params.warnAboutQuarantinedEntries,
   );
+  params.onEntryRebuilt?.(params.sessionId, rebuilt);
   upsertChannelIndex(
     params.sessionId,
     rebuilt,
@@ -587,6 +589,7 @@ export function primeChannelIndexFromDisk(params: {
     quarantinedCount: number,
     loadedCount: number,
   ) => void;
+  onEntryRebuilt?: (sessionId: string, entry: ChannelIndexEntry) => void;
 }): void {
   const indexedChannelByFilename = new Map<string, string>();
   for (const [sessionId, entry] of params.channelIndex.entries()) {
@@ -658,6 +661,7 @@ export function primeChannelIndexFromDisk(params: {
       session.filePaths,
       params.warnAboutQuarantinedEntries,
     );
+    params.onEntryRebuilt?.(session.sessionId, entry);
     upsertChannelIndex(session.sessionId, entry, params.channelIndexPath, params.channelIndex);
   }
 }

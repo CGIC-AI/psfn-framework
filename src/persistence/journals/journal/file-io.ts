@@ -301,10 +301,13 @@ export function readJournalFirstEntry(filePath: string): JournalEntry | null {
     if (line.trim().length === 0) return false;
     try {
       first = parseJournalLine(line);
-      return true;
     } catch {
-      return false;
+      first = null;
     }
+    // The first nonblank physical row is the segment boundary authority. A
+    // malformed row there must not be skipped in favor of a later parseable
+    // id, because doing so would authorize an unsafe segment seek.
+    return true;
   });
 
   return first;

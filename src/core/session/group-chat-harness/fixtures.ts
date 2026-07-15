@@ -38,7 +38,7 @@ import type { Contact } from '../../contacts/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { CoreMemoryStore, coreMemoryChannelScope } from '../../../faculties/core-memory/store.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { MemoryScopeRef, PurrMemory } from '../../../faculties/memory/types.js';
 import type { ConsentFlags } from '../../../system/trust/types.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
@@ -577,7 +577,7 @@ export function makeLeakProbeMemories(): ScopedMemory[] {
  * MemoryRetriever, so this exercises the actual retrieval path rather than
  * mocking its output.
  */
-export function makeLeakProbeStore(memories: ScopedMemory[]): MemoryStore {
+export function makeLeakProbeStore(memories: ScopedMemory[]): MemoryStorePort {
   return {
     searchByEmbedding: () => memories,
     updateMemory: () => undefined,
@@ -586,7 +586,7 @@ export function makeLeakProbeStore(memories: ScopedMemory[]): MemoryStore {
     getMemoriesByChannel: () => [],
     getAllActiveMemories: () => memories,
     listActiveMemories: async () => memories,
-  } as unknown as MemoryStore;
+  } as unknown as MemoryStorePort;
 }
 
 export function makeEmbeddingProvider(): EmbeddingProviderPort {

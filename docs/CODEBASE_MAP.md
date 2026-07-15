@@ -85,7 +85,7 @@ k8s/ docker/ proxy/ deployment/   Kubernetes/Helm manifests, container config, L
 docs/             This map + design docs; CHANGELOG.md at repo root
 ```
 
-**Scale**: ~977 non-test + ~581 test TypeScript files under `src/`, ~498k source lines. Postgres-only runtime and maintenance; SQLite (`better-sqlite3`/`sqlite-vec`) implementations and packages are removed. Built on `@mariozechner/pi-agent-core` + `pi-ai` `0.73.1` (Node ≥22, ESM).
+**Scale**: ~1,271 non-test + ~806 test TypeScript files under `src/`, ~658k source lines. Postgres-only runtime and maintenance; SQLite (`better-sqlite3`/`sqlite-vec`) implementations and packages are removed. Built on `@mariozechner/pi-agent-core` + `pi-ai` `0.73.1` (Node ≥22, ESM).
 
 ## Module Guide
 

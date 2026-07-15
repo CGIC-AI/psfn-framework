@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../../boundary/pi-agent/index.js';
+import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
@@ -81,9 +82,7 @@ export function createResearchLibraryTool(
   const tool: SubstrateAgentTool = {
     name: 'library',
     label: 'library',
-    description:
-      'Durable companion-owned research library for promoted notes, files, and generated artifacts. '
-      + 'Use action=list|read|import_text|import_file|promote_scratchpad.',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.library,
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('list'),

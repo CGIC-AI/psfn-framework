@@ -60,6 +60,9 @@ describe('non-restored fleet auth authority floors', () => {
       tombstones: [],
     });
     expect(initial.passkeys).toMatchObject({ generation: 0, credentials: [], tombstones: [] });
+    expect(initial.trustedHost.lineageId).toMatch(/^[0-9a-f]{64}$/);
+    expect(initial.trustedHost.provisioningSecret).toMatch(/^[0-9a-f]{64}$/);
+    expect(initial.trustedHost.lineageId).not.toBe(initial.trustedHost.provisioningSecret);
 
     const path = join(floor.root, FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME);
     expect(readFileSync(path).byteLength).toBeGreaterThan(0);
@@ -68,6 +71,38 @@ describe('non-restored fleet auth authority floors', () => {
     unlinkSync(path);
     expect(() => floor.open({ activationGeneration: 1, databaseHasDurableAuthority: true }))
       .toThrow(/missing.*durable fleet auth authority exists/i);
+  });
+
+  it('consumes each disable/re-enable transition once even when activation generation is unchanged', () => {
+    const floor = store();
+    const initial = floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+    const transitionId = '1'.repeat(64);
+
+    const reenabled = floor.open({
+      activationGeneration: 1,
+      databaseHasDurableAuthority: true,
+      lifecycleTransitionId: transitionId,
+    });
+    expect(reenabled.trustedHost).toMatchObject({
+      activationGeneration: 1,
+      authorityGeneration: 2,
+      restoreCheckpoint: 1,
+      lastLifecycleTransitionId: transitionId,
+    });
+
+    const retried = floor.open({
+      activationGeneration: 1,
+      databaseHasDurableAuthority: true,
+      lifecycleTransitionId: transitionId,
+    });
+    expect(retried).toEqual(reenabled);
+
+    const restarted = floor.open({
+      activationGeneration: 1,
+      databaseHasDurableAuthority: true,
+    });
+    expect(restarted).toEqual(reenabled);
+    expect(initial.trustedHost.lineageId).toBe(restarted.trustedHost.lineageId);
   });
 
   it('advances and merges account revocation/restore checkpoints monotonically', () => {
@@ -211,6 +246,18 @@ describe('non-restored fleet auth authority floors', () => {
     const payload = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     writeFileSyncForTest(path, { ...payload, rollbackAllowed: true });
     expect(() => floor.read()).toThrow(/unknown keys: rollbackAllowed/);
+  });
+
+  it('rejects a forged public lineage without its random provisioning secret', () => {
+    const floor = store();
+    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+    const path = join(floor.root, FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME);
+    const payload = JSON.parse(readFileSync(path, 'utf8')) as {
+      trustedHost: { lineageId: string };
+    };
+    payload.trustedHost.lineageId = 'f'.repeat(64);
+    writeFileSyncForTest(path, payload);
+    expect(() => floor.read()).toThrow(/lineage proof is invalid/i);
   });
 });
 

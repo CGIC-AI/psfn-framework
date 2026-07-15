@@ -54,9 +54,10 @@ export interface FleetAuthBackupArtifact {
 }
 
 export interface FleetAuthBackupManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   capturedAt: string;
   postgresSnapshot: string;
+  authorityLineageId: string;
   artifacts: FleetAuthBackupArtifact[];
 }
 
@@ -138,21 +139,30 @@ async function captureFleetAuthSnapshot(
   client: import('pg').PoolClient,
   postgresSnapshot: string,
   capturedAt: string,
-): Promise<Record<string, unknown>> {
+): Promise<{ authorityLineageId: string; value: Record<string, unknown> }> {
+  const authorityState = await selectJsonRows(client, 'authority_state', 'singleton');
+  const authorityLineageId = authorityState[0]?.authority_lineage_id;
+  if (typeof authorityLineageId !== 'string' || !/^[0-9a-f]{64}$/u.test(authorityLineageId)) {
+    throw new Error('Fleet auth backup requires a provisioned authority lineage');
+  }
   return {
-    schemaVersion: 1,
-    capturedAt,
-    postgresSnapshot,
-    durable: {
-      authorityState: await selectJsonRows(client, 'authority_state', 'singleton'),
-      humanPrincipals: await selectJsonRows(client, 'human_principals', 'principal_id'),
-      providerSubjects: await selectJsonRows(client, 'provider_subjects', 'provider, subject_id'),
-      providerSubjectHistory: await selectJsonRows(client, 'provider_subject_history', 'recorded_at, event_id'),
-      providerSubjectTombstones: await selectJsonRows(client, 'provider_subject_tombstones', 'provider, subject_id'),
-      principalContactBindings: await selectJsonRows(client, 'principal_contact_bindings', 'binding_id'),
-      principalRoleGrants: await selectJsonRows(client, 'principal_role_grants', 'grant_id'),
-      passkeyCredentials: await selectJsonRows(client, 'passkey_credentials', 'credential_id_hash'),
-      authorizationAuditEvents: await selectJsonRows(client, 'authorization_audit_events', 'occurred_at, event_id'),
+    authorityLineageId,
+    value: {
+      schemaVersion: 2,
+      capturedAt,
+      postgresSnapshot,
+      authorityLineageId,
+      durable: {
+        authorityState,
+        humanPrincipals: await selectJsonRows(client, 'human_principals', 'principal_id'),
+        providerSubjects: await selectJsonRows(client, 'provider_subjects', 'provider, subject_id'),
+        providerSubjectHistory: await selectJsonRows(client, 'provider_subject_history', 'recorded_at, event_id'),
+        providerSubjectTombstones: await selectJsonRows(client, 'provider_subject_tombstones', 'provider, subject_id'),
+        principalContactBindings: await selectJsonRows(client, 'principal_contact_bindings', 'binding_id'),
+        principalRoleGrants: await selectJsonRows(client, 'principal_role_grants', 'grant_id'),
+        passkeyCredentials: await selectJsonRows(client, 'passkey_credentials', 'credential_id_hash'),
+        authorizationAuditEvents: await selectJsonRows(client, 'authorization_audit_events', 'occurred_at, event_id'),
+      },
     },
   };
 }
@@ -204,7 +214,7 @@ export async function runFleetAuthConsistentBackup(options: {
   mkdirSync(join(backupDir, 'system-config'), { recursive: true });
 
   const pool = createPostgresPool(options.databaseUrl, {
-    applicationName: 'psfn-fleet-auth-consistent-backup',
+    applicationName: 'fleet-auth-consistent-backup',
     max: 1,
   });
   const schemaDumpPaths: Record<string, string> = {};
@@ -242,10 +252,12 @@ export async function runFleetAuthConsistentBackup(options: {
     }
 
     const fleetAuthSnapshotPath = join(backupDir, FLEET_AUTH_SNAPSHOT_NAME);
-    writeJsonDurable(
-      fleetAuthSnapshotPath,
-      await captureFleetAuthSnapshot(client, snapshot.postgres_snapshot, capturedAt),
+    const fleetAuthSnapshot = await captureFleetAuthSnapshot(
+      client,
+      snapshot.postgres_snapshot,
+      capturedAt,
     );
+    writeJsonDurable(fleetAuthSnapshotPath, fleetAuthSnapshot.value);
     artifacts.push({
       kind: 'fleet_auth',
       path: relative(backupDir, fleetAuthSnapshotPath),
@@ -267,9 +279,10 @@ export async function runFleetAuthConsistentBackup(options: {
     });
 
     const manifest: FleetAuthBackupManifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       capturedAt,
       postgresSnapshot: snapshot.postgres_snapshot,
+      authorityLineageId: fleetAuthSnapshot.authorityLineageId,
       artifacts,
     };
     const manifestPath = join(backupDir, FLEET_AUTH_BACKUP_MANIFEST_NAME);
@@ -336,12 +349,20 @@ export function verifyFleetAuthBackupManifest(manifestPath: string): FleetAuthBa
     throw new Error(`Fleet auth backup manifest is unavailable: ${String(error)}`);
   }
   if (!isRecord(parsed)) throw new Error('Invalid fleet auth backup manifest: root must be an object');
-  assertNoUnknownKeys(parsed, ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'artifacts'], 'root', {
+  assertNoUnknownKeys(parsed, [
+    'schemaVersion',
+    'capturedAt',
+    'postgresSnapshot',
+    'authorityLineageId',
+    'artifacts',
+  ], 'root', {
     errorPrefix: 'Invalid fleet auth backup manifest',
   });
-  if (parsed.schemaVersion !== 1 || !isCanonicalIsoTimestamp(parsed.capturedAt)
+  if (parsed.schemaVersion !== 2 || !isCanonicalIsoTimestamp(parsed.capturedAt)
     || typeof parsed.postgresSnapshot !== 'string'
     || parsed.postgresSnapshot.length === 0
+    || typeof parsed.authorityLineageId !== 'string'
+    || !/^[0-9a-f]{64}$/u.test(parsed.authorityLineageId)
     || !Array.isArray(parsed.artifacts)) {
     throw new Error('Invalid fleet auth backup manifest: malformed root fields');
   }
@@ -391,9 +412,10 @@ export function verifyFleetAuthBackupManifest(manifestPath: string): FleetAuthBa
     throw new Error('Invalid fleet auth backup manifest: incomplete same-snapshot artifact family');
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt: parsed.capturedAt,
     postgresSnapshot: parsed.postgresSnapshot,
+    authorityLineageId: parsed.authorityLineageId,
     artifacts,
   };
 }

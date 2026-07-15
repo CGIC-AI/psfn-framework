@@ -52,6 +52,21 @@ const FLEET_AUTH_IMMUTABLE_TABLES = [
   'authorization_audit_events',
 ] as const;
 
+const FLEET_AUTH_INTERNAL_TABLES = [
+  'schema_migrations',
+  'provider_subject_registry',
+] as const;
+
+const TABLE_PRIVILEGES = [
+  'SELECT',
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+  'TRUNCATE',
+  'REFERENCES',
+  'TRIGGER',
+] as const;
+
 function quoteIdentifier(identifier: string): string {
   if (!ROLE_PATTERN.test(identifier)) {
     throw new Error(`Invalid fleet auth PostgreSQL role name ${JSON.stringify(identifier)}`);
@@ -79,7 +94,7 @@ async function assertCurrentRole(
   pool: Pool,
   expectedRole: string,
   authority: string,
-  forbiddenMemberships: readonly string[],
+  roles: FleetAuthDatabaseRoles,
 ): Promise<void> {
   const result = await pool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(`
     SELECT current_user, rol.rolsuper, rol.rolbypassrls
@@ -93,6 +108,7 @@ async function assertCurrentRole(
   if (row.rolsuper || row.rolbypassrls) {
     throw new Error(`${authority} PostgreSQL role must not be superuser or BYPASSRLS`);
   }
+  const forbiddenMemberships = Object.values(roles).filter(role => role !== expectedRole);
   const memberships = await pool.query<{ role_name: string }>(`
     SELECT role_name
     FROM unnest($1::text[]) AS role_name
@@ -100,6 +116,28 @@ async function assertCurrentRole(
   `, [forbiddenMemberships]);
   if (memberships.rows.length > 0) {
     throw new Error(`${authority} PostgreSQL role must not inherit or SET ROLE into another fleet auth authority`);
+  }
+  const protectedRoles = Object.values(roles);
+  const inverseMemberships = await pool.query<{
+    member_role: string;
+    protected_role: string;
+  }>(`
+    SELECT member_role.rolname AS member_role, protected_role.rolname AS protected_role
+    FROM pg_roles AS member_role
+    CROSS JOIN pg_roles AS protected_role
+    WHERE protected_role.rolname = ANY($1::text[])
+      AND member_role.oid <> protected_role.oid
+      AND NOT member_role.rolsuper
+      AND pg_has_role(member_role.oid, protected_role.oid, 'MEMBER')
+    ORDER BY protected_role.rolname, member_role.rolname
+  `, [protectedRoles]);
+  if (inverseMemberships.rows.length > 0) {
+    const edges = inverseMemberships.rows.map(edge => (
+      `${edge.member_role}->${edge.protected_role}`
+    ));
+    throw new Error(
+      `${authority} found unexpected role membership into a fleet auth authority: ${edges.join(', ')}`,
+    );
   }
 }
 
@@ -112,6 +150,10 @@ async function applyRoleGrants(
   const schema = `"${FLEET_AUTH_SCHEMA_NAME}"`;
   await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC`);
   await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
+  await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
+  await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM ${runtime}, ${backup}`);
+  await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${runtime}, ${backup}`);
+  await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${runtime}, ${backup}`);
   await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC, ${runtime}, ${backup}`);
   await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtime}, ${backup}`);
   await client.query(
@@ -137,7 +179,7 @@ export async function migrateFleetAuthSchema(options: {
 }): Promise<void> {
   assertDistinctRoles(options.roles);
   const pool = createPostgresPool(options.databaseUrl, {
-    applicationName: 'psfn-fleet-auth-migration',
+    applicationName: 'fleet-auth-migration',
     allowExitOnIdle: true,
     max: 1,
   });
@@ -146,7 +188,7 @@ export async function migrateFleetAuthSchema(options: {
       pool,
       options.roles.migration,
       'Fleet auth migration',
-      [options.roles.runtime, options.roles.backupRestore],
+      options.roles,
     );
     const client = await pool.connect();
     try {
@@ -211,9 +253,9 @@ async function assertNoDdlOrLedger(
   pool: Pool,
   expectedRole: string,
   authority: string,
-  forbiddenMemberships: readonly string[],
+  roles: FleetAuthDatabaseRoles,
 ): Promise<void> {
-  await assertCurrentRole(pool, expectedRole, authority, forbiddenMemberships);
+  await assertCurrentRole(pool, expectedRole, authority, roles);
   const result = await pool.query<{
     schema_usage: boolean;
     schema_create: boolean;
@@ -273,30 +315,42 @@ async function assertNoUnexpectedFleetAuthGrantees(
   }
 }
 
-async function assertRepresentativeDml(pool: Pool, authority: string): Promise<void> {
+async function assertExactDml(pool: Pool, authority: string): Promise<void> {
+  const tables = [
+    ...FLEET_AUTH_MUTABLE_TABLES,
+    ...FLEET_AUTH_IMMUTABLE_TABLES,
+    ...FLEET_AUTH_INTERNAL_TABLES,
+  ];
   const result = await pool.query<{
-    principal_select: boolean;
-    principal_insert: boolean;
-    principal_update: boolean;
-    principal_delete: boolean;
-    audit_insert: boolean;
-    audit_update: boolean;
+    table_name: string;
+    privilege: typeof TABLE_PRIVILEGES[number];
+    present: boolean;
   }>(`
-    SELECT
-      has_table_privilege(current_user, $1, 'SELECT') AS principal_select,
-      has_table_privilege(current_user, $1, 'INSERT') AS principal_insert,
-      has_table_privilege(current_user, $1, 'UPDATE') AS principal_update,
-      has_table_privilege(current_user, $1, 'DELETE') AS principal_delete,
-      has_table_privilege(current_user, $2, 'INSERT') AS audit_insert,
-      has_table_privilege(current_user, $2, 'UPDATE') AS audit_update
-  `, [
-    `${FLEET_AUTH_SCHEMA_NAME}.human_principals`,
-    `${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events`,
-  ]);
-  const row = result.rows.at(0);
-  if (!row?.principal_select || !row.principal_insert || !row.principal_update
-    || !row.principal_delete || !row.audit_insert || row.audit_update) {
-    throw new Error(`${authority} PostgreSQL DML privileges violate the fleet_auth contract`);
+    SELECT table_name, privilege,
+      has_table_privilege(
+        current_user,
+        format('%I.%I', $1::text, table_name),
+        privilege
+      ) AS present
+    FROM unnest($2::text[]) AS table_names(table_name)
+    CROSS JOIN unnest($3::text[]) AS privileges(privilege)
+    ORDER BY table_name, privilege
+  `, [FLEET_AUTH_SCHEMA_NAME, tables, TABLE_PRIVILEGES]);
+  const mutable = new Set<string>(FLEET_AUTH_MUTABLE_TABLES);
+  const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
+  const drift = result.rows.filter(row => {
+    const expected = mutable.has(row.table_name)
+      ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(row.privilege)
+      : immutable.has(row.table_name)
+        ? ['SELECT', 'INSERT'].includes(row.privilege)
+        : false;
+    return row.present !== expected;
+  });
+  if (drift.length > 0) {
+    throw new Error(
+      `${authority} PostgreSQL exact DML privileges violate the fleet_auth contract: `
+      + drift.map(row => `${row.table_name}.${row.privilege}=${row.present}`).join(', '),
+    );
   }
 }
 
@@ -306,7 +360,7 @@ export async function assertFleetAuthRuntimePrivileges(
 ): Promise<void> {
   assertDistinctRoles(roles);
   const pool = createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-fleet-auth-runtime-preflight',
+    applicationName: 'fleet-auth-runtime-preflight',
     max: 1,
   });
   try {
@@ -314,10 +368,10 @@ export async function assertFleetAuthRuntimePrivileges(
       pool,
       roles.runtime,
       'Fleet auth runtime',
-      [roles.migration, roles.backupRestore],
+      roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth runtime');
-    await assertRepresentativeDml(pool, 'Fleet auth runtime');
+    await assertExactDml(pool, 'Fleet auth runtime');
   } finally {
     await pool.end();
   }
@@ -329,7 +383,7 @@ export async function assertFleetAuthBackupRestorePrivileges(
 ): Promise<void> {
   assertDistinctRoles(roles);
   const pool = createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-fleet-auth-backup-preflight',
+    applicationName: 'fleet-auth-backup-preflight',
     max: 1,
   });
   try {
@@ -337,10 +391,10 @@ export async function assertFleetAuthBackupRestorePrivileges(
       pool,
       roles.backupRestore,
       'Fleet auth backup/restore',
-      [roles.runtime, roles.migration],
+      roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth backup/restore');
-    await assertRepresentativeDml(pool, 'Fleet auth backup/restore');
+    await assertExactDml(pool, 'Fleet auth backup/restore');
   } finally {
     await pool.end();
   }
@@ -354,7 +408,8 @@ export async function hasDurableFleetAuthAuthority(pool: Pool): Promise<boolean>
       OR EXISTS (SELECT 1 FROM ${qualifiedTable('passkey_credentials')} LIMIT 1)
       OR EXISTS (
         SELECT 1 FROM ${qualifiedTable('authority_state')}
-        WHERE authority_generation > 1 OR restore_checkpoint > 0 OR global_auth_epoch > 1
+        WHERE authority_lineage_id IS NOT NULL
+          OR authority_generation > 1 OR restore_checkpoint > 0 OR global_auth_epoch > 1
       )
     ) AS present
   `);

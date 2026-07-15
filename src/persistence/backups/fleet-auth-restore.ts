@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { PoolClient } from 'pg';
@@ -38,13 +38,15 @@ interface FleetAuthDurableSnapshot {
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
   capturedAt: string;
   postgresSnapshot: string;
+  authorityLineageId: string;
   durable: FleetAuthDurableSnapshot;
 }
 
 export interface VerifiedFleetAuthBackupManifest {
+  authorityLineageId: string;
   capturedAt: string;
   postgresSnapshot: string;
   artifacts: ReadonlyArray<{
@@ -84,6 +86,7 @@ const SNAPSHOT_COLLECTION_KEYS = [
 const ROW_KEYS = {
   authorityState: [
     'singleton', 'authority_generation', 'global_auth_epoch', 'restore_checkpoint',
+    'authority_lineage_id',
     'activation_generation', 'updated_at',
   ],
   humanPrincipals: [
@@ -164,12 +167,19 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error(`Fleet auth snapshot is unavailable: ${String(error)}`);
   }
   if (!isRecord(value)) throw new Error('Invalid fleet auth snapshot: root must be an object');
-  assertExactKeys(value, ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'durable'], 'root');
-  if (value.schemaVersion !== 1
+  assertExactKeys(
+    value,
+    ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
+    'root',
+  );
+  if (value.schemaVersion !== 2
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
     || value.postgresSnapshot !== manifest.postgresSnapshot
+    || typeof value.authorityLineageId !== 'string'
+    || !/^[0-9a-f]{64}$/u.test(value.authorityLineageId)
+    || value.authorityLineageId !== manifest.authorityLineageId
     || !isRecord(value.durable)) {
     throw new Error('Invalid fleet auth snapshot: root does not match its verified manifest');
   }
@@ -216,10 +226,14 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
   if (parsed.authorityState[0]?.singleton !== true) {
     throw new Error('Invalid fleet auth snapshot: authorityState singleton marker is invalid');
   }
+  if (parsed.authorityState[0]?.authority_lineage_id !== value.authorityLineageId) {
+    throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
+    authorityLineageId: value.authorityLineageId,
     durable: parsed,
   };
 }
@@ -262,17 +276,22 @@ async function assertTargetNotAhead(
   floor: FleetAuthAuthorityFloor,
 ): Promise<void> {
   const result = await client.query<{
+    authority_lineage_id: string | null;
     authority_generation: string;
     restore_checkpoint: string;
     activation_generation: string;
   }>(`
-    SELECT authority_generation, restore_checkpoint, activation_generation
+    SELECT authority_lineage_id, authority_generation, restore_checkpoint, activation_generation
     FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
     WHERE singleton = TRUE
     FOR UPDATE
   `);
   const state = result.rows.at(0);
   if (!state) throw new Error('Target fleet_auth authority_state singleton is missing');
+  if (state.authority_lineage_id !== null
+    && state.authority_lineage_id !== floor.trustedHost.lineageId) {
+    throw new Error('Target fleet_auth authority lineage does not match the trusted-host floor');
+  }
   if (parseStateInteger(state.authority_generation, 'authority_generation')
       > floor.trustedHost.authorityGeneration
     || parseStateInteger(state.restore_checkpoint, 'restore_checkpoint')
@@ -314,7 +333,12 @@ async function importDurableRows(
 
   for (const [index, row] of durable.providerSubjects.entries()) {
     const resource = providerSubjectResource(row, `durable.providerSubjects[${index}]`);
-    const state = floors.isAccountAuthorityTombstoned('provider_subject', resource, floor)
+    const permanentlyTombstoned = floors.isAccountAuthorityTombstoned(
+      'provider_subject',
+      resource,
+      floor,
+    );
+    const state = permanentlyTombstoned
       ? 'revoked'
       : 'quarantined';
     await record(client.query(`
@@ -333,6 +357,21 @@ async function importDurableRows(
       row.created_at,
       restoredAt,
     ]));
+    if (permanentlyTombstoned) {
+      await record(client.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+          (provider, subject_id, prior_principal_id, authority_generation, revoked_at, reason_digest)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT DO NOTHING
+      `, [
+        row.provider,
+        row.subject_id,
+        row.principal_id,
+        floor.trustedHost.authorityGeneration,
+        restoredAt,
+        createHash('sha256').update('trusted-host-authority-floor').digest('hex'),
+      ]));
+    }
   }
 
   for (const [index, row] of durable.providerSubjectHistory.entries()) {
@@ -497,6 +536,12 @@ export async function restoreVerifiedFleetAuthSnapshot(
     resolve(dirname(resolve(options.manifestPath)), artifact.path),
     options.manifest,
   );
+  const currentFloor = options.authorityFloors.read();
+  if (snapshot.authorityLineageId !== currentFloor.trustedHost.lineageId) {
+    throw new Error(
+      'Fleet auth backup authority lineage does not match the non-restored trusted-host floor',
+    );
+  }
   const restoredTombstones = snapshot.durable.providerSubjectTombstones.map((row, index) => ({
     kind: 'provider_subject' as const,
     resourceId: providerSubjectResource(
@@ -507,7 +552,7 @@ export async function restoreVerifiedFleetAuthSnapshot(
 
   await assertFleetAuthBackupRestorePrivileges(options.databaseUrl, options.roles);
   const pool = createPostgresPool(options.databaseUrl, {
-    applicationName: 'psfn-fleet-auth-consistent-restore',
+    applicationName: 'fleet-auth-consistent-restore',
     max: 1,
   });
   let client: PoolClient | undefined;
@@ -518,7 +563,6 @@ export async function restoreVerifiedFleetAuthSnapshot(
       'SELECT pg_advisory_xact_lock($1::integer, $2::integer)',
       [RESTORE_LOCK_CLASS, RESTORE_LOCK_ID],
     );
-    const currentFloor = options.authorityFloors.read();
     await assertTargetNotAhead(client, currentFloor);
     const preparedFloor = options.authorityFloors.prepareRestore({
       activationGeneration: options.activationGeneration,

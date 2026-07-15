@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { writeFileDurableAtomicSync } from '../../../shared/utils/fs.js';
@@ -29,10 +29,13 @@ export interface AccountAuthorityTombstone {
 }
 
 export interface TrustedHostAuthorityFloor {
+  lineageId: string;
+  provisioningSecret: string;
   authorityGeneration: number;
   activationGeneration: number;
   restoreCheckpoint: number;
   revocationCheckpoint: number;
+  lastLifecycleTransitionId: string | null;
   tombstones: AccountAuthorityTombstone[];
 }
 
@@ -73,7 +76,7 @@ export interface PasskeyAuthorityFloor {
 }
 
 export interface FleetAuthAuthorityFloor {
-  schemaVersion: 1;
+  schemaVersion: 2;
   trustedHost: TrustedHostAuthorityFloor;
   passkeys: PasskeyAuthorityFloor;
   updatedAt: string;
@@ -91,6 +94,10 @@ const LOCK_OPTIONS = {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function lineageIdForSecret(secret: string): string {
+  return digest(`fleet-auth-authority-lineage:v1:${secret}`);
 }
 
 function assertTimestamp(value: unknown, field: string): string {
@@ -286,15 +293,18 @@ function parsePasskeyTombstone(value: unknown, index: number): PasskeyAuthorityT
 export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthorityFloor {
   const root = assertRecord(value, 'root');
   strictKeys(root, ['schemaVersion', 'trustedHost', 'passkeys', 'updatedAt'], 'root');
-  if (root.schemaVersion !== 1) {
-    throw new Error('Invalid fleet auth authority floor: schemaVersion must be 1');
+  if (root.schemaVersion !== 2) {
+    throw new Error('Invalid fleet auth authority floor: schemaVersion must be 2');
   }
   const trustedHost = assertRecord(root.trustedHost, 'trustedHost');
   strictKeys(trustedHost, [
+    'lineageId',
+    'provisioningSecret',
     'authorityGeneration',
     'activationGeneration',
     'restoreCheckpoint',
     'revocationCheckpoint',
+    'lastLifecycleTransitionId',
     'tombstones',
   ], 'trustedHost');
   if (!Array.isArray(trustedHost.tombstones)) {
@@ -312,6 +322,23 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
   );
   if (accountTombstones.some(entry => entry.generation > authorityGeneration)) {
     throw new Error('Invalid fleet auth authority floor: trusted-host tombstone is ahead of its floor');
+  }
+  const lineageId = assertString(trustedHost.lineageId, 'trustedHost.lineageId');
+  const provisioningSecret = assertString(
+    trustedHost.provisioningSecret,
+    'trustedHost.provisioningSecret',
+  );
+  if (!HASH_PATTERN.test(lineageId) || !HASH_PATTERN.test(provisioningSecret)
+    || lineageIdForSecret(provisioningSecret) !== lineageId) {
+    throw new Error('Invalid fleet auth authority floor: trusted-host lineage proof is invalid');
+  }
+  const lastLifecycleTransitionId = trustedHost.lastLifecycleTransitionId;
+  if (lastLifecycleTransitionId !== null
+    && (typeof lastLifecycleTransitionId !== 'string'
+      || !HASH_PATTERN.test(lastLifecycleTransitionId))) {
+    throw new Error(
+      'Invalid fleet auth authority floor: trustedHost.lastLifecycleTransitionId is invalid',
+    );
   }
 
   const passkeys = assertRecord(root.passkeys, 'passkeys');
@@ -373,12 +400,15 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     trustedHost: {
+      lineageId,
+      provisioningSecret,
       authorityGeneration,
       activationGeneration: assertInteger(trustedHost.activationGeneration, 'trustedHost.activationGeneration', 1),
       restoreCheckpoint: assertInteger(trustedHost.restoreCheckpoint, 'trustedHost.restoreCheckpoint'),
       revocationCheckpoint: assertInteger(trustedHost.revocationCheckpoint, 'trustedHost.revocationCheckpoint'),
+      lastLifecycleTransitionId,
       tombstones: accountTombstones,
     },
     passkeys: {
@@ -391,13 +421,17 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
 }
 
 function initialFloor(activationGeneration: number): FleetAuthAuthorityFloor {
+  const provisioningSecret = randomBytes(32).toString('hex');
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     trustedHost: {
+      lineageId: lineageIdForSecret(provisioningSecret),
+      provisioningSecret,
       authorityGeneration: 1,
       activationGeneration,
       restoreCheckpoint: 0,
       revocationCheckpoint: 0,
+      lastLifecycleTransitionId: null,
       tombstones: [],
     },
     passkeys: {
@@ -439,6 +473,10 @@ export class FleetAuthAuthorityFloorStore {
     writeFileDurableAtomicSync(this.path, `${JSON.stringify(validated, null, 2)}\n`);
   }
 
+  exists(): boolean {
+    return existsSync(this.path);
+  }
+
   read(): FleetAuthAuthorityFloor {
     if (!existsSync(this.path)) {
       throw new Error(`Fleet auth authority floor is unavailable at ${this.path}`);
@@ -455,9 +493,14 @@ export class FleetAuthAuthorityFloorStore {
   open(input: {
     activationGeneration: number;
     databaseHasDurableAuthority: boolean;
+    lifecycleTransitionId?: string;
   }): FleetAuthAuthorityFloor {
     if (!Number.isSafeInteger(input.activationGeneration) || input.activationGeneration < 1) {
       throw new Error('Fleet auth activation generation must be an integer >= 1');
+    }
+    if (input.lifecycleTransitionId !== undefined
+      && !HASH_PATTERN.test(input.lifecycleTransitionId)) {
+      throw new Error('Fleet auth lifecycle transition id must be SHA-256 hex');
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
       if (!existsSync(this.path)) {
@@ -467,6 +510,9 @@ export class FleetAuthAuthorityFloorStore {
           );
         }
         const created = initialFloor(input.activationGeneration);
+        if (input.lifecycleTransitionId) {
+          created.trustedHost.lastLifecycleTransitionId = input.lifecycleTransitionId;
+        }
         this.write(created);
         return created;
       }
@@ -474,7 +520,11 @@ export class FleetAuthAuthorityFloorStore {
       if (input.activationGeneration < current.trustedHost.activationGeneration) {
         throw new Error('Fleet auth activation generation cannot move backward');
       }
-      if (input.activationGeneration === current.trustedHost.activationGeneration) return current;
+      const activationAdvanced = input.activationGeneration
+        > current.trustedHost.activationGeneration;
+      const lifecycleAdvanced = input.lifecycleTransitionId !== undefined
+        && input.lifecycleTransitionId !== current.trustedHost.lastLifecycleTransitionId;
+      if (!activationAdvanced && !lifecycleAdvanced) return current;
       const next: FleetAuthAuthorityFloor = {
         ...current,
         trustedHost: {
@@ -482,6 +532,9 @@ export class FleetAuthAuthorityFloorStore {
           activationGeneration: input.activationGeneration,
           authorityGeneration: current.trustedHost.authorityGeneration + 1,
           restoreCheckpoint: current.trustedHost.restoreCheckpoint + 1,
+          ...(input.lifecycleTransitionId
+            ? { lastLifecycleTransitionId: input.lifecycleTransitionId }
+            : {}),
         },
         updatedAt: new Date().toISOString(),
       };

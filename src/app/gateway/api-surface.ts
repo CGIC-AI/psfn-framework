@@ -38,6 +38,7 @@ import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -294,6 +295,11 @@ export async function startOptionalGatewayApiServer(
   }
 
   const env = options.env ?? process.env;
+  assertFleetAuthLegacySurfacesUnavailable({
+    fleetAuthEnabled: options.config.fleetAuth !== undefined,
+    processMode: 'gateway',
+    env: { ...env, API_PORT: String(options.apiPort) },
+  });
   const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.

@@ -60,6 +60,7 @@ import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-bl
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -92,6 +93,11 @@ function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecisi
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadConfig();
+  assertFleetAuthLegacySurfacesUnavailable({
+    fleetAuthEnabled: config.fleetAuth !== undefined,
+    processMode: 'gateway',
+    env,
+  });
   applyGatewayTlsConfig({
     caPath: config.gatewayTlsCaPath,
     rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
@@ -116,6 +122,7 @@ async function main(): Promise<void> {
       startupHydration.pathSnapshot.workspacePath,
       startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
     ],
+    lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);

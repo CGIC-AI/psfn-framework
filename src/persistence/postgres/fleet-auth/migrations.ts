@@ -295,8 +295,164 @@ CREATE INDEX jit_grants_session_idx
 CREATE INDEX audit_occurred_idx ON authorization_audit_events (occurred_at, event_id);
 `;
 
+const LINEAGE_AND_IDENTITY_GUARDS_SQL = `
+ALTER TABLE authority_state
+  ADD COLUMN authority_lineage_id TEXT
+  CHECK (authority_lineage_id IS NULL OR authority_lineage_id ~ '^[0-9a-f]{64}$');
+
+CREATE TABLE provider_subject_registry (
+  provider TEXT NOT NULL CHECK (provider = 'discord'),
+  subject_id TEXT NOT NULL CHECK (subject_id ~ '^[1-9][0-9]{16,19}$'),
+  principal_id UUID NOT NULL,
+  tombstoned BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (provider, subject_id)
+);
+
+LOCK TABLE provider_subjects, provider_subject_tombstones IN SHARE ROW EXCLUSIVE MODE;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM provider_subjects AS subject
+    JOIN provider_subject_tombstones AS tombstone
+      USING (provider, subject_id)
+    WHERE subject.principal_id <> tombstone.prior_principal_id
+  ) THEN
+    RAISE EXCEPTION 'provider subject live/tombstone identity conflict'
+      USING ERRCODE = '23514';
+  END IF;
+END;
+$$;
+
+INSERT INTO provider_subject_registry (provider, subject_id, principal_id, tombstoned)
+SELECT provider, subject_id, principal_id, FALSE
+FROM provider_subjects
+ON CONFLICT (provider, subject_id) DO NOTHING;
+
+INSERT INTO provider_subject_registry (provider, subject_id, principal_id, tombstoned)
+SELECT provider, subject_id, prior_principal_id, TRUE
+FROM provider_subject_tombstones
+ON CONFLICT (provider, subject_id) DO UPDATE
+SET tombstoned = TRUE,
+    updated_at = clock_timestamp()
+WHERE provider_subject_registry.principal_id = EXCLUDED.principal_id;
+
+CREATE OR REPLACE FUNCTION enforce_provider_subject_registry()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, fleet_auth
+AS $$
+DECLARE
+  registered_principal UUID;
+  permanently_tombstoned BOOLEAN;
+BEGIN
+  INSERT INTO fleet_auth.provider_subject_registry
+    (provider, subject_id, principal_id, tombstoned)
+  VALUES (NEW.provider, NEW.subject_id, NEW.principal_id, FALSE)
+  ON CONFLICT (provider, subject_id) DO NOTHING;
+
+  SELECT principal_id, tombstoned
+  INTO registered_principal, permanently_tombstoned
+  FROM fleet_auth.provider_subject_registry
+  WHERE provider = NEW.provider AND subject_id = NEW.subject_id
+  FOR UPDATE;
+
+  IF registered_principal <> NEW.principal_id THEN
+    RAISE EXCEPTION 'provider subject is permanently bound to another principal'
+      USING ERRCODE = '23505';
+  END IF;
+  IF permanently_tombstoned AND NEW.state NOT IN ('revoked', 'quarantined') THEN
+    RAISE EXCEPTION 'provider subject is permanently tombstoned'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION enforce_provider_subject_tombstone_registry()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, fleet_auth
+AS $$
+DECLARE
+  registered_principal UUID;
+BEGIN
+  INSERT INTO fleet_auth.provider_subject_registry
+    (provider, subject_id, principal_id, tombstoned)
+  VALUES (NEW.provider, NEW.subject_id, NEW.prior_principal_id, TRUE)
+  ON CONFLICT (provider, subject_id) DO NOTHING;
+
+  SELECT principal_id
+  INTO registered_principal
+  FROM fleet_auth.provider_subject_registry
+  WHERE provider = NEW.provider AND subject_id = NEW.subject_id
+  FOR UPDATE;
+
+  IF registered_principal <> NEW.prior_principal_id THEN
+    RAISE EXCEPTION 'provider subject tombstone conflicts with its permanent principal binding'
+      USING ERRCODE = '23514';
+  END IF;
+
+  UPDATE fleet_auth.provider_subject_registry
+  SET tombstoned = TRUE, updated_at = clock_timestamp()
+  WHERE provider = NEW.provider AND subject_id = NEW.subject_id;
+
+  UPDATE fleet_auth.provider_subjects
+  SET state = 'revoked', updated_at = clock_timestamp()
+  WHERE provider = NEW.provider AND subject_id = NEW.subject_id
+    AND state <> 'revoked';
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION reject_untombstoned_provider_subject_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, fleet_auth
+AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM fleet_auth.provider_subject_registry
+    WHERE provider = OLD.provider
+      AND subject_id = OLD.subject_id
+      AND principal_id = OLD.principal_id
+      AND tombstoned = TRUE
+  ) THEN
+    RAISE EXCEPTION 'provider subject must be permanently tombstoned before deletion'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER provider_subject_registry_guard
+  BEFORE INSERT OR UPDATE OF provider, subject_id, principal_id, state
+  ON provider_subjects
+  FOR EACH ROW EXECUTE FUNCTION enforce_provider_subject_registry();
+
+CREATE TRIGGER provider_subject_delete_guard
+  BEFORE DELETE ON provider_subjects
+  FOR EACH ROW EXECUTE FUNCTION reject_untombstoned_provider_subject_delete();
+
+CREATE TRIGGER provider_subject_tombstone_registry_guard
+  BEFORE INSERT ON provider_subject_tombstones
+  FOR EACH ROW EXECUTE FUNCTION enforce_provider_subject_tombstone_registry();
+
+CREATE UNIQUE INDEX contact_binding_one_live_principal
+  ON principal_contact_bindings (companion_id, contact_id)
+  WHERE state IN ('active', 'pending');
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
   { version: 3, name: 'immutable_guards_and_indexes', sql: GUARDS_AND_INDEXES_SQL },
+  { version: 4, name: 'lineage_and_identity_guards', sql: LINEAGE_AND_IDENTITY_GUARDS_SQL },
 ] as const;

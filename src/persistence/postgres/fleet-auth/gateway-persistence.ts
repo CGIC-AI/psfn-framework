@@ -15,6 +15,7 @@ import {
   hasDurableFleetAuthAuthority,
   migrateFleetAuthSchema,
 } from './schema.js';
+import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 
 export interface GatewayFleetAuthPersistence {
   pool: Pool;
@@ -23,6 +24,7 @@ export interface GatewayFleetAuthPersistence {
 }
 
 interface AuthorityStateRow {
+  authority_lineage_id: string | null;
   authority_generation: string;
   global_auth_epoch: string;
   restore_checkpoint: string;
@@ -72,7 +74,8 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   auditEventId: string,
 ): Promise<void> {
   const result = await client.query<AuthorityStateRow>(`
-      SELECT authority_generation, global_auth_epoch, restore_checkpoint, activation_generation
+      SELECT authority_lineage_id, authority_generation, global_auth_epoch,
+             restore_checkpoint, activation_generation
       FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
       WHERE singleton = TRUE
       FOR UPDATE
@@ -93,6 +96,12 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
     'activation_generation',
   );
   const trusted = floor.trustedHost;
+  if (row.authority_lineage_id !== null
+    && row.authority_lineage_id !== trusted.lineageId) {
+    throw new Error(
+      'Restorable fleet_auth authority lineage does not match its non-restored trusted-host floor',
+    );
+  }
   if (databaseAuthorityGeneration > trusted.authorityGeneration
     || databaseRestoreCheckpoint > trusted.restoreCheckpoint
     || databaseActivationGeneration > trusted.activationGeneration) {
@@ -101,7 +110,18 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   const floorAdvanced = databaseAuthorityGeneration < trusted.authorityGeneration
     || databaseRestoreCheckpoint < trusted.restoreCheckpoint
     || databaseActivationGeneration < trusted.activationGeneration;
-  if (!floorAdvanced) return;
+  const lineageNeedsBinding = row.authority_lineage_id === null;
+  if (!floorAdvanced && !lineageNeedsBinding) return;
+
+  if (!floorAdvanced) {
+    await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+      SET authority_lineage_id = $1,
+          updated_at = clock_timestamp()
+      WHERE singleton = TRUE
+    `, [trusted.lineageId]);
+    return;
+  }
 
   // Durable account rows become non-authoritative restore candidates. Keep
   // explicit revocation states intact while quarantining everything else.
@@ -152,13 +172,15 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   const nextEpoch = databaseAuthEpoch + 1;
   await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      SET authority_generation = $1,
-          global_auth_epoch = $2,
-          restore_checkpoint = $3,
-          activation_generation = $4,
+      SET authority_lineage_id = $1,
+          authority_generation = $2,
+          global_auth_epoch = $3,
+          restore_checkpoint = $4,
+          activation_generation = $5,
           updated_at = clock_timestamp()
       WHERE singleton = TRUE
     `, [
+      trusted.lineageId,
       trusted.authorityGeneration,
       nextEpoch,
       trusted.restoreCheckpoint,
@@ -179,8 +201,13 @@ export async function initializeGatewayFleetAuthPersistence(options: {
   credentialVault?: CredentialVaultPort;
   protectedRestoreRoots: readonly string[];
   companionDatabaseUrl?: string;
+  lifecycleWitnessRoot: string;
 }): Promise<GatewayFleetAuthPersistence | undefined> {
-  if (!options.config) return undefined;
+  const lifecycleWitness = new FleetAuthLifecycleWitnessStore(options.lifecycleWitnessRoot);
+  if (!options.config) {
+    lifecycleWitness.recordDisabledIfPresent();
+    return undefined;
+  }
   if (!options.credentialVault) {
     throw new Error('Fleet auth enabled mode requires the gateway credential vault');
   }
@@ -206,18 +233,27 @@ export async function initializeGatewayFleetAuthPersistence(options: {
   );
 
   const pool = createPostgresPool(secrets.database.runtimeUrl, {
-    applicationName: 'psfn-fleet-auth-broker',
+    applicationName: 'fleet-auth-broker',
     allowExitOnIdle: true,
     max: 8,
   });
   try {
     const databaseHasDurableAuthority = await hasDurableFleetAuthAuthority(pool);
     const authorityFloors = new FleetAuthAuthorityFloorStore(secrets.authorityFloorRoot);
+    const existingFloor = authorityFloors.exists() ? authorityFloors.read() : undefined;
+    const lifecycleTransitionId = lifecycleWitness.prepareEnable(
+      existingFloor?.trustedHost.lineageId,
+    );
     const floor = authorityFloors.open({
       activationGeneration: options.config.activationGeneration,
       databaseHasDurableAuthority,
+      ...(lifecycleTransitionId ? { lifecycleTransitionId } : {}),
     });
     await reconcileFleetAuthAuthorityState(pool, floor, randomUUID());
+    lifecycleWitness.recordEnabled(
+      floor.trustedHost.lineageId,
+      floor.trustedHost.lastLifecycleTransitionId,
+    );
     return {
       pool,
       authorityFloors,

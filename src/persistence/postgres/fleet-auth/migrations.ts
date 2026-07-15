@@ -488,6 +488,53 @@ const RESTORED_HISTORY_IDENTITY_GUARD_SQL = `
 -- v4 backfilled pre-existing rows, but restore/import can append history after
 -- that one-time backfill. Register every new history row transactionally so a
 -- history-only A->subject binding can never later be recreated for B.
+--
+-- Freeze every identity source and the registry before closing the v4-to-v5
+-- trigger gap. SHARE ROW EXCLUSIVE blocks concurrent writes while allowing
+-- ordinary reads, so no restore/import row can slip between this backfill and
+-- trigger installation.
+LOCK TABLE provider_subjects, provider_subject_tombstones,
+  provider_subject_history, provider_subject_registry
+  IN SHARE ROW EXCLUSIVE MODE;
+
+-- A v4 database can contain history appended before v5 existed. Reject any
+-- subject whose history names multiple principals or conflicts with the
+-- permanent registry. The migration runner wraps this script and its ledger
+-- write in one transaction, so every conflict leaves both registry and schema
+-- version untouched.
+DO $$
+DECLARE
+  conflicting RECORD;
+BEGIN
+  SELECT provider, subject_id
+  INTO conflicting
+  FROM (
+    SELECT provider, subject_id, principal_id FROM provider_subject_history
+    UNION
+    SELECT provider, subject_id, principal_id FROM provider_subject_registry
+  ) AS identity_evidence
+  GROUP BY provider, subject_id
+  HAVING count(DISTINCT principal_id) > 1
+  ORDER BY provider, subject_id
+  LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'provider subject history conflicts with its permanent principal binding for %/%',
+      conflicting.provider, conflicting.subject_id
+      USING ERRCODE = '23505';
+  END IF;
+END;
+$$;
+
+-- The ambiguity check guarantees one owner per historical subject. Seed every
+-- missing permanent binding before the trigger begins enforcing future rows;
+-- existing tombstone state and registry timestamps remain unchanged.
+INSERT INTO provider_subject_registry (provider, subject_id, principal_id, tombstoned)
+SELECT provider, subject_id, (array_agg(DISTINCT principal_id))[1], FALSE
+FROM provider_subject_history
+GROUP BY provider, subject_id
+ON CONFLICT (provider, subject_id) DO NOTHING;
+
 CREATE OR REPLACE FUNCTION enforce_provider_subject_history_registry()
 RETURNS trigger
 LANGUAGE plpgsql

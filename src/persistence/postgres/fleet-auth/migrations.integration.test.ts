@@ -89,10 +89,10 @@ async function freshDatabase() {
   };
 }
 
-// Bring a fresh database up to schema version 3 exactly the way the runner
-// would, so that a later migrateFleetAuthSchema call recognizes versions 1-3 as
-// already applied and installs only version 4 as an in-place upgrade.
-async function seedToVersionThree(migrationUrl: string): Promise<void> {
+// Bring a fresh database to an exact historical schema version the way the
+// runner would, so the next migrateFleetAuthSchema call exercises only the
+// subsequent in-place upgrade path.
+async function seedToVersion(migrationUrl: string, targetVersion: number): Promise<void> {
   const pool = createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true });
   try {
     await pool.query(`CREATE SCHEMA ${quoteIdentifier(FLEET_AUTH_SCHEMA_NAME)}`);
@@ -106,7 +106,7 @@ async function seedToVersionThree(migrationUrl: string): Promise<void> {
       )
     `);
     for (const migration of FLEET_AUTH_MIGRATIONS) {
-      if (migration.version > 3) continue;
+      if (migration.version > targetVersion) continue;
       await pool.query(migration.sql);
       await pool.query(
         'INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)',
@@ -116,6 +116,14 @@ async function seedToVersionThree(migrationUrl: string): Promise<void> {
   } finally {
     await pool.end();
   }
+}
+
+async function seedToVersionThree(migrationUrl: string): Promise<void> {
+  await seedToVersion(migrationUrl, 3);
+}
+
+async function seedToVersionFour(migrationUrl: string): Promise<void> {
+  await seedToVersion(migrationUrl, 4);
 }
 
 async function insertPrincipal(
@@ -310,6 +318,103 @@ describe('fleet_auth v4 provider-subject identity backfill', () => {
         [`${FLEET_AUTH_SCHEMA_NAME}.provider_subject_registry`],
       );
       expect(registry.rows[0]?.present).toBe(false);
+    } finally {
+      await inspect.end();
+    }
+  }, TIMEOUT_MS);
+});
+
+describe('fleet_auth v5 restored-history identity backfill', () => {
+  it('registers history appended after v4 before installing the history trigger', async () => {
+    const db = await freshDatabase();
+    await seedToVersionFour(db.migrationUrl);
+
+    const principalA = randomUUID();
+    const principalB = randomUUID();
+    const seed = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
+    try {
+      await insertPrincipal(seed, principalA);
+      await insertPrincipal(seed, principalB);
+      // Version 4 created the permanent registry, but its history trigger did
+      // not exist yet. A restore/import can append identity evidence in this
+      // interval, and v5 must register it before enabling future enforcement.
+      await recordHistory(seed, SUBJECT_ID, principalA, 'restored');
+    } finally {
+      await seed.end();
+    }
+
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+
+    const inspect = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
+    try {
+      const registry = await inspect.query<{ principal_id: string; tombstoned: boolean }>(
+        `SELECT principal_id, tombstoned
+         FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_registry
+         WHERE provider = 'discord' AND subject_id = $1`,
+        [SUBJECT_ID],
+      );
+      expect(registry.rows).toEqual([{ principal_id: principalA, tombstoned: false }]);
+    } finally {
+      await inspect.end();
+    }
+
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1, allowExitOnIdle: true });
+    try {
+      await expect(
+        runtime.query(
+          `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+             (provider, subject_id, principal_id, state, authority_generation)
+           VALUES ('discord', $1, $2, 'active', 1)`,
+          [SUBJECT_ID, principalB],
+        ),
+      ).rejects.toThrow(/permanently bound to another principal/);
+    } finally {
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('atomically rejects conflicting history appended after v4', async () => {
+    const db = await freshDatabase();
+    await seedToVersionFour(db.migrationUrl);
+
+    const principalA = randomUUID();
+    const principalB = randomUUID();
+    const seed = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
+    try {
+      await insertPrincipal(seed, principalA);
+      await insertPrincipal(seed, principalB);
+      await recordHistory(seed, SUBJECT_ID, principalA, 'restored');
+      await recordHistory(seed, SUBJECT_ID, principalB, 'linked');
+    } finally {
+      await seed.end();
+    }
+
+    await expect(
+      migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES }),
+    ).rejects.toThrow(/history conflicts with its permanent principal binding/);
+
+    const inspect = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
+    try {
+      const ledger = await inspect.query<{ max_version: number }>(
+        `SELECT max(version) AS max_version FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations`,
+      );
+      expect(Number(ledger.rows[0]?.max_version)).toBe(4);
+
+      const registry = await inspect.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_registry
+         WHERE provider = 'discord' AND subject_id = $1`,
+        [SUBJECT_ID],
+      );
+      expect(registry.rows[0]?.count).toBe('0');
+
+      const trigger = await inspect.query<{ present: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM pg_trigger
+           WHERE tgname = 'provider_subject_history_registry_guard' AND NOT tgisinternal
+         ) AS present`,
+      );
+      expect(trigger.rows[0]?.present).toBe(false);
     } finally {
       await inspect.end();
     }

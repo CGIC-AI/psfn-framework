@@ -269,7 +269,7 @@ DECLARE
   v_restore_checkpoint bigint;
   v_new_epoch bigint;
   v_lineage text;
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
   v_expected_scope jsonb;
   v_ceremony fleet_auth.trusted_host_ceremonies%ROWTYPE;
   v_principal fleet_auth.human_principals%ROWTYPE;
@@ -312,9 +312,6 @@ BEGIN
   END IF;
   IF v_ceremony.status <> 'pending' THEN
     RAISE EXCEPTION 'trusted-host ceremony is not pending' USING ERRCODE = '42501';
-  END IF;
-  IF v_ceremony.expires_at <= v_now THEN
-    RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
   IF v_ceremony.global_auth_epoch <> v_epoch THEN
     RAISE EXCEPTION 'trusted-host ceremony is bound to a stale auth epoch' USING ERRCODE = '42501';
@@ -435,6 +432,16 @@ BEGIN
   v_new_authz := v_principal.authz_version + 1;
   v_new_binding_version := v_binding.version + 1;
   v_new_role_version := v_grant.version + 1;
+
+  -- A procedure may have waited on any authority row above after the ceremony
+  -- was observed. Use a fresh database clock only after every relevant lock and
+  -- validation, immediately before the first mutation, so a ceremony cannot be
+  -- consumed after expiring during lock contention. This same instant stamps
+  -- every atomic write below.
+  v_now := clock_timestamp();
+  IF v_ceremony.expires_at <= v_now THEN
+    RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
+  END IF;
 
   UPDATE fleet_auth.provider_subjects
   SET state = 'active', restore_state = 'live',

@@ -140,6 +140,19 @@ async function reconcileThroughCoordinator(
   }
 }
 
+async function waitForBackendLock(pool: import('pg').Pool, pid: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await pool.query<{ wait_event_type: string | null }>(
+      `SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`,
+      [pid],
+    );
+    if (result.rows[0]?.wait_event_type === 'Lock') return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`PostgreSQL backend ${pid} did not block on the authority lock`);
+}
+
 describe('fleet_auth Postgres authority boundary', () => {
   it('serializes replica migrations and records one checksummed ledger', async () => {
     const db = await freshDatabase();
@@ -1564,6 +1577,102 @@ describe('fleet_auth Postgres authority boundary', () => {
         auditEventId: randomUUID(),
         at: '2000-01-01T00:00:00.000Z',
       })).rejects.toThrow(/expired/);
+
+      // Expiry must be rechecked after every durable authority row lock has
+      // been acquired. Otherwise a ceremony that was current when this
+      // function began can expire while waiting and still be consumed.
+      const lockExpiredCeremonyId = randomUUID();
+      const lockExpiredAuditEventId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb, 1,
+                 clock_timestamp() + interval '1 second')`,
+        [
+          lockExpiredCeremonyId,
+          '9'.repeat(64),
+          subjectId,
+          companionId,
+          JSON.stringify(exactScope),
+        ],
+      );
+      const runtimeBackend = await runtime.query<{ pid: number }>(
+        'SELECT pg_backend_pid() AS pid',
+      );
+      const blocker = await migration.connect();
+      const observer = createPostgresPool(db.adminUrl, { max: 1, allowExitOnIdle: true });
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query(
+          `SELECT singleton FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+           WHERE singleton = TRUE FOR UPDATE`,
+        );
+        const blockedReapproval = executeAccountReapproval(runtime, {
+          ceremonyId: lockExpiredCeremonyId,
+          principalId,
+          provider: 'discord',
+          providerSubjectId: subjectId,
+          companionId,
+          contactId: 'contact-owner',
+          bindingId,
+          roleGrantId: grantId,
+          auditEventId: lockExpiredAuditEventId,
+          at: '2000-01-01T00:00:00.000Z',
+        });
+        await waitForBackendLock(observer, runtimeBackend.rows[0]!.pid);
+        await blocker.query(`SELECT pg_sleep(1.25)`);
+        await blocker.query('COMMIT');
+
+        await expect(blockedReapproval).rejects.toThrow(/expired/);
+
+        const unchanged = await runtime.query<{
+          principal_status: string;
+          subject_state: string;
+          binding_state: string;
+          grant_lifecycle: string;
+          global_auth_epoch: string;
+          ceremony_status: string;
+          audit_count: string;
+        }>(`
+          SELECT
+            (SELECT status FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+             WHERE principal_id = $1) AS principal_status,
+            (SELECT state FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+             WHERE provider = 'discord' AND subject_id = $2) AS subject_state,
+            (SELECT state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+             WHERE binding_id = $3) AS binding_state,
+            (SELECT lifecycle FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+             WHERE grant_id = $4) AS grant_lifecycle,
+            (SELECT global_auth_epoch::text FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+             WHERE singleton = TRUE) AS global_auth_epoch,
+            (SELECT status FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+             WHERE ceremony_id = $5) AS ceremony_status,
+            (SELECT COUNT(*)::text FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+             WHERE event_id = $6) AS audit_count
+        `, [
+          principalId,
+          subjectId,
+          bindingId,
+          grantId,
+          lockExpiredCeremonyId,
+          lockExpiredAuditEventId,
+        ]);
+        expect(unchanged.rows[0]).toEqual({
+          principal_status: 'quarantined',
+          subject_state: 'quarantined',
+          binding_state: 'quarantined',
+          grant_lifecycle: 'quarantined',
+          global_auth_epoch: '1',
+          ceremony_status: 'pending',
+          audit_count: '0',
+        });
+      } finally {
+        await blocker.query('ROLLBACK').catch(() => undefined);
+        blocker.release();
+        await observer.end();
+      }
 
       // The exact ceremony reapproves the account atomically.
       const ceremonyId = randomUUID();

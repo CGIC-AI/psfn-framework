@@ -1554,7 +1554,14 @@ export async function handleMessageForTurn(
       : runtime.sessionManager.findRecordedTurn(message.channelId, recoveredSourceTurnId);
     if (recoveredTurnRecord?.status === 'completed') {
       const replayJobs = parseTurnRecordBackgroundWorkHandoff(recoveredTurnRecord);
-      if (replayJobs.length > 0) await runtime.enqueuePostTurnBackgroundWork(replayJobs);
+      if (replayJobs.length > 0) {
+        try {
+          await runtime.enqueuePostTurnBackgroundWork(replayJobs);
+        } catch (error) {
+          runtime.sessionManager.deferBackgroundWorkHandoffRecovery(recoveredTurnRecord);
+          throw error;
+        }
+      }
       return agentResponse;
     }
 

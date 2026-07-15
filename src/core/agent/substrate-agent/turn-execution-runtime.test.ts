@@ -3805,6 +3805,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     };
     let recordedTurn: TurnRecord | null = null;
     const recordTurn = vi.fn((record: TurnRecord) => { recordedTurn = record; });
+    const deferBackgroundWorkHandoffRecovery = vi.fn();
     const enqueuePostTurnBackgroundWork = vi.fn()
       .mockRejectedValueOnce(new Error('injected queue crash gap'))
       .mockResolvedValue(undefined);
@@ -3812,6 +3813,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       recordTurn,
       hasRecordedTurn: vi.fn(() => recordedTurn?.status === 'completed'),
       findRecordedTurn: vi.fn(() => recordedTurn),
+      deferBackgroundWorkHandoffRecovery,
     } as unknown as SessionManager;
     const runtime = createRuntime({
       eventBus,
@@ -3883,6 +3885,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       finalizeDelivery: vi.fn(async () => undefined),
     })).rejects.toThrow('injected queue crash gap');
     expect(recordTurn).toHaveBeenCalledTimes(1);
+    expect(deferBackgroundWorkHandoffRecovery).toHaveBeenCalledWith(recordedTurn);
     const recordedJobs = recordedTurn.backgroundWorkHandoff?.jobs;
     expect(recordedJobs).toHaveLength(3);
 

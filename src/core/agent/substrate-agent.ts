@@ -247,6 +247,7 @@ export interface SubstrateAgentOptions {
   backgroundWorkDisabled?: boolean;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
 export type SubstrateAgentAbortResult = AgentRunAbortResult;
 
@@ -1211,14 +1212,22 @@ export class SubstrateAgent {
   }
 
   private async recoverBackgroundWorkHandoffs(): Promise<void> {
-    if (this.backgroundWorkHandoffsRecovered) return;
     if (!this.backgroundWorkHandoffRecoveryPromise) {
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
-        for (const record of this.sessionManager.listRecoverableBackgroundWorkTurnRecords()) {
-          const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-          if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+        if (!this.backgroundWorkHandoffsRecovered) {
+          for (const record of this.sessionManager.listRecoverableBackgroundWorkTurnRecords()) {
+            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+          }
+          this.backgroundWorkHandoffsRecovered = true;
         }
-        this.backgroundWorkHandoffsRecovered = true;
+        await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
+          BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+          async (record) => {
+            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+          },
+        );
       })().finally(() => {
         this.backgroundWorkHandoffRecoveryPromise = null;
       });

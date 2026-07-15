@@ -659,6 +659,21 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
+    if (normalized.startsWith('select * from contact_identity_link_verifications order by created_at desc limit $1')) {
+      const limit = Number(values[0] ?? this.contactIdentityLinkVerifications.size);
+      return result([...this.contactIdentityLinkVerifications.values()]
+        .sort((left, right) => right.created_at.localeCompare(left.created_at))
+        .slice(0, limit));
+    }
+
+    if (normalized.startsWith("select count(*) as count from contact_identity_link_verifications where contact_id = $1 and status = 'verified'")) {
+      const contactId = String(values[0] ?? '');
+      const count = [...this.contactIdentityLinkVerifications.values()]
+        .filter(row => row.contact_id === contactId && row.status === 'verified')
+        .length;
+      return result([{ count }]);
+    }
+
     if (normalized.startsWith('update contact_identity_link_verifications set status = $1, updated_at = $2, verified_at = coalesce($3, verified_at), failure_reason = $4 where id = $5')) {
       const row = this.contactIdentityLinkVerifications.get(String(values[4] ?? ''));
       if (row) {
@@ -776,6 +791,13 @@ export class FakePostgresPool {
     if (normalized.startsWith('select id, entity_kind, display_name, contact_id, sensitivity, provenance_refs, confidence, source, created_at, updated_at from social_graph_entities where id = $1 limit 1')) {
       const row = this.socialGraphEntities.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
+    }
+
+    if (normalized.startsWith('select id, entity_kind, display_name, contact_id, sensitivity, provenance_refs, confidence, source, created_at, updated_at from social_graph_entities order by updated_at desc limit $1')) {
+      const limit = Number(values[0] ?? this.socialGraphEntities.size);
+      return result([...this.socialGraphEntities.values()]
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(0, limit));
     }
 
     if (normalized.startsWith('select id, source_entity_id, target_entity_id, relationship_type, directional, sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at, source.sensitivity as source_sensitivity, target.sensitivity as target_sensitivity from social_relationship_edges e inner join social_graph_entities source on source.id = e.source_entity_id inner join social_graph_entities target on target.id = e.target_entity_id')) {

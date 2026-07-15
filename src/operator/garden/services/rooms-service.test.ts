@@ -1,32 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { ContactStore } from '../../../core/contacts/store.js';
-import { createSQLiteContactStore } from '../../../core/contacts/sqlite-adapter.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { MAX_ROOM_ROSTER_LIMIT } from '../../../core/contacts/types.js';
+import { createTestPostgresContactStore } from '../../../test-support/postgres-contact-store.js';
 import { buildAdminRoomRoutes } from '../api-routes-rooms.js';
 import { createAdminRoomsService } from './rooms-service.js';
 
 const ROOM_X = 'discord:room-x';
 const ROOM_Y = 'discord:room-y';
 
-function seed(): { db: Database.Database; contactStore: ContactStorePort } {
-  const db = new Database(':memory:');
-  const store = new ContactStore(db);
-  const alice = store.upsert({ displayName: 'Alice', trustLevel: 'trusted', relationshipType: 'friend' });
-  const bob = store.upsert({ displayName: 'Bob', trustLevel: 'regular', relationshipType: 'acquaintance' });
-  const dave = store.upsert({ displayName: 'Dave', trustLevel: 'trusted', relationshipType: 'friend' });
-  store.recordChannelActivity(alice.id, 'discord', ROOM_X, 'invite_only');
-  store.recordChannelActivity(bob.id, 'discord', ROOM_X, 'invite_only');
-  store.recordChannelActivity(dave.id, 'discord', ROOM_Y, 'private');
-  db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?')
-    .run('2020-01-01T00:00:00.000Z', bob.id);
-  db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?')
-    .run('2024-06-01T00:00:00.000Z', alice.id);
-  db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?')
-    .run('2024-08-01T00:00:00.000Z', dave.id);
-  return { db, contactStore: createSQLiteContactStore(db) };
+async function seed(): Promise<{ contactStore: ContactStorePort }> {
+  const { pool, store } = await createTestPostgresContactStore();
+  const alice = await store.upsert({ displayName: 'Alice', trustLevel: 'trusted', relationshipType: 'friend' });
+  const bob = await store.upsert({ displayName: 'Bob', trustLevel: 'regular', relationshipType: 'acquaintance' });
+  const dave = await store.upsert({ displayName: 'Dave', trustLevel: 'trusted', relationshipType: 'friend' });
+  await store.recordChannelActivity(alice.id, 'discord', ROOM_X, 'invite_only');
+  await store.recordChannelActivity(bob.id, 'discord', ROOM_X, 'invite_only');
+  await store.recordChannelActivity(dave.id, 'discord', ROOM_Y, 'private');
+  for (const activity of pool.contactChannelActivity.values()) {
+    if (activity.contact_id === bob.id) activity.last_seen = '2020-01-01T00:00:00.000Z';
+    if (activity.contact_id === alice.id) activity.last_seen = '2024-06-01T00:00:00.000Z';
+    if (activity.contact_id === dave.id) activity.last_seen = '2024-08-01T00:00:00.000Z';
+  }
+  return { contactStore: store };
 }
 
 class CapturingResponse {
@@ -64,7 +60,7 @@ async function invokeRoute(
 
 describe('AdminRoomsService', () => {
   it('lists known rooms with totals', async () => {
-    const { contactStore } = seed();
+    const { contactStore } = await seed();
     const service = createAdminRoomsService({ contactStore });
     const data = await service.listRooms();
     expect(data.total).toBe(2);
@@ -72,7 +68,7 @@ describe('AdminRoomsService', () => {
   });
 
   it('returns a paginated roster ordered by last-seen desc', async () => {
-    const { contactStore } = seed();
+    const { contactStore } = await seed();
     const service = createAdminRoomsService({ contactStore });
     const params = new URLSearchParams({ channel: 'discord', limit: '1', offset: '0' });
     const page = await service.getRoomRoster(ROOM_X, params);
@@ -82,7 +78,7 @@ describe('AdminRoomsService', () => {
   });
 
   it('clamps an over-large limit to the hard maximum', async () => {
-    const { contactStore } = seed();
+    const { contactStore } = await seed();
     const service = createAdminRoomsService({ contactStore });
     const data = await service.getRoomRoster(ROOM_X, new URLSearchParams({ limit: '100000' }));
     expect(data.limit).toBe(MAX_ROOM_ROSTER_LIMIT);
@@ -97,7 +93,7 @@ describe('AdminRoomsService', () => {
 
 describe('buildAdminRoomRoutes', () => {
   it('serves GET /api/admin/rooms', async () => {
-    const { contactStore } = seed();
+    const { contactStore } = await seed();
     const routes = buildAdminRoomRoutes({ roomsService: createAdminRoomsService({ contactStore }) });
     const res = await invokeRoute(routes, 'GET', '/api/admin/rooms');
     expect(res.status).toBe(200);
@@ -107,7 +103,7 @@ describe('buildAdminRoomRoutes', () => {
   });
 
   it('serves GET /api/admin/rooms/:channelId/roster with query params', async () => {
-    const { contactStore } = seed();
+    const { contactStore } = await seed();
     const routes = buildAdminRoomRoutes({ roomsService: createAdminRoomsService({ contactStore }) });
     const encoded = encodeURIComponent(ROOM_X);
     const res = await invokeRoute(

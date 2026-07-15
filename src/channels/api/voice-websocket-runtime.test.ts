@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -7,6 +9,11 @@ import type { StreamingSttConnector } from '../../primitives/voice/connectors/st
 import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
+import { GatewayClient } from '../../boundary/gateway/client.js';
+import type { GatewayRpcConnection, GatewayRpcSerializedTransportStats } from '../../boundary/gateway/transport.js';
+import { requestAgentVoiceStream } from '../../boundary/gateway/voice-stream-request.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 const {
   createStreamingSttConnectorMock,
@@ -287,5 +294,204 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(runtime).toBeUndefined();
     expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * mmo9.6.5 — production-composition barge-in regression.
+ *
+ * The production WS voice path is api-surface `handleAssistantTurn` ->
+ * `gateway.requestAgentVoiceStream(message, { signal })`. This wires the REAL
+ * host-side `requestAgentVoiceStream` to a REAL agent-side `GatewayClient` over
+ * an in-memory JSON-RPC bridge (mirroring the gateway server's client wiring),
+ * so a barge-in that aborts the turn signal DURING model generation is driven
+ * end-to-end: abort -> voice.stream.cancel -> GatewayClient.handleVoiceStreamCancel
+ * -> the in-flight dispatch's AbortSignal is aborted (the exact seam
+ * SubstrateAgent.cancelTurn trips in production, mmo9.6.1). Pre-fix,
+ * `requestAgentVoiceStream` ignored the abort while blocked awaiting
+ * voice.stream.end, so no cancel was sent and the model kept generating.
+ */
+class BridgeGatewayConnection extends EventEmitter implements GatewayRpcConnection {
+  private messageHandler: ((message: unknown) => void) | undefined;
+  private destroyedFlag = false;
+  toHost: ((data: unknown) => void) | undefined;
+
+  send(data: unknown): boolean {
+    this.toHost?.(data);
+    return true;
+  }
+
+  sendHeartbeat(): boolean {
+    return true;
+  }
+
+  onMessage(handler: (message: unknown) => void): void {
+    this.messageHandler = handler;
+  }
+
+  deliver(message: unknown): void {
+    this.messageHandler?.(message);
+  }
+
+  destroy(): void {
+    if (this.destroyedFlag) return;
+    this.destroyedFlag = true;
+    this.emit('close');
+  }
+
+  get destroyed(): boolean {
+    return this.destroyedFlag;
+  }
+
+  get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+    return { frameCount: 0, serializedBytes: 0, rpcCallCount: 0, byMethod: {} };
+  }
+}
+
+function okAgentResponse() {
+  return {
+    content: 'ok',
+    channelId: 'api:principal:session',
+    metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+  };
+}
+
+function createBridgedGateway() {
+  const agentConn = new BridgeGatewayConnection();
+  const gatewayClient = new GatewayClient(agentConn, 1024);
+  const sentMethods: string[] = [];
+  const hostClient = new JSONRPCServerAndClient(
+    new JSONRPCServer(),
+    new JSONRPCClient((request) => {
+      const method = (request as { method?: unknown } | null)?.method;
+      if (typeof method === 'string') {
+        sentMethods.push(method);
+      }
+      agentConn.deliver(request);
+    }),
+  );
+  agentConn.toHost = (data) => {
+    // json-rpc-2.0 receiveAndSend() payload param is typed as `any`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void hostClient.receiveAndSend(data as any);
+  };
+  return { agentConn, gatewayClient, hostClient, sentMethods };
+}
+
+function makeVoiceMessage(id: string): SubstrateMessage {
+  return {
+    id,
+    channelId: 'api:principal:session',
+    channelType: 'api',
+    authorId: 'user-1',
+    authorName: 'API Voice Principal',
+    content: 'hello there',
+    isDirectMessage: true,
+    routing: { source: 'api', responseStyle: 'concise' },
+    timestamp: new Date(),
+  };
+}
+
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`Timed out waiting for: ${label}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production composition)', () => {
+  it('sends voice.stream.cancel and cancels the in-flight agent turn when aborted mid-generation', async () => {
+    const { gatewayClient, hostClient, sentMethods } = createBridgedGateway();
+
+    const dispatchedSignals: Array<AbortSignal | undefined> = [];
+    const dispatchedCancellationIds: Array<string | undefined> = [];
+    let turnOneSettled = false;
+
+    gatewayClient.onHandleMessage(async (_message, options) => {
+      const index = dispatchedSignals.length;
+      dispatchedSignals.push(options?.signal);
+      dispatchedCancellationIds.push(options?.cancellationId);
+
+      if (index === 0) {
+        // Turn 1 stands in for the model turn: block until the dispatch signal
+        // is aborted. In production SubstrateAgent.cancelTurn(cancellationId)
+        // aborts exactly this signal (mmo9.6.1); here GatewayClient's
+        // handleVoiceStreamCancel aborts it — the same seam.
+        try {
+          await new Promise<void>((_resolve, reject) => {
+            const sig = options?.signal;
+            if (!sig) {
+              reject(new Error('agent dispatch received no cancellation signal'));
+              return;
+            }
+            if (sig.aborted) {
+              reject(new Error('aborted'));
+              return;
+            }
+            sig.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        } finally {
+          turnOneSettled = true;
+        }
+      }
+
+      return okAgentResponse();
+    });
+
+    const controller = new AbortController();
+    let counter = 0;
+    const turnPromise = requestAgentVoiceStream({
+      client: hostClient,
+      message: makeVoiceMessage('api-voice-msg-1'),
+      options: { signal: controller.signal, timeoutMs: 500 },
+      wyomingShardRouting: { enabled: false },
+      companionId: createCompanionId('companion'),
+      nextRequestCounter: () => (counter += 1),
+    });
+    // Prevent an unhandled rejection race before we assert on it below.
+    const turnOutcome = turnPromise.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
+    // The agent turn is dispatched (model "generating") and NOT yet aborted.
+    await waitFor(() => dispatchedSignals.length === 1, 'agent turn dispatched');
+    expect(dispatchedSignals[0]?.aborted).toBe(false);
+    expect(sentMethods).not.toContain('voice.stream.cancel');
+    // The turn carries a cancellation identity, so it is addressable by cancelTurn.
+    expect(typeof dispatchedCancellationIds[0]).toBe('string');
+    expect(dispatchedCancellationIds[0]).toBeTruthy();
+
+    // Barge-in: abort the turn signal WHILE the model is generating (pre-fix this
+    // was ignored — the request stayed blocked on voice.stream.end).
+    controller.abort();
+
+    const outcome = await turnOutcome;
+    expect(outcome.ok).toBe(false);
+    expect(String((outcome as { error: unknown }).error)).toMatch(/abort/i);
+
+    // The caller sent the cancel frame, and it propagated to cancel the agent turn.
+    await waitFor(() => sentMethods.includes('voice.stream.cancel'), 'voice.stream.cancel sent');
+    await waitFor(() => dispatchedSignals[0]?.aborted === true, 'agent dispatch signal aborted');
+    await waitFor(() => turnOneSettled, 'in-flight agent turn torn down');
+
+    // A follow-up voice turn is NOT queued behind a still-active turn 1: turn 1
+    // has been cancelled/torn down, so the next turn dispatches and completes.
+    const followUp = await requestAgentVoiceStream({
+      client: hostClient,
+      message: makeVoiceMessage('api-voice-msg-2'),
+      options: { timeoutMs: 500 },
+      wyomingShardRouting: { enabled: false },
+      companionId: createCompanionId('companion'),
+      nextRequestCounter: () => (counter += 1),
+    });
+    expect(followUp.content).toBe('ok');
+    expect(dispatchedSignals.length).toBe(2);
+    expect(dispatchedSignals[1]?.aborted).toBe(false);
+
+    gatewayClient.destroy();
   });
 });

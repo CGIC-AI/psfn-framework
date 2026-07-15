@@ -11,7 +11,7 @@ import { appendJsonLine } from '../jsonl.js';
 import { withCrossProcessWriteLock } from './cross-process-write-lock.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type ParentTurnContinuationStop, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
@@ -190,6 +190,57 @@ function parseOptionalLocation(value: unknown): TurnRecordLocation | undefined {
   return {
     ...(placeId ? { placeId } : {}),
     ...(satelliteId ? { satelliteId } : {}),
+  };
+}
+
+function parseRequiredSafeInteger(value: unknown, fieldName: string, minimum: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be a safe integer >= ${minimum}`);
+  }
+  return value as number;
+}
+
+function parseOptionalContinuationStop(value: unknown): ParentTurnContinuationStop | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "continuationStop" must be an object');
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error('TurnRecord field "continuationStop.schemaVersion" must be 1');
+  }
+  const reason = value.reason;
+  if (reason !== 'wall_clock_limit' && reason !== 'prompt_entry_limit') {
+    throw new Error('TurnRecord field "continuationStop.reason" is invalid');
+  }
+  const outcome = value.outcome;
+  if (outcome !== 'failed' && outcome !== 'partial') {
+    throw new Error('TurnRecord field "continuationStop.outcome" is invalid');
+  }
+  const promptEntries = parseRequiredSafeInteger(
+    value.promptEntries,
+    'continuationStop.promptEntries',
+    0,
+  );
+  const maxPromptEntries = parseRequiredSafeInteger(
+    value.maxPromptEntries,
+    'continuationStop.maxPromptEntries',
+    1,
+  );
+  if (promptEntries > maxPromptEntries) {
+    throw new Error('TurnRecord continuationStop.promptEntries exceeds maxPromptEntries');
+  }
+  return {
+    schemaVersion: 1,
+    reason,
+    outcome,
+    promptEntries,
+    maxPromptEntries,
+    elapsedMs: parseRequiredSafeInteger(value.elapsedMs, 'continuationStop.elapsedMs', 0),
+    maxWallTimeMs: parseRequiredSafeInteger(
+      value.maxWallTimeMs,
+      'continuationStop.maxWallTimeMs',
+      1,
+    ),
   };
 }
 
@@ -589,6 +640,10 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     throw new Error('TurnRecord ICP correlation does not match its channel/turn/request binding');
   }
   const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
+  const continuationStop = parseOptionalContinuationStop(raw.continuationStop);
+  if (continuationStop && status !== 'failed') {
+    throw new Error('TurnRecord continuationStop requires status "failed"');
+  }
   if (
     auditPrivacy?.contentSensitivityActor
     && (
@@ -609,6 +664,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     startedAt,
     completedAt,
     status: status as TurnRecord['status'],
+    ...(continuationStop ? { continuationStop } : {}),
     ...(location ? { location } : {}),
     ...(auditPrivacy ? { auditPrivacy } : {}),
     userMessage,

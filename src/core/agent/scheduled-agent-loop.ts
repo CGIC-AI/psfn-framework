@@ -8,7 +8,7 @@ import {
 } from './tool-call-scheduler.js';
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
-  AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+  ParentTurnContinuationFuse,
 } from './turn-limits.js';
 
 type AgentLoopErrorEvent = {
@@ -30,6 +30,7 @@ export function agentLoopWithScheduler(
   signal: AbortSignal,
   streamFn: StreamFn | undefined,
   schedulerOptions: ToolCallSchedulerOptions,
+  continuationFuse = new ParentTurnContinuationFuse(),
 ) {
   const stream = createAgentStream();
   (async () => {
@@ -45,7 +46,16 @@ export function agentLoopWithScheduler(
         stream.push({ type: 'message_start', message: prompt });
         stream.push({ type: 'message_end', message: prompt });
       }
-      await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
+      await runLoop(
+        currentContext,
+        newMessages,
+        config,
+        signal,
+        stream,
+        streamFn,
+        schedulerOptions,
+        continuationFuse,
+      );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
     }
@@ -59,6 +69,7 @@ export function agentLoopContinueWithScheduler(
   signal: AbortSignal,
   streamFn: StreamFn | undefined,
   schedulerOptions: ToolCallSchedulerOptions,
+  continuationFuse = new ParentTurnContinuationFuse(),
 ) {
   if (context.messages.length === 0) {
     throw new Error('Cannot continue: no messages in context');
@@ -73,7 +84,16 @@ export function agentLoopContinueWithScheduler(
       const currentContext: LiveToolAgentContext = { ...context };
       stream.push({ type: 'agent_start' });
       stream.push({ type: 'turn_start' });
-      await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
+      await runLoop(
+        currentContext,
+        newMessages,
+        config,
+        signal,
+        stream,
+        streamFn,
+        schedulerOptions,
+        continuationFuse,
+      );
     } catch (error) {
       terminateStreamWithError(stream, newMessages, error);
     }
@@ -96,9 +116,9 @@ async function runLoop(
   stream: ReturnType<typeof createAgentStream>,
   streamFn: StreamFn | undefined,
   schedulerOptions: ToolCallSchedulerOptions,
+  continuationFuse: ParentTurnContinuationFuse,
 ) {
   let firstTurn = true;
-  let assistantStepCount = 0;
   let checkInMessageSent = false;
   let userFacingBoundaryMarked = false;
   const toolExecutionGuard = createToolCallExecutionGuard();
@@ -125,18 +145,7 @@ async function runLoop(
         pendingMessages = [];
       }
 
-      assistantStepCount += 1;
-      if (assistantStepCount > AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN) {
-        const message = buildLoopLimitMessage(config, assistantStepCount);
-        currentContext.messages.push(message);
-        newMessages.push(message);
-        stream.push({ type: 'message_start', message });
-        stream.push({ type: 'message_end', message });
-        stream.push({ type: 'turn_end', message, toolResults: [] });
-        stream.push({ type: 'agent_end', messages: newMessages });
-        stream.end(newMessages);
-        return;
-      }
+      const assistantStepCount = continuationFuse.enterPrompt();
       if (!checkInMessageSent && assistantStepCount === AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT) {
         const message = buildLoopCheckInMessage(assistantStepCount);
         currentContext.messages.push(message);
@@ -223,39 +232,6 @@ function buildLoopCheckInMessage(stepCount: number): AgentMessage {
     }],
     timestamp: Date.now(),
   } as unknown as AgentMessage;
-}
-
-function buildLoopLimitMessage(
-  config: AgentLoopConfig,
-  stepCount: number,
-): AssistantMessage {
-  return {
-    role: 'assistant',
-    content: [{
-      type: 'text',
-      text: `Turn stopped after ${stepCount - 1} assistant steps without bounded completion. Retry with a narrower request, delegate to a bounded worker, or split the work into tracked beads.`,
-    }],
-    api: config.model.api,
-    provider: config.model.provider,
-    model: config.model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    stopReason: 'error',
-    errorMessage: 'agent_loop_step_limit_exceeded',
-    timestamp: Date.now(),
-  } as AssistantMessage;
 }
 
 async function streamAssistantResponse(

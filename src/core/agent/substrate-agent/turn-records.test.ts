@@ -454,6 +454,15 @@ describe('turn-records tool persistence', () => {
       assistantSessionEntryId: null,
       model: 'openrouter/moonshotai/kimi-k2.5',
       status: 'failed',
+      continuationStop: {
+        schemaVersion: 1,
+        reason: 'prompt_entry_limit',
+        outcome: 'failed',
+        promptEntries: 36,
+        maxPromptEntries: 36,
+        elapsedMs: 71_000,
+        maxWallTimeMs: 300_000,
+      },
       turnMessages: [
         {
           role: 'assistant',
@@ -508,6 +517,15 @@ describe('turn-records tool persistence', () => {
     });
 
     expect(record.status).toBe('failed');
+    expect(record.continuationStop).toEqual({
+      schemaVersion: 1,
+      reason: 'prompt_entry_limit',
+      outcome: 'failed',
+      promptEntries: 36,
+      maxPromptEntries: 36,
+      elapsedMs: 71_000,
+      maxWallTimeMs: 300_000,
+    });
     expect(record.assistantMessage).toBeUndefined();
     expect(record.versionPointers.model).toBe('openrouter/moonshotai/kimi-k2.5');
     expect(record.toolCalls).toEqual([

@@ -96,6 +96,7 @@ export interface SessionSummaryCompletionParams {
   originStage: string;
   maxRetries: number;
   baseDelayMs: number;
+  signal?: AbortSignal;
   onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
   icpCorrelation?: IcpConversationCorrelation;
 }
@@ -128,6 +129,21 @@ export function normalizeGeneratedRecentSummaryText(content: string, maxTokens: 
   return '';
 }
 
+function requestSessionSummaryCompletion(
+  llmProvider: LLMProviderPort,
+  context: Parameters<LLMProviderPort['complete']>[0],
+  signal?: AbortSignal,
+): ReturnType<LLMProviderPort['complete']> {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error('Session summary completion was aborted');
+  }
+  return signal
+    ? llmProvider.complete(context, 'background', { signal })
+    : llmProvider.complete(context, 'background');
+}
+
 /**
  * Shared session-summary completion primitive. Owns PromptRegistry lookup,
  * runtime-token injection, retry behavior, request correlation, and
@@ -144,7 +160,8 @@ export async function completeSessionSummary(params: SessionSummaryCompletionPar
   const runtimeSummaryPrompt = injectPromptRuntimeTokens(summaryPrompt);
   const requestContext = getRequestContext();
   const summaryResponse = await withRetry(
-    () => params.llmProvider.complete(
+    () => requestSessionSummaryCompletion(
+      params.llmProvider,
       {
         systemPrompt: runtimeSummaryPrompt,
         messages: [{ role: 'user', content: params.sourceText }],
@@ -172,13 +189,15 @@ export async function completeSessionSummary(params: SessionSummaryCompletionPar
             : {}),
         },
       },
-      'background',
+      params.signal,
     ),
     { maxRetries: params.maxRetries, baseDelayMs: params.baseDelayMs },
     {
       // Session-summary retries are unconditional by contract: any completion
-      // failure (not just transport-retryable ones) gets the full retry budget.
+      // failure (not just transport-retryable ones) gets the full retry budget,
+      // except cancellation from the owning turn.
       isRetryable: () => true,
+      shouldRetry: () => params.signal?.aborted !== true,
       ...(params.onRetry ? { onRetry: params.onRetry } : {}),
     },
   );

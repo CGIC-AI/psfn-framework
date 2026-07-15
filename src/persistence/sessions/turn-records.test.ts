@@ -119,6 +119,29 @@ describe('turn-records', () => {
     expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
   });
 
+  it('round-trips the typed content-free parent-turn continuation stop', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-continuation-stop-'));
+    const record = createTurnRecord({
+      status: 'failed',
+      assistantMessage: undefined,
+      continuationStop: {
+        schemaVersion: 1,
+        reason: 'wall_clock_limit',
+        outcome: 'failed',
+        promptEntries: 9,
+        maxPromptEntries: 36,
+        elapsedMs: 300_000,
+        maxWallTimeMs: 300_000,
+      },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
+    expect(JSON.stringify(record.continuationStop)).not.toContain(record.userMessage.content);
+  });
+
   it('round-trips a durable satellite/place location', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-location-'));
     const record = createTurnRecord({

@@ -4,7 +4,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -698,6 +698,7 @@ export class TurnSupportRuntime {
     assistantMessageContent?: string;
     turnMessages: AgentMessage[];
     status?: TurnRecord['status'];
+    continuationStop?: ParentTurnContinuationStop;
     promptMode: MessagePromptOverrideMode;
     promptText: string;
     contextMessageCount: number;

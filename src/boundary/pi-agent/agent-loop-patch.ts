@@ -13,6 +13,10 @@
 import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from '../../core/agent/scheduled-agent-loop.js';
+import {
+  ParentTurnContinuationFuse,
+  type ParentTurnContinuationFuseLimits,
+} from '../../core/agent/turn-limits.js';
 import type { ToolCallSchedulerOptions } from '../../core/agent/tool-call-scheduler.js';
 
 export interface AgentLoopPromptCacheHooks {
@@ -96,6 +100,7 @@ export function installAgentToolSchedulerPatch(
   agent: Agent,
   schedulerOptions: ToolCallSchedulerOptions,
   promptCacheHooks?: AgentLoopPromptCacheHooks,
+  continuationFuseLimits?: Partial<ParentTurnContinuationFuseLimits>,
 ): void {
   const target = agent as unknown as PatchedAgent;
   if (target.__psfnToolSchedulerPatched) {
@@ -116,21 +121,8 @@ export function installAgentToolSchedulerPatch(
       throw new Error('Agent is already processing.');
     }
 
+    const continuationFuse = new ParentTurnContinuationFuse(continuationFuseLimits);
     const abortController = new AbortController();
-    let resolveRun: () => void = () => {};
-    const runPromise = new Promise<void>((resolve) => {
-      resolveRun = resolve;
-    });
-    this.activeRun = { promise: runPromise, resolve: resolveRun, abortController };
-    this._state.isStreaming = true;
-    this._state.streamingMessage = undefined;
-    this._state.errorMessage = undefined;
-    // User-facing boundary: index into _state.messages where internal
-    // follow-up continuation begins for this run (null = no internal
-    // continuation). Reset per run; set once when the loop drains queued
-    // internal follow-ups (psfn-framework-ay73).
-    this._state.userFacingBoundaryIndex = null;
-
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
@@ -148,13 +140,47 @@ export function installAgentToolSchedulerPatch(
     };
     const config = this.createLoopConfig(options);
 
+    let resolveRun: () => void = () => {};
+    const runPromise = new Promise<void>((resolve) => {
+      resolveRun = resolve;
+    });
+    this.activeRun = { promise: runPromise, resolve: resolveRun, abortController };
+    this._state.isStreaming = true;
+    this._state.streamingMessage = undefined;
+    this._state.errorMessage = undefined;
+    // User-facing boundary: index into _state.messages where internal
+    // follow-up continuation begins for this run (null = no internal
+    // continuation). Reset per run; set once when the loop drains queued
+    // internal follow-ups (psfn-framework-ay73).
+    this._state.userFacingBoundaryIndex = null;
+    const wallClockTimer = setTimeout(() => {
+      const budgetError = continuationFuse.tripWallClock();
+      abortController.abort(budgetError);
+    }, continuationFuse.limits.maxWallTimeMs);
+    wallClockTimer.unref?.();
+
     let partial: any = null;
     let terminalStreamError: Error | null = null;
     let sawTerminalStreamError = false;
     try {
       const stream = messages
-        ? agentLoopWithScheduler(messages, context, config, abortController.signal, this.streamFn, schedulerOptions)
-        : agentLoopContinueWithScheduler(context, config, abortController.signal, this.streamFn, schedulerOptions);
+        ? agentLoopWithScheduler(
+            messages,
+            context,
+            config,
+            abortController.signal,
+            this.streamFn,
+            schedulerOptions,
+            continuationFuse,
+          )
+        : agentLoopContinueWithScheduler(
+            context,
+            config,
+            abortController.signal,
+            this.streamFn,
+            schedulerOptions,
+            continuationFuse,
+          );
 
       for await (const rawEvent of stream) {
         const event = rawEvent as any;
@@ -196,6 +222,10 @@ export function installAgentToolSchedulerPatch(
         await this.processEvents(event);
       }
 
+      const continuationBudgetError = continuationFuse.getError();
+      if (continuationBudgetError) {
+        throw continuationBudgetError;
+      }
       if (terminalStreamError) {
         throw terminalStreamError;
       }
@@ -213,19 +243,22 @@ export function installAgentToolSchedulerPatch(
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const finalError = continuationFuse.getError()
+        ?? (error instanceof Error ? error : new Error(String(error)));
+      const errorMessage = finalError.message;
       this._state.errorMessage = errorMessage;
       partial = null;
       if (!sawTerminalStreamError) {
         await this.processEvents({
           type: 'agent_error',
-          error: error instanceof Error ? error : new Error(errorMessage),
+          error: finalError,
           messages: [],
         });
         await this.processEvents({ type: 'agent_end', messages: [] });
       }
-      throw error;
+      throw finalError;
     } finally {
+      clearTimeout(wallClockTimer);
       this._state.isStreaming = false;
       this._state.streamingMessage = undefined;
       this._state.pendingToolCalls = new Set();

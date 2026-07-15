@@ -126,6 +126,25 @@ export interface TurnRecordAuditPrivacy {
     | 'missing_or_ambiguous_privacy';
 }
 
+export type ParentTurnContinuationStopReason =
+  | 'wall_clock_limit'
+  | 'prompt_entry_limit';
+
+/** Content-free snapshot of the emergency fuse that stopped one parent turn. */
+export interface ParentTurnContinuationStopSnapshot {
+  schemaVersion: 1;
+  reason: ParentTurnContinuationStopReason;
+  promptEntries: number;
+  maxPromptEntries: number;
+  elapsedMs: number;
+  maxWallTimeMs: number;
+}
+
+/** Durable terminal disposition added after outward partial-text detection. */
+export interface ParentTurnContinuationStop extends ParentTurnContinuationStopSnapshot {
+  outcome: 'failed' | 'partial';
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
@@ -137,6 +156,8 @@ export interface TurnRecord {
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
+  /** Present when the parent-turn continuation fuse terminated this run. */
+  continuationStop?: ParentTurnContinuationStop;
   /** Durable room/satellite place origin; absent on unbound turns. */
   location?: TurnRecordLocation;
   auditPrivacy?: TurnRecordAuditPrivacy;

@@ -35,7 +35,6 @@ import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
-import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
@@ -130,6 +129,7 @@ import {
   AdminSharedWorkspaceService,
   type SharedWorkspaceCredentials,
 } from './services/shared-workspace-service.js';
+import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 
 export interface InProcessGardenAdminContractOptions {
   env?: NodeJS.ProcessEnv;
@@ -214,10 +214,9 @@ export function createInProcessGardenAdminContract(
     ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
-  const auditOpaqueIdKeyring = createSessionHmacBoundaryService({
-    env: options.env,
-    credentialVault: options.config.credentialVault,
-  }).requireKeyring('Session HMAC keyring is required for Garden audit history opaque IDs.');
+  const auditOpaqueIdKeyring = requireAuditOpaqueIdKeyring(
+    options.config.gatewaySessionIntegrityAuthToken,
+  );
   const modelUsage = modelUsageStore
     ? new AdminModelUsageDataService(modelUsageStore)
     : null;

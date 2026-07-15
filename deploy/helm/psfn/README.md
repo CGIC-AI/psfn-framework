@@ -58,7 +58,9 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - `secrets.values.gatewaySessionIntegrityAuthToken` ->
   `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, the role-bound worker proof consumed
   by the agent; derive it for the configured companion as documented in
-  `docs/setup.md`, or provide the same key through `secrets.existingSecret`
+  `docs/setup.md`, or provide that proof through `secrets.existingSecret`.
+  The agent also derives its Garden audit opaque-ID key from this proof through
+  a one-way, domain-separated transform; it never receives the gateway root key
 - `secrets.values.gatewayCompanionAuthToken` ->
   `GATEWAY_COMPANION_AUTH_TOKEN`, the distinct role-bound agent proof required
   by multi-companion agents; it is optional for single-companion installs

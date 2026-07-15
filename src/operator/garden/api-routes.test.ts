@@ -434,7 +434,7 @@ const testConfig: SubstrateConfig = {
   discordToken: '',
   discordBotId: '123',
   gatewayCompanionAuthToken: 'gateway-agent-secret',
-  gatewaySessionIntegrityAuthToken: 'gateway-worker-secret',
+  gatewaySessionIntegrityAuthToken: `v1.${'b'.repeat(64)}`,
   characterCardPath: '',
   dataDir: './data',
   databasePath: '',
@@ -716,7 +716,7 @@ describe('AdminServer JSON API routes', () => {
 
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
-      env: { GATEWAY_SESSION_HMAC_KEY: 'garden-api-routes-test-session-hmac-key' },
+      env: {},
       memoryStore: memoryStorePort,
       episodicStore,
       sessionStore,

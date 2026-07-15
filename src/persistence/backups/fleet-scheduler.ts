@@ -10,10 +10,12 @@ import {
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig, ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
+import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import {
   FleetBackupPartialFailureError,
+  DEFAULT_SHARED_WORLD_SCHEMA,
   runFleetBackupCycle,
   SCHEDULED_BACKUP_TASK_ID,
   SCHEDULED_BACKUP_TASK_NAME,
@@ -21,6 +23,7 @@ import {
   type FleetBackupCompanionUnit,
   type FleetBackupRunOptions,
   type FleetBackupRunResult,
+  type FleetAuthConsistentBackupCycleOptions,
 } from './service.js';
 
 const log = createComponentLogger('FleetBackupScheduler');
@@ -223,6 +226,34 @@ export function buildFleetBackupRunOptions(
     ...(backupConfig.mirrorDir ? { mirrorDir: backupConfig.mirrorDir } : {}),
     verifyRestore: backupConfig.verifyRestore,
     encryption: backupConfig.encryption,
+  };
+}
+
+export function buildFleetAuthBackupCycleOptions(params: {
+  fleet: ResolvedCompanionsFleetConfig;
+  systemDataDir: string;
+  backupRestoreDatabaseUrl: string;
+  roles: FleetAuthDatabaseRoles;
+  backupConfig: BackupRuntimeConfig;
+  pgDumpBinary?: string;
+}): FleetAuthConsistentBackupCycleOptions {
+  if (params.fleet.companions.length === 0) {
+    throw new Error('Fleet auth consistent backup requires at least one companion schema');
+  }
+  return {
+    backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
+    roles: params.roles,
+    schemas: [
+      ...params.fleet.companions.map(companion => ({
+        kind: 'companion' as const,
+        schema: companion.postgresSchema,
+      })),
+      { kind: 'shared', schema: DEFAULT_SHARED_WORLD_SCHEMA },
+    ],
+    systemDataDir: params.systemDataDir,
+    backupRootDir: params.backupConfig.rootDir,
+    config: params.backupConfig,
+    ...(params.pgDumpBinary ? { pgDumpBinary: params.pgDumpBinary } : {}),
   };
 }
 

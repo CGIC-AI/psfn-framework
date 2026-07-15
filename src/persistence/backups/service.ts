@@ -65,6 +65,19 @@ import {
   redactPostgresCredential,
   sanitizePostgresConnection,
 } from './postgres-connection.js';
+import {
+  registerScheduledFleetAuthBackupTaskImplementation,
+  runFleetAuthConsistentBackupCycleImplementation,
+  type FleetAuthConsistentBackupCycleOptions,
+  type FleetAuthConsistentBackupCycleResult,
+  type RegisterScheduledFleetAuthBackupTaskOptions,
+} from './fleet-auth-cycle.js';
+
+export type {
+  FleetAuthConsistentBackupCycleOptions,
+  FleetAuthConsistentBackupCycleResult,
+  RegisterScheduledFleetAuthBackupTaskOptions,
+} from './fleet-auth-cycle.js';
 
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
@@ -607,6 +620,28 @@ export async function runBackupCycle(
       rmSync(stagingRootDir, { recursive: true, force: true });
     }
   }
+}
+
+export async function runFleetAuthConsistentBackupCycle(
+  options: FleetAuthConsistentBackupCycleOptions,
+): Promise<FleetAuthConsistentBackupCycleResult> {
+  return await runFleetAuthConsistentBackupCycleImplementation(options, {
+    formatTimestamp,
+    verifyDumpArchive: async (dumpPath) => {
+      await verifyPostgresDumpArchive(dumpPath);
+    },
+    mirrorBackup: mirrorBackupToDir,
+  });
+}
+
+export function registerScheduledFleetAuthBackupTask(
+  options: RegisterScheduledFleetAuthBackupTaskOptions,
+): void {
+  registerScheduledFleetAuthBackupTaskImplementation(options, {
+    taskId: SCHEDULED_BACKUP_TASK_ID,
+    taskName: SCHEDULED_BACKUP_TASK_NAME,
+    runDefaultCycle: runFleetAuthConsistentBackupCycle,
+  });
 }
 
 export function registerScheduledBackupTask(

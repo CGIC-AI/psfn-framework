@@ -1,7 +1,7 @@
 {
   "tickIntervalMs": 60000,
   "heartbeatIntervalMs": 1800000,
-  "salienceDecayIntervalMs": 300000,
+  "salienceDecayIntervalMs": 3600000,
   "artifactLifecycle": {
     "scratchpadRetentionDays": 14,
     "generatedMediaRetentionDays": 30,

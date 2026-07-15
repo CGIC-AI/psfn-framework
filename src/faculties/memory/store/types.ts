@@ -20,6 +20,7 @@ export interface MemoryRow {
   emotional_valence: number;
   formation_vad: string | null;
   salience: number;
+  salience_decay_anchor_at: number;
   source_ref: string;
   source_type: string | null;
   provenance_json: string | null;

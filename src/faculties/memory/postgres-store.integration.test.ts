@@ -80,12 +80,12 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
   await pool.query(`
     INSERT INTO l2_memories (
       id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
-      source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
+      salience_decay_anchor_at, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
       scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
       retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
       delete_reason, embedding
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::vector
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28::vector
     )
   `, [
     memory.id,
@@ -96,6 +96,7 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
     memory.emotionalValence,
     encodeJsonValue(memory.formationVAD),
     memory.salience,
+    memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     memory.sourceRef,
     memory.extractedAt,
     memory.lastAccessed,
@@ -324,12 +325,12 @@ describe('postgres memory store integration', () => {
       const legacyInsertSql = [
         'INSERT INTO l2_memories (',
         '  id, text, type, importance, confidence, emotional_valence, formation_vad, salience,',
-        '  source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,',
+        '  salience_decay_anchor_at, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,',
         '  scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,',
         '  retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,',
         '  delete_reason, embedding',
         ') VALUES (',
-        '  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27',
+        '  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28',
         ')',
       ].join('\n');
       await pool.query(legacyInsertSql, [
@@ -341,6 +342,7 @@ describe('postgres memory store integration', () => {
         legacyMemory.emotionalValence,
         encodeJsonValue(legacyMemory.formationVAD),
         legacyMemory.salience,
+        legacyMemory.salienceDecayAnchorAt ?? legacyMemory.lastAccessed,
         legacyMemory.sourceRef,
         legacyMemory.extractedAt,
         legacyMemory.lastAccessed,

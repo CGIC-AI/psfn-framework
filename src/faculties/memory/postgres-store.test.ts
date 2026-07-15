@@ -35,6 +35,7 @@ interface MemoryRow {
   emotional_valence: number;
   formation_vad: unknown;
   salience: number;
+  salience_decay_anchor_at: number;
   source_ref: string;
   source_type: string | null;
   provenance_json: unknown;
@@ -340,27 +341,28 @@ class FakeMemoryPool {
         emotional_valence: Number(values[5] ?? 0),
         formation_vad: decodeJsonInput(values[6], null),
         salience: Number(values[7] ?? 0),
-        source_ref: String(values[8] ?? ''),
-        source_type: values[9] == null ? null : String(values[9]),
-        provenance_json: decodeJsonInput(values[10], {}),
-        extracted_at: Number(values[11] ?? 0),
-        last_accessed: Number(values[12] ?? 0),
-        access_count: Number(values[13] ?? 0),
-        superseded_by: values[14] == null ? null : String(values[14]),
-        tags: decodeJsonInput(values[15], []),
-        scope_ref_kind: values[16] == null ? null : String(values[16]),
-        scope_ref_id: values[17] == null ? null : String(values[17]),
-        scope_ref_label: values[18] == null ? null : String(values[18]),
-        scope_tags: decodeJsonInput(values[19], []),
-        provenance_refs: decodeJsonInput(values[20], []),
-        retention_class: values[21] == null ? null : (values[21] as PurrMemory['retentionClass']),
-        sensitivity: values[22] as PurrMemory['sensitivity'],
-        consent_flags: decodeJsonInput(values[23], {}),
-        contact_id: values[24] == null ? null : String(values[24]),
-        deleted_at: values[25] == null ? null : Number(values[25]),
-        deleted_by: values[26] == null ? null : String(values[26]),
-        delete_reason: values[27] == null ? null : String(values[27]),
-        embedding: typeof values[28] === 'string' ? values[28] : null,
+        salience_decay_anchor_at: Number(values[8] ?? 0),
+        source_ref: String(values[9] ?? ''),
+        source_type: values[10] == null ? null : String(values[10]),
+        provenance_json: decodeJsonInput(values[11], {}),
+        extracted_at: Number(values[12] ?? 0),
+        last_accessed: Number(values[13] ?? 0),
+        access_count: Number(values[14] ?? 0),
+        superseded_by: values[15] == null ? null : String(values[15]),
+        tags: decodeJsonInput(values[16], []),
+        scope_ref_kind: values[17] == null ? null : String(values[17]),
+        scope_ref_id: values[18] == null ? null : String(values[18]),
+        scope_ref_label: values[19] == null ? null : String(values[19]),
+        scope_tags: decodeJsonInput(values[20], []),
+        provenance_refs: decodeJsonInput(values[21], []),
+        retention_class: values[22] == null ? null : (values[22] as PurrMemory['retentionClass']),
+        sensitivity: values[23] as PurrMemory['sensitivity'],
+        consent_flags: decodeJsonInput(values[24], {}),
+        contact_id: values[25] == null ? null : String(values[25]),
+        deleted_at: values[26] == null ? null : Number(values[26]),
+        deleted_by: values[27] == null ? null : String(values[27]),
+        delete_reason: values[28] == null ? null : String(values[28]),
+        embedding: typeof values[29] === 'string' ? values[29] : null,
       };
       this.memories.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
@@ -372,12 +374,14 @@ class FakeMemoryPool {
     ) {
       let rowCount = 0;
       const rows: Array<{ id: string }> = [];
-      for (let index = 0; index < values.length; index += 2) {
+      for (let index = 0; index < values.length; index += 3) {
         const id = String(values[index] ?? '');
         const salience = Number(values[index + 1] ?? Number.NaN);
+        const salienceDecayAnchorAt = Number(values[index + 2] ?? Number.NaN);
         const row = this.memories.get(id);
         if (!row || row.deleted_at !== null || row.superseded_by !== null) continue;
         row.salience = salience;
+        row.salience_decay_anchor_at = salienceDecayAnchorAt;
         rowCount += 1;
         rows.push({ id });
       }
@@ -516,6 +520,7 @@ function makeMemoryRow(memory: PurrMemory, embedding: string | null = null): Mem
     emotional_valence: memory.emotionalValence,
     formation_vad: memory.formationVAD ?? null,
     salience: memory.salience,
+    salience_decay_anchor_at: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     source_ref: memory.sourceRef,
     source_type: memory.sourceType ?? null,
     provenance_json: memory.provenance ?? {},
@@ -651,6 +656,12 @@ describe('postgres memory store unit coverage', () => {
     expect(migrationSql).toContain(
       "ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;",
     );
+    expectMemoryMigrationSqlToContain([
+      'salience_decay_anchor_at BIGINT NOT NULL',
+      'ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS salience_decay_anchor_at BIGINT;',
+      'UPDATE l2_memories SET salience_decay_anchor_at = last_accessed WHERE salience_decay_anchor_at IS NULL;',
+      'ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET NOT NULL;',
+    ]);
     expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');
     expect(migrationSql).not.toContain('l2_memory_embeddings USING');
   });
@@ -1279,7 +1290,10 @@ describe('postgres memory store unit coverage', () => {
     })).rejects.toThrow(
       'simulated delete-version failure',
     );
-    expect(await store.getById(memory.id)).toEqual(memory);
+    expect(await store.getById(memory.id)).toEqual({
+      ...memory,
+      salienceDecayAnchorAt: memory.lastAccessed,
+    });
     expect(await store.getDeleteVersion('delete-version')).toBeUndefined();
     expect(await store.countActiveMemories()).toBe(1);
   });
@@ -1297,17 +1311,25 @@ describe('postgres memory store unit coverage', () => {
     }), new Float32Array([0.3, 0.4, 0.5, 0.6]));
 
     const count = await store.bulkUpdateSalience([
-      { id: 'pg-salience-1', salience: 0.22 },
-      { id: 'pg-salience-2', salience: 0.44 },
-      { id: 'pg-salience-deleted', salience: 0.66 },
+      { id: 'pg-salience-1', salience: 0.22, salienceDecayAnchorAt: 1_700_000_000_100 },
+      { id: 'pg-salience-2', salience: 0.44, salienceDecayAnchorAt: 1_700_000_000_200 },
+      { id: 'pg-salience-deleted', salience: 0.66, salienceDecayAnchorAt: 1_700_000_000_300 },
     ]);
 
     expect(count).toBe(2);
-    await expect(store.getById('pg-salience-1')).resolves.toMatchObject({ salience: 0.22 });
-    await expect(store.getById('pg-salience-2')).resolves.toMatchObject({ salience: 0.44 });
+    await expect(store.getById('pg-salience-1')).resolves.toMatchObject({
+      salience: 0.22,
+      salienceDecayAnchorAt: 1_700_000_000_100,
+    });
+    await expect(store.getById('pg-salience-2')).resolves.toMatchObject({
+      salience: 0.44,
+      salienceDecayAnchorAt: 1_700_000_000_200,
+    });
     await expect(store.getById('pg-salience-deleted')).resolves.toMatchObject({ salience: 0.8 });
     expect(pool.memories.get('pg-salience-1')?.salience).toBe(0.22);
+    expect(pool.memories.get('pg-salience-1')?.salience_decay_anchor_at).toBe(1_700_000_000_100);
     expect(pool.memories.get('pg-salience-2')?.salience).toBe(0.44);
+    expect(pool.memories.get('pg-salience-2')?.salience_decay_anchor_at).toBe(1_700_000_000_200);
     expect(pool.memories.get('pg-salience-deleted')?.salience).toBe(0.8);
   });
 
@@ -1373,7 +1395,7 @@ describe('postgres memory store unit coverage', () => {
     pool.failNextQuery('update l2_memories as memory', 'simulated salience update failure');
 
     await expect(store.bulkUpdateSalience([
-      { id: 'pg-salience-failure', salience: 0.11 },
+      { id: 'pg-salience-failure', salience: 0.11, salienceDecayAnchorAt: 1_700_000_000_100 },
     ])).rejects.toThrow('simulated salience update failure');
     await expect(store.getById('pg-salience-failure')).resolves.toMatchObject({ salience: 0.8 });
     expect(pool.memories.get('pg-salience-failure')?.salience).toBe(0.8);

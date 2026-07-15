@@ -317,7 +317,7 @@ export function hydrateCanonicalStartupConfig(
       },
     },
   };
-  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
 

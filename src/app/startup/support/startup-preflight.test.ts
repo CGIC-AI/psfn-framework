@@ -174,7 +174,8 @@ describe('resolveStartupPreflightBundle', () => {
     expect(bundle.startupHydration.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.memoryRetrievalLimit).toBe(15);
-    expect(config.maintenanceIntervalMs).toBe(123_000);
+    expect(config.salienceDecayIntervalMs).toBe(123_000);
+    expect(config.maintenanceIntervalMs).toBe(300_000);
   });
 
   it('fails agent startup when the static concern-softening config is missing', () => {

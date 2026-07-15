@@ -293,8 +293,8 @@ describe('createSubstrateStreamFn', () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | undefined;
     const transport = {
-      stream: vi.fn(async (_context, _callbacks, signal?: AbortSignal) => {
-        receivedSignal = signal;
+      stream: vi.fn(async (_context, _callbacks, options?: { signal?: AbortSignal }) => {
+        receivedSignal = options?.signal;
         return {
           content: 'ok',
           toolCalls: [],
@@ -317,7 +317,9 @@ describe('createSubstrateStreamFn', () => {
 
     // The scheduled agent loop forwards the run's AbortController signal as
     // options.signal; the adapter must hand the SAME signal to the provider
-    // transport (verify-first: without this the abort is local-only).
+    // transport as `options.signal` (mmo9.5.1 shape) so the transport can
+    // compose it with the gate preempt signal (verify-first: without this the
+    // abort is local-only).
     expect(transport.stream).toHaveBeenCalledTimes(1);
     expect(receivedSignal).toBe(controller.signal);
     controller.abort(new Error('barge-in'));

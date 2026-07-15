@@ -40,9 +40,21 @@ import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/pr
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
 import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
+import {
+  ModelCallPreemptedError,
+  toModelCallPreemptedErrorData,
+} from '../../../primitives/llm/model-call-gate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
-async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T> {
+/**
+ * Re-raise gateway-side model-call gate/budget outcomes as typed JSON-RPC
+ * errors so their identity survives serialization to the agent. Applied to both
+ * the `llm.chat` (stream) and `llm.complete` handlers. Without the
+ * ModelCallPreemptedError branch, json-rpc-2.0 flattens a preemption to a
+ * generic -32603 (name lost) and the agent charges it as a provider failure,
+ * eventually exhausting retries and losing the background cognition job.
+ */
+export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
   } catch (error) {
@@ -58,6 +70,13 @@ async function exposeModelBudgetBlock<T>(operation: () => Promise<T>): Promise<T
         error.message,
         GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
         error.event,
+      );
+    }
+    if (error instanceof ModelCallPreemptedError) {
+      throw new JSONRPCErrorException(
+        error.message,
+        GatewayErrors.MODEL_CALL_PREEMPTED,
+        toModelCallPreemptedErrorData(error),
       );
     }
     throw error;
@@ -107,7 +126,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.stream(
+        async () => await exposeModelCallGateBlocks(async () => await runtime.llmProvider.stream(
           {
             systemPrompt: params.systemPrompt,
             messages,
@@ -192,7 +211,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
-        async () => await exposeModelBudgetBlock(async () => await runtime.llmProvider.complete(
+        async () => await exposeModelCallGateBlocks(async () => await runtime.llmProvider.complete(
           {
             systemPrompt: params.systemPrompt,
             messages,

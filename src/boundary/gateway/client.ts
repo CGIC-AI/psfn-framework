@@ -4,7 +4,7 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, LLMProviderStreamOptions, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
@@ -178,6 +178,10 @@ import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
+import {
+  ModelCallPreemptedError,
+  modelCallPreemptedErrorFromData,
+} from '../../primitives/llm/model-call-gate.js';
 import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
@@ -263,6 +267,26 @@ function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEve
   } catch {
     return undefined;
   }
+}
+
+/**
+ * mmo9.5.1: reconstruct the typed preemption error the gateway's model-call
+ * gate raised, so a preempted background call defers (no attempt consumed)
+ * instead of being misread as a generic provider failure. Without this the
+ * gateway error arrives as a flattened -32603 and the agent's name-match
+ * (`error.name === 'ModelCallPreemptedError'`) fails, exhausting retries and
+ * losing the background cognition job.
+ */
+function modelCallPreemptedErrorFromRpc(
+  error: unknown,
+): ModelCallPreemptedError | undefined {
+  if (
+    !(error instanceof JSONRPCErrorException)
+    || error.code !== GatewayErrors.MODEL_CALL_PREEMPTED
+  ) {
+    return undefined;
+  }
+  return modelCallPreemptedErrorFromData(error.data);
 }
 
 function icpConversationCostBreakerErrorFromRpc(
@@ -547,7 +571,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   async stream(
     context: LLMContext,
     callbacks?: StreamCallbacks,
-    signal?: AbortSignal,
+    options?: LLMProviderStreamOptions,
   ): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
     const requestId = context.correlation?.requestId?.trim()
@@ -609,9 +633,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       let result: LLMChatResult;
       try {
         // mmo9.6.1: route through the abort-aware request path so a barge-in
-        // AbortSignal tears down the in-flight streaming turn rather than only
-        // dropping locally-consumed chunks.
-        result = await this.requestWithAbortSignal<LLMChatResult>('llm.chat', requestParams, signal);
+        // AbortSignal (carried as options.signal, mmo9.5.1 shape) tears down the
+        // in-flight streaming turn rather than only dropping locally-consumed
+        // chunks.
+        result = await this.requestWithAbortSignal<LLMChatResult>(
+          'llm.chat',
+          requestParams,
+          options?.signal,
+        );
       } catch (error) {
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
         this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
@@ -619,10 +648,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
           requestId,
           imageCount: referencedMessages.usedHintKeys.length,
         });
-        result = await this.requestWithAbortSignal<LLMChatResult>('llm.chat', {
-          ...requestParams,
-          messages: context.messages,
-        }, signal);
+        result = await this.requestWithAbortSignal<LLMChatResult>(
+          'llm.chat',
+          {
+            ...requestParams,
+            messages: context.messages,
+          },
+          options?.signal,
+        );
       }
 
       const response: LLMResponse = {
@@ -640,6 +673,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       callbacks?.onDone?.(response);
       return response;
     } catch (error) {
+      const preemptBlock = modelCallPreemptedErrorFromRpc(error);
+      if (preemptBlock) {
+        callbacks?.onError?.(preemptBlock);
+        throw preemptBlock;
+      }
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) {
         callbacks?.onError?.(icpCostBlock);
@@ -723,6 +761,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         );
       }
     } catch (error) {
+      const preemptBlock = modelCallPreemptedErrorFromRpc(error);
+      if (preemptBlock) throw preemptBlock;
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) throw icpCostBlock;
       const budgetBlock = modelBudgetBlockedEventFromError(error);

@@ -78,6 +78,14 @@ const MAINTENANCE_REFLECTION_ORIGIN_STAGE_PREFIXES = [
 export interface RuntimeLaneBudgetProfile {
   runtimeClass: RuntimeLaneClass;
   priority: number;
+  /**
+   * Whether an in-flight model call in this lane may be preempted (aborted) by a
+   * higher-priority acquire at the model-call gate. Foreground and post-turn
+   * appraisal are never preempted; background continuation and maintenance
+   * reflection are. Single home for this policy (Law 12.4): the gate is the only
+   * mechanism, fairness/anti-starvation lives elsewhere.
+   */
+  preemptable: boolean;
   chargeLane: ChargePolicyRuntimeLane;
   modelPurpose: ModelPurpose;
   maxQueuedActions: number;
@@ -96,6 +104,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
   [FOREGROUND_CHAT_RUNTIME_CLASS]: {
     runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS,
     priority: 0,
+    preemptable: false,
     chargeLane: 'interactive',
     modelPurpose: 'chat',
     maxQueuedActions: 0,
@@ -108,6 +117,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
   [POST_TURN_APPRAISAL_RUNTIME_CLASS]: {
     runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
     priority: 1,
+    preemptable: false,
     chargeLane: 'background',
     modelPurpose: 'background',
     maxQueuedActions: 12,
@@ -120,6 +130,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
   [BACKGROUND_CONTINUATION_RUNTIME_CLASS]: {
     runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
     priority: 2,
+    preemptable: true,
     chargeLane: 'background',
     modelPurpose: 'background',
     maxQueuedActions: 4,
@@ -132,6 +143,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
   [MAINTENANCE_REFLECTION_RUNTIME_CLASS]: {
     runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
     priority: 3,
+    preemptable: true,
     chargeLane: 'maintenance',
     modelPurpose: 'memory',
     maxQueuedActions: 3,

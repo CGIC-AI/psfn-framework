@@ -24,13 +24,28 @@ export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
   /**
-   * mmo9.6.1: `signal` cancels the in-flight provider request mid-generation
-   * (tears down the upstream HTTP stream, mirroring the existing `complete`
-   * cancellation channel). Optional and additive; a transport that ignores it
-   * only stops local consumption.
+   * mmo9.6.1 + mmo9.5.1: `options.signal` cancels the in-flight provider request
+   * mid-generation (tears down the upstream HTTP stream, mirroring the existing
+   * `complete` cancellation channel). It carries both the caller/barge-in
+   * cancellation signal (mmo9.6.1) and the model-call gate's preempt signal
+   * (mmo9.5.1), composed together. Optional and additive; a transport that
+   * ignores it only stops local consumption.
    */
-  stream(context: LLMContext, callbacks?: StreamCallbacks, signal?: AbortSignal): Promise<LLMResponse>;
+  stream(
+    context: LLMContext,
+    callbacks?: StreamCallbacks,
+    options?: LLMProviderStreamOptions,
+  ): Promise<LLMResponse>;
   complete(context: LLMContext, purpose: CompletionPurpose, options?: LLMProviderCompletionOptions): Promise<LLMResponse>;
+}
+
+export interface LLMProviderStreamOptions {
+  /**
+   * Aborts the in-flight streaming transport call. Composes the caller/barge-in
+   * cancellation signal (mmo9.6.1) with the model-call gate's preempt signal
+   * (mmo9.5.1) so the upstream stream is torn down when either fires.
+   */
+  signal?: AbortSignal;
 }
 
 export interface LLMProviderCompletionOptions {
@@ -41,7 +56,7 @@ export interface LLMProviderCompletionOptions {
 
 export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {
   return {
-    stream: (context, callbacks, signal) => provider.stream(context, callbacks, signal),
+    stream: (context, callbacks, options) => provider.stream(context, callbacks, options),
     complete: (context, purpose, options) => provider.complete(context, purpose, options),
   };
 }

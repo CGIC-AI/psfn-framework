@@ -44,6 +44,7 @@ import {
 } from '../../system/config/providers-config.js';
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type { LLMProviderStreamOptions } from './contracts.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -61,13 +62,19 @@ export interface StreamTerminalFailureEvent {
 
 export interface SubstrateStreamTransport {
   /**
-   * mmo9.6.1: `signal` aborts the in-flight provider request mid-generation.
-   * The scheduled agent loop forwards the run's AbortController signal into the
-   * streamFn options; this adapter threads it to the transport so
-   * `SubstrateAgent.abort()`/`cancelTurn()` tears down the upstream stream
-   * rather than only halting local iteration.
+   * mmo9.6.1 + mmo9.5.1: `options.signal` aborts the in-flight provider request
+   * mid-generation. The scheduled agent loop forwards the run's AbortController
+   * signal into the streamFn options; this adapter threads it to the transport
+   * as `options.signal` so `SubstrateAgent.abort()`/`cancelTurn()` tears down the
+   * upstream stream rather than only halting local iteration. The transport
+   * composes it with the model-call gate's preempt signal (mmo9.5.1) so the
+   * upstream stream is torn down when either source fires.
    */
-  stream(context: LLMContext, callbacks?: StreamCallbacks, signal?: AbortSignal): Promise<LLMResponse>;
+  stream(
+    context: LLMContext,
+    callbacks?: StreamCallbacks,
+    options?: LLMProviderStreamOptions,
+  ): Promise<LLMResponse>;
 }
 
 export interface SubstrateStreamRuntimeOptions {
@@ -382,11 +389,13 @@ function createTransportEventStream(
             }));
           },
         };
-        // mmo9.6.1: only pass the abort signal when one is present so the
-        // no-cancellation call path stays byte-identical for transports/tests
+        // mmo9.6.1 + mmo9.5.1: forward the caller/barge-in run signal as
+        // `options.signal`; the transport composes it with the model-call gate's
+        // preempt signal. Only pass the options bag when a signal is present so
+        // the no-cancellation call path stays byte-identical for transports/tests
         // that assert exact stream() arity.
         const response = params.signal
-          ? await params.transport.stream(transportContext, transportCallbacks, params.signal)
+          ? await params.transport.stream(transportContext, transportCallbacks, { signal: params.signal })
           : await params.transport.stream(transportContext, transportCallbacks);
 
         applyTerminalResponse(state, response);

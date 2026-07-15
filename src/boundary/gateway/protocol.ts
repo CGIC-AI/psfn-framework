@@ -1056,4 +1056,12 @@ export const GatewayErrors = {
   ICP_CONVERSATION_COST_BLOCKED: -32016,
   /** Retained image reference was absent, expired, evicted, or outside its request scope. */
   INLINE_IMAGE_RETENTION_MISS: -32017,
+  /**
+   * mmo9.5.1: an in-flight PREEMPTABLE background model call was aborted at the
+   * gateway's model-call gate by a higher-priority (foreground) acquire. Carries
+   * the preempted/preemptor runtime classes so the agent can reconstruct the
+   * typed ModelCallPreemptedError and defer (no attempt consumed) rather than
+   * treat the abort as a generic provider failure.
+   */
+  MODEL_CALL_PREEMPTED: -32018,
 } as const;

@@ -19,6 +19,7 @@ import {
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
 import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
+import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
 import {
   BackgroundWorkDeferredError,
@@ -1299,5 +1300,43 @@ describe('executePostTurnBackgroundWork', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('maps a preempted background model call to a foreground_active defer (mmo9.5.1)', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: record.assistantMessage!.content,
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    // The extraction LLM call is aborted by the gate for a higher-priority
+    // foreground acquire. Because the call is pre-commitEffectBoundary, the
+    // handler must defer (no attempt consumed), never fail/retry.
+    const preempted = new ModelCallPreemptedError(
+      'registered_model::local_endpoint',
+      'background_continuation',
+      'foreground_chat',
+    );
+    const maybeExtract = vi.fn(async () => { throw preempted; });
+    const { dependencies } = makeDependencies({ record, recentEntries, maybeExtract });
+
+    const error = await executePostTurnBackgroundWork(execution, dependencies)
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+
+    expect(maybeExtract).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
+    expect((error as BackgroundWorkDeferredError).reasonCode).toBe('foreground_active');
   });
 });

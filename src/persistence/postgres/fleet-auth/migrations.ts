@@ -310,35 +310,68 @@ CREATE TABLE provider_subject_registry (
   PRIMARY KEY (provider, subject_id)
 );
 
-LOCK TABLE provider_subjects, provider_subject_tombstones IN SHARE ROW EXCLUSIVE MODE;
+-- Freeze every source of durable identity evidence for the backfill window.
+-- provider_subject_history is append-only, but a concurrent INSERT during the
+-- upgrade could otherwise slip a new principal in between derivation and the
+-- trigger install, so it is locked alongside the live and tombstone tables.
+LOCK TABLE provider_subjects, provider_subject_tombstones, provider_subject_history
+  IN SHARE ROW EXCLUSIVE MODE;
 
+-- Derive one permanent provider/subject owner from ALL immutable identity
+-- evidence: current live rows, terminal tombstones, and the append-only
+-- history log. A subject linked to a principal only in history (for example
+-- one deleted before v4 without a tombstone) must still seed the registry, or
+-- it could be resurrected under a different principal after enforcement is
+-- installed. Any subject whose combined legacy evidence names more than one
+-- principal is ambiguous: fail the entire migration closed with an
+-- operator-actionable error instead of silently choosing an owner.
 DO $$
+DECLARE
+  ambiguous RECORD;
 BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM provider_subjects AS subject
-    JOIN provider_subject_tombstones AS tombstone
-      USING (provider, subject_id)
-    WHERE subject.principal_id <> tombstone.prior_principal_id
-  ) THEN
-    RAISE EXCEPTION 'provider subject live/tombstone identity conflict'
+  SELECT provider, subject_id
+  INTO ambiguous
+  FROM (
+    SELECT provider, subject_id, principal_id FROM provider_subjects
+    UNION
+    SELECT provider, subject_id, prior_principal_id FROM provider_subject_tombstones
+    UNION
+    SELECT provider, subject_id, principal_id FROM provider_subject_history
+  ) AS identity_evidence
+  GROUP BY provider, subject_id
+  HAVING count(DISTINCT principal_id) > 1
+  ORDER BY provider, subject_id
+  LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION
+      'provider subject %/% has conflicting legacy principal identity evidence; resolve ownership before upgrading',
+      ambiguous.provider, ambiguous.subject_id
       USING ERRCODE = '23514';
   END IF;
 END;
 $$;
 
+-- The ambiguity guard above guarantees exactly one distinct principal per
+-- subject, so the deduplicated principal aggregate has a single element that is
+-- the sole owner; bool_or(tombstoned) keeps any terminal tombstone permanent.
 INSERT INTO provider_subject_registry (provider, subject_id, principal_id, tombstoned)
-SELECT provider, subject_id, principal_id, FALSE
-FROM provider_subjects
+SELECT
+  provider,
+  subject_id,
+  (array_agg(DISTINCT principal_id))[1] AS principal_id,
+  bool_or(tombstoned) AS tombstoned
+FROM (
+  SELECT provider, subject_id, principal_id, FALSE AS tombstoned
+    FROM provider_subjects
+  UNION ALL
+  SELECT provider, subject_id, prior_principal_id AS principal_id, TRUE AS tombstoned
+    FROM provider_subject_tombstones
+  UNION ALL
+  SELECT provider, subject_id, principal_id, FALSE AS tombstoned
+    FROM provider_subject_history
+) AS identity_evidence
+GROUP BY provider, subject_id
 ON CONFLICT (provider, subject_id) DO NOTHING;
-
-INSERT INTO provider_subject_registry (provider, subject_id, principal_id, tombstoned)
-SELECT provider, subject_id, prior_principal_id, TRUE
-FROM provider_subject_tombstones
-ON CONFLICT (provider, subject_id) DO UPDATE
-SET tombstoned = TRUE,
-    updated_at = clock_timestamp()
-WHERE provider_subject_registry.principal_id = EXCLUDED.principal_id;
 
 CREATE OR REPLACE FUNCTION enforce_provider_subject_registry()
 RETURNS trigger

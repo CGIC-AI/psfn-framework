@@ -419,4 +419,85 @@ describe('ICP L0 restart continuity', () => {
     expect(complete).toHaveBeenCalled();
     expect(complete.mock.calls[0]?.[0].messages[0]?.content).not.toContain(failedContent);
   });
+
+  it.each([
+    ['failed', false],
+    ['delivered', true],
+  ] as const)(
+    'applies %s ICP delivery truth to a source-bounded compaction snapshot after its boundary',
+    (status, includesIcpOutput) => {
+      const root = mkdtempSync(join(tmpdir(), `psfn-icp-bounded-compaction-${status}-`));
+      roots.push(root);
+      const dataDir = join(root, 'sender');
+      const store = new SessionStore(join(dataDir, 'sessions'));
+      const sender = new SessionManager(store, config(dataDir, {
+        modelRoster: {
+          chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+        } as SubstrateConfig['modelRoster'],
+      }));
+      const compactedId = sender.recordUserMessage(
+        CHANNEL,
+        'already represented by the previous compaction',
+        'user',
+        'User',
+      );
+      expect(compactedId).not.toBeNull();
+      store.insertCompaction(CHANNEL, 'previous summary', compactedId!);
+
+      const gatedContent = `${status} ICP turn A output`;
+      sender.recordAssistantMessage(
+        CHANNEL,
+        gatedContent,
+        'contact-nova',
+        true,
+        'contact-nova',
+        {
+          turnId: correlation.turnId as TurnID,
+          requestId: SOURCE_ID,
+          sourceMessageId: SOURCE_ID,
+          metadata: buildSessionMetadataWithIcpCorrelation(
+            undefined,
+            correlation,
+            { deliveryStatus: 'pending', recoveryResponse },
+          ),
+        },
+      );
+      sender.recordIcpDeliveryObservation(status === 'delivered'
+        ? {
+            channelId: CHANNEL,
+            sourceMessageId: SOURCE_ID,
+            status,
+            gatewayMessageId: GATEWAY_ID,
+            deliveredTo: [RECIPIENT],
+            permitOutcome: 'consumed',
+            recoveryResponse,
+          }
+        : {
+            channelId: CHANNEL,
+            sourceMessageId: SOURCE_ID,
+            status,
+            error: 'peer unavailable',
+            recoveryResponse,
+          });
+      sender.recordUserMessage(CHANNEL, 'successful turn B input', 'user', 'User');
+      const successfulOutputId = sender.recordAssistantMessage(
+        CHANNEL,
+        'successful turn B output',
+      );
+      expect(successfulOutputId).not.toBeNull();
+
+      const captured = sender.captureAutoCompactionRecentEntries({
+        channelId: CHANNEL,
+        maxSessionEntryId: successfulOutputId!,
+        now: new Date(),
+      });
+
+      expect(captured.map(entry => entry.content)).toEqual([
+        ...(includesIcpOutput ? [gatedContent] : []),
+        'successful turn B input',
+        'successful turn B output',
+      ]);
+      expect(captured.every(entry => entry.id > compactedId!)).toBe(true);
+    },
+  );
 });

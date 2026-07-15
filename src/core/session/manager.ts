@@ -932,15 +932,13 @@ export class SessionManager {
     const boundedStore = maxSessionEntryId === undefined
       ? this.compactionBoundaryStore
       : {
-          getRecent: (channelId: string, limit: number): SessionEntry[] => {
-            const coveredUpTo = this.store.getCompactionSummaries(channelId).reduce(
-              (maximum, summary) => Math.max(maximum, summary.coveredUpTo),
-              0,
-            );
-            return this.store
-              .getEntriesBefore(channelId, maxSessionEntryId + 1, limit)
-              .filter(entry => entry.id > coveredUpTo);
-          },
+          getRecent: (channelId: string, limit: number): SessionEntry[] => (
+            this.compactionBoundaryStore.getEntriesBefore(
+              channelId,
+              maxSessionEntryId + 1,
+              limit,
+            )
+          ),
         };
     let recent = collectRecentEntriesWithinTokenBudget({
       store: boundedStore,

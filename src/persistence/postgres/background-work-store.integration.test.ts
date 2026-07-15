@@ -26,6 +26,15 @@ import { SessionStore } from '../sessions/store.js';
 import { createTurnId } from '../../core/turns/id.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
+import { SessionManager } from '../../core/session/manager.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../../core/session/icp-correlation-metadata.js';
+import {
+  CHANNEL as ICP_CHANNEL,
+  SOURCE as ICP_SOURCE,
+  correlation as icpCorrelation,
+  recoveryResponse as icpRecoveryResponse,
+} from '../../core/session/icp-recovery.test-fixtures.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -1192,6 +1201,209 @@ describe('PostgresBackgroundWorkStore', () => {
         async () => { duplicateEffectRan = true; },
       )).rejects.toThrow('Consumed TurnRecord is missing, duplicated, tombstoned');
       expect(duplicateEffectRan).toBe(false);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await Promise.all([
+        consumerPool.end(),
+        writerPool.end(),
+        inspectionPool.end(),
+      ]);
+    }
+  }, 30_000);
+
+  it('projects failed ICP output before choosing snapshot fences and rechecks delivery truth under lock', async () => {
+    const database = await harness.createDatabase();
+    const consumerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const writerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-icp-projected-fence-'));
+    const consumerFence = new PostgresTurnRecordEligibilityFence(consumerPool, 'companion_a');
+    const writerFence = new PostgresTurnRecordEligibilityFence(writerPool, 'companion_a');
+    const consumerStore = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: consumerFence,
+    });
+    const writerStore = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: writerFence,
+    });
+    const config = {
+      dataDir: sessionsDir,
+      companionDataDir: sessionsDir,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 5,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 128_000,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 70,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+      },
+    } as SubstrateConfig;
+    const consumer = new SessionManager(consumerStore, config);
+    const writer = new SessionManager(writerStore, config);
+    const failedTurnId = icpCorrelation.turnId;
+    const successfulTurnId = createTurnId();
+    const failedContent = 'FAILED ICP A MUST NOT ENTER THE PROJECTED POST-TURN SINK';
+
+    try {
+      await inspectionPool.query(`
+        CREATE TABLE projected_background_effects (
+          id BIGSERIAL PRIMARY KEY,
+          content TEXT NOT NULL
+        )
+      `);
+      consumer.recordAssistantMessage(
+        ICP_CHANNEL,
+        failedContent,
+        'contact-peer',
+        true,
+        'contact-peer',
+        {
+          turnId: failedTurnId,
+          requestId: ICP_SOURCE,
+          sourceMessageId: ICP_SOURCE,
+          metadata: buildSessionMetadataWithIcpCorrelation(
+            undefined,
+            icpCorrelation,
+            { deliveryStatus: 'pending', recoveryResponse: icpRecoveryResponse },
+          ),
+        },
+      );
+      consumer.recordIcpDeliveryObservation({
+        channelId: ICP_CHANNEL,
+        sourceMessageId: ICP_SOURCE,
+        status: 'failed',
+        error: 'peer unavailable',
+        recoveryResponse: icpRecoveryResponse,
+      });
+      consumer.recordUserMessage(
+        ICP_CHANNEL,
+        'successful B input',
+        'human-b',
+        'Human B',
+        true,
+        undefined,
+        {
+          turnId: successfulTurnId,
+          requestId: `request-${successfulTurnId}`,
+        },
+      );
+      const successfulEntryId = consumer.recordAssistantMessage(
+        ICP_CHANNEL,
+        'successful B output',
+        undefined,
+        true,
+        undefined,
+        {
+          turnId: successfulTurnId,
+          requestId: `request-${successfulTurnId}`,
+        },
+      );
+      expect(successfulEntryId).not.toBeNull();
+      await consumer.recordTurn(makeCanonicalTurnRecord(
+        ICP_CHANNEL,
+        failedTurnId,
+        failedContent,
+      ));
+      await consumer.recordTurn(makeCanonicalTurnRecord(
+        ICP_CHANNEL,
+        successfulTurnId,
+        'successful B output',
+      ));
+
+      const readSnapshot = () => consumer.getRecentMessagesAtOrBefore(
+        ICP_CHANNEL,
+        successfulEntryId!,
+        10,
+      );
+      const effectEntered = deferred();
+      const allowEffect = deferred();
+      const effect = consumer.withStableRecordedTurnEligibilitySnapshot(
+        ICP_CHANNEL,
+        [successfulTurnId],
+        readSnapshot,
+        async (entries) => {
+          effectEntered.resolve();
+          await allowEffect.promise;
+          await inspectionPool.query(
+            'INSERT INTO projected_background_effects (content) VALUES ($1)',
+            [entries.map(entry => entry.content).join('|')],
+          );
+        },
+      );
+      await effectEntered.promise;
+
+      let failedFenceCompleted = false;
+      const failedFence = writerFence.withTurnRecordEligibilityFence({
+        logicalSessionId: ICP_CHANNEL,
+        turnId: failedTurnId,
+      }, async () => { failedFenceCompleted = true; });
+      let successfulFenceCompleted = false;
+      const successfulFence = writerFence.withTurnRecordEligibilityFence({
+        logicalSessionId: ICP_CHANNEL,
+        turnId: successfulTurnId,
+      }, async () => { successfulFenceCompleted = true; });
+      try {
+        await waitForPostgresCondition(async () => failedFenceCompleted);
+        expect(successfulFenceCompleted).toBe(false);
+      } finally {
+        allowEffect.resolve();
+        await Promise.all([effect, failedFence, successfulFence]);
+      }
+
+      const successfulFenceHeld = deferred();
+      const releaseSuccessfulFence = deferred();
+      const heldSuccessfulFence = writerFence.withTurnRecordEligibilityFence({
+        logicalSessionId: ICP_CHANNEL,
+        turnId: successfulTurnId,
+      }, async () => {
+        successfulFenceHeld.resolve();
+        await releaseSuccessfulFence.promise;
+      });
+      await successfulFenceHeld.promise;
+      let snapshotReads = 0;
+      let changedSnapshotEffectRan = false;
+      const changedSnapshot = consumer.withStableRecordedTurnEligibilitySnapshot(
+        ICP_CHANNEL,
+        [successfulTurnId],
+        () => {
+          snapshotReads += 1;
+          return readSnapshot();
+        },
+        async () => { changedSnapshotEffectRan = true; },
+      );
+      expect(snapshotReads).toBe(1);
+      writer.recordIcpDeliveryObservation({
+        channelId: ICP_CHANNEL,
+        sourceMessageId: ICP_SOURCE,
+        status: 'delivered',
+        gatewayMessageId: 'companion:projected-race-delivery',
+        deliveredTo: ['22222222-2222-4222-8222-222222222222'],
+        permitOutcome: 'consumed',
+        recoveryResponse: icpRecoveryResponse,
+      });
+      releaseSuccessfulFence.resolve();
+      await heldSuccessfulFence;
+      await expect(changedSnapshot).rejects.toThrow('TurnRecord eligibility snapshot changed');
+      expect(snapshotReads).toBe(2);
+      expect(changedSnapshotEffectRan).toBe(false);
+
+      const effects = await inspectionPool.query<{ content: string }>(
+        'SELECT content FROM projected_background_effects ORDER BY id',
+      );
+      expect(effects.rows).toEqual([{
+        content: 'successful B input|successful B output',
+      }]);
+      expect(JSON.stringify(effects.rows)).not.toContain(failedContent);
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
       await Promise.all([

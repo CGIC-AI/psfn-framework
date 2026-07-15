@@ -242,6 +242,24 @@ describe('SessionManager private-room presence window (psfn-framework-s10rm)', (
     }
   });
 
+  it('keeps source-bounded compaction inside both the entry-id and room-window floors', () => {
+    const mgr = new SessionManager(store, makeConfig(dir));
+    appendRoomMessage(store, 'pre-window bounded material', T(60_000));
+    const floor = T(30_000);
+    const sourceEntryId = appendRoomMessage(store, 'in-window bounded source', T(10_000));
+    appendRoomMessage(store, 'newer than bounded source', T(5_000), 'assistant');
+    mgr.setRoomContentWindowPort(fixedWindowPort({ kind: 'windowed', floorMs: floor }));
+
+    const captured = mgr.captureAutoCompactionRecentEntries({
+      channelId: ROOM,
+      maxSessionEntryId: sourceEntryId,
+      now: new Date(NOW),
+    });
+
+    expect(captured.map(entry => entry.content)).toEqual(['in-window bounded source']);
+    expect(captured.every(entry => entry.id <= sourceEntryId)).toBe(true);
+  });
+
   it('leaves non-room channels completely unaffected by a wired port', async () => {
     const mgr = new SessionManager(store, makeConfig(dir));
     store.append({

@@ -4,7 +4,7 @@ import { parseIcpDeliveryObservation } from '../icp-delivery-recovery.js';
 import type { SessionEntry } from '../types.js';
 
 type IcpDeliveryStatus = 'prepared' | 'delivered' | 'failed' | 'suppressed';
-const RECENT_PROJECTION_PAGE_SIZE = 256;
+const DELIVERY_PROJECTION_PAGE_SIZE = 256;
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
@@ -103,7 +103,7 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
           let cursor = lastEntry.id;
           let projected: SessionEntry[] = [];
           while (cursor > 0 && projected.length < normalizedLimit) {
-            const pageStart = Math.max(1, cursor - RECENT_PROJECTION_PAGE_SIZE + 1);
+            const pageStart = Math.max(1, cursor - DELIVERY_PROJECTION_PAGE_SIZE + 1);
             const page = filterUndeliveredIcpAssistantEntries(
               target.getEntriesInRange(channelId, pageStart, cursor),
               sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
@@ -122,6 +122,44 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
             sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
           )
         );
+      }
+
+      if (property === 'getEntriesBefore') {
+        return (channelId: string, beforeId: number, limit: number): SessionEntry[] => {
+          if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+          const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
+          const normalizedLimit = Math.max(0, Math.floor(limit));
+          if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+
+          const statuses = new Map<string, IcpDeliveryStatus | null>();
+          const resolveStatus = (sourceMessageId: string): IcpDeliveryStatus | null => {
+            if (statuses.has(sourceMessageId)) return statuses.get(sourceMessageId) ?? null;
+            const status = findDeliveryStatus(target, channelId, sourceMessageId);
+            statuses.set(sourceMessageId, status);
+            return status;
+          };
+          let cursor = normalizedBeforeId;
+          let projected: SessionEntry[] = [];
+          while (cursor > 0 && projected.length < normalizedLimit) {
+            const page = target.getEntriesBefore(
+              channelId,
+              cursor,
+              DELIVERY_PROJECTION_PAGE_SIZE,
+            );
+            if (page.length === 0) break;
+            const earliestEntry = page[0];
+            if (!earliestEntry || earliestEntry.id >= cursor) {
+              throw new Error('SessionStore getEntriesBefore returned a non-decreasing page');
+            }
+            projected = [
+              ...filterUndeliveredIcpAssistantEntries(page, resolveStatus),
+              ...projected,
+            ].slice(-normalizedLimit);
+            cursor = earliestEntry.id;
+            if (page.length < DELIVERY_PROJECTION_PAGE_SIZE) break;
+          }
+          return projected;
+        };
       }
 
       const value = Reflect.get(target, property, receiver);

@@ -212,7 +212,11 @@ describe('runTranscriptProjectionRepair', () => {
   it('rebuilds one projection from every segment in a signed logical session chain', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-chain-'));
     dirs.push(sessionsDir);
-    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:projection-chain-key',
       activeVersion: 'v1',
@@ -256,7 +260,11 @@ describe('runTranscriptProjectionRepair', () => {
   it('keeps the runtime session id when an incomplete chain shares its channel', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-incomplete-'));
     dirs.push(sessionsDir);
-    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
     const validPath = join(sessionsDir, '20260325_api-shared_user_000001.jsonl');
     const orphanSegmentPath = join(sessionsDir, '20260325_api-shared_user_000002.segment-0002.jsonl');
     const validEntry = buildMessageJournalEntry(1, {

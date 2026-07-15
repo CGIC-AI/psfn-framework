@@ -12,6 +12,8 @@ import {
   type EnqueueBackgroundWorkInput,
   type MemoryExtractionBackgroundPayload,
 } from '../../core/agent/background-work/types.js';
+import { BackgroundWorkSupervisor } from '../../core/agent/background-work/supervisor.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { createPostgresPool } from '../postgres.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
@@ -184,6 +186,17 @@ function makeFourJobBatch(
     createdAtMs: source.createdAtMs,
     maxAttempts: 3,
   }));
+}
+
+async function waitForPostgresCondition(
+  condition: () => Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!await condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for Postgres test condition');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 }
 
 describe('PostgresBackgroundWorkStore', () => {
@@ -392,6 +405,255 @@ describe('PostgresBackgroundWorkStore', () => {
         leaseOwner: 'worker-b',
         nowMs: 300,
         leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      }))?.jobId).toBe(input.jobId);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('serializes a claim behind an in-flight foreground acquisition for the same session', async () => {
+    const database = await harness.createDatabase();
+    const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const second = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const blockerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const blocker = await blockerPool.connect();
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      const otherBase = makeInput('session-b', 'turn-b');
+      const otherPayload: MemoryExtractionBackgroundPayload = {
+        ...otherBase.payload as MemoryExtractionBackgroundPayload,
+        source: {
+          ...(otherBase.payload as MemoryExtractionBackgroundPayload).source,
+          createdAtMs: 200,
+        },
+      };
+      const otherInput: EnqueueBackgroundWorkInput = {
+        ...otherBase,
+        payload: otherPayload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(otherPayload),
+        createdAtMs: 200,
+      };
+      await first.enqueue(input);
+      await first.enqueue(otherInput);
+      await blocker.query('BEGIN');
+      await blocker.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`background-work:${input.logicalSessionId}`],
+      );
+
+      const foreground = first.beginForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 100,
+        leaseDurationMs: 1_000,
+      });
+      await waitForPostgresCondition(async () => {
+        const waiting = await blocker.query<{ count: string }>(`
+          SELECT COUNT(*)::text AS count
+          FROM pg_stat_activity
+          WHERE application_name = 'psfn-background-work'
+            AND wait_event_type = 'Lock'
+            AND wait_event = 'advisory'
+        `);
+        return Number(waiting.rows[0]?.count ?? '0') >= 1;
+      });
+
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 200,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      })).toMatchObject({
+        jobId: otherInput.jobId,
+        logicalSessionId: otherInput.logicalSessionId,
+      });
+      expect(await first.get(input.jobId)).toMatchObject({ state: 'queued' });
+
+      await blocker.query('COMMIT');
+      await foreground;
+      expect(await first.get(input.jobId)).toMatchObject({ state: 'deferred' });
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 101,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+    } finally {
+      await blocker.query('ROLLBACK').catch(() => undefined);
+      blocker.release();
+      await Promise.all([blockerPool.end(), first.close(), second.close()]);
+    }
+  });
+
+  it('linearizes foreground acquisition before a pending background effect boundary', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const blockerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const blocker = await blockerPool.connect();
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      await store.enqueue(input);
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-a',
+        nowMs: 100,
+        leaseDurationMs: 1_000,
+        excludedLogicalSessionIds: [],
+      });
+      expect(claim).not.toBeNull();
+
+      await blocker.query('BEGIN');
+      await blocker.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`background-work:${input.logicalSessionId}`],
+      );
+      const foreground = store.beginForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 200,
+        leaseDurationMs: 1_000,
+      });
+      await waitForPostgresCondition(async () => {
+        const waiting = await blocker.query<{ count: string }>(`
+          SELECT COUNT(*)::text AS count
+          FROM pg_stat_activity
+          WHERE application_name = 'psfn-background-work'
+            AND wait_event_type = 'Lock'
+            AND wait_event = 'advisory'
+        `);
+        return Number(waiting.rows[0]?.count ?? '0') >= 1;
+      });
+      const effectBoundary = store.beginEffect({
+        jobId: claim!.jobId,
+        effectKey: 'durable-sink',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 200,
+      });
+
+      await blocker.query('COMMIT');
+      await foreground;
+      await expect(effectBoundary).resolves.toBe('foreground_active');
+      expect(await store.checkClaimFence({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 200,
+      })).toBe('foreground_active');
+    } finally {
+      await blocker.query('ROLLBACK').catch(() => undefined);
+      blocker.release();
+      await Promise.all([blockerPool.end(), store.close()]);
+    }
+  });
+
+  it('surfaces expired foreground ownership before a second replica executes an effect', async () => {
+    const database = await harness.createDatabase();
+    const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const secondStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    let now = 1_000;
+    let foregroundEffectCapable = true;
+    let secondReplicaEffects = 0;
+    const first = new BackgroundWorkSupervisor({
+      store: firstStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'foreground-replica',
+      leaseDurationMs: 30,
+      now: () => now,
+      executor: async () => undefined,
+    });
+    const second = new BackgroundWorkSupervisor({
+      store: secondStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'background-replica',
+      leaseDurationMs: 30,
+      now: () => now,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async () => {
+          expect(foregroundEffectCapable).toBe(false);
+          secondReplicaEffects += 1;
+        });
+      },
+    });
+    try {
+      const foreground = first.beginForeground('session-a');
+      await foreground.ready;
+      foreground.signal.addEventListener('abort', () => {
+        foregroundEffectCapable = false;
+      }, { once: true });
+      await second.enqueue([makeInput('session-a', 'turn-a')]);
+
+      now = 1_031;
+      await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
+      expect(foreground.signal.aborted).toBe(true);
+      expect(foregroundEffectCapable).toBe(false);
+
+      await second.tick();
+      await second.waitForIdle();
+      expect(secondReplicaEffects).toBe(0);
+      await first.endForeground(foreground);
+      await first.waitForSessionTransitions();
+      await second.tick();
+      await second.waitForIdle();
+      expect(secondReplicaEffects).toBe(1);
+    } finally {
+      await Promise.allSettled([first.stop(), second.stop()]);
+      await Promise.all([firstStore.close(), secondStore.close()]);
+    }
+  });
+
+  it('keeps an observed expired foreground lease quarantined for one bounded crash window', async () => {
+    const database = await harness.createDatabase();
+    const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const second = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-a', 'turn-a');
+      await first.enqueue(input);
+      await first.beginForeground({
+        logicalSessionId: input.logicalSessionId,
+        leaseOwner: 'foreground-a',
+        leaseId: 'foreground-lease-a',
+        nowMs: 100,
+        leaseDurationMs: 10,
+      });
+      expect(await first.renewForeground({
+        leaseOwner: 'foreground-a',
+        leaseIds: ['foreground-lease-a'],
+        nowMs: 111,
+        leaseDurationMs: 10,
+      })).toEqual([]);
+      expect(await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 111,
+        leaseDurationMs: 10,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      expect((await second.claimNext({
+        leaseOwner: 'worker-b',
+        nowMs: 122,
+        leaseDurationMs: 10,
         excludedLogicalSessionIds: [],
       }))?.jobId).toBe(input.jobId);
     } finally {

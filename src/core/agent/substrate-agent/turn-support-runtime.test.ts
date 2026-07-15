@@ -246,7 +246,12 @@ describe('TurnSupportRuntime role-envelope projections', () => {
 
 describe('TurnSupportRuntime durable background work delegation', () => {
   it('delegates enqueue and foreground lifecycle to the per-session supervisor', async () => {
-    const lease = { id: 'lease-1', logicalSessionId: 'session-a' };
+    const lease = {
+      id: 'lease-1',
+      logicalSessionId: 'session-a',
+      ready: Promise.resolve(),
+      signal: new AbortController().signal,
+    };
     const enqueue = vi.fn(async () => undefined);
     const beginForeground = vi.fn(() => lease);
     const endForeground = vi.fn();
@@ -261,7 +266,7 @@ describe('TurnSupportRuntime durable background work delegation', () => {
 
     await runtime.enqueuePostTurnBackgroundWork([]);
     const foregroundLease = runtime.beginForegroundBackgroundWork('session-a');
-    runtime.endForegroundBackgroundWork(foregroundLease);
+    await runtime.endForegroundBackgroundWork(foregroundLease);
 
     expect(enqueue).toHaveBeenCalledWith([]);
     expect(beginForeground).toHaveBeenCalledWith('session-a');

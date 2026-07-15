@@ -675,7 +675,12 @@ function createRuntime(params: {
     observerEvalSidecar: params.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
     beginForegroundBackgroundWork: params.beginForegroundBackgroundWork
-      ?? vi.fn((logicalSessionId: string) => ({ id: 'foreground-test', logicalSessionId })),
+      ?? vi.fn((logicalSessionId: string) => ({
+        id: 'foreground-test',
+        logicalSessionId,
+        ready: Promise.resolve(),
+        signal: new AbortController().signal,
+      })),
     endForegroundBackgroundWork: params.endForegroundBackgroundWork ?? vi.fn(),
     enqueuePostTurnBackgroundWork: params.enqueuePostTurnBackgroundWork ?? vi.fn(async () => undefined),
     resolveTaskKind: vi.fn(() => undefined),
@@ -3527,9 +3532,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const eventBus = new EventBus();
     const performanceEvents: Array<EventMap['agent.turn.performance']> = [];
     eventBus.on('agent.turn.performance', event => performanceEvents.push(event));
+    const controller = new AbortController();
     const beginForegroundBackgroundWork = vi.fn((logicalSessionId: string) => ({
       id: 'foreground-b',
       logicalSessionId,
+      ready: Promise.resolve(),
+      signal: controller.signal,
     }));
     const endForegroundBackgroundWork = vi.fn();
     const resolveAuthorContext = vi.fn(async () => ({
@@ -3579,6 +3587,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(endForegroundBackgroundWork).toHaveBeenCalledWith({
       id: 'foreground-b',
       logicalSessionId: 'ch1',
+      ready: expect.any(Promise),
+      signal: controller.signal,
     });
     expect(performanceEvents.some(event => event.stage === 'post_turn_drain_wait')).toBe(false);
     expect(performanceEvents).toEqual(expect.arrayContaining([
@@ -3598,6 +3608,112 @@ describe('handleMessageForTurn compaction scheduling', () => {
       }),
       expect.objectContaining({ stage: 'turn_complete', toolUse: false, cacheState: 'miss' }),
     ]));
+  });
+
+  it('consumes foreground ownership loss before starting a provider effect', async () => {
+    const eventBus = new EventBus();
+    const controller = new AbortController();
+    const identityStarted = createDeferred<void>();
+    const continueIdentity = createDeferred<void>();
+    const lease = {
+      id: 'foreground-loss',
+      logicalSessionId: 'ch1',
+      ready: Promise.resolve(),
+      signal: controller.signal,
+    };
+    const endForegroundBackgroundWork = vi.fn(async () => undefined);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      beginForegroundBackgroundWork: vi.fn(() => lease),
+      endForegroundBackgroundWork,
+      resolveAuthorContext: vi.fn(async () => {
+        identityStarted.resolve();
+        await continueIdentity.promise;
+        return {
+          trustLevel: 'regular',
+          speakerRole: 'user',
+          resolvedUserName: 'User',
+          canonicalContactKey: 'contact-1',
+          continuityFallbackKeys: [],
+        };
+      }),
+    });
+    const run = handleMessageForTurn(runtime, createMessage('msg-foreground-loss'));
+    await identityStarted.promise;
+    controller.abort(new Error('foreground ownership lost'));
+    continueIdentity.resolve();
+
+    await expect(run).rejects.toThrow('foreground ownership lost');
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(endForegroundBackgroundWork).toHaveBeenCalledWith(lease);
+  });
+
+  it('aborts the request-owned provider run when foreground ownership is lost mid-turn', async () => {
+    const eventBus = new EventBus();
+    const foregroundController = new AbortController();
+    const providerController = new AbortController();
+    const providerStarted = createDeferred<void>();
+    const lease = {
+      id: 'foreground-provider-loss',
+      logicalSessionId: 'ch1',
+      ready: Promise.resolve(),
+      signal: foregroundController.signal,
+    };
+    const endForegroundBackgroundWork = vi.fn(async () => undefined);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      beginForegroundBackgroundWork: vi.fn(() => lease),
+      endForegroundBackgroundWork,
+    });
+    const requestId = 'msg-foreground-provider-loss';
+    (runtime.agent as unknown as { activeRun: unknown }).activeRun = {
+      requestId,
+      abortController: providerController,
+    };
+    runtime.agent.abort = vi.fn(() => {
+      providerController.abort(new Error('provider aborted after foreground ownership loss'));
+    });
+    runtime.agent.prompt = vi.fn(async () => {
+      providerStarted.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        if (providerController.signal.aborted) {
+          reject(providerController.signal.reason);
+          return;
+        }
+        providerController.signal.addEventListener('abort', () => {
+          reject(providerController.signal.reason);
+        }, { once: true });
+      });
+    });
+
+    const run = handleMessageForTurn(runtime, createMessage(requestId));
+    await providerStarted.promise;
+    foregroundController.abort(new Error('foreground ownership lost'));
+
+    await expect(run).rejects.toThrow('provider aborted after foreground ownership loss');
+    expect(runtime.agent.abort).toHaveBeenCalledTimes(1);
+    expect(providerController.signal.aborted).toBe(true);
+    expect(endForegroundBackgroundWork).toHaveBeenCalledWith(lease);
   });
 
   it('records a replayable TurnRecord before atomically enqueueing post-turn work', async () => {

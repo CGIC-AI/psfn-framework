@@ -1,4 +1,5 @@
 import type { Agent, AgentMessage, AgentTool } from '../../../boundary/pi-agent/index.js';
+import { abortActiveAgentRun } from '../../../boundary/pi-agent/agent-loop-patch.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
@@ -123,6 +124,12 @@ const log = createComponentLogger('SubstrateAgent');
 // channel id so the same token is planted on every turn of a session and
 // rotates when a new session begins.
 const sessionCanaryRegistry = new SessionCanaryRegistry();
+
+function assertForegroundWorkOwned(lease: ForegroundWorkLease | null): void {
+  if (!lease?.signal.aborted) return;
+  const reason = lease.signal.reason;
+  throw reason instanceof Error ? reason : new Error('Foreground work lease ownership was lost');
+}
 
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
@@ -729,6 +736,13 @@ export async function handleMessageForTurn(
   }
   const foregroundLease = runtime.beginForegroundBackgroundWork(logicalSessionId);
   if (foregroundLease) await foregroundLease.ready;
+  const abortRunAfterForegroundLoss = foregroundLease
+    ? () => { abortActiveAgentRun(runtime.agent, requestId); }
+    : null;
+  if (foregroundLease && abortRunAfterForegroundLoss) {
+    foregroundLease.signal.addEventListener('abort', abortRunAfterForegroundLoss, { once: true });
+  }
+  assertForegroundWorkOwned(foregroundLease);
   try {
   const startTime = Date.now();
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
@@ -1142,6 +1156,7 @@ export async function handleMessageForTurn(
     const invokeWithCanary = () => canaryToken
       ? runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
       : invokeWithPaidDeliverableTracking();
+    assertForegroundWorkOwned(foregroundLease);
     const invocationResult = recoveredInvocationResult ?? await invokeWithCompanionSocialCharge({
       chargePolicy: runtime.config.chargePolicy,
       correlation: turnCorrelationBase,
@@ -1152,6 +1167,7 @@ export async function handleMessageForTurn(
       turnId,
       withCorrelationPurpose: runtime.withCorrelationPurpose,
     });
+    assertForegroundWorkOwned(foregroundLease);
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
@@ -1514,6 +1530,7 @@ export async function handleMessageForTurn(
           : {}),
       });
     }
+    assertForegroundWorkOwned(foregroundLease);
     await deliveryLifecycle?.finalizeDelivery(agentResponse);
     durableDeliveryFinalized = true;
     if (runtime.fatigueRegulationReservations
@@ -1548,6 +1565,7 @@ export async function handleMessageForTurn(
         runtime.sessionManager.appendSystemNote(message.channelId, nudge);
       }
     }
+    assertForegroundWorkOwned(foregroundLease);
     await schedulePostTurnWork({
       runtime,
       message,
@@ -1733,6 +1751,9 @@ export async function handleMessageForTurn(
     observability.unsubscribe();
   }
   } finally {
+    if (foregroundLease && abortRunAfterForegroundLoss) {
+      foregroundLease.signal.removeEventListener('abort', abortRunAfterForegroundLoss);
+    }
     await runtime.endForegroundBackgroundWork(foregroundLease);
   }
 }

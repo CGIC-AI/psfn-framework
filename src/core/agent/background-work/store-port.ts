@@ -20,6 +20,8 @@ export type BackgroundWorkEnqueueResult =
     staleDiscardedJobIds: [];
   };
 
+export type BackgroundWorkClaimFence = 'owned' | 'foreground_active' | 'lease_lost';
+
 export interface BackgroundWorkStorePort {
   enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
   /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
@@ -70,13 +72,19 @@ export interface BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
   }): Promise<boolean>;
+  checkClaimFence(input: {
+    jobId: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<BackgroundWorkClaimFence>;
   beginEffect(input: {
     jobId: string;
     effectKey: string;
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
-  }): Promise<'execute' | 'applied' | 'outcome_unknown'>;
+  }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'>;
   completeEffect(input: {
     jobId: string;
     effectKey: string;

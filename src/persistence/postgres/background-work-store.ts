@@ -1,6 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import type {
+  BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
@@ -55,6 +56,11 @@ interface BackgroundWorkRow extends QueryResultRow {
   revision: number | string;
   deferred_from_state: string | null;
   deferred_from_available_at_ms: number | string | null;
+}
+
+interface BackgroundWorkClaimCandidateRow extends QueryResultRow {
+  job_id: string;
+  logical_session_id: string;
 }
 
 const JOB_COLUMN_NAMES = [
@@ -541,18 +547,47 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseDurationMs: number;
   }): Promise<string[]> {
     if (input.leaseIds.length === 0) return [];
-    const rows = await queryRows<{ lease_id: string }>(this.pool, `
-      UPDATE agent_background_work_foreground_leases
-      SET expires_at_ms = $3::bigint + $4::bigint
-      WHERE lease_owner = $1 AND lease_id = ANY($2::text[])
-      RETURNING lease_id
-    `, [
-      requireText(input.leaseOwner, 'foreground leaseOwner'),
-      input.leaseIds.map(id => requireText(id, 'foreground leaseId')),
-      safeInteger(input.nowMs, 'nowMs'),
-      positiveInteger(input.leaseDurationMs, 'leaseDurationMs'),
-    ]);
-    return rows.map(row => row.lease_id);
+    const leaseOwner = requireText(input.leaseOwner, 'foreground leaseOwner');
+    const leaseIds = input.leaseIds.map(id => requireText(id, 'foreground leaseId'));
+    const nowMs = safeInteger(input.nowMs, 'nowMs');
+    const leaseDurationMs = positiveInteger(input.leaseDurationMs, 'leaseDurationMs');
+    return withPostgresClient(this.pool, async (client) => {
+      const owned = await client.query<{ lease_id: string; logical_session_id: string }>(`
+        SELECT lease_id, logical_session_id
+        FROM agent_background_work_foreground_leases
+        WHERE lease_owner = $1 AND lease_id = ANY($2::text[])
+        ORDER BY logical_session_id ASC, lease_id ASC
+      `, [leaseOwner, leaseIds]);
+      const sessions = [...new Set(owned.rows.map(row => row.logical_session_id))];
+      for (const logicalSessionId of sessions) {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`background-work:${logicalSessionId}`],
+        );
+      }
+      // An owner that notices expiry has already lost the lease, so the id is
+      // not reported as renewed. We still extend its owned row for one bounded
+      // lease window: this durable quarantine gives the loss signal time to
+      // abort/finish local foreground cleanup before a background effect can
+      // cross the same-session fence. A crashed owner never executes this path,
+      // so ordinary expiry remains bounded crash recovery.
+      const renewed = await client.query<{ lease_id: string }>(`
+        WITH candidates AS (
+          SELECT lease_id, expires_at_ms > $3 AS was_owned
+          FROM agent_background_work_foreground_leases
+          WHERE lease_owner = $1 AND lease_id = ANY($2::text[])
+          FOR UPDATE
+        ), extended AS (
+          UPDATE agent_background_work_foreground_leases lease
+          SET expires_at_ms = $3::bigint + $4::bigint
+          FROM candidates candidate
+          WHERE lease.lease_id = candidate.lease_id
+          RETURNING lease.lease_id, candidate.was_owned
+        )
+        SELECT lease_id FROM extended WHERE was_owned
+      `, [leaseOwner, leaseIds, nowMs, leaseDurationMs]);
+      return renewed.rows.map(row => row.lease_id);
+    });
   }
 
   async endForeground(input: {
@@ -577,11 +612,19 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         requireText(input.leaseOwner, 'foreground leaseOwner'),
       ]);
       if ((deleted.rowCount ?? 0) !== 1) {
-        throw new Error(`Foreground lease transition conflict for ${input.leaseId}`);
+        const incumbent = await client.query<{ lease_owner: string; logical_session_id: string }>(`
+          SELECT lease_owner, logical_session_id
+          FROM agent_background_work_foreground_leases
+          WHERE lease_id = $1
+        `, [input.leaseId]);
+        if (incumbent.rows[0]) {
+          throw new Error(`Foreground lease transition conflict for ${input.leaseId}`);
+        }
       }
       await client.query(
-        'DELETE FROM agent_background_work_foreground_leases WHERE expires_at_ms <= $1',
-        [nowMs],
+        `DELETE FROM agent_background_work_foreground_leases
+         WHERE expires_at_ms <= $1 AND logical_session_id = $2`,
+        [nowMs, logicalSessionId],
       );
       const active = await client.query<{ active: boolean }>(`
         SELECT EXISTS (
@@ -654,25 +697,51 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     const excluded = input.excludedLogicalSessionIds.map(sessionId => (
       requireText(sessionId, 'excludedLogicalSessionId')
     ));
-    const row = await queryOne<BackgroundWorkRow>(this.pool, `
-      WITH candidate AS (
-        SELECT job_id
-        FROM agent_background_work_jobs candidate_job
-        WHERE state IN ('queued', 'deferred', 'retry_wait')
-          AND available_at_ms <= $2
-          AND NOT (logical_session_id = ANY($4::text[]))
-          AND NOT EXISTS (
-            SELECT 1
-            FROM agent_background_work_foreground_leases foreground
-            WHERE foreground.logical_session_id = candidate_job.logical_session_id
-              AND foreground.expires_at_ms > $2
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM agent_background_work_jobs running_job
-            WHERE running_job.logical_session_id = candidate_job.logical_session_id
-              AND running_job.state = 'running'
-          )
+    const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
+    return withPostgresClient(this.pool, async (client) => {
+      // SAFETY: foreground acquisition, enqueue, and claim all serialize on
+      // the same per-session transaction advisory lock before mutating rows.
+      // Candidate discovery deliberately takes no row lock: taking a job row
+      // before this advisory lock would invert beginForeground's lock order.
+      const candidates = await client.query<BackgroundWorkClaimCandidateRow>(`
+        WITH ranked AS (
+          SELECT
+            candidate_job.job_id,
+            candidate_job.logical_session_id,
+            candidate_job.created_at_ms,
+            candidate_job.kind,
+            ROW_NUMBER() OVER (
+              PARTITION BY candidate_job.logical_session_id
+              ORDER BY
+                candidate_job.created_at_ms ASC,
+                CASE candidate_job.kind
+                  WHEN 'intention_post_turn_hooks' THEN 0
+                  WHEN 'emotion_appraisal' THEN 1
+                  WHEN 'memory_extraction' THEN 2
+                  ELSE 3
+                END ASC,
+                candidate_job.job_id ASC
+            ) AS session_rank
+          FROM agent_background_work_jobs candidate_job
+          WHERE candidate_job.state IN ('queued', 'deferred', 'retry_wait')
+            AND candidate_job.available_at_ms <= $1
+            AND NOT (candidate_job.logical_session_id = ANY($2::text[]))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM agent_background_work_foreground_leases foreground
+              WHERE foreground.logical_session_id = candidate_job.logical_session_id
+                AND foreground.expires_at_ms > $1
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM agent_background_work_jobs running_job
+              WHERE running_job.logical_session_id = candidate_job.logical_session_id
+                AND running_job.state = 'running'
+            )
+        )
+        SELECT job_id, logical_session_id
+        FROM ranked
+        WHERE session_rank = 1
         ORDER BY
           created_at_ms ASC,
           CASE kind
@@ -682,28 +751,49 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             ELSE 3
           END ASC,
           job_id ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-      )
-      UPDATE agent_background_work_jobs job
-      SET state = 'running',
-          reason_code = 'started',
-          lease_owner = $1,
-          lease_expires_at_ms = $2::bigint + $3::bigint,
-          updated_at_ms = $2,
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          revision = revision + 1
-      FROM candidate
-      WHERE job.job_id = candidate.job_id
-      RETURNING ${qualifiedJobColumns('job')}
-    `, [
-      requireText(input.leaseOwner, 'leaseOwner'),
-      nowMs,
-      leaseDurationMs,
-      excluded,
-    ]);
-    return row ? mapClaimedRow(row) : null;
+      `, [nowMs, excluded]);
+
+      for (const candidate of candidates.rows) {
+        const lock = await client.query<{ acquired: boolean }>(`
+          SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired
+        `, [`background-work:${candidate.logical_session_id}`]);
+        if (lock.rows[0]?.acquired !== true) continue;
+        await client.query(`
+          DELETE FROM agent_background_work_foreground_leases
+          WHERE logical_session_id = $1 AND expires_at_ms <= $2
+        `, [candidate.logical_session_id, nowMs]);
+
+        const claimed = await client.query<BackgroundWorkRow>(`
+          UPDATE agent_background_work_jobs job
+          SET state = 'running',
+              reason_code = 'started',
+              lease_owner = $1,
+              lease_expires_at_ms = $2::bigint + $3::bigint,
+              updated_at_ms = $2,
+              deferred_from_state = NULL,
+              deferred_from_available_at_ms = NULL,
+              revision = revision + 1
+          WHERE job.job_id = $4
+            AND job.state IN ('queued', 'deferred', 'retry_wait')
+            AND job.available_at_ms <= $2
+            AND NOT EXISTS (
+              SELECT 1
+              FROM agent_background_work_foreground_leases foreground
+              WHERE foreground.logical_session_id = job.logical_session_id
+                AND foreground.expires_at_ms > $2
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM agent_background_work_jobs running_job
+              WHERE running_job.logical_session_id = job.logical_session_id
+                AND running_job.state = 'running'
+            )
+          RETURNING ${qualifiedJobColumns('job')}
+        `, [leaseOwner, nowMs, leaseDurationMs, candidate.job_id]);
+        if (claimed.rows[0]) return mapClaimedRow(claimed.rows[0]);
+      }
+      return null;
+    });
   }
 
   async renewClaims(input: {
@@ -745,12 +835,6 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           AND job.lease_owner = $2
           AND job.revision = $3
           AND job.lease_expires_at_ms > $4
-          AND NOT EXISTS (
-            SELECT 1
-            FROM agent_background_work_foreground_leases foreground
-            WHERE foreground.logical_session_id = job.logical_session_id
-              AND foreground.expires_at_ms > $4
-          )
       ) AS owned
     `, [
       requireText(input.jobId, 'jobId'),
@@ -761,36 +845,83 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     return row?.owned === true;
   }
 
+  async checkClaimFence(input: {
+    jobId: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<BackgroundWorkClaimFence> {
+    const row = await queryOne<{ disposition: BackgroundWorkClaimFence }>(this.pool, `
+      SELECT CASE
+        WHEN job.job_id IS NULL
+          OR job.state <> 'running'
+          OR job.lease_owner <> $2
+          OR job.revision <> $3
+          OR job.lease_expires_at_ms <= $4
+          THEN 'lease_lost'
+        WHEN EXISTS (
+          SELECT 1
+          FROM agent_background_work_foreground_leases foreground
+          WHERE foreground.logical_session_id = job.logical_session_id
+            AND foreground.expires_at_ms > $4
+        ) THEN 'foreground_active'
+        ELSE 'owned'
+      END AS disposition
+      FROM (SELECT 1) singleton
+      LEFT JOIN agent_background_work_jobs job ON job.job_id = $1
+    `, [
+      requireText(input.jobId, 'jobId'),
+      requireText(input.leaseOwner, 'leaseOwner'),
+      positiveInteger(input.expectedRevision, 'expectedRevision'),
+      safeInteger(input.nowMs, 'nowMs'),
+    ]);
+    return row?.disposition ?? 'lease_lost';
+  }
+
   async beginEffect(input: {
     jobId: string;
     effectKey: string;
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
-  }): Promise<'execute' | 'applied' | 'outcome_unknown'> {
+  }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'> {
     return withPostgresClient(this.pool, async (client) => {
-      const claim = await client.query<{ owned: boolean }>(`
-        SELECT EXISTS (
-          SELECT 1
-          FROM agent_background_work_jobs job
-          WHERE job.job_id = $1 AND job.state = 'running'
-            AND job.lease_owner = $2 AND job.revision = $3
-            AND job.lease_expires_at_ms > $4
-            AND NOT EXISTS (
-              SELECT 1 FROM agent_background_work_foreground_leases foreground
-              WHERE foreground.logical_session_id = job.logical_session_id
-                AND foreground.expires_at_ms > $4
-            )
-        ) AS owned
+      const session = await client.query<{ logical_session_id: string }>(`
+        SELECT logical_session_id
+        FROM agent_background_work_jobs
+        WHERE job_id = $1
+      `, [requireText(input.jobId, 'jobId')]);
+      if (!session.rows[0]) return 'lease_lost';
+      // SAFETY: receipt creation and foreground acquisition share this lock,
+      // making "effect started" versus "foreground active" one total order.
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`background-work:${session.rows[0].logical_session_id}`],
+      );
+      const claim = await client.query<{ disposition: BackgroundWorkClaimFence }>(`
+        SELECT CASE
+          WHEN job.state <> 'running'
+            OR job.lease_owner <> $2
+            OR job.revision <> $3
+            OR job.lease_expires_at_ms <= $4
+            THEN 'lease_lost'
+          WHEN EXISTS (
+            SELECT 1 FROM agent_background_work_foreground_leases foreground
+            WHERE foreground.logical_session_id = job.logical_session_id
+              AND foreground.expires_at_ms > $4
+          ) THEN 'foreground_active'
+          ELSE 'owned'
+        END AS disposition
+        FROM agent_background_work_jobs job
+        WHERE job.job_id = $1
       `, [
-        requireText(input.jobId, 'jobId'),
+        input.jobId,
         requireText(input.leaseOwner, 'leaseOwner'),
         positiveInteger(input.expectedRevision, 'expectedRevision'),
         safeInteger(input.nowMs, 'nowMs'),
       ]);
-      if (claim.rows[0]?.owned !== true) {
-        throw new Error(`Background work effect lease lost for ${input.jobId}`);
-      }
+      const fence = claim.rows[0]?.disposition ?? 'lease_lost';
+      if (fence !== 'owned') return fence;
       const inserted = await client.query<{ state: string }>(`
         INSERT INTO agent_background_work_effect_receipts (
           job_id, effect_key, state, lease_owner, lease_revision, started_at_ms, applied_at_ms
@@ -843,11 +974,6 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           WHERE job.job_id = receipt.job_id AND job.state = 'running'
             AND job.lease_owner = $3 AND job.revision = $4
             AND job.lease_expires_at_ms > $5
-            AND NOT EXISTS (
-              SELECT 1 FROM agent_background_work_foreground_leases foreground
-              WHERE foreground.logical_session_id = job.logical_session_id
-                AND foreground.expires_at_ms > $5
-            )
         )
     `, [
       requireText(input.jobId, 'jobId'),

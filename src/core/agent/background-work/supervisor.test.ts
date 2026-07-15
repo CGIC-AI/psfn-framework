@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../../shared/event-bus.js';
 import type {
+  BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
@@ -71,6 +72,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     revision: number;
   }>();
+  private foregroundRenewalLoss = false;
 
   async enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult> {
     const incumbent = [...this.jobs.values()].find(job => job.idempotencyKey === input.idempotencyKey);
@@ -125,6 +127,16 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     nowMs: number;
     leaseDurationMs: number;
   }): Promise<string[]> {
+    if (this.foregroundRenewalLoss) {
+      this.foregroundRenewalLoss = false;
+      for (const leaseId of input.leaseIds) {
+        const lease = this.foreground.get(leaseId);
+        if (lease?.leaseOwner === input.leaseOwner) {
+          lease.expiresAtMs = input.nowMs + input.leaseDurationMs;
+        }
+      }
+      return [];
+    }
     const renewed: string[] = [];
     for (const leaseId of input.leaseIds) {
       const lease = this.foreground.get(leaseId);
@@ -243,10 +255,23 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     return current?.state === 'running'
       && current.leaseOwner === input.leaseOwner
       && current.revision === input.expectedRevision
-      && (current.leaseExpiresAtMs ?? 0) > input.nowMs
-      && ![...this.foreground.values()].some(lease => (
-        lease.logicalSessionId === current.logicalSessionId && lease.expiresAtMs > input.nowMs
-      ));
+      && (current.leaseExpiresAtMs ?? 0) > input.nowMs;
+  }
+
+  async checkClaimFence(input: {
+    jobId: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<BackgroundWorkClaimFence> {
+    const current = this.jobs.get(input.jobId);
+    if (current?.state !== 'running'
+      || current.leaseOwner !== input.leaseOwner
+      || current.revision !== input.expectedRevision
+      || (current.leaseExpiresAtMs ?? 0) <= input.nowMs) return 'lease_lost';
+    return [...this.foreground.values()].some(lease => (
+      lease.logicalSessionId === current.logicalSessionId && lease.expiresAtMs > input.nowMs
+    )) ? 'foreground_active' : 'owned';
   }
 
   async beginEffect(input: {
@@ -255,8 +280,9 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
-  }): Promise<'execute' | 'applied' | 'outcome_unknown'> {
-    if (!await this.assertClaimOwned(input)) throw new Error('effect lease lost');
+  }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'> {
+    const fence = await this.checkClaimFence(input);
+    if (fence !== 'owned') return fence;
     const key = `${input.jobId}:${input.effectKey}`;
     const receipt = this.effects.get(key);
     if (!receipt) {
@@ -412,6 +438,10 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     this.jobs.set(jobId, { ...current, ...patch });
   }
 
+  forceForegroundRenewalLoss(): void {
+    this.foregroundRenewalLoss = true;
+  }
+
   private transitionSession(
     logicalSessionId: string,
     expectedStates: StoredBackgroundWorkJob['state'][],
@@ -544,6 +574,128 @@ describe('BackgroundWorkSupervisor', () => {
     await supervisor.waitForIdle();
     expect(executor).toHaveBeenCalledTimes(1);
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
+  });
+
+  it('defers a claimed job when foreground begins before its effect boundary, then resumes once', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const claimEnteredExecutor = deferred();
+    const continueToEffect = deferred();
+    const effect = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async ({ effects }) => {
+        claimEnteredExecutor.resolve();
+        await continueToEffect.promise;
+        await effects.run('durable-sink', async () => effect());
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await claimEnteredExecutor.promise;
+    const foreground = supervisor.beginForeground(input.logicalSessionId);
+    await foreground.ready;
+    continueToEffect.resolve();
+    await supervisor.waitForIdle();
+
+    expect(effect).not.toHaveBeenCalled();
+    expect(await store.get(input.jobId)).toMatchObject({
+      idempotencyKey: input.idempotencyKey,
+      state: 'deferred',
+      reasonCode: 'foreground_active',
+    });
+
+    await supervisor.endForeground(foreground);
+    await supervisor.waitForSessionTransitions();
+    now = 2_000;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(effect).toHaveBeenCalledTimes(1);
+    expect(await store.get(input.jobId)).toMatchObject({
+      idempotencyKey: input.idempotencyKey,
+      state: 'succeeded',
+    });
+  });
+
+  it('signals foreground ownership loss before another replica may cross an effect boundary', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    const first = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'foreground-replica',
+      leaseDurationMs: 30,
+      now: () => now,
+      executor: async () => undefined,
+    });
+    const effect = vi.fn(async () => undefined);
+    const second = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'background-replica',
+      leaseDurationMs: 30,
+      now: () => now,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async () => effect());
+      },
+    });
+    const foreground = first.beginForeground('session-a');
+    await foreground.ready;
+    const ownershipLost = deferred();
+    foreground.signal.addEventListener('abort', () => ownershipLost.resolve(), { once: true });
+    store.forceForegroundRenewalLoss();
+    now = 1_010;
+    await ownershipLost.promise;
+    expect(foreground.signal.aborted).toBe(true);
+
+    const input = makeInput('session-a', 'turn-a');
+    await second.enqueue([input]);
+    await second.tick();
+    await second.waitForIdle();
+    expect(effect).not.toHaveBeenCalled();
+
+    // The turn lifecycle consumes the loss signal by ending local foreground
+    // capability before another replica is allowed to execute the effect.
+    await first.endForeground(foreground);
+    await first.waitForSessionTransitions();
+    await second.tick();
+    await second.waitForIdle();
+    expect(effect).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits an effect receipt once when foreground arrives after the effect boundary', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const effectStarted = deferred();
+    const completeEffect = deferred();
+    const effect = vi.fn(async () => {
+      effectStarted.resolve();
+      await completeEffect.promise;
+    });
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async () => effect());
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    await effectStarted.promise;
+
+    const foreground = supervisor.beginForeground(input.logicalSessionId);
+    await foreground.ready;
+    completeEffect.resolve();
+    await supervisor.waitForIdle();
+
+    expect(effect).toHaveBeenCalledTimes(1);
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'succeeded' });
+    await supervisor.endForeground(foreground);
   });
 
   it('retries failures with bounded attempts and never hides the terminal state', async () => {

@@ -15,8 +15,6 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
   type StreamingTtsConnector,
-  type TtsAudioChunk,
-  type TtsSynthesisSession,
 } from '../../primitives/voice/connectors/tts/index.js';
 import {
   resolveVoiceReliabilityBudgets,
@@ -74,12 +72,10 @@ import {
   assertActiveVoiceTurn,
   cancelActiveVoiceTurn,
   cancelVoiceTurnResources,
-  createPlaybackChunkIterator as createVoicePlaybackChunkIterator,
   decodeOpusToPcmStream,
   emitVoiceTurnObservation,
   handleVoiceUtterance,
   playReadableAudio as playVoiceReadableAudio,
-  playTtsSession as playVoiceTtsSession,
   playWithTtsConnector as playVoiceWithTtsConnector,
   resetActiveVoiceTurnState,
   speakVoiceText,
@@ -585,22 +581,8 @@ export class DiscordVoiceRuntime {
     turn?: ActiveVoiceTurn,
   ): Promise<void> {
     await playVoiceWithTtsConnector(this as unknown as VoiceTurnRuntimeContext & {
-      playTtsSession(session: TtsSynthesisSession, turn?: ActiveVoiceTurn): Promise<void>;
       playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
     }, connector, text, turn);
-  }
-
-  private async playTtsSession(session: TtsSynthesisSession, turn?: ActiveVoiceTurn): Promise<void> {
-    await playVoiceTtsSession(this as unknown as VoiceTurnRuntimeContext & {
-      playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void>;
-    }, session, turn);
-  }
-
-  private async *createPlaybackChunkIterator(
-    audio: AsyncIterable<TtsAudioChunk>,
-    turn?: ActiveVoiceTurn,
-  ): AsyncGenerator<Buffer> {
-    yield* createVoicePlaybackChunkIterator(this as unknown as VoiceTurnRuntimeContext, audio, turn);
   }
 
   private async playReadableAudio(audio: Readable, turn?: ActiveVoiceTurn): Promise<void> {

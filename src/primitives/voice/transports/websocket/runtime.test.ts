@@ -8,6 +8,10 @@ import {
 } from './types.js';
 import type { SttTranscriptChunk } from '../../connectors/stt/types.js';
 import type { TtsAudioChunk } from '../../connectors/tts/types.js';
+import {
+  resolveVoiceReliabilityBudgets,
+  runWithVoiceStageBudget,
+} from '../../policy/reliability.js';
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -302,6 +306,70 @@ describe('WebSocketVoiceRuntime', () => {
       type: 'error',
       code: 'INVALID_AUDIO_CHUNK',
       sessionId: 'voice-1',
+    }));
+  });
+
+  // mmo9.6.4: the WebSocket path budgets synth-request -> first audible chunk
+  // under the short, retry-safe `tts_first_byte` stage. A stalled first byte must
+  // time out and re-synthesize, cancelling the prior session BEFORE the retry so
+  // two streams never overlap.
+  it('cancels the prior TTS session before re-synth when the first audible byte stalls', async () => {
+    const events: string[] = [];
+    const firstSession = {
+      audio: {
+        [Symbol.asyncIterator]() {
+          return { next: () => new Promise<IteratorResult<TtsAudioChunk>>(() => {}) };
+        },
+      },
+      cancel: vi.fn(async () => { events.push('cancel-prior'); }),
+    };
+    const secondQueue = new AsyncQueue<TtsAudioChunk>();
+    secondQueue.push(createTtsChunk(0, [7, 8], true));
+    secondQueue.close();
+    const secondSession = { audio: secondQueue, cancel: vi.fn(async () => {}) };
+
+    let synthCall = 0;
+    const synthesizeStream = vi.fn(async () => {
+      synthCall += 1;
+      events.push(`synth-${synthCall}`);
+      return synthCall === 1 ? firstSession : secondSession;
+    });
+
+    const budgets = resolveVoiceReliabilityBudgets({
+      tts_first_byte: { timeoutMs: 25, maxRetries: 1, baseDelayMs: 0 },
+    });
+    const reliability = {
+      runStage: <T>(stage: Parameters<typeof runWithVoiceStageBudget>[0]['stage'], task: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal) =>
+        runWithVoiceStageBudget({ stage, budgets, signal, task }),
+    };
+
+    const harness = createHarness({
+      tts: { id: 'tts-test', synthesizeStream },
+      reliability,
+    });
+
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+    harness.sttQueue.push({ type: 'final', text: 'hi' });
+    await harness.runtime.handleFrame(harness.transportSession, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.end',
+      sessionId: 'voice-1',
+    });
+
+    expect(synthesizeStream).toHaveBeenCalledTimes(2);
+    expect(firstSession.cancel).toHaveBeenCalledWith('tts-first-byte-retry');
+    expect(events).toEqual(['synth-1', 'cancel-prior', 'synth-2']);
+
+    const playbackFrames = harness.outboundFrames.filter((frame) => frame.type === 'playback.chunk');
+    expect(playbackFrames).toHaveLength(1);
+    expect(playbackFrames[0]).toEqual(expect.objectContaining({
+      type: 'playback.chunk',
+      seq: 0,
+      audio: new Uint8Array([7, 8]),
     }));
   });
 });

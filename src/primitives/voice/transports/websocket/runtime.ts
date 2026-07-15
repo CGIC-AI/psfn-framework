@@ -453,16 +453,37 @@ export class WebSocketVoiceRuntime {
   }
 
   private async streamPlayback(state: RuntimeSessionState, assistantText: string): Promise<void> {
-    const ttsSession = await this.runStage(
-      'tts',
-      (stageSignal) => this.tts.synthesizeStream({ ...this.ttsRequest, text: assistantText }, stageSignal),
+    // Budget synth-request -> first audible chunk under the short, retry-safe
+    // `tts_first_byte` stage. On a first-byte retry the prior attempt's session
+    // is cancelled BEFORE re-synth so a stalled first byte cannot leave two
+    // overlapping streams. Playback of every chunk stays under the long,
+    // non-retryable `output` stage so playback duration never trips a retry.
+    let attempt = 0;
+    const acquired = await this.runStage(
+      'tts_first_byte',
+      async (stageSignal) => {
+        attempt += 1;
+        if (attempt > 1 && state.ttsSession) {
+          const prior = state.ttsSession;
+          state.ttsSession = null;
+          await prior.cancel('tts-first-byte-retry').catch(() => undefined);
+        }
+
+        const session = await this.tts.synthesizeStream({ ...this.ttsRequest, text: assistantText }, stageSignal);
+        state.ttsSession = session;
+
+        const iterator = session.audio[Symbol.asyncIterator]();
+        const first = await iterator.next();
+        return { iterator, first };
+      },
       state.abortController.signal,
     );
-    state.ttsSession = ttsSession;
 
     let totalBytes = 0;
     let fallbackSeq = 0;
-    for await (const chunk of ttsSession.audio) {
+    let result = acquired.first;
+    while (!result.done) {
+      const chunk = result.value;
       this.throwIfInterrupted(state);
 
       totalBytes = this.security.validateTtsAudioChunk(chunk.audio, totalBytes);
@@ -477,6 +498,7 @@ export class WebSocketVoiceRuntime {
       );
 
       fallbackSeq += 1;
+      result = await acquired.iterator.next();
     }
 
     state.ttsSession = null;

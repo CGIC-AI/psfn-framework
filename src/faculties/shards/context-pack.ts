@@ -22,6 +22,7 @@ const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
 const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
 const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
 const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
+const SHARD_CONTEXT_MEMORY_TASK_KIND = 'analysis';
 export const SHARD_SYNC_POLICY_VERSION = 1;
 export const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 
@@ -315,7 +316,11 @@ export class ShardContextPackHelper {
       undefined,
       undefined,
       undefined,
-      undefined,
+      {
+        channelId: sourceChannelId,
+        messageText: query,
+        taskKind: SHARD_CONTEXT_MEMORY_TASK_KIND,
+      },
       undefined,
       scopeQuery,
     );

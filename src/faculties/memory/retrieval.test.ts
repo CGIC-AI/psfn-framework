@@ -20,6 +20,7 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 
 // ── Helpers ──
 
@@ -206,6 +207,142 @@ describe('MemoryRetriever active memory context', () => {
     expect(second?.selectedMemoryIds).toContain(recalled.id);
     expect(second?.refreshStatus).toBe('ready');
   });
+
+  it('uses live settings-owned lexical bounds in the normal active-context snapshot path', async () => {
+    const lexicalMemories = Array.from({ length: 4 }, (_, index) => makeMemory({
+      id: `lexical-live-${index}`,
+      text: `Greenhouse irrigation schedule recalibrating archive ${index}`,
+      sensitivity: 'public',
+      similarity: 0,
+    }));
+    const store = makeMockStore([]);
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (store.searchByText as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const listActiveMemories = vi.fn(async (options?: { limit?: number; offset?: number }) => (
+      lexicalMemories.slice(
+        options?.offset ?? 0,
+        (options?.offset ?? 0) + (options?.limit ?? lexicalMemories.length),
+      )
+    ));
+    store.listActiveMemories = listActiveMemories;
+
+    const initialPolicy = createDefaultMemoryRetrievalPolicy();
+    initialPolicy.lexicalAugment = { pageSize: 2, maxScan: 3, selectedLimit: 1 };
+    const config = makeRuntimeConfig({
+      embeddingProvider: 'api',
+      embeddingApiModel: 'test-embedding-v1',
+      embeddingApiDims: 1024,
+      memoryRetrievalPolicy: initialPolicy,
+    });
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), config, makeMockEventBus());
+    const request = {
+      contextText: 'greenhouse irrigation schedule recalibrating',
+      channelId: 'api:lexical-live-policy',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+
+    expect(listActiveMemories.mock.calls.map(([options]) => options)).toEqual([
+      { limit: 2, offset: 0 },
+      { limit: 1, offset: 2 },
+    ]);
+    expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toHaveLength(1);
+
+    const reloadedPolicy = createDefaultMemoryRetrievalPolicy();
+    reloadedPolicy.lexicalAugment = { pageSize: 1, maxScan: 2, selectedLimit: 2 };
+    config.memoryRetrievalPolicy = reloadedPolicy;
+    listActiveMemories.mockClear();
+
+    await retriever.refreshActiveMemoryContext(request);
+
+    expect(listActiveMemories.mock.calls.map(([options]) => options)).toEqual([
+      { limit: 1, offset: 0 },
+      { limit: 1, offset: 1 },
+    ]);
+    expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toHaveLength(2);
+  });
+
+  it.each(['reflection', 'procedural'] as const)(
+    'reapplies the %s cap after consecutive active-context refreshes without starving eligible entries',
+    async cappedType => {
+      const retained = [
+        makeMemory({
+          id: `${cappedType}-retained-1`,
+          text: `${cappedType} retained one`,
+          type: cappedType,
+          importance: 1,
+          salience: 1,
+          sensitivity: 'public',
+          similarity: 0.99,
+        }),
+        makeMemory({
+          id: `${cappedType}-retained-2`,
+          text: `${cappedType} retained two`,
+          type: cappedType,
+          importance: 1,
+          salience: 1,
+          sensitivity: 'public',
+          similarity: 0.98,
+        }),
+      ];
+      const newlySelected = [
+        makeMemory({
+          id: `${cappedType}-new-1`,
+          text: `${cappedType} new one`,
+          type: cappedType,
+          importance: 1,
+          salience: 1,
+          sensitivity: 'public',
+          similarity: 0.97,
+        }),
+        makeMemory({
+          id: `${cappedType}-new-2`,
+          text: `${cappedType} new two`,
+          type: cappedType,
+          importance: 1,
+          salience: 1,
+          sensitivity: 'public',
+          similarity: 0.96,
+        }),
+      ];
+      const eligible = makeMemory({
+        id: `${cappedType}-eligible-semantic`,
+        text: 'Eligible semantic entry remains after capped memories',
+        type: 'semantic',
+        importance: 1,
+        salience: 1,
+        sensitivity: 'public',
+        similarity: 0.95,
+      });
+      const store = makeMockStore([...retained, ...newlySelected, eligible]);
+      (store.searchByEmbedding as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(retained)
+        .mockResolvedValueOnce([...newlySelected, eligible]);
+      (store.listActiveMemories as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      const retriever = new MemoryRetriever(
+        store,
+        makeMockEmbedding(),
+        { retrievalBudgetPct: 0.1 },
+        makeMockEventBus(),
+      );
+      const request = {
+        contextText: 'refresh the active context',
+        channelId: `api:active-cap-${cappedType}`,
+        trustLevel: 'regular' as const,
+      };
+
+      await retriever.refreshActiveMemoryContext(request);
+      await retriever.refreshActiveMemoryContext(request);
+
+      const active = retriever.getActiveMemoryContext(request);
+      const cappedIds = new Set([...retained, ...newlySelected].map(memory => memory.id));
+      expect(active?.selectedMemoryIds.filter(id => cappedIds.has(id))).toHaveLength(2);
+      expect(active?.selectedMemoryIds).toContain(eligible.id);
+      expect(active?.selectedMemoryIds).toHaveLength(3);
+      expect(active?.contextBlock.match(new RegExp(`\\[${cappedType}\\]`, 'g'))).toHaveLength(2);
+    },
+  );
 
   it('marks refresh degraded and keeps the previous active context when retrieval fails', async () => {
     const recalled = makeMemory({

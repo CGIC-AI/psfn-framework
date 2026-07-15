@@ -9,6 +9,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { PurrMemory } from '../types.js';
 import {
   resolveMemoryRetrievalPolicy,
+  resolveMemorySelectionCap,
   type MemoryRetrievalPolicy,
 } from '../../../system/config/memory-retrieval-policy.js';
 import { SCORE_GUARANTEE_MIN_K } from './scoring.js';
@@ -88,13 +89,9 @@ export function selectWithinRelevanceAndTokenBudget(
 
   for (let index = 0; index < scored.length; index++) {
     const item = scored[index];
-    const selectionCap = item.memory.type === 'reflection'
-      ? policy.selectionCaps.reflection
-      : item.memory.type === 'procedural'
-        ? policy.selectionCaps.procedural
-        : null;
+    const selectionCap = resolveMemorySelectionCap(policy, item.memory.type);
     if (
-      selectionCap !== null
+      selectionCap !== undefined
       && (selectedTypeCounts.get(item.memory.type) ?? 0) >= selectionCap
     ) {
       continue;

@@ -774,6 +774,7 @@ export class MemoryRetriever implements MemoryProvider {
           }
           : {}),
         retrievalThreshold: this.retrievalThreshold,
+        resolveMemoryRetrievalPolicy: () => this.resolveMemoryRetrievalPolicy(),
         resolveRetrievalBudget: turn => this.resolveRetrievalBudget(turn),
         resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
           this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
@@ -810,6 +811,7 @@ export class MemoryRetriever implements MemoryProvider {
       manifestSeed: buildManifestSeedFromTelemetry(input.telemetry),
     }, {
       activeMemoryContexts: this.activeMemoryContexts,
+      memoryRetrievalPolicy: this.resolveMemoryRetrievalPolicy(),
       eventBus: this.eventBus,
       isMemoryQuarantined: memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
       filterQuarantinedMemories: memories => filterQuarantinedMemories(

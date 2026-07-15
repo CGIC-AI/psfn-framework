@@ -408,3 +408,12 @@ export function resolveMemoryRetrievalPrior(
   }
   return policy.typePolicies[type].retrievalPrior;
 }
+
+export function resolveMemorySelectionCap(
+  policy: MemoryRetrievalPolicy,
+  type: MemoryPolicyType,
+): number | undefined {
+  if (type === 'reflection') return policy.selectionCaps.reflection;
+  if (type === 'procedural') return policy.selectionCaps.procedural;
+  return undefined;
+}

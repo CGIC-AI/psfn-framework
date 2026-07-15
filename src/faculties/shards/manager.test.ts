@@ -998,7 +998,11 @@ describe('ShardManager', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
+      {
+        channelId: sourceChannelId,
+        messageText: 'Summarize the deployment blockers.',
+        taskKind: 'analysis',
+      },
       undefined,
       undefined,
     );
@@ -1107,7 +1111,7 @@ describe('ShardManager', () => {
     ]));
   });
 
-  it('threads active focus scope into shard memory retrieval', async () => {
+  it('threads deterministic task context and active focus scope into shard memory retrieval', async () => {
     const sourceTurnId = createTurnId();
     const sourceChannelId = 'api:scoped-parent';
     const scopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
@@ -1164,7 +1168,11 @@ describe('ShardManager', () => {
       undefined,
       undefined,
       undefined,
-      undefined,
+      {
+        channelId: sourceChannelId,
+        messageText: 'Summarize the memory improvement work.',
+        taskKind: 'analysis',
+      },
       undefined,
       scopeQuery,
     );

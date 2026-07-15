@@ -91,9 +91,11 @@ describe('memory retrieval policy', () => {
 
     expect(isProceduralTaskContext('maintenance')).toBe(true);
     expect(isProceduralTaskContext('research')).toBe(true);
+    expect(isProceduralTaskContext('analysis')).toBe(true);
     expect(isProceduralTaskContext('chat')).toBe(false);
     expect(isProceduralTaskContext(undefined)).toBe(false);
     expect(resolveMemoryRetrievalPrior(policy, 'procedural', 'work')).toBe(1.2);
+    expect(resolveMemoryRetrievalPrior(policy, 'procedural', 'analysis')).toBe(1.2);
     expect(resolveMemoryRetrievalPrior(policy, 'procedural', 'chat')).toBe(0.6);
     expect(resolveMemoryRetrievalPrior(policy, 'emotional', 'work')).toBe(1.3);
   });

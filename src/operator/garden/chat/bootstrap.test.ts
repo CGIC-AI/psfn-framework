@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Contact } from '../../../core/contacts/types.js';
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminChatBootstrapService } from './bootstrap.js';
 
@@ -101,7 +101,7 @@ describe('AdminChatBootstrapService', () => {
   it('uses global latest session id for default transport when available', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => '123456789012345678',
@@ -122,7 +122,7 @@ describe('AdminChatBootstrapService', () => {
   it('falls back to selected identity session id when no global default exists', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
@@ -148,7 +148,7 @@ describe('AdminChatBootstrapService', () => {
       linkChannelIdentity,
       setChannelPrivacy: vi.fn(() => true),
       setConversationChannelPrivacy: vi.fn(() => true),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => '123456789012345678',
@@ -184,7 +184,7 @@ describe('AdminChatBootstrapService', () => {
       linkChannelIdentity: vi.fn(() => 'identity_conflict'),
       setChannelPrivacy: vi.fn(() => true),
       setConversationChannelPrivacy: vi.fn(() => true),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
@@ -232,7 +232,7 @@ describe('AdminChatBootstrapService', () => {
       setConversationChannelPrivacy,
       linkChannelIdentity,
       setChannelPrivacy: vi.fn(() => true),
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
 
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
@@ -268,7 +268,7 @@ describe('AdminChatBootstrapService', () => {
   it('does not expose raw api keys in bootstrap payloads', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       apiKey: 'bootstrap-test-secret',
       config: makeRuntimeConfig(''),
@@ -288,7 +288,7 @@ describe('AdminChatBootstrapService', () => {
   it('fails closed when no contacts are available for admin bootstrap', async () => {
     const contactStore = {
       listAll: () => [],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
@@ -319,7 +319,7 @@ describe('AdminChatBootstrapService', () => {
         makeContact('contact-api-principal', 'API Principal'),
         makeContact('contact-v', 'V'),
       ],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
@@ -360,7 +360,7 @@ describe('AdminChatBootstrapService', () => {
 
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(characterCardPath),
       resolveGlobalDefaultSessionId: () => null,
@@ -378,7 +378,7 @@ describe('AdminChatBootstrapService', () => {
     const characterCardPath = join(root, 'missing-character.json');
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(characterCardPath, { characterName: 'Configured Companion' }),
       resolveGlobalDefaultSessionId: () => null,
@@ -394,7 +394,7 @@ describe('AdminChatBootstrapService', () => {
     writeFileSync(characterCardPath, '{"broken":', 'utf-8');
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(characterCardPath, { characterName: 'Configured Companion' }),
       resolveGlobalDefaultSessionId: () => null,
@@ -426,7 +426,7 @@ describe('AdminChatBootstrapService', () => {
 
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
-    } as unknown as ContactStore;
+    } as unknown as ContactStorePort;
     const service = new AdminChatBootstrapService(contactStore, {
       config: makeRuntimeConfig(characterCardPath, { characterName: 'Configured Companion' }),
       resolveGlobalDefaultSessionId: () => null,

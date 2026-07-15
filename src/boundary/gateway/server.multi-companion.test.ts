@@ -457,9 +457,9 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     const connA = await connect();
     const connB = await connect();
 
-    server.notifyChannelMessage('discord', 'discord.message', {
+    expect(server.notifyChannelMessage('discord', 'discord.message', {
       message: { id: 'm1', channelId: 'ch1' },
-    });
+    })).toBe(2);
 
     expect(methodFrames(connA, 'discord.message')).toHaveLength(1);
     expect(methodFrames(connB, 'discord.message')).toHaveLength(1);
@@ -1305,8 +1305,18 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     await identifyAgent(connA, 'comp-a', 1);
     await identifyAgent(connB, 'comp-b', 2);
 
-    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm-a' } }, 'acct-a');
-    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm-b' } }, 'acct-b');
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm-a' } },
+      'acct-a',
+    )).toBe(1);
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm-b' } },
+      'acct-b',
+    )).toBe(1);
 
     const aFrames = methodFrames(connA, 'discord.message');
     const bFrames = methodFrames(connB, 'discord.message');
@@ -1314,6 +1324,28 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     expect(aFrames[0].params.message.id).toBe('m-a');
     expect(bFrames).toHaveLength(1);
     expect(bFrames[0].params.message.id).toBe('m-b');
+  });
+
+  it('reports zero when the exact routed companion rejects the frame without rerouting', async () => {
+    const { options } = createMultiAccountOptions();
+    const { server, connect } = await setupServer(options);
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+    const rejectedSend = vi.spyOn(connA.conn, 'send').mockReturnValue(false);
+
+    expect(server.notifyChannelMessage(
+      'discord',
+      'discord.message',
+      { message: { id: 'm-rejected' } },
+      'acct-a',
+    )).toBe(0);
+    expect(rejectedSend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'discord.message',
+      params: { message: { id: 'm-rejected' } },
+    }));
+    expect(methodFrames(connB, 'discord.message')).toHaveLength(0);
   });
 
   it('fails closed when the inbound discord message carries no accountId', async () => {

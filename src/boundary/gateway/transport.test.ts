@@ -8,18 +8,18 @@ import { execFileSync } from 'node:child_process';
 import type { AddressInfo, Server as NetServer } from 'node:net';
 import type { Server as HttpsServer } from 'node:https';
 import { WebSocket } from 'ws';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createSocketClient,
   createSocketServer,
   createWebSocketRpcClient,
   createWebSocketRpcServer,
   GATEWAY_RPC_WS_PROTOCOL,
+  NdjsonConnection,
   NdjsonFramingError,
   resolveGatewayRpcEndpointFromEnv,
   type GatewayRpcConnection,
   type GatewayRpcTlsFileConfig,
-  type NdjsonConnection,
 } from './transport.js';
 
 const GATEWAY_SPIFFE_URI = 'spiffe://cluster.local/psfn/gateway';
@@ -399,6 +399,27 @@ describe('gateway RPC endpoint parsing', () => {
 });
 
 describe('createSocketClient lifecycle', () => {
+  it('counts NDJSON backpressure as accepted but rejects writes after destruction', () => {
+    const socket = new net.Socket();
+    const write = vi.spyOn(socket, 'write').mockReturnValue(false);
+    const connection = new NdjsonConnection(socket);
+    const notification = {
+      jsonrpc: '2.0',
+      method: 'discord.message',
+      params: { message: { id: 'backpressured' } },
+    };
+
+    expect(connection.send(notification)).toBe(true);
+    expect(write).toHaveBeenCalledWith(`${JSON.stringify(notification)}\n`);
+    expect(connection.serializedTransportStats.frameCount).toBe(1);
+
+    connection.destroy();
+
+    expect(connection.send({ ...notification, params: { message: { id: 'destroyed' } } })).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(connection.serializedTransportStats.frameCount).toBe(1);
+  });
+
   it('exchanges Unix transport heartbeats without producing JSON-RPC frames or stats', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-heartbeat-${randomUUID()}.sock`);
     let serverConn: GatewayRpcConnection | null = null;
@@ -538,6 +559,37 @@ describe('createSocketClient lifecycle', () => {
 });
 
 describe('WebSocket RPC transport', () => {
+  it('rejects a frame when websocket send throws or the connection is closed', async () => {
+    const harness = await createWssHarness(() => undefined);
+    const client = await createWebSocketRpcClient({
+      url: harness.url,
+      tls: harness.fixture.clientTls,
+      reconnect: false,
+    });
+    const rawSocket = (client as unknown as { socket: WebSocket }).socket;
+    const sendError = new Error('simulated websocket close race');
+    const errors: unknown[] = [];
+    client.on('error', error => errors.push(error));
+
+    try {
+      const send = vi.spyOn(rawSocket, 'send').mockImplementation(() => {
+        throw sendError;
+      });
+
+      expect(client.send({ jsonrpc: '2.0', method: 'discord.message' })).toBe(false);
+      expect(errors).toEqual([sendError]);
+      expect(client.serializedTransportStats.frameCount).toBe(0);
+
+      send.mockRestore();
+      client.destroy();
+      expect(client.send({ jsonrpc: '2.0', method: 'discord.message' })).toBe(false);
+      expect(client.serializedTransportStats.frameCount).toBe(0);
+    } finally {
+      client.destroy();
+      await harness.close();
+    }
+  });
+
   it('fails closed before WSS start or connect when mTLS config is incomplete', () => {
     const fixture = createGatewayRpcTlsFixture();
     try {

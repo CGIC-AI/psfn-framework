@@ -1326,6 +1326,21 @@ describe('GatewayServer', () => {
       }));
     });
 
+    it('reports zero when a ready agent closes before accepting the notification frame', async () => {
+      const { server, conn } = await setupServerConnection(createMinimalOptions());
+      const send = vi.spyOn(conn.conn, 'send').mockReturnValue(false);
+
+      expect(server.notifyChannelMessage(
+        'discord',
+        'discord.message',
+        { message: { id: 'msg-close-race', channelId: 'ch1' } },
+      )).toBe(0);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({
+        method: 'discord.message',
+        params: { message: { id: 'msg-close-race', channelId: 'ch1' } },
+      }));
+    });
+
     it('removes disconnected agents from rpcClients', async () => {
       const server = new GatewayServer(createMinimalOptions());
 

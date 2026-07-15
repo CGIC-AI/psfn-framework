@@ -1372,7 +1372,7 @@ export class GatewayServer {
     });
   }
 
-  // Send notification to all connected agents and report eligible recipients.
+  // Send to eligible agents and count only transports that accepted the frame.
   notifyAll(method: string, params: unknown): number {
     const notification = {
       jsonrpc: '2.0' as const,
@@ -1385,15 +1385,16 @@ export class GatewayServer {
       if (status?.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
         continue;
       }
-      conn.send(notification);
-      recipientCount += 1;
+      if (conn.send(notification)) {
+        recipientCount += 1;
+      }
     }
     return recipientCount;
   }
 
-  // Send notification to a specific connection
-  notifyOne(conn: GatewayRpcConnection, method: string, params: unknown): void {
-    conn.send({
+  // Send to one connection and report whether its transport accepted the frame.
+  notifyOne(conn: GatewayRpcConnection, method: string, params: unknown): boolean {
+    return conn.send({
       jsonrpc: '2.0' as const,
       method,
       params,
@@ -1417,8 +1418,7 @@ export class GatewayServer {
       return this.notifyAll(method, params);
     }
     const route = this.resolveCompanionAgent(surface, discordAccountId);
-    this.notifyOne(route.conn, method, params);
-    return 1;
+    return this.notifyOne(route.conn, method, params) ? 1 : 0;
   }
 
   /**

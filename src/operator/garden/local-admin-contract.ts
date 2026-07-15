@@ -190,12 +190,15 @@ export function createInProcessGardenAdminContract(
 ): GardenAdminDomainServices {
   const publicConfig = sanitizeCoreSubstrateConfig(options.config) as SubstrateConfig;
   const promptState = options.promptState ?? createPromptStatePort({});
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const configStore = createOwnerFileConfigStore({
     dataDir: options.config.dataDir,
+    // capability-tier.json is a per-companion owner file (dnll.2): the Garden
+    // editor must read/write the selected companion's file, not a shared one.
+    companionDataDir,
     seedDir: process.env.CONFIG_DIR,
     defaultContextWindow: options.config.defaultContextWindow,
   });
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const resolveLastActiveSessionId = () => readLastActiveSession(companionDataDir)?.sessionId ?? null;
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],

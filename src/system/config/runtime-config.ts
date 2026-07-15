@@ -16,6 +16,7 @@ export function hydrateJsonBackedRuntimeConfig(
   options: { seedDir?: string } = {},
 ): SubstrateConfig {
   const dataDir = config.dataDir;
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR;
   const loadOptions = seedDir ? { seedDir } : undefined;
 
@@ -25,7 +26,7 @@ export function hydrateJsonBackedRuntimeConfig(
   // over the global runtime settings. Absent overlay = byte-identical behavior.
   const effectiveRuntimeSettings = resolveEffectiveRuntimeSettings(
     settingsDomains.runtime,
-    resolveConfiguredCompanionDataDir(config),
+    companionDataDir,
   );
   applySettings(config, effectiveRuntimeSettings);
 
@@ -42,7 +43,9 @@ export function hydrateJsonBackedRuntimeConfig(
   });
   config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
 
-  config.capabilityTier = loadCapabilityTierConfig(dataDir, loadOptions).tier;
+  // capability-tier.json is a per-companion owner file (dnll.2): root it at the
+  // companion data dir so fleet companions can hold distinct maturation tiers.
+  config.capabilityTier = loadCapabilityTierConfig(companionDataDir, loadOptions).tier;
   config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
 
   return config;

@@ -24,6 +24,7 @@ import { type SchedulerRuntimeConfig } from '../../../system/config/scheduler-co
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
 import {
+  resolveConfiguredCompanionDataDir,
   resolveRuntimePathSnapshotFromConfig,
   type RuntimePathSnapshot,
 } from '../../../persistence/layout.js';
@@ -118,11 +119,13 @@ export function createEmbeddingDimensionMismatchFatalMessage(
 
 function createDefaultConfigStore(options: {
   dataDir: string;
+  companionDataDir?: string;
   defaultContextWindow?: number;
   env: NodeJS.ProcessEnv;
 }): ConfigStorePort {
   return createOwnerFileConfigStore({
     dataDir: options.dataDir,
+    ...(options.companionDataDir ? { companionDataDir: options.companionDataDir } : {}),
     seedDir: options.env.CONFIG_DIR,
     defaultContextWindow: options.defaultContextWindow,
   });
@@ -183,6 +186,7 @@ export function installPromotedToolsPersistenceHook(
   const env = options.env ?? process.env;
   const configStore = options.configStore ?? createDefaultConfigStore({
     dataDir: config.dataDir,
+    companionDataDir: resolveConfiguredCompanionDataDir(config),
     defaultContextWindow: config.defaultContextWindow,
     env,
   });
@@ -241,6 +245,7 @@ export function hydrateCanonicalStartupConfig(
   const { systemDataDir, companionDataDir, runtimePathLayout } = pathSnapshot;
   const configStore = options.configStore ?? createDefaultConfigStore({
     dataDir: systemDataDir,
+    companionDataDir,
     defaultContextWindow: config.defaultContextWindow,
     env,
   });

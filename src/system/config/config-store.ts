@@ -98,7 +98,17 @@ export interface ConfigStorePort {
 }
 
 export interface OwnerFileConfigStoreOptions {
+  /** System-owned config root (systemDataDir). Roots the cluster-global owner files. */
   dataDir: string;
+  /**
+   * Companion-owned config root (companionDataDir). Roots the per-companion
+   * owner files — currently only capability-tier.json (bead dnll.2). When
+   * omitted it resolves to {@link OwnerFileConfigStoreOptions.dataDir}, matching
+   * the legacy shared-root layout where systemDataDir === companionDataDir. This
+   * mirrors `resolveConfiguredCompanionDataDir` and is NOT a config fallback:
+   * the underlying loader still fails closed on a missing per-companion file.
+   */
+  companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
 }
@@ -111,6 +121,9 @@ export function createOwnerFileConfigStore(
     ...loadOptions,
     defaultContextWindow: options.defaultContextWindow,
   };
+  // capability-tier.json is a per-companion owner file (dnll.2); route it at the
+  // companion root, not the shared system root.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
 
   return {
     loadRuntimeSettings: () => loadSettings(options.dataDir, loadOptions),
@@ -121,8 +134,8 @@ export function createOwnerFileConfigStore(
     saveProviders: (nextConfig) => saveProvidersConfig(options.dataDir, nextConfig),
     loadScheduler: () => loadSchedulerConfig(options.dataDir, loadOptions),
     saveScheduler: (nextConfig) => saveSchedulerConfig(options.dataDir, nextConfig),
-    loadCapabilityTier: () => loadCapabilityTierConfig(options.dataDir, loadOptions),
-    saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(options.dataDir, nextConfig),
+    loadCapabilityTier: () => loadCapabilityTierConfig(companionDataDir, loadOptions),
+    saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(companionDataDir, nextConfig),
     loadChargePolicy: () => loadChargePolicyConfig(options.dataDir, loadOptions),
     saveChargePolicy: (nextConfig) => saveChargePolicyConfig(options.dataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
@@ -156,7 +169,7 @@ export function createOwnerFileConfigStore(
     loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
     loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
     loadStartupCapabilityTier: () => loadStartupCapabilityTierOwnerFile(
-      options.dataDir,
+      companionDataDir,
       options.seedDir,
     ),
     loadStartupChargePolicy: () => loadStartupChargePolicyOwnerFile(

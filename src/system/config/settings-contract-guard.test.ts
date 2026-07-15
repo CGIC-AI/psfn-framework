@@ -129,6 +129,7 @@ describe('settings contract guard', () => {
       id: 'channels',
       ownerFile: 'channels.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 
@@ -139,6 +140,7 @@ describe('settings contract guard', () => {
       id: 'chargePolicy',
       ownerFile: 'charge-policy.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 
@@ -149,6 +151,7 @@ describe('settings contract guard', () => {
       id: 'intakePolicy',
       ownerFile: 'intake-policy.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 

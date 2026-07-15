@@ -1178,7 +1178,7 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
   CREATE TABLE IF NOT EXISTS agent_background_work_effect_receipts (
     job_id TEXT NOT NULL REFERENCES agent_background_work_jobs(job_id) ON DELETE CASCADE,
     effect_key TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('started', 'applied')),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'started', 'applied')),
     lease_owner TEXT NOT NULL,
     lease_revision INTEGER NOT NULL CHECK (lease_revision > 0),
     started_at_ms BIGINT NOT NULL CHECK (started_at_ms >= 0),
@@ -1195,6 +1195,16 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     WHERE receipt.job_id = job.job_id AND receipt.lease_revision IS NULL;`,
   `ALTER TABLE agent_background_work_effect_receipts
     ALTER COLUMN lease_revision SET NOT NULL;`,
+  // A durable phase boundary distinct from handler entry: an effect receipt is
+  // 'pending' (run entered, no external write attempted yet — safely
+  // cancelable/requeue-able) until the handler crosses its write boundary, at
+  // which point it becomes 'started' (outcome ambiguous on interruption) and
+  // finally 'applied' (idempotent proof of completion).
+  `ALTER TABLE agent_background_work_effect_receipts
+    DROP CONSTRAINT IF EXISTS agent_background_work_effect_receipts_state_check;`,
+  `ALTER TABLE agent_background_work_effect_receipts
+    ADD CONSTRAINT agent_background_work_effect_receipts_state_check
+      CHECK (state IN ('pending', 'started', 'applied'));`,
   `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_background_work_one_running_per_session
     ON agent_background_work_jobs (logical_session_id)

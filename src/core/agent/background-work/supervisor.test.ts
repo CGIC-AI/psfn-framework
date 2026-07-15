@@ -68,7 +68,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     expiresAtMs: number;
   }>();
   private effects = new Map<string, {
-    state: 'started' | 'applied';
+    state: 'pending' | 'started' | 'applied';
     leaseOwner: string;
     revision: number;
   }>();
@@ -287,16 +287,41 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     const receipt = this.effects.get(key);
     if (!receipt) {
       this.effects.set(key, {
-        state: 'started',
+        state: 'pending',
         leaseOwner: input.leaseOwner,
         revision: input.expectedRevision,
       });
       return 'execute';
     }
+    const owned = receipt.leaseOwner === input.leaseOwner && receipt.revision === input.expectedRevision;
     if (receipt.state === 'applied') return 'applied';
-    return receipt.leaseOwner === input.leaseOwner && receipt.revision === input.expectedRevision
-      ? 'execute'
-      : 'outcome_unknown';
+    if (receipt.state === 'started') return owned ? 'execute' : 'outcome_unknown';
+    if (owned) return 'execute';
+    // Stale pending receipt from an expired lease is re-taken (still pre-boundary).
+    this.effects.set(key, {
+      state: 'pending',
+      leaseOwner: input.leaseOwner,
+      revision: input.expectedRevision,
+    });
+    return 'execute';
+  }
+
+  async commitEffectBoundary(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<'crossed' | 'applied' | 'foreground_active' | 'lease_lost'> {
+    const fence = await this.checkClaimFence(input);
+    if (fence === 'foreground_active') return 'foreground_active';
+    if (fence !== 'owned') return 'lease_lost';
+    const receipt = this.effects.get(`${input.jobId}:${input.effectKey}`);
+    if (!receipt || receipt.leaseOwner !== input.leaseOwner
+      || receipt.revision !== input.expectedRevision) return 'lease_lost';
+    if (receipt.state === 'applied') return 'applied';
+    receipt.state = 'started';
+    return 'crossed';
   }
 
   async completeEffect(input: {
@@ -402,21 +427,39 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     return this.transitionClaim(input, 'stale_discarded', input.reasonCode);
   }
 
-  async releaseClaims(input: {
+  async requeuePreBoundaryClaims(input: {
     leaseOwner: string;
     nowMs: number;
     reasonCode: 'shutdown';
-  }): Promise<number> {
-    let count = 0;
+  }): Promise<StoredBackgroundWorkJob[]> {
+    const requeued: StoredBackgroundWorkJob[] = [];
     for (const job of [...this.jobs.values()]) {
       if (job.state !== 'running' || job.leaseOwner !== input.leaseOwner) continue;
-      const next = { ...job, state: 'deferred' as const, reasonCode: input.reasonCode, revision: job.revision + 1 };
+      const crossed = [...this.effects.entries()].some(([key, receipt]) => (
+        key.startsWith(`${job.jobId}:`) && (receipt.state === 'started' || receipt.state === 'applied')
+      ));
+      if (crossed) continue;
+      for (const key of [...this.effects.keys()]) {
+        if (key.startsWith(`${job.jobId}:`) && this.effects.get(key)?.state === 'pending') {
+          this.effects.delete(key);
+        }
+      }
+      const next: StoredBackgroundWorkJob = {
+        ...job,
+        state: 'queued',
+        reasonCode: input.reasonCode,
+        availableAtMs: input.nowMs,
+        updatedAtMs: input.nowMs,
+        revision: job.revision + 1,
+      };
       delete next.leaseOwner;
       delete next.leaseExpiresAtMs;
+      delete next.deferredFromState;
+      delete next.deferredFromAvailableAtMs;
       this.jobs.set(job.jobId, next);
-      count += 1;
+      requeued.push({ ...next });
     }
-    return count;
+    return requeued;
   }
 
   async recoverExpired(): Promise<number> { return 0; }
@@ -724,26 +767,59 @@ describe('BackgroundWorkSupervisor', () => {
     expect(executor).toHaveBeenCalledTimes(2);
   });
 
-  it('does not release a claim while its handler can still write during bounded shutdown', async () => {
+  it('durably requeues pre-boundary work on shutdown and a fresh supervisor completes it once', async () => {
     const store = new MemoryBackgroundWorkStore();
-    const blocked = deferred();
-    const supervisor = new BackgroundWorkSupervisor({
+    let firstSinkWrites = 0;
+    let secondSinkWrites = 0;
+    const first = new BackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
+      leaseOwner: 'first',
       now: () => 1_000,
       shutdownTimeoutMs: 0,
-      executor: async () => blocked.promise,
+      executor: async ({ effects, signal }) => {
+        // A blocked provider/compute step that never crosses the effect
+        // boundary; it unwinds only when shutdown aborts the claim signal.
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          firstSinkWrites += 1;
+        });
+      },
     });
     const input = makeInput('session-a', 'turn-a');
-    await supervisor.enqueue([input]);
-    await supervisor.tick();
+    await first.enqueue([input]);
+    await first.tick();
     await flush();
-
-    await supervisor.stop();
     expect((await store.get(input.jobId))?.state).toBe('running');
-    blocked.resolve();
-    await supervisor.waitForIdle();
+
+    await first.stop();
+    await first.waitForIdle();
+    // Pre-boundary work is durably requeued under its claim token, not lost or
+    // falsely completed. The old worker never crossed its boundary.
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'queued', reasonCode: 'shutdown' });
+    expect(firstSinkWrites).toBe(0);
+
+    const second = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'second',
+      now: () => 2_000,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          secondSinkWrites += 1;
+        });
+      },
+    });
+    await second.tick();
+    await second.waitForIdle();
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
+    expect(secondSinkWrites).toBe(1);
+    expect(firstSinkWrites).toBe(0);
   });
 
   it('fails malformed persisted payloads closed without invoking a handler', async () => {

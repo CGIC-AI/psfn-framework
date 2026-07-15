@@ -78,6 +78,13 @@ export interface BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
   }): Promise<BackgroundWorkClaimFence>;
+  /**
+   * Open an effect at its durable phase boundary. Writes a `pending` receipt
+   * (run entered, no external write attempted yet — the job is still safely
+   * requeue-able) and returns `execute`, or the terminal replay disposition for
+   * an incumbent receipt. The `pending` phase is promoted to `started` only when
+   * the handler crosses its write boundary via {@link commitEffectBoundary}.
+   */
   beginEffect(input: {
     jobId: string;
     effectKey: string;
@@ -85,6 +92,20 @@ export interface BackgroundWorkStorePort {
     expectedRevision: number;
     nowMs: number;
   }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'>;
+  /**
+   * Cross the durable side-effect boundary for an already-open (`pending`)
+   * effect. Promotes the receipt to `started` under the same per-session lock
+   * that foreground acquisition takes, so "effect boundary crossed" and
+   * "foreground active" form one total order. Idempotent for a receipt this
+   * owner/revision already promoted.
+   */
+  commitEffectBoundary(input: {
+    jobId: string;
+    effectKey: string;
+    leaseOwner: string;
+    expectedRevision: number;
+    nowMs: number;
+  }): Promise<'crossed' | 'applied' | 'foreground_active' | 'lease_lost'>;
   completeEffect(input: {
     jobId: string;
     effectKey: string;
@@ -141,11 +162,20 @@ export interface BackgroundWorkStorePort {
     reasonCode: 'source_missing' | 'source_mismatch' | 'superseded';
     nowMs: number;
   }): Promise<StoredBackgroundWorkJob>;
-  releaseClaims(input: {
+  /**
+   * Durably requeue this owner's running claims that are still pre-boundary —
+   * i.e. have no `started`/`applied` effect receipt — during graceful shutdown.
+   * A claim whose handler may have crossed its effect boundary (a `started`
+   * receipt exists) is left running for lease-expiry recovery so its outcome
+   * stays fail-closed. The revision bump fences any still-in-flight worker: its
+   * next {@link commitEffectBoundary} will fail ownership before it can write.
+   * Returns the requeued jobs so the supervisor can emit lifecycle telemetry.
+   */
+  requeuePreBoundaryClaims(input: {
     leaseOwner: string;
     nowMs: number;
     reasonCode: 'shutdown';
-  }): Promise<number>;
+  }): Promise<StoredBackgroundWorkJob[]>;
   recoverExpired(input: { nowMs: number }): Promise<number>;
   purgeTerminal(input: { completedBeforeMs: number; limit: number }): Promise<number>;
   countRunnable(input: { nowMs: number }): Promise<number>;

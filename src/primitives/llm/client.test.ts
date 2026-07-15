@@ -1953,7 +1953,11 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
 
     expect(requestOptions.cacheRetention).toBe('short');
     expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
-    expect(requestOptions.onPayload).toBeUndefined();
+    // Wire capture (bead hgw3-80f6) always attaches a pass-through onPayload, but
+    // with no cache transformer chained it leaves the payload byte-identical.
+    expect(typeof requestOptions.onPayload).toBe('function');
+    const openPayload = { model: 'z-ai/glm-5', messages: [{ role: 'user', content: 'Hi' }] };
+    expect(await requestOptions.onPayload!(openPayload, { provider: 'openrouter' })).toBeUndefined();
     expect(response.providerObservability).toMatchObject({
       promptCaching: {
         configured: true,
@@ -1970,7 +1974,11 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
 
     expect(requestOptions.cacheRetention).toBeUndefined();
     expect(requestOptions.sessionId).toBeUndefined();
-    expect(requestOptions.onPayload).toBeUndefined();
+    // Wire capture (bead hgw3-80f6) attaches a pass-through onPayload even with
+    // the cache flag off; it captures without altering the byte-identical wire.
+    expect(typeof requestOptions.onPayload).toBe('function');
+    const flagOffPayload = { model: 'x', messages: [{ role: 'user', content: 'Hi' }] };
+    expect(await requestOptions.onPayload!(flagOffPayload, { provider: 'openrouter' })).toBeUndefined();
     expect(response.providerObservability).toMatchObject({
       promptCaching: {
         configured: false,
@@ -1979,11 +1987,47 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     });
   });
 
+  it('captures the true wire body (tools counted once) onto providerObservability (bead hgw3-80f6)', async () => {
+    const model = 'anthropic/claude-sonnet-4.5';
+    const client = new LLMClient(makeConfig({ modelRegistry: makeRegistry(model) }), 'http://litellm.test/v1');
+    const wireBody = {
+      model,
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: 'Hi' }],
+      tools: [
+        { name: 'search', input_schema: { type: 'object' } },
+        { name: 'recall', input_schema: { type: 'object' } },
+      ],
+    };
+    mocks.completeSimple.mockImplementation(async (_model: unknown, _ctx: unknown, opts: {
+      onPayload?: (payload: unknown, model: unknown) => unknown | Promise<unknown>;
+    }) => {
+      // pi-ai invokes onPayload with the outbound body just before sending.
+      await opts.onPayload?.(wireBody, { id: model, api: 'anthropic-messages' });
+      return { content: [{ type: 'text', text: 'ok' }], model, usage: { input: 9, output: 4 }, stopReason: 'stop' };
+    });
+    const response = await client.complete(
+      { systemPrompt: SYSTEM_PROMPT, messages: [{ role: 'user', content: 'Hi' }] },
+      'summary',
+      { disableRetry: true },
+    );
+    const captured = response.providerObservability?.capturedWirePayload;
+    expect(captured).toBeDefined();
+    expect(captured?.toolCount).toBe(2);
+    expect(captured?.byteLength).toBe(Buffer.byteLength(JSON.stringify(wireBody), 'utf8'));
+    expect(JSON.stringify(captured?.body)).toBe(JSON.stringify(wireBody));
+  });
+
   it('skips breakpoints (but keeps retention) when no boundaries accompany the request', async () => {
     const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5', { boundaries: false });
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.onPayload).toBeUndefined();
+    // No boundaries → no cache transformer chained; wire capture (bead hgw3-80f6)
+    // still attaches a pass-through onPayload that leaves the payload unchanged.
+    expect(typeof requestOptions.onPayload).toBe('function');
+    const noBoundaryPayload = { model: 'x', messages: [{ role: 'user', content: 'Hi' }] };
+    expect(await requestOptions.onPayload!(noBoundaryPayload, { provider: 'openrouter' })).toBeUndefined();
     expect(response.providerObservability).toMatchObject({
       promptCaching: {
         configured: true,

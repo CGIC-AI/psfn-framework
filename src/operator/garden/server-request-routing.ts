@@ -50,8 +50,8 @@ interface AdminRequestRoutingDependencies {
   token?: string;
   checkAuth: (req: IncomingMessage, res: ServerResponse) => boolean;
   isGardenUiEnabled: () => boolean;
-  serveGardenBuildAsset: (path: string, res: ServerResponse) => void;
-  serveGardenPage: (path: string, res: ServerResponse) => void;
+  serveGardenBuildAsset: (path: string, req: IncomingMessage, res: ServerResponse) => void;
+  serveGardenPage: (path: string, req: IncomingMessage, res: ServerResponse) => void;
   route: (
     method: string,
     path: string,
@@ -116,7 +116,7 @@ export function handleAdminRequest(
 
   if (isGardenBuildAssetPath(req.method, requestPath)) {
     if (deps.isGardenUiEnabled()) {
-      deps.serveGardenBuildAsset(requestPath, res);
+      deps.serveGardenBuildAsset(requestPath, req, res);
     } else {
       deps.sendNotFound(requestPath, res);
     }
@@ -125,7 +125,7 @@ export function handleAdminRequest(
 
   if (isGardenClientRoute(req.method, requestPath)) {
     if (deps.isGardenUiEnabled()) {
-      deps.serveGardenPage(requestPath, res);
+      deps.serveGardenPage(requestPath, req, res);
     } else {
       deps.sendNotFound(requestPath, res);
     }

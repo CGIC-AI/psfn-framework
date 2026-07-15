@@ -18,6 +18,10 @@ import type {
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { isHighTierTrustLevel } from '../../../system/trust/types.js';
 import { isManualHighTierTrustMutationAuthorized, resolveTrustMutationSource } from '../../../system/trust/policy.js';
+import {
+  isManualRelationshipMutationAuthorized,
+  requiresManualRelationshipMutation,
+} from '../relationship-progression.js';
 import type { ContactUpsertMutationOptions, MachineIntelligenceObservationMarkResult } from '../contact-store-port.js';
 import { isDeliberateMachineIntelligenceCorrection } from '../observed-machine-intelligence.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
@@ -25,6 +29,7 @@ import {
   appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
   hasLearnedMoodSnapshot,
+  MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
   mergeEmotionalTimeSeries,
   parseMoodSnapshot,
 } from '../store/emotional-baseline.js';
@@ -90,6 +95,15 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     }
 
     if (
+      partial.relationshipType !== undefined
+      && partial.relationshipType !== target?.relationshipType
+      && requiresManualRelationshipMutation(target?.relationshipType, partial.relationshipType)
+      && !isManualRelationshipMutationAuthorized(options.actor)
+    ) {
+      throw new Error('Approval-gated relationship assignment denied: manual operator authorization required');
+    }
+
+    if (
       partial.trustLevel === 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
     ) {
@@ -107,41 +121,84 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const requestedNickname = normalizeNicknameValue(partial.nickname);
       const nextNickname = requestedNickname === undefined ? (target.nickname ?? undefined) : requestedNickname;
       const nextTrustLevel = partial.trustLevel ?? target.trustLevel;
-      const nextRelationshipType = nextTrustLevel === 'primary'
-        ? 'partner'
-        : (partial.relationshipType ?? target.relationshipType);
+      const relationshipMutationRequested = partial.relationshipType !== undefined;
+      const nextRelationshipType = partial.relationshipType ?? target.relationshipType;
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};
       const nextDiscordUserId = partial.discordUserId ?? target.discordUserId ?? undefined;
       const nextTimezone = hasOwnTimezone(partial)
         ? normalizeTimezoneValue(partial.timezone)
         : (target.timezone ?? null);
-      await this.pool.query(
-        `
-          UPDATE contacts
-          SET discord_user_id = COALESCE(discord_user_id, $1),
-              display_name = $2,
-              nickname = $3,
-              trust_level = $4,
-              relationship_type = $5,
-              emotional_baseline = $6,
-              last_seen = $7,
-              notes = COALESCE($8, notes),
-              timezone = $9
-          WHERE id = $10
-        `,
-        [
-          nextDiscordUserId ?? null,
-          nextDisplayName,
-          nextNickname ?? null,
-          nextTrustLevel,
-          nextRelationshipType,
-          nextEmotion,
-          now,
-          partial.notes ?? null,
-          nextTimezone,
-          target.id,
-        ],
-      );
+      const commonValues = [
+        nextDiscordUserId ?? null,
+        nextDisplayName,
+        nextNickname ?? null,
+        nextTrustLevel,
+      ];
+      const trailingValues = [
+        nextEmotion,
+        now,
+        partial.notes ?? null,
+        nextTimezone,
+        target.id,
+      ];
+      if (relationshipMutationRequested) {
+        await withPostgresClient(this.pool, async (client) => {
+          const updated = await client.query(
+            `
+              UPDATE contacts
+              SET discord_user_id = COALESCE(discord_user_id, $1),
+                  display_name = $2,
+                  nickname = $3,
+                  trust_level = $4,
+                  relationship_type = $5,
+                  emotional_baseline = $6,
+                  last_seen = $7,
+                  notes = COALESCE($8, notes),
+                  timezone = $9
+              WHERE id = $10 AND relationship_type = $11
+              RETURNING id
+            `,
+            [...commonValues, nextRelationshipType, ...trailingValues, target.relationshipType],
+          );
+          if (updated.rowCount !== 1) {
+            throw new Error('Concurrent relationship change detected during contact upsert');
+          }
+          if (nextRelationshipType !== target.relationshipType) {
+            await client.query(
+              `
+                INSERT INTO contact_mutation_audit (
+                  contact_id, actor, field, old_value, new_value, timestamp
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+              `,
+              [
+                target.id,
+                normalizeAuditActor(options.actor),
+                'relationship_type',
+                target.relationshipType,
+                nextRelationshipType,
+                new Date().toISOString(),
+              ],
+            );
+          }
+        });
+      } else {
+        await this.pool.query(
+          `
+            UPDATE contacts
+            SET discord_user_id = COALESCE(discord_user_id, $1),
+                display_name = $2,
+                nickname = $3,
+                trust_level = $4,
+                emotional_baseline = $5,
+                last_seen = $6,
+                notes = COALESCE($7, notes),
+                timezone = $8
+            WHERE id = $9
+          `,
+          [...commonValues, ...trailingValues],
+        );
+      }
 
       for (const identity of identities) {
         await this.upsertIdentityLinkRecord(
@@ -195,7 +252,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       displayName: partial.displayName.trim(),
       ...(normalizeNicknameValue(partial.nickname) !== undefined ? { nickname: normalizeNicknameValue(partial.nickname) ?? undefined } : {}),
       trustLevel: shouldForcePrimary ? 'primary' : (partial.trustLevel ?? 'regular'),
-      relationshipType: shouldForcePrimary ? 'partner' : (partial.relationshipType ?? 'stranger'),
+      relationshipType: partial.relationshipType ?? 'stranger',
       emotionalBaseline: partial.emotionalBaseline ?? {},
       firstSeen: partial.firstSeen ?? now,
       lastSeen: partial.lastSeen ?? now,
@@ -668,8 +725,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     if (!contact) return undefined;
     const updatedBaseline = computeUpdatedEmotionalBaseline(contact.emotionalBaseline, observation);
     const updatedTimeSeries = appendEmotionalObservationToTimeSeries(
-      await this.loadContactEmotionalTimeSeries(id),
+      await this.loadContactEmotionalTimeSeries(id, MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT),
       observation,
+      MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
     );
     await this.pool.query(
       `
@@ -702,13 +760,61 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const contact = await this.getById(id);
     if (!contact) return false;
     if (contact.relationshipType === relationshipType) return true;
-    if (contact.trustLevel === 'primary' && relationshipType !== 'partner') {
+    return await this.compareAndSetRelationshipType(
+      id,
+      contact.relationshipType,
+      relationshipType,
+      actor,
+    );
+  },
+
+  async compareAndSetRelationshipType(
+    id: string,
+    expectedRelationshipType: RelationshipType,
+    relationshipType: RelationshipType,
+    actor?: string,
+  ): Promise<boolean> {
+    if (
+      requiresManualRelationshipMutation(expectedRelationshipType, relationshipType)
+      && !isManualRelationshipMutationAuthorized(actor)
+    ) {
       return false;
     }
-    await this.pool.query('UPDATE contacts SET relationship_type = $1 WHERE id = $2', [relationshipType, id]);
-    await this.appendMutationAuditEntry(id, 'relationship_type', contact.relationshipType, relationshipType, actor);
-    await this.syncContactExports();
-    return true;
+    if (expectedRelationshipType === relationshipType) {
+      return (await this.getById(id))?.relationshipType === expectedRelationshipType;
+    }
+
+    const applied = await withPostgresClient(this.pool, async (client) => {
+      const updated = await client.query(
+        `
+          UPDATE contacts
+          SET relationship_type = $1
+          WHERE id = $2 AND relationship_type = $3
+          RETURNING id
+        `,
+        [relationshipType, id, expectedRelationshipType],
+      );
+      if (updated.rowCount !== 1) return false;
+      await client.query(
+        `
+          INSERT INTO contact_mutation_audit (
+            contact_id, actor, field, old_value, new_value, timestamp
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          id,
+          normalizeAuditActor(actor),
+          'relationship_type',
+          expectedRelationshipType,
+          relationshipType,
+          new Date().toISOString(),
+        ],
+      );
+      return true;
+    });
+    if (applied) await this.syncContactExports();
+    return applied;
   },
 
   async setChannelPrivacy(
@@ -1132,8 +1238,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       await this.pool.query(
         `
           UPDATE contacts
-          SET trust_level = 'primary',
-              relationship_type = 'partner'
+          SET trust_level = 'primary'
           WHERE id = $1
         `,
         [contactId],

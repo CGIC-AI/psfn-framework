@@ -61,7 +61,7 @@ describe('satellite hub auth', () => {
       capabilities: {
         input: ['text'],
         output: ['text', 'subtitle', 'artifact', 'tool_activity'],
-        control: ['interrupt', 'presence', 'session_attach', 'approvals'],
+        control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
         safety: ['confirmation_required', 'local_only'],
       },
     });
@@ -165,6 +165,27 @@ describe('satellite hub websocket client', () => {
       type: 'user.text',
       text: 'hello hub',
       interrupt: false,
+    });
+  });
+
+  it('sends a typed headpat interaction over the hub protocol', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      webSocketFactory: () => socket,
+    });
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+    client.sendTouchInteraction({ kind: 'headpat', region: 'head', count: 12, durationMs: 1_100 });
+
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+      type: 'touch.interaction',
+      kind: 'headpat',
+      region: 'head',
+      count: 12,
+      durationMs: 1_100,
     });
   });
 

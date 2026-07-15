@@ -1,5 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { CompanionDeliveryFailureReason } from './protocol.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 
 const DELIVERY_RECEIPT_TTL_MS = 60 * 60_000;
 const FAILURE_REASONS = new Set<CompanionDeliveryFailureReason>([
@@ -10,8 +11,8 @@ const FAILURE_REASONS = new Set<CompanionDeliveryFailureReason>([
 export interface CompanionDeliveryReceipt {
   channelId: string;
   messageId: string;
-  senderCompanionId: string;
-  recipientCompanionId: string;
+  senderCompanionId: CompanionId;
+  recipientCompanionId: CompanionId;
   deliveredAt: number;
   /** Room recipients only: stable presence epoch accepted at delivery time. */
   roomPresenceEpoch?: {
@@ -25,7 +26,7 @@ export interface CompanionMessageFailureReport {
   reason: CompanionDeliveryFailureReason;
 }
 
-function receiptKey(recipientCompanionId: string, messageId: string): string {
+function receiptKey(recipientCompanionId: CompanionId, messageId: string): string {
   return `${recipientCompanionId}\u0000${messageId}`;
 }
 
@@ -41,7 +42,7 @@ export class CompanionDeliveryFailureReceipts {
   }
 
   findVerified(
-    reportingCompanionId: string,
+    reportingCompanionId: CompanionId,
     report: CompanionMessageFailureReport,
     now = Date.now(),
   ): CompanionDeliveryReceipt | null {
@@ -58,7 +59,7 @@ export class CompanionDeliveryFailureReceipts {
    * Failure-report verification remains available after this claim.
    */
   claimReply(
-    replyingCompanionId: string,
+    replyingCompanionId: CompanionId,
     channelId: string,
     replyToMessageId: string,
     now = Date.now(),
@@ -81,7 +82,7 @@ export class CompanionDeliveryFailureReceipts {
     return receipt;
   }
 
-  consume(recipientCompanionId: string, messageId: string): void {
+  consume(recipientCompanionId: CompanionId, messageId: string): void {
     const key = receiptKey(recipientCompanionId, messageId);
     this.receipts.delete(key);
     this.claimedReplies.delete(key);

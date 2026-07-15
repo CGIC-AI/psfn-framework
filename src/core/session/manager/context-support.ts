@@ -15,6 +15,7 @@ import {
 } from '../entry-attribution.js';
 import {
   MASKED_TOOL_OBSERVATION_CONTENT,
+  parseToolObservationMetadata,
   type ToolObservationMetadata,
 } from '../tool-observation.js';
 import {
@@ -24,6 +25,39 @@ import {
   isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
+import { formatActiveDateTimeCompact, formatActiveWeekdayShort } from '../../../shared/time/active-timezone.js';
+
+const ARTIFACT_IMAGE_TOOL_NAMES = new Set(['selfie_create', 'generate_image']);
+const GENERATED_IMAGE_STATUS_PATTERN = /"status"\s*:\s*"image_generated"/u;
+const PENDING_IMAGE_ATTACHMENT_PATTERN = /"attachmentPending"\s*:\s*true/u;
+
+function renderImageToolHistoryProvenance(
+  entry: SessionEntry,
+  metadata: ToolObservationMetadata,
+): string | null {
+  if (
+    metadata.isError !== false
+    || !ARTIFACT_IMAGE_TOOL_NAMES.has(metadata.toolName)
+    || !GENERATED_IMAGE_STATUS_PATTERN.test(entry.content)
+    || !PENDING_IMAGE_ATTACHMENT_PATTERN.test(entry.content)
+  ) {
+    return null;
+  }
+
+  const nextRequest = metadata.toolName === 'selfie_create'
+    ? 'call selfie_create again for a new selfie'
+    : 'call generate_image again for a new image';
+  return `[Prior image tool success] ${metadata.toolName} produced a pending image attachment in that turn. `
+    + `Assistant text alone never creates an attachment; ${nextRequest}.`;
+}
+
+// Minute-resolution provenance stamp for rendered history. Returns undefined on
+// missing/invalid timestamps so context assembly never crashes on bad data.
+function entryStampLabel(timestamp: number): string | undefined {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined;
+  const at = new Date(timestamp);
+  return `${formatActiveWeekdayShort(at)} ${formatActiveDateTimeCompact(at)}`;
+}
 
 function continuityEntryKey(entry: SessionEntry): string {
   return [
@@ -231,7 +265,10 @@ export function entriesToMessages(
   preserveLeadingAssistant: boolean = false,
   renderGroupUserAttribution: boolean = true,
 ): ContextMessage[] {
-  const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
+  const messages: Array<ContextMessage & {
+    sourceRole: SessionEntry['role'];
+    stampLabel?: string;
+  }> = [];
 
   for (const entry of entries) {
     if (isNonConversationalSessionEntry(entry)) {
@@ -241,6 +278,19 @@ export function entriesToMessages(
       continue;
     }
     if (entry.role === 'tool') {
+      const toolObservation = parseToolObservationMetadata(entry.metadata);
+      if (toolObservation) {
+        const content = renderImageToolHistoryProvenance(entry, toolObservation);
+        if (!content) continue;
+        const stampLabel = entryStampLabel(entry.timestamp);
+        messages.push({
+          role: 'system',
+          content: stampLabel !== undefined ? `[${stampLabel}] ${content}` : content,
+          provenance: toolResultProvenance(entry, toolObservation),
+          sourceRole: entry.role,
+          ...(stampLabel !== undefined ? { stampLabel } : {}),
+        });
+      }
       continue;
     }
     const attribution = normalizeSessionEntryAttribution(entry);
@@ -277,14 +327,35 @@ export function entriesToMessages(
       toolObservation,
     );
 
+    // Timestamp stamp is trusted runtime provenance, so it wraps OUTSIDE any
+    // untrusted-context envelope applied above. The companion's own turns stay
+    // unstamped: a model that reads its past speech prefixed with stamps
+    // mimics the prefix into new replies (live leak, psfn-framework-2x37.10);
+    // user/system stamps alone carry the timeline.
+    const stampLabel = role === 'assistant' ? undefined : entryStampLabel(entry.timestamp);
+
     // Merge consecutive same-role messages
     const last = messages.at(-1);
     const canMerge = attribution.role !== 'tool';
     if (canMerge && last && last.role === role && last.sourceRole === entry.role) {
-      last.content += '\n' + content;
+      // Re-stamp appended lines only when the minute-resolution label moved,
+      // so rapid-fire messages in the same minute stay unstamped.
+      const appended = stampLabel !== undefined && stampLabel !== last.stampLabel
+        ? `[${stampLabel}] ${content}`
+        : content;
+      last.content += '\n' + appended;
+      if (stampLabel !== undefined) {
+        last.stampLabel = stampLabel;
+      }
       last.provenance = mergeProvenance(last.provenance, provenance);
     } else {
-      messages.push({ role, content, provenance, sourceRole: entry.role });
+      messages.push({
+        role,
+        content: stampLabel !== undefined ? `[${stampLabel}] ${content}` : content,
+        provenance,
+        sourceRole: entry.role,
+        ...(stampLabel !== undefined ? { stampLabel } : {}),
+      });
     }
   }
 

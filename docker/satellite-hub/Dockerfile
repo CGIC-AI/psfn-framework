@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY tsconfig.json ./
+COPY scripts/clean-ts-dist.mjs ./scripts/clean-ts-dist.mjs
 COPY src/ ./src/
 
 RUN npm run build:ts

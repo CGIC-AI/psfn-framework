@@ -114,6 +114,7 @@ for (const envName of [
   'COMPANION_DATA_DIR',
   'WORKSPACE_PATH',
   'POSTGRES_DATABASE_URL',
+  'POSTGRES_DATABASE_URL_FILE',
   'PSFN_REDIS_URL',
   'LITELLM_BASE_URL',
   'GATEWAY_RPC_ENDPOINT',
@@ -156,7 +157,11 @@ assertNotIncludes(rendered, 'psfn-companion-ui-test', 'default disabled companio
 
 const gatewayDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-gateway');
 assertIncludes(gatewayDeployment, 'name: wait-for-postgres', 'gateway Postgres startup wait init container');
-assertIncludes(gatewayDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'gateway Postgres startup wait command');
+assertIncludes(
+  gatewayDeployment,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'gateway Postgres startup wait command',
+);
 assertIncludes(gatewayDeployment, 'name: psfn-postgres', 'gateway Postgres startup wait secret name');
 assertIncludes(gatewayDeployment, 'key: postgres-database-url', 'gateway Postgres startup wait secret key');
 assertIncludes(gatewayDeployment, 'name: LITELLM_BASE_URL', 'gateway LiteLLM endpoint env');
@@ -174,11 +179,33 @@ assertIncludes(gatewayDeployment, 'subPath: state', 'gateway CogSec state PVC su
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');
-assertIncludes(agentDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'agent Postgres startup wait command');
-assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup wait secret name');
+assertIncludes(
+  agentDeployment,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'agent Postgres startup wait command',
+);
+assertIncludes(agentDeployment, 'secretName: psfn-postgres', 'agent Postgres startup wait secret name');
 assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
+assertIncludes(agentDeployment, 'name: POSTGRES_DATABASE_URL_FILE', 'agent Postgres credential file env');
+assertIncludes(
+  agentDeployment,
+  'value: "/var/run/secrets/psfn-postgres/database-url"',
+  'agent Postgres credential file path',
+);
+assertNotIncludes(
+  agentDeployment,
+  '- name: POSTGRES_DATABASE_URL\n',
+  'agent raw Postgres credential env',
+);
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
+assertIncludes(agentDeployment, 'name: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof env');
+assertIncludes(agentDeployment, 'key: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof Secret key');
+assertIncludes(
+  agentDeployment,
+  'key: GATEWAY_COMPANION_AUTH_TOKEN\n                  optional: true',
+  'agent companion role proof remains optional for single-companion installs',
+);
 for (const [name, value] of [
   ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
   ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
@@ -202,6 +229,13 @@ for (const [name, value] of [
 }
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
+
+const gardenCredentialBoundaryDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
+assertNotIncludes(
+  gardenCredentialBoundaryDeployment,
+  '- name: POSTGRES_DATABASE_URL\n',
+  'Garden raw Postgres credential env',
+);
 
 const workloadImageOverrides = [
   ['agent', 'a'],
@@ -271,6 +305,17 @@ assertIncludes(
 
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');
+assertIncludes(
+  liteLlmConfig,
+  'model_name: "z-ai-glm-5.2-nitro"',
+  'LiteLLM colon-free GLM 5.2 Nitro alias',
+);
+assertIncludes(
+  liteLlmConfig,
+  'model: "openrouter/z-ai/glm-5.2:nitro"',
+  'LiteLLM GLM 5.2 Nitro upstream variant',
+);
+assertIncludes(liteLlmConfig, 'reasoning_effort: "none"', 'LiteLLM Nitro reasoning disabled');
 assertIncludes(liteLlmConfig, 'api_key: "os.environ/OPENROUTER_API_KEY"', 'LiteLLM provider key env reference');
 assertIncludes(liteLlmConfig, 'master_key: "os.environ/LITELLM_MASTER_KEY"', 'LiteLLM master key env reference');
 
@@ -321,6 +366,8 @@ const strictSecretRendered = render([
   '--set-string',
   'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
   '--set-string',
+  'secrets.values.gatewayCompanionAuthToken=verify-agent-proof',
+  '--set-string',
   'secrets.values.backupEncryptionKey=verify-backup-key',
 ]);
 
@@ -331,6 +378,11 @@ assertIncludes(
   strictSecretRendered,
   'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN: "verify-worker-proof"',
   'strict app secret isolated session-integrity proof',
+);
+assertIncludes(
+  strictSecretRendered,
+  'GATEWAY_COMPANION_AUTH_TOKEN: "verify-agent-proof"',
+  'strict app secret companion agent proof',
 );
 assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup-key"', 'strict app secret backup encryption key');
 
@@ -473,6 +525,21 @@ const hubClientCert = findDocumentByKindName(hubRendered, 'Certificate', 'psfn-s
 assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client Certificate secret');
 assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
 assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
+
+const piHubOverlayRendered = render([
+  '-f',
+  resolve(chartDir, 'overlays/pi-satellite-hub.values.yaml'),
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+  '--set-string',
+  'secrets.values.satelliteHubApiKey=verify-hub-satellite-key',
+]);
+const piHubDevices = findDocumentByKindName(piHubOverlayRendered, 'ConfigMap', 'psfn-hub-devices');
+assertIncludes(
+  piHubDevices,
+  '\"control\":[\"interrupt\",\"presence\",\"session_attach\",\"approvals\",\"touch\"]',
+  'Pi companion app touch capability grant',
+);
 
 const hubTextOnlyRendered = render([
   '--set',

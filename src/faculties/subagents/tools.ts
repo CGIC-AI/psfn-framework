@@ -32,7 +32,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
     description:
       'Control bounded short-horizon subagents. action=spawn requires name and task and returns subagent_id; '
       + 'action=message requires subagent_id and message; wait/cancel/status use subagent_id from spawn or status. '
-      + 'Use status without subagent_id to list visible tasks. Use shard action=spawn for long-horizon or distributed shard work.',
+      + 'Use status without subagent_id to list visible tasks.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('spawn'),

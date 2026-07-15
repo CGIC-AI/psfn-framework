@@ -454,6 +454,12 @@ describe('prompt-facing trust/style state', () => {
       runtime_response_style_name: 'Expressive',
       runtime_response_style_is_concise: 'false',
       runtime_response_style_is_expressive: 'true',
+      runtime_response_style_is_concise_voice: 'false',
+    });
+    expect(buildResponseStylePromptState('concise', true)).toMatchObject({
+      runtime_response_style: 'concise',
+      runtime_response_style_is_concise: 'true',
+      runtime_response_style_is_concise_voice: 'true',
     });
   });
 });
@@ -542,6 +548,10 @@ describe('resolveChannelResponseStyle', () => {
     })).toBe('concise');
     expect(resolveChannelResponseStyle('api:voice-session', {
       channelType: 'api_voice',
+      meta: { isDirectMessage: true },
+    })).toBe('concise');
+    expect(resolveChannelResponseStyle('satellite:voice-only:bedroom', {
+      channelType: 'api',
       meta: { isDirectMessage: true },
     })).toBe('concise');
   });

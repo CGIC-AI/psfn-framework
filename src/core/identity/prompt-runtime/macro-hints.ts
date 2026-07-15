@@ -262,6 +262,7 @@ export const RESPONSE_STYLE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[]
   responseStyleTurnHint('{{runtime_response_style_name}}', 'Human-readable response style name for the current turn.', 'Expressive'),
   responseStyleTurnHint('{{runtime_response_style_is_concise}}', 'Whether the current turn should use the concise delivery profile.', 'false'),
   responseStyleTurnHint('{{runtime_response_style_is_expressive}}', 'Whether the current turn should use the expressive delivery profile.', 'true'),
+  responseStyleTurnHint('{{runtime_response_style_is_concise_voice}}', 'Whether the current turn uses the concise voice-delivery profile.', 'false'),
 ];
 
 export const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [

@@ -50,6 +50,8 @@ export interface GatewayMethodRuntime {
   visionIntake?: GatewayVisionIntakeScreener;
   policyConfig: PolicyConfig;
   workspacePath: string;
+  /** True when this connection is confined to one fleet Personal Workspace. */
+  personalWorkspaceIsolation?: boolean;
   sessionHmacKeyring: SessionHmacKeyring;
   approvalBoundary: ApprovalBoundaryService;
   /**

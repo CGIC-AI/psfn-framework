@@ -40,10 +40,15 @@ import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audi
 import { isDeliberateMachineIntelligenceCorrection } from './observed-machine-intelligence.js';
 import type { MachineIntelligenceObservationMarkResult } from './contact-store-port.js';
 import {
+  isManualRelationshipMutationAuthorized,
+  requiresManualRelationshipMutation,
+} from './relationship-progression.js';
+import {
   appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
   type EmotionalTimeSeriesPoint,
   hasLearnedMoodSnapshot,
+  MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
   normalizeEmotionalTimeSeries,
   parseMoodSnapshot,
 } from './store/emotional-baseline.js';
@@ -72,7 +77,6 @@ import {
   updateContactIdentityProfile,
   updateContactLastSeen,
   updateContactNotes,
-  updateContactRelationshipType,
 } from './store/mutation-operations.js';
 import {
   countKnownRooms,
@@ -122,7 +126,6 @@ import type {
   ContactTrustMutationOptions,
   ContactUpsertMutationOptions,
 } from './contact-store-port.js';
-
 const log = createComponentLogger('ContactStore');
 
 export interface ContactStoreOptions {
@@ -293,6 +296,15 @@ export class ContactStore implements ContactStorePort {
     }
 
     if (
+      partial.relationshipType !== undefined
+      && partial.relationshipType !== target?.relationshipType
+      && requiresManualRelationshipMutation(target?.relationshipType, partial.relationshipType)
+      && !isManualRelationshipMutationAuthorized(options.actor)
+    ) {
+      throw new Error('Approval-gated relationship assignment denied: manual operator authorization required');
+    }
+
+    if (
       partial.trustLevel === 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
     ) {
@@ -311,7 +323,7 @@ export class ContactStore implements ContactStorePort {
     }
 
     const previousTrustLevel = target?.trustLevel ?? null;
-    const contact = upsertContact(this.buildUpsertResolveContext(), partial);
+    const contact = upsertContact(this.buildUpsertResolveContext(), partial, options.actor);
     const row = this.db.prepare(`
       SELECT id, display_name, first_seen, last_seen
       FROM contacts
@@ -729,8 +741,9 @@ export class ContactStore implements ContactStorePort {
 
     const updatedBaseline = computeUpdatedEmotionalBaseline(contact.emotionalBaseline, observation);
     const updatedTimeSeries = appendEmotionalObservationToTimeSeries(
-      this.getStoredEmotionalTimeSeries(id),
+      this.getStoredEmotionalTimeSeries(id, MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT),
       observation,
+      MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
     );
     updateContactEmotionalBaseline(this.db, id, updatedBaseline, updatedTimeSeries);
     this.syncContactExports();
@@ -764,16 +777,50 @@ export class ContactStore implements ContactStorePort {
     const contact = this.getById(id);
     if (!contact) return false;
     if (contact.relationshipType === relationshipType) return true;
+    return this.compareAndSetRelationshipType(
+      id,
+      contact.relationshipType,
+      relationshipType,
+      actor,
+    );
+  }
 
-    if (contact.trustLevel === 'primary' && relationshipType !== 'partner') {
-      log.warn('Attempted to change primary user relationship type', { id, relationshipType });
+  compareAndSetRelationshipType(
+    id: string,
+    expectedRelationshipType: RelationshipType,
+    relationshipType: RelationshipType,
+    actor?: string,
+  ): boolean {
+    if (
+      requiresManualRelationshipMutation(expectedRelationshipType, relationshipType)
+      && !isManualRelationshipMutationAuthorized(actor)
+    ) {
+      log.warn('Denied approval-gated relationship compare-and-set', { id, relationshipType, actor });
       return false;
     }
+    if (expectedRelationshipType === relationshipType) {
+      return this.getById(id)?.relationshipType === expectedRelationshipType;
+    }
 
-    updateContactRelationshipType(this.db, id, relationshipType);
-    appendMutationAuditEntry(this.db, id, 'relationship_type', contact.relationshipType, relationshipType, actor);
-    this.syncContactExports();
-    return true;
+    const applied = this.db.transaction(() => {
+      const result = this.db.prepare(`
+        UPDATE contacts
+        SET relationship_type = ?
+        WHERE id = ? AND relationship_type = ?
+      `).run(relationshipType, id, expectedRelationshipType);
+      if (result.changes !== 1) return false;
+      appendMutationAuditEntry(
+        this.db,
+        id,
+        'relationship_type',
+        expectedRelationshipType,
+        relationshipType,
+        actor,
+      );
+      return true;
+    })();
+    if (applied) this.syncContactExports();
+    return applied;
   }
 
   setChannelPrivacy(

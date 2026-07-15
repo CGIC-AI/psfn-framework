@@ -44,6 +44,7 @@ import {
   type PlacesRegistryConfig,
 } from '../../shared/contracts/places-registry.js';
 import { DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS } from '../../core/agent/companion-presence-runtime.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
 /** Narrow read-only view over the shared-schema presence store. */
 export interface CompanionPresenceReadRow {
@@ -75,7 +76,7 @@ export interface GatewayCompanionChannelLaneOptions {
   placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
   presence: CompanionPresenceReadPort;
   /** Fleet manifest companion ids (companions.json); DM peers must be members. */
-  fleetCompanionIds: ReadonlySet<string>;
+  fleetCompanionIds: ReadonlySet<CompanionId>;
   /** Read-side staleness TTL override (tests). */
   staleTtlMs?: number;
   /** Clock override (tests). */
@@ -94,7 +95,7 @@ export type CompanionDeliveryResolution =
     kind: 'room';
     channelId: string;
     placeId: string;
-    recipients: string[];
+    recipients: CompanionId[];
     /** The addressed place's privacy classification. */
     roomPrivacy: PlacePrivacy;
     /**
@@ -102,7 +103,7 @@ export type CompanionDeliveryResolution =
      * opened after the message was minted (join race) or their row carried
      * no `since` (fail closed).
      */
-    windowExcluded?: string[];
+    windowExcluded?: CompanionId[];
     /**
      * Room only: stable accepted recipient epochs used by the gateway to mint
      * a reply proof. Recipients without a parseable epoch still receive
@@ -114,7 +115,7 @@ export type CompanionDeliveryResolution =
     ok: true;
     kind: 'dm';
     channelId: string;
-    recipients: string[];
+    recipients: CompanionId[];
   }
   | { ok: false; violation: CompanionDeliveryViolation };
 
@@ -136,7 +137,7 @@ export interface CompanionDeliveryResolveOptions {
 export class GatewayCompanionChannelLane {
   private readonly placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
   private readonly presence: CompanionPresenceReadPort;
-  private readonly fleetCompanionIds: ReadonlySet<string>;
+  private readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   private readonly staleTtlMs: number;
   private readonly now: () => number;
 
@@ -149,7 +150,7 @@ export class GatewayCompanionChannelLane {
   }
 
   async resolveDelivery(
-    senderCompanionId: string,
+    senderCompanionId: CompanionId,
     channelId: string,
     options?: CompanionDeliveryResolveOptions,
   ): Promise<CompanionDeliveryResolution> {
@@ -238,31 +239,35 @@ export class GatewayCompanionChannelLane {
         { senderCompanionId, channelId, siteId: place.siteId, placeId: place.placeId },
       );
     }
-    const recipients: string[] = [];
-    const windowExcluded: string[] = [];
+    const recipients: CompanionId[] = [];
+    const windowExcluded: CompanionId[] = [];
     const recipientPresenceEpochs: Record<string, CompanionRoomPresenceEpoch> = {};
     for (const row of rows) {
-      if (row.companionId === senderCompanionId) continue; // never echo the sender
+      const rowCompanionId = createCompanionId(
+        row.companionId,
+        'Companion presence row companionId',
+      );
+      if (rowCompanionId === senderCompanionId) continue; // never echo the sender
       const updatedAtMs = Date.parse(row.updatedAt);
       if (!Number.isFinite(updatedAtMs) || updatedAtMs < staleCutoffMs) continue;
-      if (recipients.includes(row.companionId) || windowExcluded.includes(row.companionId)) continue;
+      if (recipients.includes(rowCompanionId) || windowExcluded.includes(rowCompanionId)) continue;
       if (windowCutoffMs !== null) {
         const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
         // Fail closed: no parseable join time, or joined after the message
         // was minted — a private room never delivers pre-join content.
         if (!Number.isFinite(sinceMs) || sinceMs > windowCutoffMs) {
-          windowExcluded.push(row.companionId);
+          windowExcluded.push(rowCompanionId);
           continue;
         }
       }
-      recipients.push(row.companionId);
+      recipients.push(rowCompanionId);
       const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
       if (
         Number.isFinite(sinceMs)
         && sinceMs <= updatedAtMs
         && sinceMs <= referenceNowMs
       ) {
-        recipientPresenceEpochs[row.companionId] = {
+        recipientPresenceEpochs[rowCompanionId] = {
           since: new Date(sinceMs).toISOString(),
         };
       }

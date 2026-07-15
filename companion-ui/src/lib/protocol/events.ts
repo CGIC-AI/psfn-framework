@@ -37,7 +37,8 @@ export type ClientToHubMessage =
   | TurnStartMessage
   | TurnEndMessage
   | ApprovalDecisionMessage
-  | ArtifactPreviewRequestMessage;
+  | ArtifactPreviewRequestMessage
+  | TouchInteractionMessage;
 
 export interface HelloMessage {
   type: 'hello';
@@ -123,6 +124,14 @@ export interface ArtifactPreviewRequestMessage {
   type: 'artifact.preview';
   requestId: string;
   artifactId: string;
+}
+
+export interface TouchInteractionMessage {
+  type: 'touch.interaction';
+  kind: 'headpat' | 'petting' | 'hug' | 'kiss';
+  region: 'head' | 'cheek' | 'body';
+  count: number;
+  durationMs: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,7 +366,8 @@ export type SatelliteControlCapability =
   | 'sleep_wake'
   | 'presence'
   | 'session_attach'
-  | 'approvals';
+  | 'approvals'
+  | 'touch';
 
 export type SatelliteSafetyCapability =
   | 'action_allowlist'

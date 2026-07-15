@@ -17,6 +17,7 @@ import {
   createDefaultCompositionalPolicyConfig,
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   type SubstrateConfig,
 } from './config/runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './config/group-memory-config.js';
@@ -561,6 +562,43 @@ describe('settings', () => {
           },
         } as any,
       })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
+    });
+
+    it('normalizes session tail cache settings as a JSON-owned structured object', () => {
+      const normalized = normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: true,
+          maxEntriesPerChannel: 256,
+        } as any,
+      });
+      expect(normalized.sessionTailCache).toEqual({
+        enabled: true,
+        maxEntriesPerChannel: 256,
+      });
+    });
+
+    it('fails closed on malformed session tail cache settings', () => {
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: 'enabled' as any,
+      })).toThrow(/sessionTailCache/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: 'sometimes',
+          maxEntriesPerChannel: 512,
+        } as any,
+      })).toThrow(/sessionTailCache\.enabled/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: true,
+          maxEntriesPerChannel: 0,
+        } as any,
+      })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          ...createDefaultSessionTailCacheSettings(),
+          maxEntriesPerChannel: 1_000_000,
+        } as any,
+      })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
     });
 
     it('normalizes group memory settings as a JSON-owned structured object', () => {

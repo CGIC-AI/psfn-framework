@@ -169,6 +169,10 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
     fleetCompanionIds: ['comp-nova', 'comp-selene'],
     channelRouting: {},
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      'comp-nova': '/workspace/comp-nova',
+      'comp-selene': '/workspace/comp-selene',
+    },
   };
   return {
     socketPath: '/tmp/test.sock',

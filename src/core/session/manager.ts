@@ -51,6 +51,7 @@ import {
   shouldPersistSessionChannel,
   createCompactionBoundaryStore,
 } from './manager/compaction-boundary-store.js';
+import { createSessionTailReadStore } from './manager/session-tail-read-store.js';
 import {
   collectRecentEntriesWithinTokenBudget,
   isNonConversationalSessionEntry,
@@ -147,6 +148,14 @@ export type {
 };
 
 const log = createComponentLogger('SessionManager');
+
+/**
+ * Shallow per-channel scan depth used by listRecentlyActiveChannels to confirm
+ * genuine partner activity within the lookback window. Deep enough to see past
+ * a burst of recent companion/system entries to the partner's last turn,
+ * bounded so wake-lane fan-out enumeration stays cheap.
+ */
+const RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT = 128;
 
 export interface LegacyChatImportRunRequest extends LegacyChatImportRequest {
   canonicalContactId?: string;
@@ -373,6 +382,43 @@ export class SessionManager {
       return this.store.listSessionsByRecentActivity();
     }
     return this.store.listSessionsByRecentActivity(limit);
+  }
+
+  /**
+   * Recently-active conversational channels for temporal wake-note fan-out
+   * (bead psfn-framework-2x37.3). Returns every channel whose most recent
+   * partner (role 'user') message falls within `lookbackMs`, ordered
+   * most-recent-activity first (same order the store already sorts by).
+   *
+   * Bounded: `listSessionsByRecentActivity` is sorted by last-activity
+   * descending, so the scan stops at the first channel outside the lookback
+   * edge; each surviving candidate is confirmed by a shallow recent-entry scan
+   * for genuine partner (not just assistant/system) activity — a channel where
+   * only the companion emitted something in-window is not a fan-out target.
+   */
+  listRecentlyActiveChannels(input: {
+    lookbackMs: number;
+    nowMs?: number;
+  }): StartupSessionMetadata[] {
+    const nowMs = input.nowMs ?? Date.now();
+    const cutoffMs = nowMs - Math.max(0, input.lookbackMs);
+    const active: StartupSessionMetadata[] = [];
+    for (const summary of this.store.listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)) {
+      // Store list is last-activity-desc: once a channel's newest entry is
+      // older than the lookback edge, every remaining channel is too.
+      if (summary.lastActivityAt < cutoffMs) break;
+      const entries = this.store.getRecent(summary.sessionId, RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT);
+      const hasRecentPartner = entries.some(
+        entry => entry.role === 'user' && entry.timestamp >= cutoffMs,
+      );
+      if (!hasRecentPartner) continue;
+      active.push({
+        sessionId: summary.sessionId,
+        channelType: summary.channelType,
+        timestamp: summary.lastActivityAt,
+      });
+    }
+    return active;
   }
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {
@@ -952,6 +998,17 @@ export class SessionManager {
   }
 
   /**
+   * Force the session store to drop and reload the channel's in-memory view
+   * from disk. Heal hook for a captured session window that is missing entries
+   * the write path already assigned ids past (psfn-framework-hgw3.1).
+   */
+  async reconcileSessionChannelFromDisk(
+    channelId: string,
+  ): Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null> {
+    return await this.store.reloadChannelFromDisk(this.resolveSessionChannelId(channelId));
+  }
+
+  /**
    * Capture the turn's session-context snapshot through the single derivation
    * path (context-builder captureTurnSessionContext). The turn pipeline calls
    * this once pre-turn (feeding the retrieval query and the persisted
@@ -972,6 +1029,21 @@ export class SessionManager {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+    // Shared hot tail (psfn-framework-hgw3.5): when the tail cache is enabled
+    // and serves a validated window covering the just-recorded entry, the
+    // capture's recent-window reads gap-fill from it — journal rows win on
+    // any id overlap (the tail bypasses the journal HMAC chain); tail rows
+    // are accepted only for ids newer than the journal window. Null keeps the
+    // journal-only path byte-identical — including the tail-behind fallback
+    // required by the hgw3.1 heal guard.
+    const tailWindow = await this.store.fetchSessionTailWindow(resolvedChannelId, {
+      ...(input.excludeSessionEntryId !== undefined
+        ? { expectedMinEntryId: input.excludeSessionEntryId }
+        : {}),
+    });
+    const tailReadStore = tailWindow
+      ? createSessionTailReadStore(this.store, resolvedChannelId, tailWindow)
+      : null;
     return captureTurnSessionContext({
       channelId: resolvedChannelId,
       sourceChannelId,
@@ -980,8 +1052,10 @@ export class SessionManager {
       continuityFallbackUserIds: input.continuityFallbackUserIds ?? [],
       turnBudgetCharacteristics: input.turnBudgetCharacteristics,
       config: this.config,
-      store: this.compactionBoundaryStore,
-      activityStore: this.store,
+      store: tailReadStore
+        ? createCompactionBoundaryStore(tailReadStore)
+        : this.compactionBoundaryStore,
+      activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,
       focusCompactionRanges: this.getFocusCompactionRanges(resolvedChannelId),
       focusKnowledgeTexts: this.getFocusKnowledgeTexts(resolvedChannelId),

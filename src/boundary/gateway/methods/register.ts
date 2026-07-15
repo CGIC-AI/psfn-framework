@@ -39,6 +39,7 @@ export function registerGatedDescriptors(
       approvalAction?: string;
       approvalScope?: (params: unknown) => string;
       approvalReason?: (params: unknown) => string;
+      policyConfigProvider?: () => GatewayMethodRuntime['policyConfig'];
     }) => (params: unknown) => Promise<unknown>)
     | undefined;
   if (runtimeWithCompatibility.approvalBoundary) {
@@ -49,6 +50,7 @@ export function registerGatedDescriptors(
       approvalAction: input.approvalAction ?? input.method,
       approvalScope: input.approvalScope ?? (() => input.method),
       ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
+      ...(input.policyConfigProvider ? { policyConfigProvider: input.policyConfigProvider } : {}),
     });
   } else if (runtimeWithCompatibility.gated) {
     gateMethod = ({ method, handler }) => runtimeWithCompatibility.gated!(method, handler);
@@ -67,6 +69,7 @@ export function registerGatedDescriptors(
         approvalAction: descriptor.approvalAction,
         approvalScope: descriptor.approvalScope as (params: unknown) => string,
         approvalReason: descriptor.approvalReason as ((params: unknown) => string) | undefined,
+        policyConfigProvider: () => runtime.policyConfig,
       }),
     );
   }

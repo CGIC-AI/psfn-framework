@@ -23,7 +23,11 @@ import {
   type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
-import type { ChannelType, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
+import {
+  CHANNEL_TYPES,
+  type ChannelType,
+  type PostTurnActionCandidate,
+} from '../../shared/contracts/runtime.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -48,6 +52,15 @@ const MAX_DELAY_MINUTES = 10080;
 const MAX_ABSOLUTE_SCHEDULE_MS = 366 * 24 * 60 * 60_000;
 const ISO_DATETIME_WITH_TIMEZONE_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const DISCORD_SNOWFLAKE_PATTERN = /^[1-9]\d{16,19}$/;
+const MAX_DISCORD_SNOWFLAKE = 18_446_744_073_709_551_615n;
+
+// Inter-companion continuity does not use the reminder/follow-up destination
+// fields. Keep this surface at its existing scope while deriving every
+// supported value from the canonical runtime channel contract.
+const SCHEDULE_CONTINUITY_CHANNEL_TYPES = CHANNEL_TYPES.filter(
+  channelType => channelType !== 'companion',
+);
 
 const SCHEDULE_TOOL_ACTIONS = [
   'list',
@@ -320,16 +333,27 @@ function resolveScheduledPromptRunAt(
 }
 
 function normalizeChannelType(value: unknown, fieldName: string): ChannelType {
-  switch (value) {
-    case 'terminal':
-    case 'api':
-    case 'discord':
-    case 'telegram':
-    case 'psfn-amica':
-      return value;
-    default:
-      throw new Error(`${fieldName} must be a supported channel type`);
+  if (
+    typeof value !== 'string'
+    || !SCHEDULE_CONTINUITY_CHANNEL_TYPES.some(channelType => channelType === value)
+  ) {
+    throw new Error(`${fieldName} must be a supported channel type`);
   }
+  return value as ChannelType;
+}
+
+function normalizeFollowUpChannelId(value: unknown, channelType: ChannelType): string {
+  const channelId = normalizeNonEmptyString(value, 'channel_id');
+  if (
+    channelType === 'discord'
+    && (
+      !DISCORD_SNOWFLAKE_PATTERN.test(channelId)
+      || BigInt(channelId) > MAX_DISCORD_SNOWFLAKE
+    )
+  ) {
+    throw new Error('channel_id must be a Discord snowflake string (17-20 decimal digits)');
+  }
+  return channelId;
 }
 
 function normalizeListLimit(value: unknown): number {
@@ -497,7 +521,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
     label: 'schedule',
     description:
       'Manage time-based continuity through one schedule surface. Orientation: action=list is safe and can filter by contact_id. '
-      + 'Follow-ups: create_follow_up needs content and usually channel_id/channel_type or contact_id; activate_follow_up needs follow_up_id. '
+      + 'Follow-ups: create_follow_up needs content, channel_id, and canonical channel_type; for Discord DMs or guild channels, use the raw string snowflake and channel_type=discord (not prompt-facing discord_text). contact_id is optional scope; activate_follow_up needs follow_up_id. '
       + 'Reminders: create_reminder needs title/content; trigger_reminder needs reminder_id. '
       + 'Templates: list_templates inspects them, update_template uses template_id for existing templates and id only when adding a new template, run_template needs template_id. '
       + 'Scheduled prompts: schedule_prompt needs name, prompt, and exactly one of delay_minutes or run_at; run_at is ISO-8601 with explicit timezone.',
@@ -524,17 +548,15 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
         PENDING_FOLLOW_UP_TIMINGS.map(timing => Type.Literal(timing)),
         { description: 'Follow-up timing. Defaults to scheduled when due_at is set, otherwise soon.' },
       )),
-      channel_id: Type.Optional(Type.String({ minLength: 1, description: 'Destination channel id for reminder/follow-up continuity.' })),
-      channel_type: Type.Optional(Type.Union(
-        [
-          Type.Literal('terminal'),
-          Type.Literal('api'),
-          Type.Literal('discord'),
-          Type.Literal('telegram'),
-          Type.Literal('psfn-amica'),
-        ],
-        { description: 'Destination channel type for reminder/follow-up continuity.' },
-      )),
+      channel_id: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Destination channel id for reminder/follow-up continuity. For a Discord follow-up, pass the raw channel snowflake as a quoted string.',
+      })),
+      channel_type: Type.Optional(Type.Unsafe<ChannelType>({
+        type: 'string',
+        enum: [...SCHEDULE_CONTINUITY_CHANNEL_TYPES],
+        description: 'Canonical destination channel type for reminder/follow-up continuity. Discord DMs and guild channels use discord, not discord_text.',
+      })),
       due_at: Type.Optional(Type.String({ minLength: 1, description: 'ISO timestamp for reminder/follow-up activation.' })),
       source_message_id: Type.Optional(Type.String({ minLength: 1, description: 'Optional source message id for provenance-safe continuity.' })),
       context_summary: Type.Optional(Type.String({ minLength: 1, description: 'Optional preserved situation summary for follow-ups.' })),
@@ -653,12 +675,14 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               throw new Error('Pending follow-up store is unavailable');
             }
             const dueAt = normalizeOptionalIsoTimestamp(params.due_at, 'due_at');
+            const channelType = normalizeChannelType(params.channel_type, 'channel_type');
+            const channelId = normalizeFollowUpChannelId(params.channel_id, channelType);
             const created = await options.pendingFollowUpStore.enqueue({
               content: normalizeNonEmptyString(params.content, 'content'),
               priority: normalizePriority(params.priority),
               timing: normalizeTiming(params.timing, dueAt),
-              channelId: normalizeNonEmptyString(params.channel_id, 'channel_id'),
-              channelType: normalizeChannelType(params.channel_type, 'channel_type'),
+              channelId,
+              channelType,
               authorId: 'system:intention',
               authorName: 'Whisper',
               ...(dueAt ? { dueAt } : {}),

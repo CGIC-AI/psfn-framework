@@ -33,6 +33,7 @@ export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
   adminTransport?: Lifecycle;
   appCache?: { close?: () => Promise<void> };
+  sessionTailCache?: { close?: () => Promise<void> } | null;
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -131,6 +132,7 @@ export function buildAgentControlPlane(
         { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
         { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
         { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+        { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
         { step: 'destroy gateway client', action: () => gateway.destroy() },
         { step: 'close database', action: () => closeDatabase() },
       ], log);

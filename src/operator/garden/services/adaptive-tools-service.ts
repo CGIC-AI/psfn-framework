@@ -3,6 +3,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../../../core/agent/adaptive-tools-telemetry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import { getCanonicalToolSurface } from '../../../core/agent/tool-surface/registry.js';
 import type { AdaptiveToolsStateProvider } from '../admin-contract.js';
 import type { AdminToolHealthProvider } from '../tool-health-provider.js';
 import type {
@@ -10,6 +11,7 @@ import type {
   AdminAdaptiveToolsData,
   AdminAdaptiveToolsService,
   AdminToolFailureEvent,
+  AdminToolInvocationEvent,
 } from './types.js';
 import {
   cloneRuntimeState,
@@ -21,6 +23,25 @@ import {
 
 const DEFAULT_RECENT_TELEMETRY_LIMIT = 200;
 const DEFAULT_RECENT_FAILURE_LIMIT = 50;
+const DEFAULT_RECENT_INVOCATION_LIMIT = 100;
+const SAFE_AUDIT_ACTION_PATTERN = /^[a-z][a-z0-9_]{0,79}$/u;
+
+function isDeclaredToolAction(
+  stateProvider: AdaptiveToolsStateProvider | null | undefined,
+  toolName: string,
+  action: string,
+): boolean {
+  const catalogActions = stateProvider
+    ?.getToolCatalogSnapshot()
+    .tools.find(tool => tool.name === toolName)
+    ?.schema?.actions.map(candidate => candidate.name) ?? [];
+  const canonicalActions = getCanonicalToolSurface(toolName)?.actions ?? [];
+  return catalogActions.includes(action) || canonicalActions.includes(action);
+}
+
+function invocationCorrelationKey(channelId: string, toolCallId: string): string {
+  return `${channelId}\u0000${toolCallId}`;
+}
 
 function cloneDecisionTelemetry(payload: AdaptiveToolDecisionTelemetry): AdaptiveToolDecisionTelemetry {
   return {
@@ -44,8 +65,11 @@ function cloneSnapshotTelemetry(payload: AdaptiveToolSnapshotTelemetry): Adaptiv
 export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService {
   private readonly telemetryLimit: number;
   private readonly failureLimit: number;
+  private readonly invocationLimit: number;
   private readonly recentTelemetry: AdminAdaptiveToolTelemetryEvent[] = [];
   private readonly recentFailures: AdminToolFailureEvent[] = [];
+  private readonly recentInvocations: AdminToolInvocationEvent[] = [];
+  private readonly pendingActions = new Map<string, { toolName: string; action: string }>();
 
   constructor(private readonly deps: {
     eventBus: EventBus;
@@ -53,6 +77,7 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
     toolHealthProvider?: AdminToolHealthProvider | null;
     telemetryLimit?: number;
     failureLimit?: number;
+    invocationLimit?: number;
   }) {
     const resolvedLimit = Number.isFinite(deps.telemetryLimit)
       ? Math.max(1, Math.floor(deps.telemetryLimit as number))
@@ -62,6 +87,10 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       ? Math.max(1, Math.floor(deps.failureLimit as number))
       : DEFAULT_RECENT_FAILURE_LIMIT;
     this.failureLimit = resolvedFailureLimit;
+    const resolvedInvocationLimit = Number.isFinite(deps.invocationLimit)
+      ? Math.max(1, Math.floor(deps.invocationLimit as number))
+      : DEFAULT_RECENT_INVOCATION_LIMIT;
+    this.invocationLimit = resolvedInvocationLimit;
 
     this.deps.eventBus.on('agent.tools.adaptive.decision', (payload) => {
       this.pushTelemetry({
@@ -79,14 +108,53 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       });
     });
 
-    this.deps.eventBus.on('agent.tool.end', ({ toolName, channelId, isError, errorMessage }) => {
-      if (!isError || !errorMessage?.trim()) return;
-      this.pushFailure({
+    this.deps.eventBus.on('agent.toolcall.end', ({ channelId, toolCallId, toolName, arguments: toolArguments }) => {
+      const candidateAction = typeof toolArguments.action === 'string'
+        ? toolArguments.action.trim()
+        : '';
+      if (!SAFE_AUDIT_ACTION_PATTERN.test(candidateAction)) return;
+      if (!isDeclaredToolAction(this.deps.stateProvider, toolName, candidateAction)) return;
+      const action = candidateAction;
+      this.pendingActions.set(invocationCorrelationKey(channelId, toolCallId), { toolName, action });
+      if (this.pendingActions.size > this.invocationLimit) {
+        const oldestKey = this.pendingActions.keys().next().value as string | undefined;
+        if (oldestKey) this.pendingActions.delete(oldestKey);
+      }
+    });
+
+    this.deps.eventBus.on('agent.tool.end', ({
+      toolName,
+      toolCallId,
+      channelId,
+      isError,
+      errorMessage,
+      turnId,
+      requestId,
+    }) => {
+      const correlationKey = invocationCorrelationKey(channelId, toolCallId);
+      const pendingAction = this.pendingActions.get(correlationKey);
+      this.pendingActions.delete(correlationKey);
+      const action = pendingAction?.toolName === toolName ? pendingAction.action : undefined;
+      this.pushInvocation({
         toolName,
+        toolCallId,
         channelId,
-        message: errorMessage.trim(),
+        ...(action ? { action } : {}),
+        status: isError ? 'error' : 'ok',
         timestamp: Date.now(),
+        ...(turnId ? { turnId } : {}),
+        ...(requestId ? { requestId } : {}),
       });
+      if (isError && errorMessage?.trim()) {
+        this.pushFailure({
+          toolName,
+          channelId,
+          message: toolName === 'contact'
+            ? 'Contact tool invocation failed.'
+            : errorMessage.trim(),
+          timestamp: Date.now(),
+        });
+      }
     });
   }
 
@@ -96,6 +164,10 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
     const healthSnapshot = await this.deps.toolHealthProvider?.getRuntimeServiceHealth()
       ?? { checkedAt: Date.now(), services: [] };
     const recentFailures = this.recentFailures
+      .slice()
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .map(entry => ({ ...entry }));
+    const recentInvocations = this.recentInvocations
       .slice()
       .sort((left, right) => right.timestamp - left.timestamp)
       .map(entry => ({ ...entry }));
@@ -112,6 +184,7 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       serviceHealth: cloneServiceHealth(healthSnapshot),
       toolHealth,
       inventory: deriveToolInventoryGroups(toolHealth),
+      recentInvocations,
       recentFailures,
       recentTelemetry: this.recentTelemetry.map((entry) => (
         entry.type === 'decision'
@@ -138,6 +211,13 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
     this.recentFailures.push(entry);
     if (this.recentFailures.length > this.failureLimit) {
       this.recentFailures.splice(0, this.recentFailures.length - this.failureLimit);
+    }
+  }
+
+  private pushInvocation(entry: AdminToolInvocationEvent): void {
+    this.recentInvocations.push(entry);
+    if (this.recentInvocations.length > this.invocationLimit) {
+      this.recentInvocations.splice(0, this.recentInvocations.length - this.invocationLimit);
     }
   }
 }

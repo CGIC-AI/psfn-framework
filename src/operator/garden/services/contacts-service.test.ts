@@ -150,7 +150,10 @@ describe('AdminContactsDataService', () => {
     try {
       const owner = contactStore.upsert({ displayName: 'Owner', trustLevel: 'trusted', relationshipType: 'friend' });
       const friend = contactStore.upsert({ displayName: 'Friend', trustLevel: 'trusted', relationshipType: 'friend' });
-      const sibling = contactStore.upsert({ displayName: 'Sibling', relationshipType: 'family' });
+      const sibling = contactStore.upsert(
+        { displayName: 'Sibling', relationshipType: 'family' },
+        { actor: 'operator:test-setup' },
+      );
 
       profiles.set(friend.id, {
         contactId: friend.id,

@@ -63,6 +63,9 @@ import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgre
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
+import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
+import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
+import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
 import {
   registerScheduledFleetAuthBackupTask,
@@ -200,12 +203,33 @@ async function main(): Promise<void> {
         ? { companionDatabaseUrl: config.postgresDatabaseUrl }
         : {}),
     });
+    if (backupConfig.verifyRestore) {
+      const scratchMigrationUrl = deriveRestoreVerifyDatabaseUrl(
+        fleetAuthSecrets.database.migrationUrl,
+      );
+      if (!scratchMigrationUrl) {
+        throw new Error(
+          'Fleet auth verifyRestore requires a derivable migration URL for the dedicated scratch database',
+        );
+      }
+      // The scratch database itself remains an operator-provisioned recovery
+      // target. Gateway startup idempotently provisions only its fleet_auth
+      // schema with the migration authority; backup cycles still use only the
+      // dedicated backup/restore credential.
+      await migrateFleetAuthSchema({
+        databaseUrl: scratchMigrationUrl,
+        roles: config.fleetAuth.databaseRoles,
+      });
+    }
+    const kubernetesHelm = resolveKubernetesHelmBackupConfig(env);
     const cycleOptions = buildFleetAuthBackupCycleOptions({
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
       roles: config.fleetAuth.databaseRoles,
+      authorityFloors: fleetAuthPersistence.authorityFloors,
       backupConfig,
+      ...(kubernetesHelm ? { kubernetesHelm } : {}),
     });
     fleetAuthBackupScheduler = new Scheduler(
       eventBus,

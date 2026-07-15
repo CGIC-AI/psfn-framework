@@ -16,7 +16,9 @@ import {
   resetRuntimeDiagnosticsForTests,
 } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
+import { verifyWorkspaceTreeSnapshot } from './companion-tree.js';
 import {
   decryptEncryptedBackupPackage,
   ENCRYPTED_BACKUP_MANIFEST_NAME,
@@ -48,6 +50,8 @@ const ENCRYPTION: BackupEncryptionRuntimeConfig = {
 };
 
 const roots: string[] = [];
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const BACKUP_TIMESTAMP = '20260715T150000000Z';
 
 function makeRoot(): string {
   const root = join(
@@ -131,17 +135,73 @@ function makeCycleOptions(
   root: string,
   config: BackupRuntimeConfig,
   runCoordinator: FleetAuthConsistentBackupCycleOptions['runCoordinator'],
+  verifyFamilyRestore: NonNullable<FleetAuthConsistentBackupCycleOptions['verifyFamilyRestore']>
+    = async () => undefined,
 ): FleetAuthConsistentBackupCycleOptions {
+  const companionDataDir = join(root, 'companion-data', COMPANION_ID);
+  const sessionsDir = join(companionDataDir, 'state', 'sessions');
+  const personalWorkspacePath = join(root, 'workspaces', 'personal', COMPANION_ID);
+  const sharedWorkspacePath = join(root, 'workspaces', 'shared');
+  const systemDataDir = join(root, 'system-data');
+  const authorityRoot = join(root, 'authority-floor');
+  for (const directory of [
+    join(companionDataDir, 'vault'),
+    sessionsDir,
+    join(companionDataDir, 'notes'),
+    join(companionDataDir, 'state'),
+    join(personalWorkspacePath, 'journal'),
+    join(sharedWorkspacePath, 'artifacts'),
+    systemDataDir,
+    authorityRoot,
+  ]) mkdirSync(directory, { recursive: true });
+  writeFileSync(join(companionDataDir, 'vault', 'marker.txt'), 'companion-data\n');
+  writeFileSync(join(sessionsDir, 'channel.jsonl'), '{"session":true}\n');
+  writeFileSync(join(companionDataDir, 'notes', 'memories.jsonl'), '{"memory":true}\n');
+  writeFileSync(join(companionDataDir, 'character.json'), '{"name":"Companion"}\n');
+  writeFileSync(join(companionDataDir, 'state', 'character-card-history.jsonl'), '{"version":1}\n');
+  writeFileSync(join(personalWorkspacePath, 'journal', 'marker.txt'), 'personal-workspace\n');
+  writeFileSync(join(sharedWorkspacePath, 'artifacts', 'world.txt'), 'shared-workspace\n');
+  writeFileSync(join(systemDataDir, 'settings.json'), '{}\n');
+  writeFileSync(join(systemDataDir, 'fleet-auth.json'), '{}\n');
+  const authorityFloors = new FleetAuthAuthorityFloorStore(authorityRoot);
+  if (!authorityFloors.exists()) {
+    authorityFloors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+  }
+  const backupRestoreDatabaseUrl =
+    'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app';
   return {
-    backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+    backupRestoreDatabaseUrl,
     roles: ROLES,
     schemas: [
       { kind: 'companion', schema: 'companion_one' },
       { kind: 'shared', schema: 'shared' },
     ],
-    systemDataDir: join(root, 'system-data'),
+    systemDataDir,
     backupRootDir: config.rootDir,
     config,
+    fleetBackupOptions: {
+      postgres: {
+        databaseUrl: backupRestoreDatabaseUrl,
+        restoreVerifyDatabaseUrl:
+          'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app_restore_verify',
+      },
+      companions: [{
+        companionId: COMPANION_ID,
+        postgresSchema: 'companion_one',
+        companionDataDir,
+        sessionsDir,
+        personalWorkspacePath,
+        characterCardPath: join(companionDataDir, 'character.json'),
+        characterCardHistoryPath: join(companionDataDir, 'state', 'character-card-history.jsonl'),
+        memoriesJournalPath: join(companionDataDir, 'notes', 'memories.jsonl'),
+      }],
+      systemDataDir,
+      sharedWorkspacePath,
+      backupRootDir: config.rootDir,
+      groupMode: false,
+    },
+    authorityFloors,
+    verifyFamilyRestore,
     now: () => Date.UTC(2026, 6, 15, 15, 0, 0),
     runCoordinator,
   };
@@ -162,45 +222,34 @@ describe('runFleetAuthConsistentBackupCycle', () => {
     const root = makeRoot();
     const backupRootDir = join(root, 'backups');
     const mirrorDir = join(root, 'mirror');
-    const binDir = join(root, 'bin');
-    const pgRestoreLog = join(root, 'pg-restore.log');
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'pg_restore'),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${pgRestoreLog}'\nprintf "1; 0 100 TABLE public sample owner\\n"\n`,
-      { mode: 0o755 },
-    );
     const oldName = '20260714T150000000Z';
     mkdirSync(join(backupRootDir, oldName), { recursive: true });
     mkdirSync(join(mirrorDir, oldName), { recursive: true });
     writeFileSync(join(backupRootDir, oldName, 'old.txt'), 'old\n');
     writeFileSync(join(mirrorDir, oldName, 'old.txt'), 'old\n');
     const config = makeConfig(backupRootDir, { mirrorDir, verifyRestore: true });
-    const priorPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${priorPath ?? ''}`;
-    let result: Awaited<ReturnType<typeof runFleetAuthConsistentBackupCycle>>;
-    try {
-      result = await runFleetAuthConsistentBackupCycle(makeCycleOptions(
-        root,
-        config,
-        async options => writeFakeFamily(options.backupDir),
-      ));
-    } finally {
-      process.env.PATH = priorPath;
-    }
+    const verifyFamilyRestore = vi.fn(async () => undefined);
+    const result = await runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir),
+      verifyFamilyRestore,
+    ));
 
     expect(result).toMatchObject({
       manifestVerified: true,
       encrypted: true,
       mirrorDir,
       prunedBackupDirs: [join(backupRootDir, oldName)],
+      familyRestoreVerified: true,
+      recoveryUnitCount: 2,
     });
+    expect(verifyFamilyRestore).toHaveBeenCalledOnce();
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_PAYLOAD_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(mirrorDir, '20260715T150000000Z', ENCRYPTED_BACKUP_PAYLOAD_NAME)))
       .toBe(true);
     expect(existsSync(join(mirrorDir, oldName))).toBe(false);
-    expect(readFileSync(pgRestoreLog, 'utf8').trim().split('\n')).toHaveLength(2);
 
     const restoredDir = join(root, 'restored');
     await decryptEncryptedBackupPackage({
@@ -211,35 +260,85 @@ describe('runFleetAuthConsistentBackupCycle', () => {
     expect(existsSync(join(restoredDir, FLEET_AUTH_BACKUP_MANIFEST_NAME))).toBe(true);
     expect(readFileSync(join(restoredDir, 'postgres/companion_one.dump'), 'utf8'))
       .toBe('companion-bytes\n');
+    const companionArtifact = join(
+      restoredDir,
+      'recovery',
+      'companions',
+      COMPANION_ID,
+      BACKUP_TIMESTAMP,
+    );
+    expect(readFileSync(join(companionArtifact, 'companion-tree/vault/marker.txt'), 'utf8'))
+      .toBe('companion-data\n');
+    expect(readFileSync(join(companionArtifact, 'sessions/channel.jsonl'), 'utf8'))
+      .toBe('{"session":true}\n');
+    expect(readFileSync(join(companionArtifact, 'notes/memories.jsonl'), 'utf8'))
+      .toBe('{"memory":true}\n');
+    expect(readFileSync(join(companionArtifact, 'companion/character.json'), 'utf8'))
+      .toBe('{"name":"Companion"}\n');
+    expect(readFileSync(
+      join(companionArtifact, 'companion/character-card-history.jsonl'),
+      'utf8',
+    )).toBe('{"version":1}\n');
+    expect(readFileSync(join(companionArtifact, 'workspace-tree/journal/marker.txt'), 'utf8'))
+      .toBe('personal-workspace\n');
+    const clusterArtifact = join(restoredDir, 'recovery', 'cluster', BACKUP_TIMESTAMP);
+    expect(readFileSync(join(clusterArtifact, 'workspace-tree/artifacts/world.txt'), 'utf8'))
+      .toBe('shared-workspace\n');
+    expect(readFileSync(join(clusterArtifact, 'system-config/settings.json'), 'utf8'))
+      .toBe('{}\n');
+    expect(readFileSync(join(clusterArtifact, 'system-config/fleet-auth.json'), 'utf8'))
+      .toBe('{}\n');
   });
 
   it('rejects a tampered family before publishing a backup', async () => {
     const root = makeRoot();
     const backupRootDir = join(root, 'backups');
-    const binDir = join(root, 'bin');
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, 'pg_restore'),
-      '#!/bin/sh\nprintf "1; 0 100 TABLE companion_one sample owner\\n"\n',
-      { mode: 0o755 },
-    );
-    const priorPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${priorPath ?? ''}`;
     const config = makeConfig(backupRootDir, {
       verifyRestore: true,
       encryption: ENCRYPTION,
     });
-    try {
-      await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
-        root,
-        config,
-        async options => writeFakeFamily(options.backupDir, true),
-      ))).rejects.toThrow(/digest mismatch/);
-    } finally {
-      process.env.PATH = priorPath;
-    }
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir, true),
+    ))).rejects.toThrow(/digest mismatch/);
 
     expect(existsSync(join(backupRootDir, '20260715T150000000Z'))).toBe(false);
+  });
+
+  it('rejects a missing workspace member before publishing the encrypted family', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: true });
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir),
+      async ({ fleetManifestPath }) => {
+        const artifactDir = join(
+          dirname(fleetManifestPath),
+          'companions',
+          COMPANION_ID,
+          BACKUP_TIMESTAMP,
+        );
+        rmSync(join(artifactDir, 'workspace-tree/journal/marker.txt'));
+        verifyWorkspaceTreeSnapshot(artifactDir);
+      },
+    ))).rejects.toThrow(/missing|mismatch/i);
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
+  });
+
+  it('rejects a restore-only failure before publishing the encrypted family', async () => {
+    const root = makeRoot();
+    const backupRootDir = join(root, 'backups');
+    const config = makeConfig(backupRootDir, { verifyRestore: true });
+    await expect(runFleetAuthConsistentBackupCycle(makeCycleOptions(
+      root,
+      config,
+      async options => writeFakeFamily(options.backupDir),
+      async () => { throw new Error('scratch restore rejected durable family'); },
+    ))).rejects.toThrow('scratch restore rejected durable family');
+    expect(existsSync(join(backupRootDir, BACKUP_TIMESTAMP))).toBe(false);
   });
 });
 
@@ -263,8 +362,10 @@ describe('registerScheduledFleetAuthBackupTask', () => {
       runCycle: async () => ({
         backupDir: join(root, 'backups/complete'),
         manifestVerified: true,
+        familyRestoreVerified: true,
         encrypted: true,
         prunedBackupDirs: [],
+        recoveryUnitCount: 2,
       }),
     });
 

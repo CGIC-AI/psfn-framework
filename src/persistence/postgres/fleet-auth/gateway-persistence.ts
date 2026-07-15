@@ -15,11 +15,24 @@ import {
   hasDurableFleetAuthAuthority,
   migrateFleetAuthSchema,
 } from './schema.js';
+import {
+  executeAccountReapproval,
+  type AccountReapprovalRequest,
+  type AccountReapprovalResult,
+} from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 
+/**
+ * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
+ * deliberately NOT exported as the authority interface; callers receive only
+ * bounded domain operations. Authority-state mutation must go through those
+ * operations (today: constrained trusted-host reapproval), never raw SQL.
+ */
 export interface GatewayFleetAuthPersistence {
-  pool: Pool;
   authorityFloors: FleetAuthAuthorityFloorStore;
+  reapproveAccountAuthority(
+    request: AccountReapprovalRequest,
+  ): Promise<AccountReapprovalResult>;
   close(): Promise<void>;
 }
 
@@ -258,8 +271,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lastLifecycleTransitionId,
     );
     return {
-      pool,
       authorityFloors,
+      reapproveAccountAuthority: request => executeAccountReapproval(pool, request),
       close: async () => await pool.end(),
     };
   } catch (error) {

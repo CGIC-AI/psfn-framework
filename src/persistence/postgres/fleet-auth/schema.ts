@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createPostgresPool } from '../../postgres.js';
 import { FLEET_AUTH_MIGRATIONS } from './migrations.js';
+import {
+  FLEET_AUTH_REAPPROVAL_DDL_SQL,
+  FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
+} from './reapproval-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -204,6 +209,17 @@ async function applyRoleGrants(
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
+  // The runtime broker may invalidate pending trusted-host ceremonies during
+  // reconciliation (DELETE) and observe them (SELECT), but it must never author
+  // or tamper with one: the ceremony is the reapproval procedure's only external
+  // gate, so a runtime able to INSERT/UPDATE a ceremony could self-mint a fully
+  // sanctioned reapproval. Ceremony minting belongs to the schema owner
+  // (migration / SECURITY DEFINER) or a future distinct trusted-host credential.
+  // The reapproval procedure consumes the row as the schema owner, so revoking
+  // the caller's INSERT/UPDATE does not affect it.
+  await client.query(
+    `REVOKE INSERT, UPDATE ON ${qualifiedTable('trusted_host_ceremonies')} FROM ${runtime}`,
+  );
   await client.query(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
@@ -216,6 +232,27 @@ async function applyRoleGrants(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
   await client.query(`REVOKE ALL ON ${qualifiedTable('schema_migrations')} FROM ${runtime}, ${backup}`);
+  // The broker runtime alone may invoke the constrained reapproval procedure.
+  // Its SECURITY DEFINER body — not this EXECUTE grant — is what actually
+  // reactivates quarantined authority; the runtime's ordinary UPDATE is fenced
+  // by restore_quarantine_activation_guard. The backup/restore coordinator
+  // never reapproves, so it receives no EXECUTE.
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+}
+
+/**
+ * Idempotently (re)assert the trusted-host reapproval boundary: the
+ * quarantine-activation guard triggers and the SECURITY DEFINER reapproval
+ * procedure. Applied on every migration run, like applyRoleGrants, so the
+ * boundary can never drift or be left half-applied. Requires the transaction's
+ * search_path to already include fleet_auth (set by migrateFleetAuthSchema).
+ */
+async function applyFleetAuthReapprovalBoundary(
+  client: import('pg').PoolClient,
+): Promise<void> {
+  await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {
@@ -281,6 +318,7 @@ export async function migrateFleetAuthSchema(options: {
           [migration.version, migration.name, checksum],
         );
       }
+      await applyFleetAuthReapprovalBoundary(client);
       await applyRoleGrants(client, options.roles);
       await client.query('COMMIT');
     } catch (error) {
@@ -360,7 +398,12 @@ async function assertNoUnexpectedFleetAuthGrantees(
   }
 }
 
-async function assertExactDml(pool: Pool, authority: string): Promise<void> {
+async function assertExactDml(
+  pool: Pool,
+  authority: string,
+  expectedRole: string,
+  roles: FleetAuthDatabaseRoles,
+): Promise<void> {
   const tables = [
     ...FLEET_AUTH_MUTABLE_TABLES,
     ...FLEET_AUTH_IMMUTABLE_TABLES,
@@ -383,14 +426,24 @@ async function assertExactDml(pool: Pool, authority: string): Promise<void> {
   `, [FLEET_AUTH_SCHEMA_NAME, tables, TABLE_PRIVILEGES]);
   const mutable = new Set<string>(FLEET_AUTH_MUTABLE_TABLES);
   const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
-  const drift = result.rows.filter(row => {
-    const expected = mutable.has(row.table_name)
-      ? ['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(row.privilege)
-      : immutable.has(row.table_name)
-        ? ['SELECT', 'INSERT'].includes(row.privilege)
-        : false;
-    return row.present !== expected;
-  });
+  const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
+    if (mutable.has(tableName)) {
+      // The runtime broker cannot author or tamper with trusted-host ceremonies;
+      // it may only SELECT/DELETE them. The backup/restore coordinator retains
+      // full DML on every mutable table and never receives reapproval EXECUTE.
+      if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
+        return new Set(['SELECT', 'DELETE']);
+      }
+      return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+    }
+    if (immutable.has(tableName)) {
+      return new Set(['SELECT', 'INSERT']);
+    }
+    return new Set<string>();
+  };
+  const drift = result.rows.filter(row => (
+    expectedPrivileges(row.table_name).has(row.privilege) !== row.present
+  ));
   if (drift.length > 0) {
     throw new Error(
       `${authority} PostgreSQL exact DML privileges violate the fleet_auth contract: `
@@ -416,7 +469,7 @@ export async function assertFleetAuthRuntimePrivileges(
       roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth runtime');
-    await assertExactDml(pool, 'Fleet auth runtime');
+    await assertExactDml(pool, 'Fleet auth runtime', roles.runtime, roles);
   } finally {
     await pool.end();
   }
@@ -439,7 +492,7 @@ export async function assertFleetAuthBackupRestorePrivileges(
       roles,
     );
     await assertNoUnexpectedFleetAuthGrantees(pool, roles, 'Fleet auth backup/restore');
-    await assertExactDml(pool, 'Fleet auth backup/restore');
+    await assertExactDml(pool, 'Fleet auth backup/restore', roles.backupRestore, roles);
   } finally {
     await pool.end();
   }

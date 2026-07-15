@@ -27,6 +27,7 @@ import {
   type FleetAuthDatabaseRoles,
 } from './schema.js';
 import { reconcileFleetAuthAuthorityState } from './gateway-persistence.js';
+import { executeAccountReapproval } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import {
   runFleetAuthConsistentBackup,
@@ -593,6 +594,9 @@ describe('fleet_auth Postgres authority boundary', () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    // The runtime role can no longer mint trusted-host ceremonies; the schema
+    // owner (migration role) authors this fixture ceremony instead.
+    const migration = createPostgresPool(db.migrationUrl, { max: 1 });
     const principalId = randomUUID();
     const sessionId = randomUUID();
     const companionId = randomUUID();
@@ -663,7 +667,7 @@ describe('fleet_auth Postgres authority boundary', () => {
                  1, $5, 1, 1, 1, clock_timestamp() + interval '5 minutes')`,
         [randomUUID(), principalId, sessionId, companionId, '9'.repeat(64)],
       );
-      await runtime.query(
+      await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
           (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
            global_auth_epoch, expires_at)
@@ -736,6 +740,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       })));
     } finally {
       await runtime.end();
+      await migration.end();
       rmSync(floorRoot, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);
@@ -956,6 +961,9 @@ describe('fleet_auth Postgres authority boundary', () => {
         restoredAt: '2026-07-15T12:00:00.000Z',
       });
       const targetRuntime = createPostgresPool(target.runtimeUrl, { max: 1 });
+      // The runtime role can no longer mint trusted-host ceremonies; the schema
+      // owner (migration role) authors the fixture ceremony below.
+      const targetMigration = createPostgresPool(target.migrationUrl, { max: 1 });
       try {
         const principal = await targetRuntime.query<{ status: string; restore_state: string }>(
           `SELECT status, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals WHERE principal_id = $1`,
@@ -985,25 +993,65 @@ describe('fleet_auth Postgres authority boundary', () => {
         );
         expect(passkey.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
 
-        // Account/binding/role reapproval is deliberately separate and cannot
-        // mutate the non-restored passkey floor.
-        await targetRuntime.query(
+        // The raw restore-quarantine bypass is now impossible: ordinary runtime
+        // SQL cannot reactivate a quarantined restore candidate. Every attempt
+        // is fenced by restore_quarantine_activation_guard.
+        await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals SET status = 'active' WHERE principal_id = $1`,
           [principalId],
-        );
-        await targetRuntime.query(
+        )).rejects.toThrow(/reapprove_account_authority/);
+        await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
            SET state = 'active' WHERE binding_id = $1`,
           [bindingId],
-        );
-        await targetRuntime.query(
+        )).rejects.toThrow(/reapprove_account_authority/);
+        await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants SET lifecycle = 'active' WHERE grant_id = $1`,
           [grantId],
+        )).rejects.toThrow(/reapprove_account_authority/);
+
+        // The constrained ceremony also refuses this account: its provider
+        // subject was tombstoned after the backup, so no reapproval can promote
+        // it. The denial leaves every row untouched.
+        const epochRow = await targetRuntime.query<{ global_auth_epoch: string }>(
+          `SELECT global_auth_epoch FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE`,
         );
+        const currentEpoch = Number(epochRow.rows[0]!.global_auth_epoch);
+        const ceremonyId = randomUUID();
+        await targetMigration.query(
+          `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+            (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+             expected_companion_id, expected_contact_id, exact_scope,
+             global_auth_epoch, expires_at)
+           VALUES ($1, $2, 'account_reapproval', '123456789012345678',
+                   '11111111-1111-4111-8111-111111111111', 'contact-owner', '{}',
+                   $3, clock_timestamp() + interval '5 minutes')`,
+          [ceremonyId, 'c'.repeat(64), currentEpoch],
+        );
+        await expect(executeAccountReapproval(targetRuntime, {
+          ceremonyId,
+          principalId,
+          provider: 'discord',
+          providerSubjectId: '123456789012345678',
+          companionId: '11111111-1111-4111-8111-111111111111',
+          contactId: 'contact-owner',
+          bindingId,
+          roleGrantId: grantId,
+          auditEventId: randomUUID(),
+          at: '2026-07-15T12:30:00.000Z',
+        })).rejects.toThrow(/tombstoned/i);
+        const afterDenial = await targetRuntime.query<{ status: string; restore_state: string }>(
+          `SELECT status, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals WHERE principal_id = $1`,
+          [principalId],
+        );
+        expect(afterDenial.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+
+        // Reapproval never touches the non-restored passkey floor.
         expect(floors.verifyCurrentPasskey(keyA)).toEqual({ allowed: false, reason: 'not_current' });
         expect(floors.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
       } finally {
         await targetRuntime.end();
+        await targetMigration.end();
       }
     } finally {
       await sourceMigration.end();
@@ -1114,6 +1162,323 @@ describe('fleet_auth Postgres authority boundary', () => {
       await sourceMigration.end();
       await sourceRuntime.end();
       rmSync(root, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('reapproves a clean quarantined account through the trusted-host ceremony and fences every bypass', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    // The runtime role can no longer mint trusted-host ceremonies; the schema
+    // owner (migration role) authors the fixture ceremonies below. The runtime
+    // pool still invokes the reapproval procedure via EXECUTE.
+    const migration = createPostgresPool(db.migrationUrl, { max: 1 });
+    const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-reapprove-'));
+    chmodSync(floorRoot, 0o700);
+    const principalId = randomUUID();
+    const bindingId = randomUUID();
+    const grantId = randomUUID();
+    const companionId = randomUUID();
+    const subjectId = '123456789012345678';
+    const passkeyHash = 'd'.repeat(64);
+    try {
+      const floors = new FleetAuthAuthorityFloorStore(floorRoot);
+      const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+
+      // A quarantined restore candidate: principal + provider subject + binding + role.
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [principalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+         VALUES ('discord', $1, $2, 'quarantined', 1, 'quarantined')`,
+        [subjectId, principalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'contact-owner', 'quarantined', '{"kind":"verified"}', 1, 'quarantined')`,
+        [bindingId, principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'owner', 'quarantined', 1, 'quarantined')`,
+        [grantId, principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
+          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
+           public_key_projection, credential_generation, state, authority_floor_generation,
+           restore_state)
+         VALUES ($1, $2, $3, 'fleet.example.test', 'verifier', 1, 'quarantined', 1, 'quarantined')`,
+        [passkeyHash, principalId, subjectId],
+      );
+
+      // Direct runtime SQL cannot escalate any quarantined row.
+      await expect(runtime.query(
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals SET status = 'active' WHERE principal_id = $1`,
+        [principalId],
+      )).rejects.toThrow(/reapprove_account_authority/);
+      await expect(runtime.query(
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals SET restore_state = 'live' WHERE principal_id = $1`,
+        [principalId],
+      )).rejects.toThrow(/reapprove_account_authority/);
+      await expect(runtime.query(
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+         SET authority_generation = authority_generation + 5 WHERE principal_id = $1`,
+        [principalId],
+      )).rejects.toThrow(/reapprove_account_authority/);
+      await expect(runtime.query(
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials SET state = 'pending' WHERE credential_id_hash = $1`,
+        [passkeyHash],
+      )).rejects.toThrow(/passkey projection cannot be reactivated/);
+
+      // A ceremony bound to a different provider subject cannot promote this account.
+      const wrongCeremonyId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', '123456789012345679', '{}', 1,
+                 clock_timestamp() + interval '5 minutes')`,
+        [wrongCeremonyId, 'e'.repeat(64)],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: wrongCeremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:00:00.000Z',
+      })).rejects.toThrow(/does not bind the requested account/);
+
+      // The exact ceremony reapproves the account atomically.
+      const ceremonyId = randomUUID();
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', '{}', 1,
+                 clock_timestamp() + interval '5 minutes')`,
+        [ceremonyId, 'f'.repeat(64), subjectId, companionId],
+      );
+      const result = await executeAccountReapproval(runtime, {
+        ceremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:05:00.000Z',
+      });
+      expect(result).toMatchObject({
+        globalAuthEpoch: 2,
+        authnVersion: 2,
+        authzVersion: 2,
+        bindingVersion: 2,
+        roleVersion: 2,
+      });
+
+      const principal = await runtime.query<{ status: string; restore_state: string }>(
+        `SELECT status, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals WHERE principal_id = $1`,
+        [principalId],
+      );
+      expect(principal.rows[0]).toEqual({ status: 'active', restore_state: 'live' });
+      const provider = await runtime.query<{ state: string; restore_state: string }>(
+        `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects WHERE subject_id = $1`,
+        [subjectId],
+      );
+      expect(provider.rows[0]).toEqual({ state: 'active', restore_state: 'live' });
+      const binding = await runtime.query<{ state: string; restore_state: string; version: string }>(
+        `SELECT state, restore_state, version::text AS version
+         FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1`,
+        [bindingId],
+      );
+      expect(binding.rows[0]).toEqual({ state: 'active', restore_state: 'live', version: '2' });
+      const role = await runtime.query<{ lifecycle: string; restore_state: string }>(
+        `SELECT lifecycle, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants WHERE grant_id = $1`,
+        [grantId],
+      );
+      expect(role.rows[0]).toEqual({ lifecycle: 'active', restore_state: 'live' });
+      const audit = await runtime.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+         WHERE action = 'authority.reapprove' AND decision = 'allow' AND principal_id = $1
+           AND global_auth_epoch = 2`,
+        [principalId],
+      );
+      expect(audit.rows[0]?.count).toBe('1');
+      const state = await runtime.query<{ global_auth_epoch: string }>(
+        `SELECT global_auth_epoch FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE`,
+      );
+      expect(state.rows[0]?.global_auth_epoch).toBe('2');
+      const consumed = await runtime.query<{ status: string }>(
+        `SELECT status FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies WHERE ceremony_id = $1`,
+        [ceremonyId],
+      );
+      expect(consumed.rows[0]?.status).toBe('consumed');
+      const passkey = await runtime.query<{ state: string; restore_state: string }>(
+        `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials WHERE credential_id_hash = $1`,
+        [passkeyHash],
+      );
+      expect(passkey.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
+
+      // Replay is denied: the ceremony is consumed and the epoch has advanced.
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId,
+        principalId,
+        provider: 'discord',
+        providerSubjectId: subjectId,
+        companionId,
+        contactId: 'contact-owner',
+        bindingId,
+        roleGrantId: grantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:10:00.000Z',
+      })).rejects.toThrow(/not pending/);
+    } finally {
+      await runtime.end();
+      await migration.end();
+      rmSync(floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects runtime DELETE+INSERT and fresh-PK INSERT quarantine reactivation of contact bindings and role grants', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    const principalId = randomUUID();
+    const bindingId = randomUUID();
+    const grantId = randomUUID();
+    const companionId = randomUUID();
+    try {
+      // A quarantined restore candidate: principal + one binding + one role.
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [principalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'contact-owner', 'quarantined', '{"kind":"verified"}', 1, 'quarantined')`,
+        [bindingId, principalId, companionId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'owner', 'quarantined', 1, 'quarantined')`,
+        [grantId, principalId, companionId],
+      );
+
+      // Runtime cannot DELETE a quarantined row to clear its unique-index slot.
+      await expect(runtime.query(
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1`,
+        [bindingId],
+      )).rejects.toThrow(/quarantined fleet_auth authority row can only be removed/);
+      await expect(runtime.query(
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants WHERE grant_id = $1`,
+        [grantId],
+      )).rejects.toThrow(/quarantined fleet_auth authority row can only be removed/);
+
+      // Runtime cannot INSERT a fresh live/active authority row for a quarantined
+      // principal (a distinct contact_id isolates the trigger as the sole
+      // rejector, so no unique index masks the guard).
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'reactivation-attempt', 'active', '{"kind":"verified"}', 1, 'live')`,
+        [randomUUID(), principalId, companionId],
+      )).rejects.toThrow(/live fleet_auth authority row for a quarantined principal/);
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, authority_generation, restore_state)
+         VALUES ($1, $2, $3, 'owner', 'active', 1, 'live')`,
+        [randomUUID(), principalId, companionId],
+      )).rejects.toThrow(/live fleet_auth authority row for a quarantined principal/);
+
+      // The rows remain quarantined; no reactivation happened.
+      const binding = await runtime.query<{ state: string; restore_state: string }>(
+        `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1`,
+        [bindingId],
+      );
+      expect(binding.rows[0]).toEqual({ state: 'quarantined', restore_state: 'quarantined' });
+      const role = await runtime.query<{ lifecycle: string; restore_state: string }>(
+        `SELECT lifecycle, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants WHERE grant_id = $1`,
+        [grantId],
+      );
+      expect(role.rows[0]).toEqual({ lifecycle: 'quarantined', restore_state: 'quarantined' });
+    } finally {
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies runtime INSERT on trusted_host_ceremonies and blocks a self-minted reapproval', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    // The privilege matrix must still pass with runtime lacking ceremony INSERT.
+    await expect(assertFleetAuthRuntimePrivileges(db.runtimeUrl, ROLES)).resolves.toBeUndefined();
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+    const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-noceremony-'));
+    chmodSync(floorRoot, 0o700);
+    const principalId = randomUUID();
+    try {
+      // Provision authority lineage so a reapproval attempt reaches the ceremony
+      // gate rather than failing earlier on an unprovisioned lineage.
+      const floors = new FleetAuthAuthorityFloorStore(floorRoot);
+      const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+      await reconcileFleetAuthAuthorityState(runtime, floor, randomUUID());
+
+      // Runtime can no longer author a trusted-host ceremony.
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id, exact_scope,
+           global_auth_epoch, expires_at)
+         VALUES ($1, $2, 'account_reapproval', '123456789012345678', '{}', 1,
+                 clock_timestamp() + interval '5 minutes')`,
+        [randomUUID(), '1'.repeat(64)],
+      )).rejects.toThrow(/permission denied/);
+
+      // Unable to mint a ceremony, a runtime reapproval attempt cannot pass the
+      // ceremony-consumption gate: the procedure raises before any mutation.
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [principalId],
+      );
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: randomUUID(),
+        principalId,
+        provider: 'discord',
+        providerSubjectId: '123456789012345678',
+        companionId: randomUUID(),
+        contactId: 'contact-owner',
+        bindingId: randomUUID(),
+        roleGrantId: randomUUID(),
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:00:00.000Z',
+      })).rejects.toThrow(/ceremony not found/);
+    } finally {
+      await runtime.end();
+      rmSync(floorRoot, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);
 });

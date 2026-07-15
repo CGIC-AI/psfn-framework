@@ -32,7 +32,8 @@ export class FakePostgresPool {
   contactMaintenanceWatermarks = new Map<string, string>();
   failNextWriteForChannel: string | null = null;
   failNextMutationAudit = false;
-  beforeNextContactProfileUpdate: ((row: ContactRow) => void) | null = null;
+  beforeNextContactProfileUpdate: ((row: ContactRow) => void | Promise<void>) | null = null;
+  beforeNextContactTrustUpdate: ((row: ContactRow) => void | Promise<void>) | null = null;
   afterNextChannelIdentityLookup: (() => void) | null = null;
   private transactionSnapshot?: {
     contacts: Map<string, ContactRow>;
@@ -138,6 +139,11 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone from contacts where id = $1 for update')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row ? [row] : []);
+    }
+
     if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where discord_user_id = $1 limit 1')) {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);
@@ -162,6 +168,11 @@ export class FakePostgresPool {
     if (normalized.startsWith('select emotional_time_series from contacts where id = $1 limit 1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [{ emotional_time_series: row.emotional_time_series ?? [] }] : []);
+    }
+
+    if (normalized.startsWith('select trust_level, trust_version::text as trust_version from contacts where id = $1 limit 1')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row ? [{ trust_level: row.trust_level, trust_version: row.trust_version ?? '0' }] : []);
     }
 
     if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
@@ -194,6 +205,7 @@ export class FakePostgresPool {
         display_name: String(values[2] ?? ''),
         nickname: values[3] == null ? null : String(values[3]),
         trust_level: String(values[4] ?? 'regular'),
+        trust_version: '0',
         relationship_type: String(values[5] ?? 'stranger'),
         is_machine_intelligence: false,
         emotional_baseline: values[6] ?? {},
@@ -237,55 +249,78 @@ export class FakePostgresPool {
       return result(row ? [{ actor: row.actor }] : []);
     }
 
-    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, trust_level = $4, relationship_type = $5, emotional_baseline = $6, last_seen = $7, notes = coalesce($8, notes), timezone = $9 where id = $10')) {
-      const id = String(values[9] ?? '');
+    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, relationship_type = $4, emotional_baseline = $5, last_seen = $6, notes = coalesce($7, notes), timezone = $8 where id = $9')) {
+      const id = String(values[8] ?? '');
       const row = this.contacts.get(id);
       if (!row) return result();
       const beforeUpdate = this.beforeNextContactProfileUpdate;
       this.beforeNextContactProfileUpdate = null;
-      beforeUpdate?.(row);
+      await beforeUpdate?.(row);
       if (
-        normalized.includes('and relationship_type = $11')
-        && row.relationship_type !== String(values[10] ?? '')
+        normalized.includes('and relationship_type = $10')
+        && row.relationship_type !== String(values[9] ?? '')
       ) {
         return result();
       }
       row.discord_user_id = row.discord_user_id ?? (values[0] == null ? null : String(values[0]));
       row.display_name = String(values[1] ?? row.display_name);
       row.nickname = values[2] == null ? null : String(values[2]);
-      row.trust_level = String(values[3] ?? row.trust_level);
-      row.relationship_type = String(values[4] ?? row.relationship_type);
-      row.emotional_baseline = values[5] ?? row.emotional_baseline;
-      row.last_seen = String(values[6] ?? row.last_seen);
-      if (values[7] !== null && values[7] !== undefined) {
-        row.notes = String(values[7]);
+      row.relationship_type = String(values[3] ?? row.relationship_type);
+      row.emotional_baseline = values[4] ?? row.emotional_baseline;
+      row.last_seen = String(values[5] ?? row.last_seen);
+      if (values[6] !== null && values[6] !== undefined) {
+        row.notes = String(values[6]);
       }
-      row.timezone = values[8] == null ? null : String(values[8]);
+      row.timezone = values[7] == null ? null : String(values[7]);
       return normalized.endsWith('returning id') ? result([{ id: row.id }]) : result();
     }
 
-    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, trust_level = $4, emotional_baseline = $5, last_seen = $6, notes = coalesce($7, notes), timezone = $8 where id = $9')) {
-      const id = String(values[8] ?? '');
+    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, emotional_baseline = $4, last_seen = $5, notes = coalesce($6, notes), timezone = $7 where id = $8')) {
+      const id = String(values[7] ?? '');
       const row = this.contacts.get(id);
       if (!row) return result();
       const beforeUpdate = this.beforeNextContactProfileUpdate;
       this.beforeNextContactProfileUpdate = null;
-      beforeUpdate?.(row);
+      await beforeUpdate?.(row);
       row.discord_user_id = row.discord_user_id ?? (values[0] == null ? null : String(values[0]));
       row.display_name = String(values[1] ?? row.display_name);
       row.nickname = values[2] == null ? null : String(values[2]);
-      row.trust_level = String(values[3] ?? row.trust_level);
-      row.emotional_baseline = values[4] ?? row.emotional_baseline;
-      row.last_seen = String(values[5] ?? row.last_seen);
-      if (values[6] !== null && values[6] !== undefined) row.notes = String(values[6]);
-      row.timezone = values[7] == null ? null : String(values[7]);
+      row.emotional_baseline = values[3] ?? row.emotional_baseline;
+      row.last_seen = String(values[4] ?? row.last_seen);
+      if (values[5] !== null && values[5] !== undefined) row.notes = String(values[5]);
+      row.timezone = values[6] == null ? null : String(values[6]);
       return result();
     }
 
-    if (normalized.startsWith('update contacts set trust_level = $1 where id = $2')) {
+    if (normalized.startsWith('update contacts set trust_level = $1')) {
       const row = this.contacts.get(String(values[1] ?? ''));
-      if (row) row.trust_level = String(values[0] ?? row.trust_level);
-      return result();
+      if (!row) return result();
+      const beforeUpdate = this.beforeNextContactTrustUpdate;
+      this.beforeNextContactTrustUpdate = null;
+      await beforeUpdate?.(row);
+      if (
+        normalized.includes('and trust_level = $3')
+        && row.trust_level !== String(values[2] ?? '')
+      ) {
+        return result();
+      }
+      if (
+        normalized.includes('and trust_version = $4')
+        && (row.trust_version ?? '0') !== String(values[3] ?? '')
+      ) {
+        return result();
+      }
+      if (
+        normalized.includes("and trust_level not in ('primary', 'trusted')")
+        && (row.trust_level === 'primary' || row.trust_level === 'trusted')
+      ) {
+        return result();
+      }
+      row.trust_level = String(values[0] ?? row.trust_level);
+      if (normalized.includes('trust_version = trust_version + 1')) {
+        row.trust_version = String(BigInt(row.trust_version ?? '0') + 1n);
+      }
+      return normalized.endsWith('returning id') ? result([{ id: row.id }]) : result();
     }
 
     if (normalized.startsWith('update contacts set relationship_type = $1 where id = $2 and relationship_type = $3 returning id')) {
@@ -772,10 +807,11 @@ export class FakePostgresPool {
       return { ...result(), rowCount: existed ? 1 : 0 };
     }
 
-    if (normalized.startsWith('update contacts set trust_level = \'primary\' where id = $1')) {
+    if (normalized.startsWith("update contacts set trust_level = 'primary', trust_version = trust_version + 1 where id = $1 and trust_level <> 'primary'")) {
       const row = this.contacts.get(String(values[0] ?? ''));
-      if (row) {
+      if (row && row.trust_level !== 'primary') {
         row.trust_level = 'primary';
+        row.trust_version = String(BigInt(row.trust_version ?? '0') + 1n);
       }
       return result();
     }
@@ -933,13 +969,17 @@ export class FakePostgresPool {
       return result();
     }
 
-    if (normalized.startsWith('update contacts set discord_user_id = $1, display_name = $2, nickname = $3, trust_level = $4, relationship_type = $5, emotional_baseline = $6, emotional_time_series = $7, first_seen = $8, last_seen = $9, notes = $10, timezone = $11 where id = $12')) {
+    if (normalized.startsWith('update contacts set discord_user_id = $1, display_name = $2, nickname = $3, trust_level = $4, trust_version = case when trust_level is distinct from $4 then trust_version + 1 else trust_version end, relationship_type = $5')) {
       const row = this.contacts.get(String(values[11] ?? ''));
       if (row) {
         row.discord_user_id = values[0] == null ? null : String(values[0]);
         row.display_name = String(values[1] ?? row.display_name);
         row.nickname = values[2] == null ? null : String(values[2]);
-        row.trust_level = String(values[3] ?? row.trust_level);
+        const mergedTrustLevel = String(values[3] ?? row.trust_level);
+        if (row.trust_level !== mergedTrustLevel) {
+          row.trust_version = String(BigInt(row.trust_version ?? '0') + 1n);
+        }
+        row.trust_level = mergedTrustLevel;
         row.relationship_type = String(values[4] ?? row.relationship_type);
         row.emotional_baseline = values[5] ?? row.emotional_baseline;
         row.emotional_time_series = typeof values[6] === 'string' ? JSON.parse(values[6]) : values[6];

@@ -1,3 +1,4 @@
+import type { Pool, PoolClient } from 'pg';
 import type { Contact } from '../types.js';
 import type { ContactTrustDriftApplyResult, ContactTrustDriftSuggestion, ContactTrustMutationOptions } from '../contact-store-port.js';
 import type { TrustLevel, LowTierTrustLevel } from '../../../system/trust/types.js';
@@ -5,7 +6,9 @@ import { isHighTierTrustLevel, isLowTierTrustLevel } from '../../../system/trust
 import { evaluateLowTierTrustDriftSuggestion, isManualHighTierTrustMutationAuthorized, resolveTrustMutationSource, type TrustDriftBehaviorSignals } from '../../../system/trust/policy.js';
 import { isPrimaryIdentity } from '../store/identity-utils.js';
 import type { collectUpsertIdentities } from '../store/upsert.js';
+import { withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+import { compareAndSetExplicitTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
 
 const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   async appendPrimaryTrustAudit(
@@ -15,11 +18,12 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
     outcome: 'allowed' | 'denied',
     actor?: string,
     details?: Record<string, unknown>,
+    queryable?: Pool | PoolClient,
   ): Promise<void> {
     const baseActor = actor?.trim() || `system:contact_store:${source}`;
     const auditActor = `${baseActor}:primary_${outcome}`;
     if (contactId) {
-      await this.appendMutationAuditEntry(contactId, 'trust_level', previousTrustLevel, 'primary', auditActor);
+      await this.appendMutationAuditEntry(contactId, 'trust_level', previousTrustLevel, 'primary', auditActor, queryable);
     }
     if (outcome === 'denied') {
       console.warn('Denied primary trust mutation', {
@@ -40,15 +44,18 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   ): boolean {
     if (options.allowPrimaryTrustAssignment === true) return true;
     if (!this.primaryUserId) return false;
-    if (contact?.discordUserId?.trim() === this.primaryUserId) return true;
-    if (discordUserId?.trim() === this.primaryUserId) return true;
-    const candidates = [
-      ...identities,
+    const boundCandidates = [
       ...(Array.isArray(contact?.channelIdentities) ? contact.channelIdentities : []),
       ...(contact?.discordUserId ? [{ channel: 'discord', userId: contact.discordUserId }] : []),
+    ];
+    if (contact) {
+      return boundCandidates.some(identity => isPrimaryIdentity(identity, this.primaryUserId));
+    }
+    const creationCandidates = [
+      ...identities,
       ...(discordUserId ? [{ channel: 'discord', userId: discordUserId }] : []),
     ];
-    return candidates.some(identity => isPrimaryIdentity(identity, this.primaryUserId));
+    return creationCandidates.some(identity => isPrimaryIdentity(identity, this.primaryUserId));
   },
 
   async suggestLowTierTrustDrift(
@@ -118,38 +125,61 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   ): Promise<boolean> {
     const contact = await this.getById(id);
     if (!contact) return false;
-    if (contact.trustLevel === trustLevel) return true;
+    const trustSnapshot = await loadContactTrustSnapshot(this.pool, id);
+    if (!trustSnapshot) return false;
+    const currentTrustLevel = trustSnapshot.trustLevel;
+    if (currentTrustLevel === trustLevel) return true;
 
     const mutationSource = resolveTrustMutationSource(actor, options.mutationSource);
     if (
       mutationSource === 'behavior_drift'
-      && (isHighTierTrustLevel(contact.trustLevel) || isHighTierTrustLevel(trustLevel))
+      && (isHighTierTrustLevel(currentTrustLevel) || isHighTierTrustLevel(trustLevel))
     ) {
       return false;
     }
     if (
-      (isHighTierTrustLevel(contact.trustLevel) || isHighTierTrustLevel(trustLevel))
+      (isHighTierTrustLevel(currentTrustLevel) || isHighTierTrustLevel(trustLevel))
       && !isManualHighTierTrustMutationAuthorized(actor, mutationSource)
     ) {
       return false;
     }
-    if (contact.trustLevel === 'primary') {
+    if (currentTrustLevel === 'primary') {
       return false;
     }
     if (trustLevel === 'primary' && !this.isPrimaryTrustAssignmentAuthorized(contact, [], contact.discordUserId, options)) {
-      await this.appendPrimaryTrustAudit(contact.id, contact.trustLevel, 'set_trust_level', 'denied', actor, {
+      await this.appendPrimaryTrustAudit(contact.id, currentTrustLevel, 'set_trust_level', 'denied', actor, {
         requestedTrustLevel: trustLevel,
         hasConfiguredPrimaryUserId: Boolean(this.primaryUserId),
       });
       return false;
     }
 
-    await this.pool.query('UPDATE contacts SET trust_level = $1 WHERE id = $2', [trustLevel, id]);
-    if (trustLevel === 'primary') {
-      await this.appendPrimaryTrustAudit(id, contact.trustLevel, 'set_trust_level', 'allowed', actor);
-    } else {
-      await this.appendMutationAuditEntry(id, 'trust_level', contact.trustLevel, trustLevel, actor);
-    }
+    const updated = await withPostgresClient(this.pool, async (client) => {
+      const changed = await compareAndSetExplicitTrust(client, id, trustSnapshot, trustLevel);
+      if (!changed) return false;
+      if (trustLevel === 'primary') {
+        await this.appendPrimaryTrustAudit(
+          id,
+          currentTrustLevel,
+          'set_trust_level',
+          'allowed',
+          actor,
+          undefined,
+          client,
+        );
+      } else {
+        await this.appendMutationAuditEntry(
+          id,
+          'trust_level',
+          currentTrustLevel,
+          trustLevel,
+          actor,
+          client,
+        );
+      }
+      return true;
+    });
+    if (!updated) return false;
     await this.syncContactExports();
     return true;
   },

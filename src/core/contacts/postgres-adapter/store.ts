@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type {
   ContactStorePort,
   ContactTrustMutationOptions,
@@ -88,7 +88,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare loadContactByChannelIdentity: (channel: ContactChannel, channelUserId: string) => Promise<Contact | undefined>;
   declare loadContactByRow: (row: ContactRow) => Promise<Contact>;
   declare touchContactLastSeen: (id: string) => Promise<void>;
-  declare appendMutationAuditEntry: (contactId: string, field: ContactMutationAuditEntry['field'], oldValue: string | null, newValue: string | null, actor?: string) => Promise<void>;
+  declare appendMutationAuditEntry: (contactId: string, field: ContactMutationAuditEntry['field'], oldValue: string | null, newValue: string | null, actor?: string, queryable?: Pool | PoolClient) => Promise<void>;
   declare upsertIdentityLinkRecord: (contactId: string, channel: string, channelUserId: string, firstSeen: string, lastSeen: string, privacyLevel?: ChannelPrivacyLevel) => Promise<ContactIdentityLinkResult>;
   declare upsertSocialGraphEntityForContact: (contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>) => Promise<SocialGraphEntity>;
   declare loadSocialGraphEntityByRow: (row: SocialGraphEntityRow | undefined) => Promise<SocialGraphEntity | undefined>;
@@ -96,7 +96,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare loadSocialGraphEntityByContactId: (contactId: string) => Promise<SocialGraphEntity | undefined>;
   declare loadSocialRelationshipEdgeRows: (query?: SocialRelationshipEdgeQuery) => Promise<Array<SocialRelationshipEdgeRow & { source_sensitivity: string; target_sensitivity: string }>>;
   declare loadRelatedContactIds: (contactId: string, query?: SocialRelationshipEdgeQuery) => Promise<string[]>;
-  declare appendPrimaryTrustAudit: (contactId: string | undefined, previousTrustLevel: TrustLevel | null, source: 'upsert' | 'set_trust_level', outcome: 'allowed' | 'denied', actor?: string, details?: Record<string, unknown>) => Promise<void>;
+  declare appendPrimaryTrustAudit: (contactId: string | undefined, previousTrustLevel: TrustLevel | null, source: 'upsert' | 'set_trust_level', outcome: 'allowed' | 'denied', actor?: string, details?: Record<string, unknown>, queryable?: Pool | PoolClient) => Promise<void>;
   declare isPrimaryTrustAssignmentAuthorized: (contact: Contact | undefined, identities: Array<{ channel: string; userId: string }>, discordUserId: string | undefined, options?: ContactTrustMutationOptions) => boolean;
   declare syncContactExports: () => Promise<void>;
   declare toVerification: (row: import('./rows.js').ContactIdentityVerificationRow) => ContactIdentityLinkVerification;

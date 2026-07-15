@@ -99,6 +99,7 @@ describe('Postgres live schema migrations', () => {
       'conversation_channels',
       'emotional_time_series',
       'is_machine_intelligence',
+      'trust_version',
     ]) {
       expectAddColumn(sql, 'contacts', column);
     }

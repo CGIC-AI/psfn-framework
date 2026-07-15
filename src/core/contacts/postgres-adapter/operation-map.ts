@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type {
   ContactStorePort,
   ContactTrustMutationOptions,
@@ -39,6 +39,7 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     oldValue: string | null,
     newValue: string | null,
     actor?: string,
+    queryable?: Pool | PoolClient,
   ): Promise<void>;
   upsertIdentityLinkRecord(
     contactId: string,
@@ -65,6 +66,7 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     outcome: 'allowed' | 'denied',
     actor?: string,
     details?: Record<string, unknown>,
+    queryable?: Pool | PoolClient,
   ): Promise<void>;
   isPrimaryTrustAssignmentAuthorized(
     contact: Contact | undefined,

@@ -57,6 +57,7 @@ import {
 } from './mapping.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+import { compareAndSetGenericUpsertTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -105,6 +106,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     if (
       partial.trustLevel === 'primary'
+      && target?.trustLevel !== 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
     ) {
       await this.appendPrimaryTrustAudit(target?.id, target?.trustLevel ?? null, 'upsert', 'denied', options.actor, {
@@ -116,7 +118,11 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     const now = new Date().toISOString();
     if (target) {
-      const previousTrustLevel = target.trustLevel;
+      const trustSnapshot = await loadContactTrustSnapshot(this.pool, target.id);
+      if (!trustSnapshot) {
+        throw new Error(`Concurrent contact deletion detected during contact upsert: ${target.id}`);
+      }
+      const previousTrustLevel = trustSnapshot.trustLevel;
       const nextDisplayName = partial.displayName.trim() || target.displayName;
       const requestedNickname = normalizeNicknameValue(partial.nickname);
       const nextNickname = requestedNickname === undefined ? (target.nickname ?? undefined) : requestedNickname;
@@ -124,9 +130,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       // entered a high trust tier, only the explicit setTrustLevel path may
       // move it out again; otherwise a resolver miss followed by an upsert
       // race can replace trusted with the public new-speaker floor.
-      const nextTrustLevel = isHighTierTrustLevel(target.trustLevel)
-        ? target.trustLevel
-        : (partial.trustLevel ?? target.trustLevel);
+      const nextTrustLevel = isHighTierTrustLevel(previousTrustLevel)
+        ? previousTrustLevel
+        : (partial.trustLevel ?? previousTrustLevel);
       const relationshipMutationRequested = partial.relationshipType !== undefined;
       const nextRelationshipType = partial.relationshipType ?? target.relationshipType;
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};
@@ -138,7 +144,6 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         nextDiscordUserId ?? null,
         nextDisplayName,
         nextNickname ?? null,
-        nextTrustLevel,
       ];
       const trailingValues = [
         nextEmotion,
@@ -155,13 +160,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               SET discord_user_id = COALESCE(discord_user_id, $1),
                   display_name = $2,
                   nickname = $3,
-                  trust_level = $4,
-                  relationship_type = $5,
-                  emotional_baseline = $6,
-                  last_seen = $7,
-                  notes = COALESCE($8, notes),
-                  timezone = $9
-              WHERE id = $10 AND relationship_type = $11
+                  relationship_type = $4,
+                  emotional_baseline = $5,
+                  last_seen = $6,
+                  notes = COALESCE($7, notes),
+                  timezone = $8
+              WHERE id = $9 AND relationship_type = $10
               RETURNING id
             `,
             [...commonValues, nextRelationshipType, ...trailingValues, target.relationshipType],
@@ -195,16 +199,45 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             SET discord_user_id = COALESCE(discord_user_id, $1),
                 display_name = $2,
                 nickname = $3,
-                trust_level = $4,
-                emotional_baseline = $5,
-                last_seen = $6,
-                notes = COALESCE($7, notes),
-                timezone = $8
-            WHERE id = $9
+                emotional_baseline = $4,
+                last_seen = $5,
+                notes = COALESCE($6, notes),
+                timezone = $7
+            WHERE id = $8
           `,
           [...commonValues, ...trailingValues],
         );
       }
+
+      await withPostgresClient(this.pool, async (client) => {
+        const changed = await compareAndSetGenericUpsertTrust(
+          client,
+          target.id,
+          trustSnapshot,
+          nextTrustLevel,
+        );
+        if (!changed) return;
+        if (nextTrustLevel === 'primary') {
+          await this.appendPrimaryTrustAudit(
+            target.id,
+            previousTrustLevel,
+            'upsert',
+            'allowed',
+            options.actor,
+            undefined,
+            client,
+          );
+        } else {
+          await this.appendMutationAuditEntry(
+            target.id,
+            'trust_level',
+            previousTrustLevel,
+            nextTrustLevel,
+            options.actor,
+            client,
+          );
+        }
+      });
 
       for (const identity of identities) {
         await this.upsertIdentityLinkRecord(
@@ -217,11 +250,6 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         );
       }
 
-      if (nextTrustLevel === 'primary' && previousTrustLevel !== 'primary') {
-        await this.appendPrimaryTrustAudit(target.id, previousTrustLevel, 'upsert', 'allowed', options.actor);
-      } else if (previousTrustLevel !== nextTrustLevel) {
-        await this.appendMutationAuditEntry(target.id, 'trust_level', previousTrustLevel, nextTrustLevel, options.actor);
-      }
       if (target.displayName !== nextDisplayName) {
         await this.appendMutationAuditEntry(target.id, 'display_name', target.displayName, nextDisplayName, options.actor);
       }
@@ -510,28 +538,26 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
   async mergeContacts(sourceContactId: string, targetContactId: string): Promise<boolean> {
     if (sourceContactId === targetContactId) return true;
     return await withPostgresClient(this.pool, async (client) => {
-      const sourceRow = await queryOne<ContactRow>(
-        this.pool,
-        `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
-          FROM contacts
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [sourceContactId],
-      );
-      const targetRow = await queryOne<ContactRow>(
-        this.pool,
-        `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
-          FROM contacts
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [targetContactId],
-      );
+      // SAFETY: Lock both contacts in deterministic ID order and derive the
+      // merged trust from those locked rows. This prevents a stale merge from
+      // overwriting an explicit trust mutation and avoids AB-BA deadlocks.
+      const lockedRows = new Map<string, ContactRow>();
+      for (const contactId of [sourceContactId, targetContactId].sort()) {
+        const result = await client.query<ContactRow>(
+          `
+            SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+                   emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
+            FROM contacts
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [contactId],
+        );
+        if (result.rowCount !== 1) return false;
+        lockedRows.set(contactId, result.rows[0]);
+      }
+      const sourceRow = lockedRows.get(sourceContactId);
+      const targetRow = lockedRows.get(targetContactId);
       if (!sourceRow || !targetRow) return false;
 
       await client.query('UPDATE contact_channel_ids SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
@@ -678,6 +704,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               display_name = $2,
               nickname = $3,
               trust_level = $4,
+              trust_version = CASE
+                WHEN trust_level IS DISTINCT FROM $4 THEN trust_version + 1
+                ELSE trust_version
+              END,
               relationship_type = $5,
               emotional_baseline = $6,
               emotional_time_series = $7,
@@ -1244,8 +1274,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       await this.pool.query(
         `
           UPDATE contacts
-          SET trust_level = 'primary'
-          WHERE id = $1
+          SET trust_level = 'primary',
+              trust_version = trust_version + 1
+          WHERE id = $1 AND trust_level <> 'primary'
         `,
         [contactId],
       );

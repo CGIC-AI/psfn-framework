@@ -367,8 +367,8 @@ describe('companion.message.send routing (W6)', () => {
     await identifyAgent(agent, 'comp-a');
 
     const response = await invokeRpc(agent, 12, 'companion.message.send', {
-      channelId: 'discord:general',
-      content: 'wrong lane',
+      channelId: 'companion-dm:comp-a!:comp-b',
+      content: 'malformed companion lane',
       companionId: 'comp-a',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);

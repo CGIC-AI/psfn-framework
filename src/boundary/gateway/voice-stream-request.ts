@@ -17,6 +17,11 @@ import {
 } from './protocol.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { applyWyomingRoutingPolicy } from './wyoming-routing.js';
+import {
+  createGatewayRoutingEnvelope,
+  type CompanionId,
+} from '../../shared/routing/envelope.js';
+import type { CompanionRoutingBinding } from '../../shared/routing/companion-id.js';
 
 const DEFAULT_VOICE_CHUNK_SIZE = 120;
 const DEFAULT_VOICE_QUEUE_SIZE = 32;
@@ -51,12 +56,12 @@ export interface VoiceStreamRequestOptions {
   signal?: AbortSignal;
 }
 
-export interface RequestAgentVoiceStreamOptions {
+export interface RequestAgentVoiceStreamOptions extends CompanionRoutingBinding {
   client: JSONRPCServerAndClient;
   message: SubstrateMessage;
   options?: VoiceStreamRequestOptions;
   wyomingShardRouting: WyomingShardRoutingConfig;
-  companionId: string;
+  companionId: CompanionId;
   nextRequestCounter: () => number;
 }
 
@@ -75,8 +80,23 @@ export async function requestAgentVoiceStream({
   const requestCounter = nextRequestCounter();
   const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${requestCounter}`;
   const streamId = options.streamId ?? `voice-stream-${Date.now()}-${requestCounter}`;
+  const gatewayAddressedMessage: SubstrateMessage = {
+    ...message,
+    routing: {
+      ...(message.routing ?? {}),
+      gateway: createGatewayRoutingEnvelope({
+        companionId,
+        ...(message.routing?.gateway?.shard
+          ? { shard: message.routing.gateway.shard }
+          : {}),
+        ...(message.routing?.gateway?.subagentAddress
+          ? { subagentAddress: message.routing.gateway.subagentAddress }
+          : {}),
+      }),
+    },
+  };
   const routedMessage = applyWyomingRoutingPolicy(
-    message,
+    gatewayAddressedMessage,
     options.metadata,
     wyomingShardRouting,
     companionId,

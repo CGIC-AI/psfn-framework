@@ -11,6 +11,7 @@ import type {
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
+import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
@@ -152,7 +153,7 @@ export interface SubstrateConfig {
   discordToken?: string;
   discordBotId?: string;
   characterCardPath: string;
-  companionId?: string;
+  companionId?: RuntimeCompanionId;
   /** True when the multi-companion topology flag (PSFN_MULTI_COMPANION) is enabled. */
   multiCompanion?: boolean;
   /** Validated fleet manifest; present only when multi-companion mode is enabled. */

@@ -21,6 +21,7 @@ import {
   type ChannelEnvelopeLabel,
 } from '../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import {
   createDefaultChannelGroupMemoryConfig,
   normalizeChannelGroupMemoryConfig,
@@ -54,7 +55,7 @@ export interface TelegramChannelConfig {
   pollIntervalMs: number;
   webhook: TelegramWebhookConfig;
   /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
-  companionId?: string;
+  companionId?: CompanionId;
 }
 
 /**
@@ -66,7 +67,7 @@ export interface DiscordAccountConfig {
   /** Stable operator-chosen key for this bot account (registry/routing key). */
   accountId: string;
   /** Companion that owns this bot identity. */
-  companionId: string;
+  companionId: CompanionId;
   /** Env var name the bot token resolves from (gateway-side secret). */
   tokenEnvVar: string;
   /**
@@ -85,7 +86,7 @@ export interface DiscordChannelConfig {
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
   /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
-  companionId?: string;
+  companionId?: CompanionId;
   /**
    * Multi-companion (sprint-10 W1-P2): per-companion bot accounts. Mutually
    * exclusive with every single-account discord key (including companionId);
@@ -99,7 +100,7 @@ export interface DiscordChannelConfig {
  * (OpenAI-compatible chat, API voice websocket, Wyoming-tagged api traffic).
  */
 export interface ApiChannelConfig {
-  companionId?: string;
+  companionId?: CompanionId;
 }
 
 export interface ExternalChannelProfileConfig {
@@ -409,7 +410,7 @@ function parseDiscordAccountsSection(
   }
 
   const seenAccountIds = new Set<string>();
-  const seenCompanionIds = new Set<string>();
+  const seenCompanionIds = new Set<CompanionId>();
   const seenTokenEnvVars = new Set<string>();
   const accounts: DiscordAccountConfig[] = [];
 
@@ -435,10 +436,11 @@ function parseDiscordAccountsSection(
     }
     seenAccountIds.add(accountId);
 
-    const companionId = parseConfiguredString(entry.companionId, `${fieldName}.companionId`);
-    if (!companionId) {
+    const rawCompanionId = parseConfiguredString(entry.companionId, `${fieldName}.companionId`);
+    if (!rawCompanionId) {
       throw new Error(`${fieldName}.companionId must be configured`);
     }
+    const companionId = createCompanionId(rawCompanionId, `${fieldName}.companionId`);
     if (seenCompanionIds.has(companionId)) {
       throw new Error(
         `channels.json.discord.accounts maps companion "${companionId}" to more than one bot `
@@ -510,7 +512,7 @@ export interface DiscordCompanionChannelView {
  */
 export function resolveDiscordCompanionView(
   discord: DiscordChannelConfig,
-  companionId: string | undefined,
+  companionId: CompanionId | undefined,
 ): DiscordCompanionChannelView {
   const accounts = discord.accounts;
   if (!accounts || accounts.length === 0) {
@@ -646,7 +648,10 @@ export function loadRuntimeChannelsConfig(
   if (unknownApiKeys.length > 0) {
     throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
   }
-  const apiCompanionId = parseConfiguredString(apiConfig.companionId, 'channels.json.api.companionId');
+  const rawApiCompanionId = parseConfiguredString(apiConfig.companionId, 'channels.json.api.companionId');
+  const apiCompanionId = rawApiCompanionId
+    ? createCompanionId(rawApiCompanionId, 'channels.json.api.companionId')
+    : undefined;
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
     throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
@@ -753,14 +758,20 @@ export function loadRuntimeChannelsConfig(
     }
   }
 
-  const discordCompanionId = parseConfiguredString(
+  const rawDiscordCompanionId = parseConfiguredString(
     discordConfig.companionId,
     'channels.json.discord.companionId',
   );
-  const telegramCompanionId = parseConfiguredString(
+  const discordCompanionId = rawDiscordCompanionId
+    ? createCompanionId(rawDiscordCompanionId, 'channels.json.discord.companionId')
+    : undefined;
+  const rawTelegramCompanionId = parseConfiguredString(
     telegramConfig.companionId,
     'channels.json.telegram.companionId',
   );
+  const telegramCompanionId = rawTelegramCompanionId
+    ? createCompanionId(rawTelegramCompanionId, 'channels.json.telegram.companionId')
+    : undefined;
 
   return {
     discord: {

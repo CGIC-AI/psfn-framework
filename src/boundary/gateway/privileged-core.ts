@@ -12,6 +12,7 @@ import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   composeGatewayIntakeScreening,
   resolveIntakeScreenerBackend,
@@ -21,6 +22,7 @@ import { GatewayServer } from './server.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -48,7 +50,7 @@ export interface GatewayPrivilegedCore {
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
-    discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
+    discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
   }): GatewayServer;
@@ -128,6 +130,7 @@ export async function buildGatewayPrivilegedCore(
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       socketPath: input.bootstrap.socketPath,
+      companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,
       embeddingService: privilegedServices.embeddingProvider,

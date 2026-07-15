@@ -57,7 +57,7 @@ import {
   type SubagentExecutionPort,
 } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import {
-  resolveCompanionIdFromConfig,
+  resolveCoreCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
 import {
@@ -240,7 +240,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -346,7 +346,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
-    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,

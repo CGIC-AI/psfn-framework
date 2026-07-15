@@ -74,6 +74,7 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
+import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
@@ -246,7 +247,7 @@ export function createEmbeddingProviderFromConfig(config: SubstrateConfig): Embe
 }
 
 export interface IdentityComposition {
-  companionId: string;
+  companionId: RuntimeCompanionId;
   card: CharacterCardV2;
   systemPrompt: string;
 }

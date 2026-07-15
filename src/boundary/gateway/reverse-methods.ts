@@ -9,9 +9,7 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from '../../channels/api/types.js';
 import type {
-  RpcSubstrateMessage,
   VoiceHandleMessageResult,
-  VoiceStreamStartParams,
   VoiceStreamChunkParams,
   VoiceStreamEndParams,
   VoiceStreamCancelParams,
@@ -19,11 +17,12 @@ import type {
   VoiceStreamEndResult,
   VoiceStreamCancelResult,
 } from './protocol.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
-  dispatchHandleMessage(message: RpcSubstrateMessage): Promise<VoiceHandleMessageResult>;
-  handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult;
+  dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult>;
+  handleVoiceStreamStart(params: unknown): VoiceStreamAckResult;
   handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult;
   handleVoiceStreamEnd(params: VoiceStreamEndParams): Promise<VoiceStreamEndResult>;
   handleVoiceStreamCancel(params: VoiceStreamCancelParams): Promise<VoiceStreamCancelResult>;
@@ -41,11 +40,16 @@ interface ReverseGatewayMethodDescriptor<P, R> {
 const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
   {
     names: ['voice.handleMessage'],
-    handler: (params: { message: RpcSubstrateMessage }, runtime) => runtime.dispatchHandleMessage(params.message),
+    handler: (params: unknown, runtime) => {
+      if (!isRecord(params) || !Object.hasOwn(params, 'message')) {
+        throw new Error('voice.handleMessage requires an object params.message payload');
+      }
+      return runtime.dispatchHandleMessage(params.message);
+    },
   },
   {
     names: ['voice.stream.start'],
-    handler: (params: VoiceStreamStartParams, runtime) => runtime.handleVoiceStreamStart(params),
+    handler: (params: unknown, runtime) => runtime.handleVoiceStreamStart(params),
   },
   {
     names: ['voice.stream.chunk'],

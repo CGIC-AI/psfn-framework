@@ -11,6 +11,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ContactBlockGate } from './contact-block-gate.js';
 import { assertDiscordAccountTokensConfigured } from '../../channels/backplane/config.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
@@ -26,7 +27,7 @@ import {
 /** One per-companion discord bot account surface (multi-companion W1-P2). */
 export interface GatewayDiscordAccountSurface {
   accountId: string;
-  companionId: string;
+  companionId: CompanionId;
   adapter: DiscordAdapter;
 }
 

@@ -10,6 +10,7 @@ import {
 import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { assertValidPostgresSchemaName } from '../../persistence/postgres.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import type {
   CanonicalModelRegistry,
   ImportProcessingRouteMode,
@@ -100,9 +101,9 @@ function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boole
   return value?.trim() === '0';
 }
 
-function requireCompanionId(env: NodeJS.ProcessEnv): string {
+function requireCompanionId(env: NodeJS.ProcessEnv): CompanionId {
   const companionId = parseOptionalStringEnv(env.COMPANION_ID);
-  if (companionId) return companionId;
+  if (companionId) return createCompanionId(companionId, 'COMPANION_ID');
   throw new Error(
     'COMPANION_ID is required. Set an explicit deployment identity in .env before startup.',
   );

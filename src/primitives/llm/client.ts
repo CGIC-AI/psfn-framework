@@ -1,6 +1,7 @@
 import {
   streamSimple,
   completeSimple,
+  type AssistantMessage as PiAssistantMessage,
   type Context as PiContext,
   type Model,
   type SimpleStreamOptions,
@@ -171,6 +172,16 @@ export interface LLMClientRuntimeOptions {
 }
 
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
+
+function hasSubstantiveToolCallIdentity(
+  partial: PiAssistantMessage,
+  contentIndex: number,
+): boolean {
+  const block = partial.content.at(contentIndex);
+  return block?.type === 'toolCall'
+    && block.id.trim().length > 0
+    && block.name.trim().length > 0;
+}
 
 export class SensitiveImportRoutePolicyError extends Error {
   readonly code = 'sensitive_import_route_rejected';
@@ -1098,13 +1109,21 @@ export class LLMClient {
                     break;
 
                   case 'toolcall_start':
-                    markFirstOutput('tool');
+                    if (hasSubstantiveToolCallIdentity(event.partial, event.contentIndex)) {
+                      markFirstOutput('tool');
+                    }
                     break;
 
                   case 'toolcall_delta': {
                     const fragment = (event as { delta?: unknown }).delta;
-                    if (typeof fragment === 'string' && fragment.length > 0) {
+                    const hasArgumentBytes = typeof fragment === 'string' && fragment.length > 0;
+                    if (
+                      hasArgumentBytes
+                      || hasSubstantiveToolCallIdentity(event.partial, event.contentIndex)
+                    ) {
                       markFirstOutput('tool');
+                    }
+                    if (hasArgumentBytes) {
                       toolArgumentFragmentBytes += fragment.length;
                     }
                     break;

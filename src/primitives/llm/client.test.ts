@@ -1030,6 +1030,99 @@ describe('LLMClient provider observability', () => {
     });
   });
 
+  it('waits for a later tool identity when toolcall_start contains a placeholder', async () => {
+    const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
+    let nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    const toolBlock = {
+      type: 'toolCall',
+      id: '',
+      name: '',
+      arguments: {},
+    };
+    const partial = { role: 'assistant', content: [toolBlock] };
+    mocks.streamSimple.mockImplementation(async function* () {
+      nowMs = 2_000;
+      yield { type: 'toolcall_start', contentIndex: 0, partial };
+
+      nowMs = 6_000;
+      toolBlock.id = 'call-late';
+      toolBlock.name = 'memory_lookup';
+      yield { type: 'toolcall_delta', contentIndex: 0, delta: '', partial };
+
+      nowMs = 9_000;
+      yield {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: toolBlock,
+        partial,
+      };
+      yield {
+        type: 'done',
+        reason: 'toolUse',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 1 },
+          content: [toolBlock],
+        },
+      };
+    });
+
+    try {
+      await client.stream({
+        systemPrompt: 'System prompt',
+        messages: [{ role: 'user', content: 'Look it up' }],
+      }, { onFirstOutput });
+
+      expect(onFirstOutput).toHaveBeenCalledTimes(1);
+      expect(onFirstOutput).toHaveBeenCalledWith({
+        kind: 'tool',
+        monotonicAtMs: expect.any(Number),
+        timestampMs: 6_000,
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('ignores a toolcall placeholder that never exposes a valid identity', async () => {
+    const client = new LLMClient(makeConfig());
+    const onFirstOutput = vi.fn();
+    const partial = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: '',
+          name: '',
+          arguments: {},
+        },
+      ],
+    };
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'toolcall_start', contentIndex: 0, partial };
+      yield { type: 'toolcall_delta', contentIndex: 0, delta: '', partial };
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 1 },
+          content: [{ type: 'text', text: 'terminal content' }],
+        },
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Hi' }],
+    }, { onFirstOutput });
+
+    expect(response.content).toBe('terminal content');
+    expect(onFirstOutput).not.toHaveBeenCalled();
+  });
+
   it('does not fabricate first output from a terminal-only completion event', async () => {
     const client = new LLMClient(makeConfig());
     const onFirstOutput = vi.fn();

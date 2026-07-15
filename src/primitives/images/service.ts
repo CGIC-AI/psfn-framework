@@ -260,7 +260,8 @@ export class ImageService implements ImageOperations {
     }
 
     try {
-      const falClient = new FalImageClient(falApiKey, this.fetchImpl);
+      // Owner-file backed polling limits ride the runtime config (zet.7).
+      const falClient = new FalImageClient(falApiKey, this.fetchImpl, this.config);
       const result = mode === 'create'
         ? await this.runFal('create', params as ImageCreateParams, provider, falClient, context)
         : await this.runFal('edit', params as ImageEditParams, provider, falClient, context);

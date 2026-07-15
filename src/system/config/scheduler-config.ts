@@ -99,6 +99,13 @@ export interface EpisodeSynthesisLaneConfig {
    * keep validating; when false the deterministic cuts are unchanged.
    */
   topicSegmentationEnabled: boolean;
+  /**
+   * Cap on prior-episode candidates pulled for consolidation/dedup lookups
+   * (zet.7). Optional key with an explicit default (24, mirrors
+   * DEFAULT_MAX_PRIOR_CANDIDATES in the synthesizer) so existing operator
+   * files keep validating.
+   */
+  maxPriorCandidates: number;
 }
 
 /**
@@ -120,6 +127,20 @@ export interface SleepConsolidationConfig {
    * and are not bounded by this.
    */
   maxConsolidationsPerRun: number;
+  /**
+   * Messages pulled per episode transcript during consolidation (zet.7).
+   * Optional key with an explicit default (200, mirrors
+   * DEFAULT_TRANSCRIPT_MESSAGE_LIMIT in the consolidator) so existing
+   * operator files keep validating.
+   */
+  transcriptMessageLimit: number;
+  /**
+   * Per-episode transcript character cap during consolidation (zet.7).
+   * Optional key with an explicit default (6000, mirrors
+   * DEFAULT_MAX_TRANSCRIPT_CHARS in the consolidator) so existing operator
+   * files keep validating.
+   */
+  maxTranscriptCharsPerEpisode: number;
 }
 
 /**
@@ -789,6 +810,11 @@ function validateEpisodeSynthesisConfig(
     topicSegmentationEnabled: raw.topicSegmentationEnabled === undefined
       ? false
       : toBoolean(raw.topicSegmentationEnabled, 'episodeSynthesis.topicSegmentationEnabled'),
+    // zet.7: optional key, default mirrors DEFAULT_MAX_PRIOR_CANDIDATES (24)
+    // in src/faculties/memory/episodic/synthesis.ts — keep in lockstep.
+    maxPriorCandidates: raw.maxPriorCandidates === undefined
+      ? 24
+      : toPositiveInteger(raw.maxPriorCandidates, 'episodeSynthesis.maxPriorCandidates', 1),
   };
 }
 
@@ -809,6 +835,15 @@ function validateSleepConsolidationConfig(
       'sleepConsolidation.maxConsolidationsPerRun',
       1,
     ),
+    // zet.7: optional keys, defaults mirror DEFAULT_TRANSCRIPT_MESSAGE_LIMIT
+    // (200) and DEFAULT_MAX_TRANSCRIPT_CHARS (6000) in
+    // src/faculties/memory/episodic/sleep-consolidation.ts — keep in lockstep.
+    transcriptMessageLimit: raw.transcriptMessageLimit === undefined
+      ? 200
+      : toPositiveInteger(raw.transcriptMessageLimit, 'sleepConsolidation.transcriptMessageLimit', 1),
+    maxTranscriptCharsPerEpisode: raw.maxTranscriptCharsPerEpisode === undefined
+      ? 6000
+      : toPositiveInteger(raw.maxTranscriptCharsPerEpisode, 'sleepConsolidation.maxTranscriptCharsPerEpisode', 1),
   };
 }
 

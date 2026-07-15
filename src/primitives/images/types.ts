@@ -59,6 +59,14 @@ export interface ImageRuntimeConfig {
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
   webFetchDnsResolver?: DnsResolver;
+  /** Overall wait cap (ms) for FAL queue results (owner-file backed, zet.7). */
+  imageFalTimeoutMs?: number;
+  /** Poll cadence (ms) for FAL queue status (owner-file backed, zet.7). */
+  imageFalPollIntervalMs?: number;
+  /** Overall wait cap (ms) for ComfyUI workflow completion (owner-file backed, zet.7). */
+  imageComfyTimeoutMs?: number;
+  /** Poll cadence (ms) for ComfyUI workflow history (owner-file backed, zet.7). */
+  imageComfyPollIntervalMs?: number;
 }
 
 export interface ImageResultAsset {

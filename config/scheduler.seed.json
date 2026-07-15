@@ -34,14 +34,17 @@
     "maxEntriesPerEpisode": 14,
     "minConversationalEntries": 2,
     "minSingleEntryChars": 120,
-    "topicSegmentationEnabled": false
+    "topicSegmentationEnabled": false,
+    "maxPriorCandidates": 24
   },
   "sleepConsolidation": {
     "reviewWindowDays": 60,
     "refinementWindowHours": 36,
     "adjacencyGapMinutes": 45,
     "maxRefinementsPerRun": 8,
-    "maxConsolidationsPerRun": 6
+    "maxConsolidationsPerRun": 6,
+    "transcriptMessageLimit": 200,
+    "maxTranscriptCharsPerEpisode": 6000
   },
   "orientationRewrite": {
     "minNewEntriesSinceRewrite": 4,

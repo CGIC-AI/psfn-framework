@@ -163,8 +163,18 @@ export class SubagentFaculty implements SubagentControlPort {
   private readonly recentResultIds: string[] = [];
 
   constructor(private readonly deps: SubagentFacultyDeps) {
-    this.maxConcurrent = Math.max(1, Math.trunc(deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT));
+    // Owner-file setting (zet.7): explicit deps override wins (tests/embedding),
+    // then the operator's settings.json value, then the compiled default.
+    this.maxConcurrent = Math.max(
+      1,
+      Math.trunc(deps.maxConcurrent ?? deps.config.subagentMaxConcurrent ?? DEFAULT_MAX_CONCURRENT),
+    );
     this.auditTrail = deps.auditTrail ?? null;
+  }
+
+  /** Resolved concurrency cap on active subagent tasks (owner-file backed, zet.7). */
+  get maxConcurrentTasks(): number {
+    return this.maxConcurrent;
   }
 
   async execute(request: SubagentExecutionRequest): Promise<SubagentResult> {

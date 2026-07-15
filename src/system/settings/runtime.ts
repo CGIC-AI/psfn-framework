@@ -125,6 +125,18 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
+  'subagentMaxConcurrent',
+  'shardMaxConcurrent',
+  'shardHeartbeatStaleAfterMs',
+  'shardHeartbeatDisconnectAfterMs',
+  'documentIngestMaxBytes',
+  'documentIngestTextMaxBytes',
+  'documentIngestPromptChars',
+  'documentIngestSidecarChars',
+  'imageFalTimeoutMs',
+  'imageFalPollIntervalMs',
+  'imageComfyTimeoutMs',
+  'imageComfyPollIntervalMs',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'moaMaxRounds',
@@ -476,6 +488,39 @@ function getObsidianAndMoaSettingsSnapshot(config: SubstrateConfig) {
   >;
 }
 
+// Tier 2 tuning knobs (zet.7): compositional concurrency, document ingest
+// caps, and image polling limits. Null means "not set — compiled default".
+function getTier2TuningSnapshot(config: SubstrateConfig) {
+  return {
+    subagentMaxConcurrent: config.subagentMaxConcurrent ?? null,
+    shardMaxConcurrent: config.shardMaxConcurrent ?? null,
+    shardHeartbeatStaleAfterMs: config.shardHeartbeatStaleAfterMs ?? null,
+    shardHeartbeatDisconnectAfterMs:
+      config.shardHeartbeatDisconnectAfterMs ?? null,
+    documentIngestMaxBytes: config.documentIngestMaxBytes ?? null,
+    documentIngestTextMaxBytes: config.documentIngestTextMaxBytes ?? null,
+    documentIngestPromptChars: config.documentIngestPromptChars ?? null,
+    documentIngestSidecarChars: config.documentIngestSidecarChars ?? null,
+    imageFalTimeoutMs: config.imageFalTimeoutMs ?? null,
+    imageFalPollIntervalMs: config.imageFalPollIntervalMs ?? null,
+    imageComfyTimeoutMs: config.imageComfyTimeoutMs ?? null,
+    imageComfyPollIntervalMs: config.imageComfyPollIntervalMs ?? null,
+  } satisfies SnapshotSection<
+    | 'subagentMaxConcurrent'
+    | 'shardMaxConcurrent'
+    | 'shardHeartbeatStaleAfterMs'
+    | 'shardHeartbeatDisconnectAfterMs'
+    | 'documentIngestMaxBytes'
+    | 'documentIngestTextMaxBytes'
+    | 'documentIngestPromptChars'
+    | 'documentIngestSidecarChars'
+    | 'imageFalTimeoutMs'
+    | 'imageFalPollIntervalMs'
+    | 'imageComfyTimeoutMs'
+    | 'imageComfyPollIntervalMs'
+  >;
+}
+
 function hasSetting(settings: EditableSettings, key: string): boolean {
   return key in settings;
 }
@@ -559,6 +604,7 @@ export function getRuntimeSettingsSnapshot(
     ...getVoiceSettingsSnapshot(config),
     ...getChannelSettingsSnapshot(config),
     ...getObsidianAndMoaSettingsSnapshot(config),
+    ...getTier2TuningSnapshot(config),
   };
 }
 

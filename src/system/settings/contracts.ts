@@ -194,6 +194,21 @@ export interface EditableSettings {
   sessionTailCache?: SessionTailCacheSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
+  // Tier 2 tuning knobs (zet.7): compositional-cognition concurrency limits
+  subagentMaxConcurrent?: number;
+  shardMaxConcurrent?: number;
+  shardHeartbeatStaleAfterMs?: number;
+  shardHeartbeatDisconnectAfterMs?: number;
+  // Tier 2 tuning knobs (zet.7): document attachment ingest caps
+  documentIngestMaxBytes?: number;
+  documentIngestTextMaxBytes?: number;
+  documentIngestPromptChars?: number;
+  documentIngestSidecarChars?: number;
+  // Tier 2 tuning knobs (zet.7): image generation polling limits
+  imageFalTimeoutMs?: number;
+  imageFalPollIntervalMs?: number;
+  imageComfyTimeoutMs?: number;
+  imageComfyPollIntervalMs?: number;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
@@ -378,6 +393,19 @@ export const RUNTIME_SETTINGS_KEYS = [
   'telegramAuthorizedUsers',
   'wyomingShardRouting',
   'shardToolsets',
+  // Tier 2 tuning knobs (zet.7)
+  'subagentMaxConcurrent',
+  'shardMaxConcurrent',
+  'shardHeartbeatStaleAfterMs',
+  'shardHeartbeatDisconnectAfterMs',
+  'documentIngestMaxBytes',
+  'documentIngestTextMaxBytes',
+  'documentIngestPromptChars',
+  'documentIngestSidecarChars',
+  'imageFalTimeoutMs',
+  'imageFalPollIntervalMs',
+  'imageComfyTimeoutMs',
+  'imageComfyPollIntervalMs',
   // Obsidian vault
   'obsidianVaultName',
   'obsidianCliPath',

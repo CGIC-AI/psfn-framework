@@ -107,6 +107,25 @@ const DEFAULT_THINK_OUTPUT_TRUNCATION = 8_192;
 const DEFAULT_VOICE_SESSION_TIMEOUT_MS = 30_000;
 const DEFAULT_VOICE_MAX_FRAME_BYTES = 256 * 1024;
 const DEFAULT_VOICE_MAX_PENDING_FRAMES = 32;
+// Mirrors DEFAULT_MAX_CONCURRENT in src/faculties/subagents/faculty.ts — keep in lockstep.
+const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
+// Mirrors DEFAULT_MAX_CONCURRENT and the heartbeat constants in
+// src/faculties/shards/manager.ts — keep in lockstep. The disconnect default
+// materializes the compiled stale × DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER (3).
+const DEFAULT_SHARD_MAX_CONCURRENT = 5;
+const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
+const DEFAULT_SHARD_HEARTBEAT_DISCONNECT_AFTER_MS = 180_000;
+// Mirrors the caps in src/faculties/file-ingest/document-ingest.ts — keep in lockstep.
+const DEFAULT_DOCUMENT_INGEST_MAX_BYTES = 16 * 1024 * 1024;
+const DEFAULT_DOCUMENT_INGEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
+const DEFAULT_DOCUMENT_INGEST_PROMPT_CHARS = 24_000;
+const DEFAULT_DOCUMENT_INGEST_SIDECAR_CHARS = 240_000;
+// Mirrors the DEFAULT_FAL_* / DEFAULT_COMFY_* constants in
+// src/primitives/images/{fal,comfyui}.ts — keep in lockstep.
+const DEFAULT_IMAGE_FAL_TIMEOUT_MS = 300_000;
+const DEFAULT_IMAGE_FAL_POLL_INTERVAL_MS = 1_500;
+const DEFAULT_IMAGE_COMFY_TIMEOUT_MS = 180_000;
+const DEFAULT_IMAGE_COMFY_POLL_INTERVAL_MS = 1_500;
 const POSTGRES_DATABASE_URL_ENV = 'POSTGRES_DATABASE_URL';
 const POSTGRES_DATABASE_URL_FILE_ENV = 'POSTGRES_DATABASE_URL_FILE';
 const POSTGRES_DATABASE_URL_FD_ENV = 'POSTGRES_DATABASE_URL_FD';
@@ -436,6 +455,18 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     analysisWorkbenchMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
     analysisWorkbenchExecutionTimeoutMs: DEFAULT_THINK_EXECUTION_TIMEOUT_MS,
     analysisWorkbenchOutputTruncation: DEFAULT_THINK_OUTPUT_TRUNCATION,
+    subagentMaxConcurrent: DEFAULT_SUBAGENT_MAX_CONCURRENT,
+    shardMaxConcurrent: DEFAULT_SHARD_MAX_CONCURRENT,
+    shardHeartbeatStaleAfterMs: DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,
+    shardHeartbeatDisconnectAfterMs: DEFAULT_SHARD_HEARTBEAT_DISCONNECT_AFTER_MS,
+    documentIngestMaxBytes: DEFAULT_DOCUMENT_INGEST_MAX_BYTES,
+    documentIngestTextMaxBytes: DEFAULT_DOCUMENT_INGEST_TEXT_MAX_BYTES,
+    documentIngestPromptChars: DEFAULT_DOCUMENT_INGEST_PROMPT_CHARS,
+    documentIngestSidecarChars: DEFAULT_DOCUMENT_INGEST_SIDECAR_CHARS,
+    imageFalTimeoutMs: DEFAULT_IMAGE_FAL_TIMEOUT_MS,
+    imageFalPollIntervalMs: DEFAULT_IMAGE_FAL_POLL_INTERVAL_MS,
+    imageComfyTimeoutMs: DEFAULT_IMAGE_COMFY_TIMEOUT_MS,
+    imageComfyPollIntervalMs: DEFAULT_IMAGE_COMFY_POLL_INTERVAL_MS,
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,

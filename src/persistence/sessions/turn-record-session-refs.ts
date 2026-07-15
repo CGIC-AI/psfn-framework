@@ -24,12 +24,13 @@ import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../
  * references and reconstructs it from the journal at the persistence read
  * boundary, so:
  * - the session journal (L0) is the single durable source of the conversation;
- * - for REF-BACKED records (written since this module), a redacted / tombstoned
- *   / rolled-off L0 entry can NEVER be resurrected from the turn record —
- *   reconstruction only ever surfaces the journal's CURRENT truth (redaction
- *   marker, or the entry is simply gone). Old fat records pass their inline
- *   `recentEntries` through UNGATED (pre-existing exposure, tracked by the
- *   hgw3 fixes epic); only their `plan.messages` view is gated;
+ * - a redacted / tombstoned / rolled-off L0 entry can NEVER be resurrected from
+ *   the turn record — reconstruction only ever surfaces the journal's CURRENT
+ *   truth (redaction marker, or the entry is simply gone). This holds for
+ *   records of ANY vintage: new ref-backed records reconstruct `recentEntries`
+ *   from L0, and pre-9ree "old fat" records (inline `recentEntries`, no ref)
+ *   are redaction-gated against L0 at read time (bead psfn-framework-hgw3.10) so
+ *   their frozen inline plaintext can never outlive an L0 redaction either;
  * - the rendered view (`plan.messages`, the Loom conversation) is redaction-
  *   gated at read time via each message's `provenance.sourceEntryIds`.
  *
@@ -41,9 +42,14 @@ import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../
  *
  * Convention parity with the content-addressed sidecars
  * (turn-record-shared-store.ts): an inline field `X` is replaced by a sibling
- * `XRef`; old fat records lack the ref and pass through untouched; a record that
+ * `XRef`; old fat records lack the ref and pass through untouched for the diet
+ * (their bodies stay on disk); a record that
  * carries BOTH the inline field and the ref is ambiguous and fails closed. The
- * one documented deviation: unlike the immutable content-addressed sidecars
+ * one redaction-safety exception to "pass through untouched": an old fat
+ * record's inline `recentEntries` is still redaction-gated against L0 on read
+ * (see gateInlineRecentEntries), because leaving frozen L0 plaintext ungated
+ * would resurrect a since-redacted entry — the exact pathology this epic closes.
+ * The one documented deviation: unlike the immutable content-addressed sidecars
  * (dangling ref = fail closed), an L0 entry that is legitimately absent on
  * re-read (redacted-as-tombstone / tombstoned / rolled off by L0 rolling) is
  * EXPECTED and heals (the entry is dropped) rather than throwing — L0 entries
@@ -74,6 +80,30 @@ export type SessionEntryRangeResolver = (
   minId: number,
   maxId: number,
 ) => SessionEntry[];
+
+/**
+ * Structured heal-drop signal: an id-backed `recentEntries` item resolved to
+ * ABSENT from L0 (redacted-as-tombstone / tombstoned / rolled-off) and was
+ * dropped rather than resurrected. Emitted for BOTH ref-backed records and
+ * pre-9ree inline "old fat" records so operators can distinguish a legitimate
+ * redaction/rolloff drop from ref corruption that happened to parse (structural
+ * corruption fails closed upstream and never reaches this signal). A surfaced
+ * CogSec redaction marker is NOT a drop — the entry is present and the journal's
+ * current truth is shown — so it is deliberately not reported here.
+ */
+export interface TurnRecordRecentEntryHealDrop {
+  /** Turn-channel id-space the dropped entry belonged to. */
+  channelId: string;
+  /** The L0 entry id that could not be re-read. */
+  entryId: number;
+  /** Storage vintage that produced the drop. */
+  source: 'ref-backed' | 'inline-old-fat';
+  /** Owning turn record, for audit correlation. */
+  turnId: string;
+}
+
+/** Sink for {@link TurnRecordRecentEntryHealDrop} events; wired to store telemetry. */
+export type TurnRecordHealDropSink = (drop: TurnRecordRecentEntryHealDrop) => void;
 
 interface RecentEntryDelta {
   delta: SessionEntry;
@@ -182,14 +212,23 @@ function parseRecentEntriesRef(value: unknown): RecentEntriesRef {
 /**
  * Read inverse for `recentEntriesRef`: reconstruct `sessionContext.recentEntries`
  * from the L0 journal. Fail closed on a structurally corrupt ref or an ambiguous
- * ref+inline record; heal (drop the entry) when an id-backed entry is
- * legitimately absent on re-read — that IS the redaction/rolloff suppression.
- * Records without the ref pass through untouched.
+ * ref+inline record; heal (drop the entry, emitting a telemetry signal) when an
+ * id-backed entry is legitimately absent on re-read — that IS the
+ * redaction/rolloff suppression. A record with NO ref is a pre-9ree "old fat"
+ * record; its inline `recentEntries` is redaction-gated against L0 instead of
+ * passed through (bead psfn-framework-hgw3.10).
  */
-function resolveRecentEntries(record: TurnRecord, resolve: SessionEntryRangeResolver): TurnRecord {
+function resolveRecentEntries(
+  record: TurnRecord,
+  resolve: SessionEntryRangeResolver,
+  onHealDrop?: TurnRecordHealDropSink,
+): TurnRecord {
   const sessionContext = readSessionContext(record);
-  const rawRef = sessionContext?.[RECENT_ENTRIES_REF_FIELD];
-  if (!sessionContext || rawRef === undefined) return record;
+  if (!sessionContext) return record;
+  const rawRef = sessionContext[RECENT_ENTRIES_REF_FIELD];
+  if (rawRef === undefined) {
+    return gateInlineRecentEntries(record, sessionContext, resolve, onHealDrop);
+  }
   if (sessionContext.recentEntries !== undefined) {
     throw new Error(
       `TurnRecord sessionContext carries both inline recentEntries and ${RECENT_ENTRIES_REF_FIELD}`,
@@ -209,13 +248,71 @@ function resolveRecentEntries(record: TurnRecord, resolve: SessionEntryRangeReso
   for (const item of ref.items) {
     if (typeof item === 'number') {
       const resolved = byId.get(item);
-      if (resolved) recentEntries.push(resolved); // absent → dropped (redacted/tombstoned/rolled-off)
+      if (resolved) {
+        recentEntries.push(resolved);
+      } else {
+        // absent → dropped (redacted-as-tombstone / tombstoned / rolled-off)
+        onHealDrop?.({ channelId: ref.channelId, entryId: item, source: 'ref-backed', turnId: record.turnId });
+      }
     } else {
       recentEntries.push(item.delta);
     }
   }
   const { [RECENT_ENTRIES_REF_FIELD]: _ref, ...rest } = sessionContext;
   return withSessionContext(record, { ...rest, recentEntries });
+}
+
+/**
+ * Redaction-gate the inline `recentEntries` of a pre-9ree "old fat" record (no
+ * `recentEntriesRef`). Symmetric with both the ref-backed path above and
+ * gatePlanMessages: each entry carrying a real positive L0 id is re-read from
+ * the journal and REPLACED with the journal's current truth — a since-redacted
+ * entry surfaces its CogSec marker, a since-removed entry is dropped (heal +
+ * telemetry), and a still-live entry surfaces unchanged. Entries with no
+ * positive L0 id (divergence deltas — never L0-redactable content) are kept
+ * inline verbatim. This makes redaction propagation vintage-independent so the
+ * frozen inline body of a since-redacted entry can never resurrect via
+ * getRecentTurnRecords / findTurnRecord. The input record is not mutated; a
+ * record with nothing L0-backed to re-read passes through untouched.
+ */
+function gateInlineRecentEntries(
+  record: TurnRecord,
+  sessionContext: Record<string, unknown>,
+  resolve: SessionEntryRangeResolver,
+  onHealDrop?: TurnRecordHealDropSink,
+): TurnRecord {
+  const inline = sessionContext.recentEntries;
+  if (!Array.isArray(inline) || inline.length === 0) return record;
+  const channelId = typeof sessionContext.channelId === 'string' ? sessionContext.channelId : '';
+  const ids: number[] = [];
+  for (const entry of inline) {
+    if (isRecord(entry) && isValidL0Id(entry.id)) ids.push(entry.id);
+  }
+  // No re-readable L0 ids (all divergence deltas), or no channel to read from:
+  // nothing here is CogSec-redactable, so the inline copy is already the only
+  // truth and passes through untouched.
+  if (ids.length === 0 || channelId.length === 0) return record;
+  const byId = new Map<number, SessionEntry>();
+  for (const entry of resolve(channelId, Math.min(...ids), Math.max(...ids))) {
+    byId.set(entry.id, entry);
+  }
+  const recentEntries: SessionEntry[] = [];
+  for (const entry of inline) {
+    if (isRecord(entry) && isValidL0Id(entry.id)) {
+      const fresh = byId.get(entry.id);
+      if (fresh) {
+        // Journal-current truth (incl. any redaction marker) — never the frozen inline body.
+        recentEntries.push(fresh);
+      } else {
+        // absent → dropped (redacted-as-tombstone / tombstoned / rolled-off)
+        onHealDrop?.({ channelId, entryId: entry.id, source: 'inline-old-fat', turnId: record.turnId });
+      }
+    } else {
+      // Divergence delta: no positive L0 id, so not CogSec-redactable — keep inline.
+      recentEntries.push(entry as SessionEntry);
+    }
+  }
+  return withSessionContext(record, { ...sessionContext, recentEntries });
 }
 
 // ── plan.messages redaction gating ───────────────────────────────────────────
@@ -305,16 +402,19 @@ export function slimTurnRecordSessionEntriesForAppend(record: TurnRecord): TurnR
 
 /**
  * Read-side resolution applied at the SessionManager store boundary: reconstruct
- * `recentEntries` from L0 and redaction-gate `plan.messages`, making the diet
- * transparent to every consumer above persistence (Garden Loom, session-turn
- * observability, introspection auditing).
+ * (ref-backed) or redaction-gate (pre-9ree inline) `recentEntries` from L0 and
+ * redaction-gate `plan.messages`, making the diet transparent to every consumer
+ * above persistence (Garden Loom, session-turn observability, introspection
+ * auditing). `onHealDrop`, if provided, is invoked for each id-backed
+ * `recentEntries` item dropped because its L0 entry is absent on re-read.
  */
 export function resolveTurnRecordSessionEntries(
   record: TurnRecord,
   resolve: SessionEntryRangeResolver,
+  onHealDrop?: TurnRecordHealDropSink,
 ): TurnRecord {
   return gatePlanMessages(
-    resolveRecentEntries(record, resolve),
+    resolveRecentEntries(record, resolve, onHealDrop),
     resolve,
   );
 }

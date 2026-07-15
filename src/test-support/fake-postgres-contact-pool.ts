@@ -33,6 +33,7 @@ export class FakePostgresPool {
   failNextWriteForChannel: string | null = null;
   failNextMutationAudit = false;
   beforeNextContactProfileUpdate: ((row: ContactRow) => void) | null = null;
+  afterNextChannelIdentityLookup: (() => void) | null = null;
   private transactionSnapshot?: {
     contacts: Map<string, ContactRow>;
     contactMutationAudit: ContactMutationAuditRow[];
@@ -152,6 +153,9 @@ export class FakePostgresPool {
 
     if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
       const row = this.findContactByChannelIdentity(String(values[0] ?? ''), String(values[1] ?? ''));
+      const afterLookup = this.afterNextChannelIdentityLookup;
+      this.afterNextChannelIdentityLookup = null;
+      afterLookup?.();
       return result(row ? [row] : []);
     }
 

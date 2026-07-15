@@ -120,8 +120,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const nextDisplayName = partial.displayName.trim() || target.displayName;
       const requestedNickname = normalizeNicknameValue(partial.nickname);
       const nextNickname = requestedNickname === undefined ? (target.nickname ?? undefined) : requestedNickname;
-      const nextTrustLevel = target.trustLevel === 'primary'
-        ? 'primary'
+      // Generic upserts merge profile and identity data. Once a contact has
+      // entered a high trust tier, only the explicit setTrustLevel path may
+      // move it out again; otherwise a resolver miss followed by an upsert
+      // race can replace trusted with the public new-speaker floor.
+      const nextTrustLevel = isHighTierTrustLevel(target.trustLevel)
+        ? target.trustLevel
         : (partial.trustLevel ?? target.trustLevel);
       const relationshipMutationRequested = partial.relationshipType !== undefined;
       const nextRelationshipType = partial.relationshipType ?? target.relationshipType;

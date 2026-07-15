@@ -97,6 +97,8 @@ interface AgentProcessReply {
   type?: 'ready';
 }
 
+const CERTIFICATION_CONTACT_FIXTURE_ACTOR = 'operator:e2e:icp-certification';
+
 const logger = {
   info: (_message: string, _meta?: Record<string, unknown>) => undefined,
   warn: (_message: string, _meta?: Record<string, unknown>) => undefined,
@@ -169,13 +171,30 @@ async function main(): Promise<void> {
       )
     : undefined;
   if (peerContact) {
-    await contactStore.setMachineIntelligence(peerContact.id, true, 'e2e:icp-certification');
-    await contactStore.setTrustLevel(peerContact.id, 'trusted', 'e2e:icp-certification');
-    await contactStore.updateRelationshipType(
+    const machineIntelligenceApplied = await contactStore.setMachineIntelligence(
+      peerContact.id,
+      true,
+      CERTIFICATION_CONTACT_FIXTURE_ACTOR,
+    );
+    if (!machineIntelligenceApplied) {
+      throw new Error(`ICP certification failed to mark peer contact ${peerContact.id} as machine intelligence`);
+    }
+    const trustApplied = await contactStore.setTrustLevel(
+      peerContact.id,
+      'trusted',
+      CERTIFICATION_CONTACT_FIXTURE_ACTOR,
+    );
+    if (!trustApplied) {
+      throw new Error(`ICP certification failed to establish trusted peer contact ${peerContact.id}`);
+    }
+    const relationshipApplied = await contactStore.updateRelationshipType(
       peerContact.id,
       'ai_companion',
-      'e2e:icp-certification',
+      CERTIFICATION_CONTACT_FIXTURE_ACTOR,
     );
+    if (!relationshipApplied) {
+      throw new Error(`ICP certification failed to establish AI companion relationship for ${peerContact.id}`);
+    }
   }
 
   const llmProvider = createLLMProviderPort(gateway);

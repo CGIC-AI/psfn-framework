@@ -815,6 +815,31 @@ describe('Postgres contact store behavior', () => {
       expect(resolved.trustLevel).toBe('trusted');
     });
 
+    it('preserves trusted contact when a concurrent legacy identity appears between resolver lookups', async () => {
+      const created = await store.upsert({
+        displayName: 'Legacy Race',
+        discordUserId: 'discord-race',
+        trustLevel: 'trusted',
+      }, { actor: 'operator:test-fixture' });
+      const row = pool.contacts.get(created.id);
+      if (!row) throw new Error('Missing legacy resolver race fixture');
+      const identityKey = 'discord::discord-race';
+      const identityRow = pool.contactChannelIds.get(identityKey);
+      if (!identityRow) throw new Error('Missing legacy resolver identity fixture');
+
+      row.discord_user_id = null;
+      pool.contactChannelIds.delete(identityKey);
+      pool.afterNextChannelIdentityLookup = () => {
+        row.discord_user_id = 'discord-race';
+        pool.contactChannelIds.set(identityKey, identityRow);
+      };
+
+      const resolved = await store.resolveUserId('discord-race');
+
+      expect(resolved.id).toBe(created.id);
+      expect(resolved.trustLevel).toBe('trusted');
+    });
+
     it('updates lastSeen for existing contact', async () => {
       const created = await store.upsert({
         displayName: 'Judy',
@@ -854,6 +879,27 @@ describe('Postgres contact store behavior', () => {
       const resolved = await store.resolveChannelIdentity('api', 'v-api-id', 'V API');
       expect(resolved.id).toBe(contact.id);
       expect(resolved.trustLevel).toBe('primary');
+    });
+
+    it('preserves trusted contact when a concurrent channel identity appears between resolver lookups', async () => {
+      const created = await store.upsert({
+        displayName: 'Channel Race',
+        trustLevel: 'trusted',
+      }, { actor: 'operator:test-fixture' });
+      expect(await store.linkChannelIdentity(created.id, 'api', 'api-race')).toBe('linked');
+      const identityKey = 'api::api-race';
+      const identityRow = pool.contactChannelIds.get(identityKey);
+      if (!identityRow) throw new Error('Missing channel resolver race fixture');
+
+      pool.contactChannelIds.delete(identityKey);
+      pool.afterNextChannelIdentityLookup = () => {
+        pool.contactChannelIds.set(identityKey, identityRow);
+      };
+
+      const resolved = await store.resolveChannelIdentity('api', 'api-race', 'Channel Race');
+
+      expect(resolved.id).toBe(created.id);
+      expect(resolved.trustLevel).toBe('trusted');
     });
 
     it('reconciles duplicate primary contacts into the canonical identity owner', async () => {

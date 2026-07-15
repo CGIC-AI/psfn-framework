@@ -44,6 +44,7 @@ const CHANNEL = `companion-dm:${A}:${B}`;
 const CHANNEL_AC = `companion-dm:${A}:${C}`;
 const PROVENANCE_HANDLE = `icp-prov:${CANDIDATE_ID}`;
 const SECOND_PROVENANCE_HANDLE = `icp-prov:${SECOND_CANDIDATE_ID}`;
+const ICP_INTEGRATION_FIXTURE_ACTOR = 'operator:icp-autonomy-integration';
 
 let harness: PostgresTestHarness | null = null;
 
@@ -498,8 +499,26 @@ describe('ICP autonomy Postgres persistence', () => {
     try {
       const peerForA = await contactsA.resolveChannelIdentity('companion', B, 'Companion B');
       const peerForB = await contactsB.resolveChannelIdentity('companion', A, 'Companion A');
-      await contactsA.setMachineIntelligence(peerForA.id, true, 'test');
-      await contactsB.setMachineIntelligence(peerForB.id, true, 'test');
+      expect(await contactsA.setTrustLevel(
+        peerForA.id,
+        'trusted',
+        ICP_INTEGRATION_FIXTURE_ACTOR,
+      )).toBe(true);
+      expect(await contactsB.setTrustLevel(
+        peerForB.id,
+        'trusted',
+        ICP_INTEGRATION_FIXTURE_ACTOR,
+      )).toBe(true);
+      expect(await contactsA.setMachineIntelligence(
+        peerForA.id,
+        true,
+        ICP_INTEGRATION_FIXTURE_ACTOR,
+      )).toBe(true);
+      expect(await contactsB.setMachineIntelligence(
+        peerForB.id,
+        true,
+        ICP_INTEGRATION_FIXTURE_ACTOR,
+      )).toBe(true);
       const privateCandidate = await candidateStore.createCandidate({
         candidateId: CANDIDATE_ID,
         rootInitiationId: ROOT_ID,

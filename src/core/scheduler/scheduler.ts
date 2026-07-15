@@ -65,6 +65,11 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
+// Floor for the adaptive next-wake delay. Guarantees the self-rescheduling timer
+// can never spin into a busy-loop even when a task is already overdue: an overdue
+// task wakes after at most this delay rather than immediately re-arming at 0ms.
+const MIN_WAKE_MS = 50;
+
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -233,7 +238,11 @@ export class Scheduler {
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private tasks = new Map<string, RuntimeScheduledTask>();
-  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private tickTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Absolute epoch (ms) the currently armed wake will fire at, or null when disarmed. */
+  private wakeAt: number | null = null;
+  /** True between start() and stop(); gates arming so the timer self-reschedules only while active. */
+  private running = false;
   private tickInFlight: Promise<void> | null = null;
   private stopDrainPromise: Promise<void> | null = null;
   private stopping = false;
@@ -251,7 +260,6 @@ export class Scheduler {
 
   updateConfig(config: Partial<SchedulerConfig>): void {
     const next = { ...this.config, ...config };
-    const tickChanged = next.tickIntervalMs !== this.config.tickIntervalMs;
     const heartbeatChanged = next.heartbeatIntervalMs !== this.config.heartbeatIntervalMs;
 
     this.config = next;
@@ -260,10 +268,11 @@ export class Scheduler {
       this.updateTask('heartbeat', { intervalMs: this.config.heartbeatIntervalMs });
     }
 
-    if (tickChanged && this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-      this.start();
+    // Re-arm so a changed coarse ceiling (tickIntervalMs) and any heartbeat cadence
+    // change take effect immediately. Clears the existing timer before re-arming.
+    if (this.running) {
+      this.clearWakeTimer();
+      this.armNextWake(Date.now());
     }
   }
 
@@ -345,15 +354,102 @@ export class Scheduler {
   }
 
   start(): void {
-    if (this.tickTimer) return;
+    if (this.running) return;
+    this.running = true;
     this.stopping = false;
-    this.tickTimer = setInterval(() => {
-      if (this.stopping) return;
-      this.tick().catch(err => {
-        log.error('Tick error', { error: String(err) });
-      });
-    }, this.config.tickIntervalMs);
+    this.armNextWake(Date.now());
     log.info(`Started (tick=${this.config.tickIntervalMs}ms, ${this.tasks.size} tasks)`);
+  }
+
+  /**
+   * Request an earlier wake than the one currently armed. Used when a near-term
+   * task (e.g. a sub-second one-shot or defer) is registered or updated so the
+   * self-rescheduling timer does not wait until its next computed boundary.
+   * No-op when the scheduler is stopped or already waking at/before `atMs`.
+   */
+  requestWake(atMs: number): void {
+    if (!this.running || this.stopping) return;
+    if (this.wakeAt !== null && this.wakeAt <= atMs) return;
+    this.armNextWake(Date.now(), atMs);
+  }
+
+  private clearWakeTimer(): void {
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+      this.tickTimer = null;
+    }
+    this.wakeAt = null;
+  }
+
+  /**
+   * Absolute epoch (ms) when a single idle task next wants to run. Non-idle tasks
+   * never contribute (Infinity). Wall-clock cadences resolve only to minute
+   * precision, so they contribute the coarse ceiling when not yet due; the ceiling
+   * re-check honors their existing granularity.
+   */
+  private taskNextDueAt(now: number, entry: RuntimeScheduledTask): number {
+    if (entry.state !== 'idle') return Number.POSITIVE_INFINITY;
+    if (entry.type === 'every') {
+      if (isWallClockCadence(entry.cadence)) {
+        return isWallClockTaskDue(now, entry.lastRun, entry.cadence)
+          ? now
+          : now + this.config.tickIntervalMs;
+      }
+      return entry.lastRun === 0 ? now : entry.lastRun + entry.intervalMs;
+    }
+    return entry.runAt !== undefined ? entry.runAt : Number.POSITIVE_INFINITY;
+  }
+
+  /**
+   * Earliest absolute epoch (ms) the scheduler should next wake at: the minimum
+   * over all idle tasks' next-due times, an optional near-term hint, and the coarse
+   * ceiling safety net (tickIntervalMs). Never returns beyond the ceiling.
+   */
+  private computeNextWakeAt(now: number, hintAt?: number): number {
+    let earliest = now + this.config.tickIntervalMs;
+    if (hintAt !== undefined && hintAt < earliest) {
+      earliest = hintAt;
+    }
+    for (const entry of this.tasks.values()) {
+      const due = this.taskNextDueAt(now, entry);
+      if (due < earliest) earliest = due;
+    }
+    return earliest;
+  }
+
+  /**
+   * Arm the self-rescheduling wake timer for the next due task, clamped to
+   * [MIN_WAKE_MS, tickIntervalMs]. The floor prevents a busy-loop on overdue tasks;
+   * the ceiling keeps a coarse safety-net wake. Skips arming while a tick is in
+   * flight — that tick re-arms on completion and will observe any new near-term task.
+   */
+  private armNextWake(now: number, hintAt?: number): void {
+    if (!this.running || this.stopping) return;
+    if (this.tickInFlight) return;
+
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+      this.tickTimer = null;
+    }
+
+    const ceiling = this.config.tickIntervalMs;
+    const floor = Math.min(MIN_WAKE_MS, ceiling);
+    const rawDelay = this.computeNextWakeAt(now, hintAt) - now;
+    const delay = Math.max(floor, Math.min(rawDelay, ceiling));
+
+    this.wakeAt = now + delay;
+    this.tickTimer = setTimeout(() => {
+      this.tickTimer = null;
+      this.wakeAt = null;
+      if (this.stopping || !this.running) return;
+      this.tick()
+        .catch(err => {
+          log.error('Tick error', { error: String(err) });
+        })
+        .finally(() => {
+          this.armNextWake(Date.now());
+        });
+    }, delay);
   }
 
   async stop(): Promise<void> {
@@ -363,11 +459,9 @@ export class Scheduler {
     }
 
     this.stopping = true;
+    this.running = false;
     const hadTimer = this.tickTimer !== null;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    this.clearWakeTimer();
 
     const drainTarget = this.tickInFlight;
     if (!hadTimer && !drainTarget) return;

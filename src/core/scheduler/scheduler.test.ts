@@ -788,4 +788,167 @@ describe('Scheduler', () => {
       expect(stopped).toBe(true);
     });
   });
+
+  describe('adaptive next-wake (sub-tick scheduling)', () => {
+    // Coarse ceiling of 60s — the old fixed setInterval floor. These prove the
+    // self-rescheduling timer fires sub-minute work far ahead of that ceiling.
+    const CEILING_MS = 60_000;
+    // Slightly above the scheduler's internal ~50ms wake floor so the first
+    // immediately-due run is observed without depending on the exact floor value.
+    const MIN_WAKE_TOLERANCE_MS = 60;
+
+    it('fires a one-shot due in 250ms well before the 60s ceiling', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+        const fn = vi.fn();
+        adaptive.register({
+          id: 'subtick-one-shot',
+          name: 'Sub-tick One Shot',
+          type: 'one-shot',
+          intervalMs: 0,
+          runAt: Date.now() + 250,
+          handler: fn,
+          state: 'idle',
+        });
+
+        adaptive.start();
+
+        // Under the old fixed 60s setInterval this fires only at the 60s edge.
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fn).toHaveBeenCalledOnce();
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('honors requestWake to fire a near-term one-shot registered after start', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+
+        adaptive.start();
+
+        const fn = vi.fn();
+        const runAt = Date.now() + 250;
+        adaptive.register({
+          id: 'late-one-shot',
+          name: 'Late One Shot',
+          type: 'one-shot',
+          intervalMs: 0,
+          runAt,
+          handler: fn,
+          state: 'idle',
+        });
+        adaptive.requestWake(runAt);
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fn).toHaveBeenCalledOnce();
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('arms exactly one wake when idle and re-arms one at the coarse boundary (no busy loop)', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const ticks: number[] = [];
+        bus.on('schedule.tick', ({ timestamp }) => { ticks.push(timestamp); });
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+
+        adaptive.start();
+
+        // Well before the coarse boundary: no ticks — the idle scheduler is not
+        // spinning in a tight loop firing repeatedly.
+        await vi.advanceTimersByTimeAsync(CEILING_MS - 1_000);
+        expect(ticks).toHaveLength(0);
+
+        // Crossing the boundary triggers exactly one tick; the timer re-arms once
+        // more so the next boundary yields exactly one more — steady coarse cadence.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(ticks).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(CEILING_MS);
+        expect(ticks).toHaveLength(2);
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps firing a periodic task on cadence via adaptive re-arming', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+        const fn = vi.fn();
+        adaptive.register({
+          id: 'periodic-500',
+          name: 'Periodic 500ms',
+          type: 'every',
+          intervalMs: 500,
+          handler: fn,
+          state: 'idle',
+        });
+
+        adaptive.start();
+
+        // First run: lastRun === 0 is immediately due, fired within the wake floor.
+        await vi.advanceTimersByTimeAsync(MIN_WAKE_TOLERANCE_MS);
+        expect(fn).toHaveBeenCalledOnce();
+
+        await vi.advanceTimersByTimeAsync(500);
+        expect(fn).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(500);
+        expect(fn).toHaveBeenCalledTimes(3);
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the timer on stop so no further ticks fire', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const ticks: number[] = [];
+        bus.on('schedule.tick', ({ timestamp }) => { ticks.push(timestamp); });
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+
+        adaptive.start();
+        await adaptive.stop();
+
+        // No timer remains armed: advancing well past several ceilings fires nothing.
+        await vi.advanceTimersByTimeAsync(CEILING_MS * 2);
+        expect(ticks).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

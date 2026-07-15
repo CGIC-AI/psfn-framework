@@ -234,6 +234,12 @@ assertNotIncludes(
   '- name: POSTGRES_DATABASE_URL\n',
   'agent raw Postgres credential env',
 );
+assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_HMAC_KEY', 'agent audit opaque-ID HMAC env');
+assertIncludes(
+  agentDeployment,
+  'key: GATEWAY_SESSION_HMAC_KEY',
+  'agent audit opaque-ID HMAC Secret key',
+);
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
 assertIncludes(agentDeployment, 'name: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof env');
@@ -268,6 +274,11 @@ assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint e
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
 
 const gardenCredentialBoundaryDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
+assertNotIncludes(
+  gardenCredentialBoundaryDeployment,
+  'GATEWAY_SESSION_HMAC_KEY',
+  'network-only Garden session HMAC credential',
+);
 assertNotIncludes(
   gardenCredentialBoundaryDeployment,
   '- name: POSTGRES_DATABASE_URL\n',

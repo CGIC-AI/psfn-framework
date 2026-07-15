@@ -49,6 +49,7 @@ import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
+import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1582,18 +1583,57 @@ async function captureObserverSidecarInput(
 }
 
 describe('handleMessageForTurn observer eval sidecar seam', () => {
-  it('classifies operator-local terminal turns as private terminal observations', async () => {
+  it('keeps internal scheduler terminal turns fail-closed and redacts their emotion snapshot', async () => {
     const receivedInput = await captureObserverSidecarInput({
-      channelId: 'terminal:operator',
+      channelId: 'internal:reflection:temporal-wakeup',
       channelType: 'terminal',
-      isDirectMessage: undefined,
+      authorId: 'scheduler',
+      authorName: 'Temporal Wakeup',
+      isDirectMessage: false,
       routing: undefined,
     });
 
     expect(receivedInput.source).toEqual({
       routingSource: 'terminal',
       isDirectMessage: false,
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'fail_closed',
+        channelVisibility: null,
+        derivedTelemetryPermitted: false,
+        redactionReason: 'missing_channel_privacy_metadata',
+      },
+      emotion: {
+        snapshot: null,
+        snapshotRedacted: true,
+      },
+    });
+  });
+
+  it('classifies genuine interactive console turns as private observations', async () => {
+    const consoleMessage = createInteractiveTerminalMessage({
+      id: 'cli-observer-test',
+      content: OBSERVER_TEST_MESSAGE_CONTENT,
+      timestamp: new Date('2026-03-08T12:00:00Z'),
+    });
+    const receivedInput = await captureObserverSidecarInput(consoleMessage);
+
+    expect(receivedInput.source).toEqual({
+      routingSource: 'terminal',
+      isDirectMessage: false,
       channelPrivacy: 'private',
+    });
+    expect(sanitizeObserverEvalInput(receivedInput)).toMatchObject({
+      privacy: {
+        privacyClass: 'private',
+        channelVisibility: 'private',
+        derivedTelemetryPermitted: true,
+      },
+      emotion: {
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        snapshotRedacted: false,
+      },
     });
   });
 

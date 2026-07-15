@@ -678,8 +678,6 @@ export async function computePreTurnState(input: {
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
-  const observerChannelPrivacy = channelMeta.privacyLevel
-    ?? (message.channelType === 'terminal' ? 'private' : undefined);
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -697,7 +695,7 @@ export async function computePreTurnState(input: {
       source: {
         routingSource: resolveObserverEvalRoutingSource(message),
         isDirectMessage: message.isDirectMessage ?? false,
-        ...(observerChannelPrivacy ? { channelPrivacy: observerChannelPrivacy } : {}),
+        ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
       },
       emotion: {
         snapshot: emotionSnapshot,

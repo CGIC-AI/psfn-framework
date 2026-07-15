@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { CogSecEventStore, CogSecAction } from '../../core/cogsec/events.js';
@@ -16,6 +16,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   CHANNEL_INDEX_FILENAME,
   IMPORT_MANIFEST_FILENAME,
+  L0_SESSION_FILE_MAX_BYTES,
   createKeyringIntegrityProvider,
   normalizeOptionalNonNegativeNumber,
   normalizeOptionalSessionEntryRole,
@@ -40,6 +41,11 @@ import {
   type TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import {
+  validateSessionTailWindow,
+  type SessionTailCachePort,
+  type SessionTailRow,
+} from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
@@ -69,6 +75,21 @@ import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
+import { withSessionJournalWriteLock } from './store/session-journal-write-lock.js';
+import { rollSessionArchiveIfNeeded } from './store/session-rollover.js';
+import {
+  applyLastMessageMetadata,
+  syncLastMessageMetadataFromEntries,
+} from './store/session-cache-metadata.js';
+import {
+  buildRecentEntriesFingerprint,
+  fingerprintSessionJournalChain,
+  fullyLoadedSessionChainIsCurrent,
+  loadSessionJournalChain,
+  readSessionJournalChain,
+  reconcileSessionWriteChain,
+  syncLightweightSessionCacheFromIndex,
+} from './store/session-chain-cache.js';
 import {
   buildCogSecInvalidatedSummaryContent,
   buildCogSecTombstoneContent,
@@ -88,12 +109,11 @@ import {
 } from './store/cogsec-journal-helpers.js';
 const log = createComponentLogger('SessionStore');
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
-const JOURNAL_WRITE_LOCK_SUFFIX = '.write-lock';
-const JOURNAL_WRITE_LOCK_POLL_MS = 10;
-const JOURNAL_WRITE_LOCK_STALE_MS = 30_000;
-const JOURNAL_WRITE_LOCK_TIMEOUT_MS = 5_000;
-const JOURNAL_WRITE_SLEEP_STATE = new Int32Array(new SharedArrayBuffer(4));
+/** Initial overscan multiplier for tombstone-filtered turn-record reads. */
+const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
+const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
 export {
+  L0_SESSION_FILE_MAX_BYTES,
   sanitizeChannelId,
   unsanitizeChannelId,
 };
@@ -192,107 +212,34 @@ export interface CogSecCompactionRegenerationResult {
   skippedCompactionIds: number[];
 }
 
-const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
-
-function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxChars - 3)}...`;
-}
-
-function applyLastMessageMetadata(
-  cache: ChannelCache,
-  entry: Pick<SessionEntry, 'timestamp' | 'role' | 'authorName' | 'content'>,
-): void {
-  cache.lastMessageTimestamp = entry.timestamp;
-  cache.lastMessageRole = entry.role;
-  cache.lastMessageAuthorName = entry.authorName;
-  cache.lastMessagePreview = toMessagePreview(entry.content);
-}
-
-function clearLastMessageMetadata(cache: ChannelCache): void {
-  cache.lastMessageTimestamp = 0;
-  cache.lastMessageRole = null;
-  cache.lastMessageAuthorName = undefined;
-  cache.lastMessagePreview = '';
-}
-
-function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
-  const lastEntry = cache.entries.at(-1);
-  if (!lastEntry) {
-    clearLastMessageMetadata(cache);
-    return;
-  }
-  applyLastMessageMetadata(cache, lastEntry);
-}
-
-function sleepSync(ms: number): void {
-  if (ms <= 0) return;
-  Atomics.wait(JOURNAL_WRITE_SLEEP_STATE, 0, 0, ms);
-}
-
-function journalWriteLockPath(filePath: string): string {
-  return `${filePath}${JOURNAL_WRITE_LOCK_SUFFIX}`;
-}
-
-function clearStaleJournalWriteLock(lockPath: string): boolean {
-  try {
-    const stats = statSync(lockPath);
-    if (Date.now() - stats.mtimeMs <= JOURNAL_WRITE_LOCK_STALE_MS) {
-      return false;
-    }
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return false;
-    throw error;
-  }
-
-  rmSync(lockPath, { recursive: true, force: true });
-  return true;
-}
-
-function withJournalWriteLock<T>(filePath: string, operation: () => T): T {
-  const lockPath = journalWriteLockPath(filePath);
-  const deadline = Date.now() + JOURNAL_WRITE_LOCK_TIMEOUT_MS;
-
-  for (;;) {
-    try {
-      mkdirSync(lockPath);
-      break;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') {
-        throw error;
-      }
-      if (clearStaleJournalWriteLock(lockPath)) {
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out acquiring session journal write lock for ${filePath}`);
-      }
-      sleepSync(JOURNAL_WRITE_LOCK_POLL_MS);
-    }
-  }
-
-  try {
-    return operation();
-  } finally {
-    rmSync(lockPath, { recursive: true, force: true });
-  }
-}
-
 export class SessionStore implements TranscriptSearchPort {
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private channelIndexFingerprint: string | null = null;
+  private journalTombstoneAuthority = new Map<string, {
+    archiveFingerprint: string;
+    tombstones: Set<string>;
+  }>();
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
   private journalRuntime: SessionJournalRuntime;
+  private channelIndexFailureLogged = false;
+  /** Optional shared hot tail (psfn-framework-hgw3.5); null = file-only behavior. */
+  private tailCache: SessionTailCachePort | null;
+  /** Serializes fire-and-forget tail writes so per-channel ops keep call order. */
+  private tailWriteChain: Promise<void> = Promise.resolve();
+  /**
+   * Channels whose Redis tail must not be trusted until repopulated: a tail
+   * write failed (possible gap) or a journal rewrite invalidated the window.
+   * Local-process poison flag backing the cross-process DEL.
+   */
+  private tailRefreshRequiredChannels = new Set<string>();
+  private tailDegradedLastWarnAt = 0;
+  private tailDegradedSuppressedCount = 0;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
     this.channelIndexPath = join(sessionsDir, CHANNEL_INDEX_FILENAME);
@@ -313,16 +260,49 @@ export class SessionStore implements TranscriptSearchPort {
       this.transcriptSearch = this.transcriptProjection;
     }
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.tailCache = options.tailCache ?? null;
+    for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
+      withSessionJournalWriteLock(rootPath, () => {
+        this.journalRuntime.recoverJournalChainRewrite(rootPath);
+      });
+    }
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
     this.backfillTranscriptProjectionFromDisk();
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
   }
-  private ensureChannelIndexEntry(sessionId: string, channelId: string, filePath: string): ChannelIndexEntry {
+  private fingerprintChannelIndex(): string | null {
+    try {
+      const stats = statSync(this.channelIndexPath);
+      return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(':');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  private refreshChannelIndexFromDisk(): void {
+    const observed = this.fingerprintChannelIndex();
+    if (observed === this.channelIndexFingerprint) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refreshed = new Map<string, ChannelIndexEntry>();
+      loadChannelIndex(this.channelIndexPath, refreshed);
+      const afterRead = this.fingerprintChannelIndex();
+      if (afterRead !== observed && attempt === 0) continue;
+      this.channelIndex = refreshed;
+      this.channelIndexFingerprint = afterRead;
+      return;
+    }
+  }
+  private ensureChannelIndexEntry(
+    sessionId: string,
+    channelId: string,
+    filePaths: readonly string[],
+  ): ChannelIndexEntry {
     return ensureChannelIndexEntry({
       sessionId,
       channelId,
-      filePath,
+      filePaths,
       channelIndexPath: this.channelIndexPath,
       channelIndex: this.channelIndex,
       warnAboutQuarantinedEntries: (id, path, quarantined, loaded) => {
@@ -333,17 +313,86 @@ export class SessionStore implements TranscriptSearchPort {
           loaded,
         );
       },
+      onEntryRebuilt: (id, entry) => this.rememberJournalTombstoneAuthority(id, entry),
     });
+  }
+  private rememberJournalTombstoneAuthority(sessionId: string, entry: ChannelIndexEntry): void {
+    const archiveFingerprint = normalizeOptionalString(entry.archiveFingerprint);
+    if (!archiveFingerprint) return;
+    this.journalTombstoneAuthority.set(sessionId, {
+      archiveFingerprint,
+      tombstones: new Set(entry.activeTurnTombstoneIds ?? []),
+    });
+  }
+  private resolveJournalAuthoritativeTurnTombstones(params: {
+    sessionId: string;
+    channelId: string;
+    filePaths: readonly string[];
+    cache?: ChannelCache;
+  }): ReadonlySet<string> {
+    const archives = params.filePaths.map(filePath => (
+      this.journalRuntime.openArchive(params.channelId, filePath)
+    ));
+    const archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
+    if (!archiveFingerprint) {
+      throw new Error(`Cannot establish turn-tombstone authority for missing L0 session ${params.sessionId}`);
+    }
+    const remembered = this.journalTombstoneAuthority.get(params.sessionId);
+    if (remembered?.archiveFingerprint === archiveFingerprint) {
+      this.syncCacheTurnTombstoneAuthority(params.cache, remembered.tombstones);
+      return new Set(remembered.tombstones);
+    }
+    if (params.cache?.fullyLoaded && params.cache.archiveFingerprint === archiveFingerprint) {
+      const tombstones = new Set(params.cache.turnTombstones);
+      this.journalTombstoneAuthority.set(params.sessionId, { archiveFingerprint, tombstones });
+      return new Set(tombstones);
+    }
+
+    // The channel index is an unsigned derived cache. On a fresh process it
+    // cannot authorize removal of a redaction merely because its archive
+    // fingerprint is current; derive tombstones from canonical journal replay
+    // once per immutable archive generation, then retain only that authority.
+    const loaded = this.journalRuntime.loadChannelChain(archives);
+    const loadedFingerprint = loaded.archiveFingerprint;
+    if (!loadedFingerprint) {
+      throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
+    }
+    const tombstones = new Set(loaded.turnTombstones);
+    this.journalTombstoneAuthority.set(params.sessionId, {
+      archiveFingerprint: loadedFingerprint,
+      tombstones,
+    });
+    this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
+    return new Set(tombstones);
+  }
+  private syncCacheTurnTombstoneAuthority(
+    cache: ChannelCache | undefined,
+    tombstones: ReadonlySet<string>,
+  ): void {
+    if (!cache || cache.fullyLoaded) return;
+    const unchanged = cache.turnTombstones.size === tombstones.size
+      && [...tombstones].every(turnId => cache.turnTombstones.has(turnId));
+    if (unchanged) return;
+    cache.turnTombstones = new Set(tombstones);
+    cache.activeTurnTombstoneCount = tombstones.size;
+    cache.recentEntriesByLimit.clear();
   }
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
     upsertChannelIndex(channelId, entry, this.channelIndexPath, this.channelIndex);
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
   }
   private resolveSessionId(lookupKey: string): string | null {
     return resolvePrimarySessionId(lookupKey, this.channelIndex);
   }
   private getLoadedCache(lookupKey: string): ChannelCache | undefined {
+    loadChannelIndex(this.channelIndexPath, this.channelIndex);
     const sessionId = this.resolveSessionId(lookupKey) ?? lookupKey;
-    return this.channels.get(sessionId);
+    const cache = this.channels.get(sessionId);
+    const indexEntry = this.channelIndex.get(sessionId);
+    if (cache && indexEntry && !cache.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    return cache;
   }
   private resolveExistingSession(lookupKey: string) {
     return resolveExistingSession(this.sessionsDir, lookupKey, this.channelIndex);
@@ -379,6 +428,7 @@ export class SessionStore implements TranscriptSearchPort {
           loadedCount,
         );
       },
+      onEntryRebuilt: (sessionId, entry) => this.rememberJournalTombstoneAuthority(sessionId, entry),
     });
   }
   private backfillTranscriptProjectionFromDisk(): void {
@@ -393,25 +443,45 @@ export class SessionStore implements TranscriptSearchPort {
     if (existing) return existing;
     const resolved = this.resolveExistingSession(channelId);
     if (!resolved) return null;
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
-    const cache = createLightweightCache(resolved.channelId, resolved.filePath, indexEntry);
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
+    const cache = createLightweightCache(resolved.channelId, resolved.filePaths, indexEntry);
     this.channels.set(resolved.sessionId, cache);
     return cache;
   }
+  /**
+   * A fullyLoaded cache may only be served while the journal file on disk is
+   * byte-identical to what the cache loaded or last wrote. Other processes
+   * (gateway, garden) append through their own SessionStore instances over the
+   * same sessions dir, so an unverified fullyLoaded cache silently serves a
+   * stale window (psfn-framework-hgw3.1: duplicate replies from a context
+   * missing the previous turn's assistant entry). `null === null` only holds
+   * while the archive file does not exist yet (empty new channel).
+   */
+  private fullyLoadedCacheIsCurrent(cache: ChannelCache): boolean {
+    loadChannelIndex(this.channelIndexPath, this.channelIndex);
+    const sessionId = this.resolveCacheSessionKey(cache);
+    return fullyLoadedSessionChainIsCurrent({
+      cache,
+      indexEntry: this.channelIndex.get(sessionId),
+      sessionsDir: this.sessionsDir,
+      runtime: this.journalRuntime,
+    });
+  }
   private ensureChannelFullyLoaded(channelId: string): ChannelCache | null {
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
-    const existing = this.channels.get(resolvedSessionId);
-    if (existing?.fullyLoaded) return existing;
-    const resolved = existing
+    const existing = this.getLoadedCache(channelId);
+    if (existing?.fullyLoaded && this.fullyLoadedCacheIsCurrent(existing)) return existing;
+    const resolved = this.resolveExistingSession(channelId) ?? (existing
       ? {
         sessionId: resolvedSessionId,
         channelId: existing.channelId,
+        filePaths: existing.archivePaths,
         filePath: existing.resolvedPath,
       }
-      : this.resolveExistingSession(channelId);
+      : null);
     if (!resolved) return null;
-    const loaded = this.journalRuntime.loadChannel(
-      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
+    const loaded = this.journalRuntime.loadChannelChain(
+      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
     );
     this.channels.set(resolved.sessionId, loaded);
     this.upsertChannelIndex(resolved.sessionId, snapshotIndexEntry(loaded));
@@ -421,13 +491,17 @@ export class SessionStore implements TranscriptSearchPort {
     this.journalRuntime.indexSessionEntry(entry, this.transcriptProjection);
   }
   private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {
+    // A sibling process may have rolled this logical session since this store
+    // was constructed. Refresh the index before resolving the write chain so
+    // a stale writer cannot append to the retired root segment or reuse an id.
+    this.refreshChannelIndexFromDisk();
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
     const existing = this.channels.get(resolvedSessionId);
     if (existing) return existing;
     const resolved = this.resolveExistingSession(channelId);
     if (resolved) {
-      const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
-      const cache = createLightweightCache(resolved.channelId, resolved.filePath, indexEntry);
+      const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
+      const cache = createLightweightCache(resolved.channelId, resolved.filePaths, indexEntry);
       this.channels.set(resolved.sessionId, cache);
       return cache;
     }
@@ -437,12 +511,14 @@ export class SessionStore implements TranscriptSearchPort {
       channelId,
       entries: [],
       compactions: [],
+      compactionArchivePaths: new Set(),
       turnTombstones: new Set(),
       activeTurnTombstoneCount: 0,
       nextId: 1,
       lastHmac: null,
       lastExtractionCoveredUpTo: 0,
       lastJournalEntry: null,
+      archivePaths: [newPath],
       resolvedPath: newPath,
       archiveFingerprint: null,
       messageCount: 0,
@@ -460,16 +536,21 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
     cache.recentEntriesByLimit.clear();
-    const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+    const archives = cache.archivePaths.map(filePath => (
+      this.journalRuntime.openArchive(cache.channelId, filePath)
+    ));
+    const archive = archives.at(-1)!;
+    const sessionId = this.resolveCacheSessionKey(cache);
     this.journalRuntime.writeJournalEntry({
       cache,
       archive,
       journal,
-      upsertChannelIndex: (channelId, entry) => this.upsertChannelIndex(channelId, entry),
     });
     let archiveFingerprint: string | null;
     try {
-      archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
+      // Every caller holds the cross-process journal write lock here, so the
+      // refreshed chain fingerprint cannot absorb a concurrent foreign append.
+      archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
     } catch (error) {
       cache.archiveFingerprint = null;
       log.warn('Session archive fingerprint refresh failed after journal append; write cache invalidated', {
@@ -483,6 +564,23 @@ export class SessionStore implements TranscriptSearchPort {
       throw new Error(`Session archive is missing after journal append for ${cache.channelId}`);
     }
     cache.archiveFingerprint = archiveFingerprint;
+    try {
+      this.upsertChannelIndex(sessionId, snapshotIndexEntry(cache));
+    } catch (error) {
+      if (!this.channelIndexFailureLogged) {
+        this.channelIndexFailureLogged = true;
+        log.warn('Session channel index write failed after journal append; continuing without interruption', {
+          channelId: cache.channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
+  }
+  private readJournalChain(cache: ChannelCache) {
+    return readSessionJournalChain(this.journalRuntime, cache);
+  }
+  private loadJournalChain(cache: ChannelCache): ChannelCache {
+    return loadSessionJournalChain(this.journalRuntime, cache);
   }
   private resolveCacheSessionKey(cache: ChannelCache): string {
     for (const [sessionId, candidate] of this.channels.entries()) {
@@ -491,73 +589,294 @@ export class SessionStore implements TranscriptSearchPort {
     return this.resolveSessionId(cache.channelId) ?? cache.channelId;
   }
   private reconcileWriteCache(cache: ChannelCache): ChannelCache {
-    const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
-    const archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
-    if (cache.archiveFingerprint !== null && archiveFingerprint === cache.archiveFingerprint) {
-      return cache;
-    }
-
-    const metadata = this.journalRuntime.scanArchiveMetadata(archive);
-    if (metadata.quarantined.length > 0) {
-      this.journalRuntime.warnAboutQuarantinedEntries(
-        cache.channelId,
-        archive,
-        metadata.quarantined.length,
-        metadata.entryCount,
-      );
-    }
-
-    const diskNextId = metadata.maxId + 1;
-    const cacheLastJournalType = cache.lastJournalEntry?.type ?? null;
-    const diskLastJournalType = metadata.lastEntry?.type ?? null;
-    const cacheMatchesDisk = (
-      cache.nextId === diskNextId
-      && cache.lastHmac === metadata.lastHmac
-      && cache.lastTimestamp === metadata.lastTimestamp
-      && cache.messageCount === metadata.messageCount
-      && cache.activeTurnTombstoneCount === metadata.activeTurnTombstoneCount
-      && cache.lastExtractionCoveredUpTo === metadata.lastExtractionCoveredUpTo
-      && cacheLastJournalType === diskLastJournalType
-    );
-    if (cacheMatchesDisk) {
-      cache.archiveFingerprint = archiveFingerprint;
-      return cache;
-    }
-
-    const loaded = this.journalRuntime.loadChannel(archive);
-    loaded.archiveFingerprint = archiveFingerprint;
     const sessionId = this.resolveCacheSessionKey(cache);
-    this.channels.set(sessionId, loaded);
-    this.upsertChannelIndex(sessionId, snapshotIndexEntry(loaded));
-    this.syncTranscriptProjectionForChannel(loaded.channelId, loaded.entries);
-    return loaded;
+    loadChannelIndex(this.channelIndexPath, this.channelIndex);
+    const reconciled = reconcileSessionWriteChain({
+      cache,
+      indexEntry: this.channelIndex.get(sessionId),
+      sessionsDir: this.sessionsDir,
+      runtime: this.journalRuntime,
+    });
+    if (reconciled.cache === cache) return cache;
+    this.channels.set(sessionId, reconciled.cache);
+    if (reconciled.refreshIndex) {
+      this.upsertChannelIndex(sessionId, snapshotIndexEntry(reconciled.cache));
+    }
+    this.syncTranscriptProjectionForChannel(reconciled.cache.channelId, reconciled.cache.entries);
+    return reconciled.cache;
   }
   private withLockedChannelWrite<T>(
     channelId: string,
     seed: SessionFileSeed,
-    writer: (cache: ChannelCache) => T,
+    writer: (cache: ChannelCache, renewLease: () => void) => T,
   ): T {
     const cache = this.ensureChannelForWrite(channelId, seed);
-    return withJournalWriteLock(cache.resolvedPath, () => writer(this.reconcileWriteCache(cache)));
+    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => (
+      writer(this.reconcileWriteCache(cache), renewLease)
+    ));
   }
   private withLockedExistingChannelWrite<T>(
     channelId: string,
-    writer: (cache: ChannelCache) => T,
+    writer: (cache: ChannelCache, renewLease: () => void) => T,
   ): T | null {
     const cache = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     if (!cache) return null;
-    return withJournalWriteLock(cache.resolvedPath, () => writer(this.reconcileWriteCache(cache)));
+    return withSessionJournalWriteLock(cache.archivePaths[0]!, (renewLease) => (
+      writer(this.reconcileWriteCache(cache), renewLease)
+    ));
   }
-  private readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
-    return this.journalRuntime.readRecentEntriesFromTail(
-      this.journalRuntime.openArchive(channelId, filePath),
+  private readRecentEntriesFromTail(
+    channelId: string,
+    filePaths: readonly string[],
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return this.journalRuntime.readRecentEntriesFromTailChain(
+      filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath)),
       limit,
+      tombstones,
     );
   }
   private fingerprintArchive(cache: ChannelCache): string | null {
-    return this.journalRuntime.fingerprintArchive(
-      this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath),
-    );
+    return fingerprintSessionJournalChain(this.journalRuntime, cache);
+  }
+  private resolveTailChannelKey(channelId: string): string {
+    return this.resolveSessionId(channelId) ?? channelId;
+  }
+  /**
+   * Redis degraded: LOUD warn, rate-limited per occurrence window. A companion
+   * that stops replying because Redis blipped is worse than one on slow file
+   * reads, so tail failures degrade to the journal path and are logged, never
+   * hidden and never rethrown into the turn.
+   */
+  private markSessionTailDegraded(channelKey: string, operation: string, error: unknown): void {
+    this.tailRefreshRequiredChannels.add(channelKey);
+    const now = Date.now();
+    if (now - this.tailDegradedLastWarnAt < TAIL_DEGRADED_WARN_INTERVAL_MS) {
+      this.tailDegradedSuppressedCount += 1;
+      return;
+    }
+    const suppressed = this.tailDegradedSuppressedCount;
+    this.tailDegradedLastWarnAt = now;
+    this.tailDegradedSuppressedCount = 0;
+    log.warn('Session tail cache degraded; serving journal reads until the tail repopulates', {
+      channelKey,
+      operation,
+      suppressedSinceLastWarn: suppressed,
+      error: toErrorMessage(error),
+    });
+  }
+  /**
+   * Serialize fire-and-forget tail writes. The journal write already
+   * succeeded by the time these run; a tail failure only poisons the channel
+   * tail (forced refresh) and warns — it never fails the caller.
+   */
+  private queueSessionTailWrite(
+    channelKey: string,
+    operation: string,
+    op: () => Promise<void>,
+  ): void {
+    this.tailWriteChain = this.tailWriteChain.then(async () => {
+      try {
+        await op();
+      } catch (error) {
+        this.markSessionTailDegraded(channelKey, operation, error);
+      }
+    });
+  }
+  /** Write-through after a durable journal append (write path holds the journal lock). */
+  private writeSessionTailRowThrough(channelId: string, row: SessionTailRow): void {
+    const port = this.tailCache;
+    if (!port) return;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    // Capture the epoch AT ENQUEUE time (the GET is issued now, while the row
+    // data is fresh under the journal lock), never at write-execution time: a
+    // queued append that captured pre-rewrite content must land under the
+    // pre-rewrite epoch key, where a rewrite's fence bumps make it
+    // structurally unreadable. Rejections surface when the queued op awaits
+    // the promise; the no-op catch only prevents a spurious
+    // unhandled-rejection between enqueue and execution.
+    const epochAtEnqueue = port.getEpoch(channelKey);
+    epochAtEnqueue.catch(() => { /* handled where awaited on the write chain */ });
+    this.queueSessionTailWrite(channelKey, 'append', async () => {
+      const epoch = await epochAtEnqueue;
+      if (this.tailRefreshRequiredChannels.has(channelKey)) {
+        // A prior tail write failed: the tail may hide a gap. Drop it before
+        // appending so readers fall back to the journal until repopulation.
+        await port.invalidateChannel(channelKey, epoch);
+        this.tailRefreshRequiredChannels.delete(channelKey);
+      }
+      await port.appendRow(channelKey, epoch, row);
+    });
+  }
+  private writeSessionTailThrough(channelId: string, entry: SessionEntry): void {
+    this.writeSessionTailRowThrough(channelId, { kind: 'message', entry });
+  }
+  /**
+   * Non-message journal entries (compactions, extraction markers, shutdown
+   * markers) consume entry ids too. Write an explicit id-gap placeholder so
+   * the tail's ID CONTIGUITY invariant keeps holding: without it every
+   * non-message append would read as a lost tail write and force a miss.
+   */
+  private writeSessionTailGapThrough(channelId: string, id: number): void {
+    this.writeSessionTailRowThrough(channelId, { kind: 'id_gap', id });
+  }
+  /**
+   * Advance the shared per-channel tail epoch. Every journal REWRITE path
+   * (CogSec tombstone/compaction rewrites, turn tombstones, post-repair
+   * reloads) MUST await this before the rewrite completes: the epoch bump is
+   * what makes every pre-rewrite tail row unreadable in EVERY process, so
+   * security redactions can never be resurrected from Redis. Fail-closed: a
+   * failed bump aborts the rewrite loudly instead of leaving other processes
+   * able to serve pre-rewrite content.
+   *
+   * Queued tail writes are drained first so a repopulation captured before
+   * the rewrite can only ever land under the old (fenced-off) epoch.
+   */
+  private async bumpSessionTailEpoch(channelId: string, reason: string): Promise<void> {
+    const port = this.tailCache;
+    if (!port) return;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    this.tailRefreshRequiredChannels.add(channelKey);
+    await this.tailWriteChain;
+    try {
+      await port.bumpEpoch(channelKey);
+    } catch (error) {
+      throw new Error(
+        `Session tail epoch bump failed for channel ${channelKey} (${reason}); `
+        + `refusing to complete the journal rewrite while other processes could `
+        + `serve the pre-rewrite tail: ${toErrorMessage(error)}`,
+      );
+    }
+    this.tailRefreshRequiredChannels.delete(channelKey);
+  }
+  /**
+   * Run a journal-rewrite body and GUARANTEE the post-rewrite epoch bump
+   * executes once the journal mutation is durable — even when a step between
+   * the rewrite and the bump throws (projection sync, index update, event
+   * store bookkeeping). The body calls `markRewritten()` immediately after
+   * the journal mutation lands; if it was called, the second fence runs on
+   * BOTH the success and the failure path. `bumpSessionTailEpoch` poisons the
+   * local tail (refresh flag) before attempting the INCR, so even a failed
+   * bump leaves local state safe while still throwing loudly (fail-closed).
+   */
+  private async withPostRewriteTailFence<T>(
+    channelId: string,
+    reason: string,
+    body: (markRewritten: () => void) => T,
+  ): Promise<T> {
+    const state = { rewritten: false };
+    let result: T;
+    try {
+      result = body(() => {
+        state.rewritten = true;
+      });
+    } catch (error) {
+      if (state.rewritten) {
+        try {
+          await this.bumpSessionTailEpoch(channelId, `${reason}:post`);
+        } catch (bumpError) {
+          // Neither failure may be swallowed: the caller sees both.
+          throw new AggregateError(
+            [error, bumpError],
+            `Journal rewrite failed after mutating the journal AND the post-rewrite `
+            + `tail fence failed for channel ${channelId} (${reason}): `
+            + `${toErrorMessage(error)}; ${toErrorMessage(bumpError)}`,
+          );
+        }
+      }
+      throw error;
+    }
+    if (state.rewritten) {
+      await this.bumpSessionTailEpoch(channelId, `${reason}:post`);
+    }
+    return result;
+  }
+  /** Rebuild the Redis tail from the journal-backed recent window (fire-and-forget). */
+  private repopulateSessionTail(channelId: string, channelKey: string): void {
+    const port = this.tailCache;
+    if (!port) return;
+    this.queueSessionTailWrite(channelKey, 'repopulate', async () => {
+      // ORDER MATTERS: resolve the epoch BEFORE capturing the journal data,
+      // then write to that captured epoch's key only. Under the two-bump
+      // rewrite protocol this is airtight: data captured after an epoch read
+      // that predates the post-rewrite bump lands under a key that bump
+      // supersedes, and an epoch read after the post-rewrite bump can only
+      // see post-rewrite journal state. Resolving the epoch at write time
+      // (or capturing data before the epoch) would let a delayed
+      // repopulation resurrect pre-rewrite content under the new epoch.
+      const epoch = await port.getEpoch(channelKey);
+      const entries = this.getRecent(channelId, port.maxEntriesPerChannel);
+      const rows: SessionTailRow[] = [];
+      let previousId: number | null = null;
+      for (const entry of entries) {
+        if (previousId !== null && entry.id - previousId > port.maxEntriesPerChannel) {
+          // Absurd id jump (corrupt window): keep only the newest contiguous
+          // run instead of synthesizing an unbounded placeholder range.
+          rows.length = 0;
+        } else if (previousId !== null) {
+          for (let gapId = previousId + 1; gapId < entry.id; gapId += 1) {
+            rows.push({ kind: 'id_gap', id: gapId });
+          }
+        }
+        rows.push({ kind: 'message', entry });
+        previousId = entry.id;
+      }
+      await port.replaceTail(channelKey, epoch, rows);
+      this.tailRefreshRequiredChannels.delete(channelKey);
+    });
+  }
+  /**
+   * Fetch the shared hot tail for a capture read (psfn-framework-hgw3.5).
+   * Returns null when the tail cache is disabled, degraded, poisoned,
+   * epoch-fenced (a journal rewrite bumped the channel epoch, making every
+   * pre-rewrite row unreadable), non-contiguous (a lost tail write from any
+   * process leaves an id hole the max-id freshness check alone would miss),
+   * or BEHIND the just-recorded entry id (`expectedMinEntryId`) — callers
+   * then stay on the journal-backed path (byte-identical behavior) while the
+   * tail repopulates in the background. Integrates with the hgw3.1
+   * stale-window heal guard: `reloadChannelFromDisk` bumps the epoch, so a
+   * heal recapture never re-reads the window that was just diagnosed as
+   * stale.
+   */
+  async fetchSessionTailWindow(
+    channelId: string,
+    options: { expectedMinEntryId?: number } = {},
+  ): Promise<SessionEntry[] | null> {
+    const port = this.tailCache;
+    if (!port) return null;
+    const channelKey = this.resolveTailChannelKey(channelId);
+    if (!this.tailRefreshRequiredChannels.has(channelKey)) {
+      let messages: SessionEntry[] = [];
+      let maxRowId: number | null = null;
+      try {
+        ({ messages, maxRowId } = validateSessionTailWindow(await port.getTail(channelKey)));
+      } catch (error) {
+        // Fall through to repopulation: duplicate/gapped windows and Redis
+        // errors alike degrade loudly to the journal path. If Redis is down
+        // the repopulation fails quietly on the queued chain and the channel
+        // stays poisoned until it recovers.
+        this.markSessionTailDegraded(channelKey, 'read', error);
+        messages = [];
+        maxRowId = null;
+      }
+      if (messages.length > 0 && maxRowId !== null) {
+        if (options.expectedMinEntryId === undefined || maxRowId >= options.expectedMinEntryId) {
+          return messages;
+        }
+        log.warn('Session tail cache is behind the just-recorded entry; falling back to journal reads and repopulating', {
+          channelKey,
+          tailMaxEntryId: maxRowId,
+          expectedMinEntryId: options.expectedMinEntryId,
+        });
+      }
+    }
+    this.repopulateSessionTail(channelId, channelKey);
+    return null;
+  }
+  /** Flush queued tail writes (tests and shutdown). */
+  async flushSessionTailWrites(): Promise<void> {
+    await this.tailWriteChain;
   }
   private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
     if (tombstones.size === 0) return [...entries];
@@ -575,37 +894,6 @@ export class SessionStore implements TranscriptSearchPort {
     if (!this.transcriptProjection) return;
     this.transcriptProjection.replaceChannelEntries(channelId, entries);
   }
-  private buildRecentEntriesFingerprint(cache: ChannelCache): string {
-    return [
-      cache.resolvedPath,
-      cache.messageCount,
-      cache.activeTurnTombstoneCount,
-      cache.nextId,
-      cache.lastTimestamp,
-      cache.lastExtractionCoveredUpTo,
-      cache.lastJournalEntry?.type ?? '',
-      cache.lastJournalEntry?.type === 'marker' ? (cache.lastJournalEntry.marker ?? '') : '',
-      cache.lastHmac ?? '',
-    ].join(':');
-  }
-  private syncLightweightCacheFromIndexEntry(cache: ChannelCache, indexEntry: ChannelIndexEntry): void {
-    if (cache.fullyLoaded) return;
-    const previousFingerprint = this.buildRecentEntriesFingerprint(cache);
-    cache.activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
-    cache.nextId = (normalizeOptionalNonNegativeNumber(indexEntry.maxId) ?? 0) + 1;
-    cache.lastHmac = indexEntry.lastHmac ?? null;
-    cache.lastExtractionCoveredUpTo = normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0;
-    cache.lastJournalEntry = rehydrateLastJournalEntry(cache.channelId, indexEntry);
-    cache.messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
-    cache.lastTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastTimestamp) ?? 0;
-    cache.lastMessageTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
-    cache.lastMessageRole = normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole) ?? null;
-    cache.lastMessageAuthorName = normalizeOptionalString(indexEntry.lastMessageAuthorName);
-    cache.lastMessagePreview = normalizeOptionalString(indexEntry.lastMessagePreview) ?? '';
-    if (this.buildRecentEntriesFingerprint(cache) !== previousFingerprint) {
-      cache.recentEntriesByLimit.clear();
-    }
-  }
   private readCachedRecentEntries(
     cache: ChannelCache,
     limit: number,
@@ -613,7 +901,7 @@ export class SessionStore implements TranscriptSearchPort {
   ): SessionEntry[] | null {
     const cached = cache.recentEntriesByLimit.get(limit);
     if (!cached) return null;
-    if (cached.fingerprint !== this.buildRecentEntriesFingerprint(cache)) return null;
+    if (cached.fingerprint !== buildRecentEntriesFingerprint(cache)) return null;
     if (cached.archiveFingerprint !== archiveFingerprint) return null;
     return [...cached.entries];
   }
@@ -629,7 +917,7 @@ export class SessionStore implements TranscriptSearchPort {
       return;
     }
     cache.recentEntriesByLimit.set(limit, {
-      fingerprint: this.buildRecentEntriesFingerprint(cache),
+      fingerprint: buildRecentEntriesFingerprint(cache),
       archiveFingerprint,
       entries: [...entries],
     });
@@ -682,7 +970,24 @@ export class SessionStore implements TranscriptSearchPort {
         authorId: entry.authorId,
         authorName: entry.authorName,
       },
-      (cache) => {
+      (writeCache) => {
+        const cache = rollSessionArchiveIfNeeded({
+          cache: writeCache,
+          nextRole: entry.role,
+          archiveByteLength: filePath => this.journalRuntime.archiveByteLength(
+            this.journalRuntime.openArchive(writeCache.channelId, filePath),
+          ),
+          materializeEmptyArchive: (filePath) => {
+            this.journalRuntime.rewriteJournalEntries(
+              this.journalRuntime.openArchive(writeCache.channelId, filePath),
+              [],
+            );
+          },
+          persistIndex: (rolledCache) => this.upsertChannelIndex(
+            this.resolveCacheSessionKey(rolledCache),
+            snapshotIndexEntry(rolledCache),
+          ),
+        });
         const id = cache.nextId;
         const full: SessionEntry = { ...entry, id };
         const previousNextId = cache.nextId;
@@ -717,6 +1022,7 @@ export class SessionStore implements TranscriptSearchPort {
           throw error;
         }
         this.indexSessionEntry(full);
+        this.writeSessionTailThrough(entry.channelId, full);
         return id;
       },
     );
@@ -725,26 +1031,61 @@ export class SessionStore implements TranscriptSearchPort {
     this.turnRecordStore.appendTurnRecord(record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
+    if (limit <= 0) return [];
+    this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
-    const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
-    const records = this.turnRecordStore.readRecentTurnRecords(
-      sessionId,
-      hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+      }
+      : null);
+    if (!resolved) {
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
+    }
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
     );
-    if (!hasTombstones) {
-      return records;
+    if (cached) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
     }
-
-    const loaded = this.ensureChannelFullyLoaded(channelId);
-    if (!loaded || loaded.turnTombstones.size === 0) {
-      if (records.length <= limit) return records;
-      return records.slice(-limit);
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached,
+    });
+    if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
+    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
+  }
+  /**
+   * Bounded iterative overscan for tombstone-filtered turn-record reads:
+   * request a small multiple of the limit, filter tombstoned turns, and only
+   * widen (doubling) while the segment files still have older records to
+   * offer. Exactness wins when an unusually dense tombstone window requires
+   * reading farther back: returning a partial logical window would violate
+   * the public limit contract.
+   */
+  private readTombstoneFilteredTurnRecords(
+    sessionId: string,
+    limit: number,
+    tombstones: ReadonlySet<string>,
+  ): TurnRecord[] {
+    let requested = Math.max(limit, limit * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR);
+    for (;;) {
+      const records = this.turnRecordStore.readRecentTurnRecords(sessionId, requested);
+      const filtered = records.filter(record => !tombstones.has(record.turnId));
+      // Fewer records than requested means the whole archive is already read.
+      const exhaustedHistory = records.length < requested;
+      if (filtered.length >= limit || exhaustedHistory) {
+        return filtered.length > limit ? filtered.slice(-limit) : filtered;
+      }
+      requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
-
-    const filtered = records.filter(record => !loaded.turnTombstones.has(record.turnId));
-    if (filtered.length <= limit) return filtered;
-    return filtered.slice(-limit);
   }
   async searchByKeywords(
     query: string,
@@ -767,44 +1108,36 @@ export class SessionStore implements TranscriptSearchPort {
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
     if (limit <= 0) return [];
+    this.refreshChannelIndexFromDisk();
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     if (cached?.fullyLoaded) {
-      if (cached.entries.length <= limit) return [...cached.entries];
-      return cached.entries.slice(-limit);
+      if (this.fullyLoadedCacheIsCurrent(cached)) {
+        if (cached.entries.length <= limit) return [...cached.entries];
+        return cached.entries.slice(-limit);
+      }
     }
-    if (cached && cached.activeTurnTombstoneCount > 0) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
-    const resolved = cached
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
       ? {
         sessionId,
         channelId: cached.channelId,
+        filePaths: cached.archivePaths,
         filePath: cached.resolvedPath,
       }
-      : this.resolveExistingSession(channelId);
+      : null);
     if (!resolved) return [];
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
     if (cached) {
-      this.syncLightweightCacheFromIndexEntry(cached, indexEntry);
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
     }
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
-    if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
-    if (messageCount <= limit) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
+    const tombstones = this.resolveJournalAuthoritativeTurnTombstones({
+      sessionId: resolved.sessionId,
+      channelId: resolved.channelId,
+      filePaths: resolved.filePaths,
+      cache: cached,
+    });
     const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
     const recentCacheHit = cached
       ? this.readCachedRecentEntries(cached, limit, archiveFingerprintBeforeRead)
@@ -812,26 +1145,85 @@ export class SessionStore implements TranscriptSearchPort {
     if (recentCacheHit) {
       return recentCacheHit;
     }
-    const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
+    const recentEntries = this.readRecentEntriesFromTail(
+      resolved.channelId,
+      resolved.filePaths,
+      limit,
+      tombstones,
+    );
     if (cached) {
       this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
     return recentEntries;
+  }
+  /**
+   * Drop every in-memory view of the channel and reload it from the archive
+   * on disk. Detect-and-heal hook for readers that observe a session window
+   * missing an entry the write path already assigned an id past
+   * (psfn-framework-hgw3.1). Returns null when no archive exists.
+   */
+  async reloadChannelFromDisk(channelId: string): Promise<{ maxEntryId: number; lastMessageEntryId: number | null } | null> {
+    // The stale window being healed may have come FROM the shared tail, and
+    // a post-repair reload means the journal on disk was rewritten out of
+    // band: bump the epoch so EVERY process drops its pre-reload tail. The
+    // bump precedes any state mutation and throws on failure (fail-closed).
+    await this.bumpSessionTailEpoch(channelId, 'reload_channel_from_disk');
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    this.channels.delete(sessionId);
+    if (sessionId !== channelId) {
+      this.channels.delete(channelId);
+    }
+    const loaded = this.ensureChannelFullyLoaded(channelId);
+    if (!loaded) return null;
+    return {
+      maxEntryId: loaded.nextId - 1,
+      lastMessageEntryId: loaded.entries.at(-1)?.id ?? null,
+    };
   }
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);
     return entries[entries.length - 1];
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
     if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
     const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));
     const normalizedEnd = Math.max(0, Math.floor(Math.max(startId, endId)));
     if (normalizedEnd < normalizedStart) return [];
-    const cache = this.ensureChannelFullyLoaded(channelId);
-    if (!cache) return [];
-    return cache.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
+      return cached.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+    }
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+      }
+      : null);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached && !cached.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    return this.journalRuntime.readEntriesInRangeFromChain(
+      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
+      normalizedStart,
+      normalizedEnd,
+      this.resolveJournalAuthoritativeTurnTombstones({
+        sessionId: resolved.sessionId,
+        channelId: resolved.channelId,
+        filePaths: resolved.filePaths,
+        cache: cached,
+      }),
+    );
   }
-  applyCogSecTombstones(options: CogSecL0TombstoneOptions): CogSecL0TombstoneResult {
+  async applyCogSecTombstones(options: CogSecL0TombstoneOptions): Promise<CogSecL0TombstoneResult> {
     const caseId = normalizeCogSecCaseId(options.caseId);
     const event = options.eventStore.getEvent(caseId);
     if (!event) {
@@ -841,9 +1233,16 @@ export class SessionStore implements TranscriptSearchPort {
     const timestamp = options.timestamp ?? Date.now();
     const redactedAt = new Date(timestamp).toISOString();
 
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
-      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
-      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+    // Fence the shared tail BEFORE rewriting: a failed bump aborts the
+    // redaction while the journal is still untouched (fail-closed).
+    await this.bumpSessionTailEpoch(options.channelId, 'cogsec_tombstone_rewrite');
+    // Second fence AFTER the rewrite (exception-safe): closes the race where
+    // another process repopulated the post-bump epoch from a journal read
+    // taken before the rewrite landed. Runs even when a post-rewrite step
+    // (reload, projection sync, event bookkeeping) throws.
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_tombstone_rewrite', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache, renewLease) => {
+      const journalChain = this.readJournalChain(cache);
+      const rawEntries = journalChain.entries;
       const selectedRows = rawEntries.filter(entry => isSelectedCogSecMessage(entry, selector));
       const selectedMessageIds = selectedRows.map(entry => entry.id);
       if (selectedRows.length === 0) {
@@ -877,14 +1276,21 @@ export class SessionStore implements TranscriptSearchPort {
         actor: options.actor,
       });
       const selectedIdSet = new Set(selectedMessageIds);
-      const rewrittenEntries = rawEntries.map(entry => (
-        entry.type === 'message' && selectedIdSet.has(entry.id)
-          ? buildCogSecTombstoneJournalEntry(entry, tombstoneContent, tombstoneMetadata)
-          : entry
+      const rewrittenEntriesByArchive = journalChain.entriesByArchive.map(entries => (
+        entries.map(entry => (
+          entry.type === 'message' && selectedIdSet.has(entry.id)
+            ? buildCogSecTombstoneJournalEntry(entry, tombstoneContent, tombstoneMetadata)
+            : entry
+        ))
       ));
 
-      this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
-      const reloaded = this.journalRuntime.loadChannel(archive);
+      this.journalRuntime.rewriteJournalEntryChain(
+        journalChain.archives,
+        rewrittenEntriesByArchive,
+        renewLease,
+      );
+      markRewritten();
+      const reloaded = this.loadJournalChain(cache);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
       this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
@@ -937,7 +1343,7 @@ export class SessionStore implements TranscriptSearchPort {
         sealedForensicPayloadRef: sealed.ref,
         sealedForensicPayloadHash: sealed.sha256,
       } satisfies CogSecL0TombstoneResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec tombstone: ${options.channelId}`);
@@ -984,9 +1390,9 @@ export class SessionStore implements TranscriptSearchPort {
         };
       });
   }
-  applyCogSecCompactionInvalidations(
+  async applyCogSecCompactionInvalidations(
     options: CogSecCompactionInvalidationOptions,
-  ): CogSecCompactionInvalidationResult {
+  ): Promise<CogSecCompactionInvalidationResult> {
     const caseId = normalizeCogSecCaseId(options.caseId);
     const compactionIds = new Set(options.compactionIds.map((id, index) => (
       normalizeEntryId(id, `compactionIds[${index}]`)
@@ -995,9 +1401,12 @@ export class SessionStore implements TranscriptSearchPort {
       throw new Error('CogSec compaction invalidation requires at least one compaction ID');
     }
 
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
-      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
-      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+    // Fence the shared tail BEFORE rewriting (fail-closed redaction).
+    await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_invalidation');
+    // Second fence AFTER the rewrite, exception-safe (see applyCogSecTombstones).
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_compaction_invalidation', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache, renewLease) => {
+      const journalChain = this.readJournalChain(cache);
+      const rawEntries = journalChain.entries;
       const selectedIds = rawEntries
         .filter(entry => entry.type === 'compaction' && compactionIds.has(entry.id))
         .map(entry => entry.id);
@@ -1011,14 +1420,21 @@ export class SessionStore implements TranscriptSearchPort {
 
       const invalidatedSummary = buildCogSecInvalidatedSummaryContent(caseId);
       const selectedIdSet = new Set(selectedIds);
-      const rewrittenEntries = rawEntries.map(entry => (
-        entry.type === 'compaction' && selectedIdSet.has(entry.id)
-          ? buildCogSecInvalidatedCompactionJournalEntry(entry, invalidatedSummary)
-          : entry
+      const rewrittenEntriesByArchive = journalChain.entriesByArchive.map(entries => (
+        entries.map(entry => (
+          entry.type === 'compaction' && selectedIdSet.has(entry.id)
+            ? buildCogSecInvalidatedCompactionJournalEntry(entry, invalidatedSummary)
+            : entry
+        ))
       ));
 
-      this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
-      const reloaded = this.journalRuntime.loadChannel(archive);
+      this.journalRuntime.rewriteJournalEntryChain(
+        journalChain.archives,
+        rewrittenEntriesByArchive,
+        renewLease,
+      );
+      markRewritten();
+      const reloaded = this.loadJournalChain(cache);
       const sessionKey = this.resolveCacheSessionKey(cache);
       this.channels.set(sessionKey, reloaded);
       this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
@@ -1028,16 +1444,16 @@ export class SessionStore implements TranscriptSearchPort {
         channelId: cache.channelId,
         invalidatedCompactionIds: selectedIds,
       } satisfies CogSecCompactionInvalidationResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec compaction invalidation: ${options.channelId}`);
     }
     return result;
   }
-  applyCogSecCompactionRegenerations(
+  async applyCogSecCompactionRegenerations(
     options: CogSecCompactionRegenerationOptions,
-  ): CogSecCompactionRegenerationResult {
+  ): Promise<CogSecCompactionRegenerationResult> {
     const caseId = normalizeCogSecCaseId(options.caseId);
     const summariesById = new Map<number, string>();
     for (const [index, summary] of options.summaries.entries()) {
@@ -1051,21 +1467,25 @@ export class SessionStore implements TranscriptSearchPort {
       throw new Error('CogSec compaction regeneration requires at least one summary');
     }
 
-    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
-      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
-      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+    // Fence the shared tail BEFORE rewriting (fail-closed redaction).
+    await this.bumpSessionTailEpoch(options.channelId, 'cogsec_compaction_regeneration');
+    // Second fence AFTER the rewrite, exception-safe (see applyCogSecTombstones).
+    const result = await this.withPostRewriteTailFence(options.channelId, 'cogsec_compaction_regeneration', (markRewritten) => this.withLockedExistingChannelWrite(options.channelId, (cache, renewLease) => {
+      const journalChain = this.readJournalChain(cache);
       const regeneratedIds: number[] = [];
       const skippedIds: number[] = [];
-      const rewrittenEntries = rawEntries.map(entry => {
-        if (entry.type !== 'compaction' || !summariesById.has(entry.id)) return entry;
-        const currentSummary = entry.summary ?? '';
-        if (!isCogSecInvalidatedSummaryContent(currentSummary)) {
-          skippedIds.push(entry.id);
-          return entry;
-        }
-        regeneratedIds.push(entry.id);
-        return buildCogSecInvalidatedCompactionJournalEntry(entry, summariesById.get(entry.id)!);
-      });
+      const rewrittenEntriesByArchive = journalChain.entriesByArchive.map(entries => (
+        entries.map(entry => {
+          if (entry.type !== 'compaction' || !summariesById.has(entry.id)) return entry;
+          const currentSummary = entry.summary ?? '';
+          if (!isCogSecInvalidatedSummaryContent(currentSummary)) {
+            skippedIds.push(entry.id);
+            return entry;
+          }
+          regeneratedIds.push(entry.id);
+          return buildCogSecInvalidatedCompactionJournalEntry(entry, summariesById.get(entry.id)!);
+        })
+      ));
 
       for (const id of summariesById.keys()) {
         if (!regeneratedIds.includes(id) && !skippedIds.includes(id)) {
@@ -1074,8 +1494,13 @@ export class SessionStore implements TranscriptSearchPort {
       }
 
       if (regeneratedIds.length > 0) {
-        this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
-        const reloaded = this.journalRuntime.loadChannel(archive);
+        this.journalRuntime.rewriteJournalEntryChain(
+          journalChain.archives,
+          rewrittenEntriesByArchive,
+          renewLease,
+        );
+        markRewritten();
+        const reloaded = this.loadJournalChain(cache);
         const sessionKey = this.resolveCacheSessionKey(cache);
         this.channels.set(sessionKey, reloaded);
         this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
@@ -1087,7 +1512,7 @@ export class SessionStore implements TranscriptSearchPort {
         regeneratedCompactionIds: regeneratedIds,
         skippedCompactionIds: skippedIds,
       } satisfies CogSecCompactionRegenerationResult;
-    });
+    }));
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec compaction regeneration: ${options.channelId}`);
@@ -1102,20 +1527,53 @@ export class SessionStore implements TranscriptSearchPort {
     return new Set(ids);
   }
   count(channelId: string): number {
-    const cached = this.getLoadedCache(channelId);
+    let cached = this.getLoadedCache(channelId);
+    // Frozen fullyLoaded caches must not serve counts across a sibling
+    // process's journal rewrite (same fingerprint gate as entry reads).
+    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
+      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
+    }
     if (cached) return cached.messageCount;
     const resolved = this.resolveExistingSession(channelId);
     if (!resolved) return 0;
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
-    const cache = this.ensureChannelFullyLoaded(channelId);
-    return cache ? [...cache.compactions] : [];
+    this.refreshChannelIndexFromDisk();
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
+      return [...cached.compactions];
+    }
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? { sessionId, channelId: cached.channelId, filePaths: cached.archivePaths }
+      : null);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached && !cached.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    const compactionArchivePaths = new Set(
+      (indexEntry.compactionFilenames ?? []).map(filename => join(this.sessionsDir, filename)),
+    );
+    return this.journalRuntime.readCompactionSummariesFromChain(
+      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
+      compactionArchivePaths,
+    );
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    let cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    // Same fingerprint gate as count(): a frozen fullyLoaded cache must not
+    // serve activity metadata across a sibling process's journal rewrite.
+    if (cached?.fullyLoaded && !this.fullyLoadedCacheIsCurrent(cached)) {
+      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
+    }
     if (cached && cached.messageCount > 0 && cached.lastMessageTimestamp > 0 && cached.lastMessageRole) {
       return {
         sessionId,
@@ -1131,7 +1589,7 @@ export class SessionStore implements TranscriptSearchPort {
 
     const resolved = this.resolveExistingSession(channelId);
     if (!resolved) return null;
-    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     const lastActivityAt = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
     const lastRole = normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole);
@@ -1152,12 +1610,14 @@ export class SessionStore implements TranscriptSearchPort {
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
-    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+    // Ensuring a stale entry may atomically replace the backing Map. Iterate a
+    // stable snapshot so that replacement cannot revisit already-seen rows.
+    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
       const logicalChannelId = indexedChannelId(sessionId, indexEntry);
-      const filePath = join(this.sessionsDir, indexEntry.filename);
-      if (!existsSync(filePath)) continue;
+      const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
+      if (filePaths.some(filePath => !existsSync(filePath))) continue;
 
-      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePath);
+      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePaths);
       const messageCount = normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0;
       if (messageCount <= 0) continue;
 
@@ -1188,11 +1648,13 @@ export class SessionStore implements TranscriptSearchPort {
   listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
     this.primeChannelIndexFromDisk();
     const channels: Array<{ sessionId: string; channelId: string; messageCount: number }> = [];
-    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+    // `ensureChannelIndexEntry` can replace the local Map after an index
+    // repair; snapshot iteration prevents duplicate rows in this one listing.
+    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
       const logicalChannelId = indexedChannelId(sessionId, indexEntry);
-      const filePath = join(this.sessionsDir, indexEntry.filename);
-      if (!existsSync(filePath)) continue;
-      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePath);
+      const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
+      if (filePaths.some(filePath => !existsSync(filePath))) continue;
+      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePaths);
       channels.push({
         sessionId,
         channelId: logicalChannelId,
@@ -1228,6 +1690,9 @@ export class SessionStore implements TranscriptSearchPort {
           }
           throw error;
         }
+        // Compactions consume an entry id: keep the tail's contiguity
+        // invariant with an explicit placeholder.
+        this.writeSessionTailGapThrough(channelId, id);
       },
     );
   }
@@ -1245,21 +1710,32 @@ export class SessionStore implements TranscriptSearchPort {
         cache.nextId = previousNextId;
         throw error;
       }
+      // Extraction markers consume an entry id: keep the tail's contiguity
+      // invariant with an explicit placeholder.
+      this.writeSessionTailGapThrough(cache.channelId, id);
     });
   }
-  private appendTurnTombstone(
+  private async appendTurnTombstone(
     channelId: string,
     turnId: string,
     action: 'redact' | 'restore',
     options: { actor?: string; reason?: string; timestamp?: number } = {},
-  ): void {
+  ): Promise<void> {
     const parsedTurnId = parseTurnId(turnId, 'turnId');
     if (!parsedTurnId) {
       throw new Error('Turn tombstone requires a valid TurnID');
     }
 
+    // Redact/restore changes the visible entry set: fence the shared tail
+    // BEFORE the tombstone lands so no process can keep serving the
+    // pre-tombstone window. A failed bump aborts the redaction (fail-closed).
+    await this.bumpSessionTailEpoch(channelId, `turn_tombstone_${action}`);
     const timestamp = options.timestamp ?? Date.now();
-    this.withLockedChannelWrite(
+    // Second fence AFTER the tombstone landed, exception-safe: closes the
+    // race where another process repopulated the post-bump epoch from a
+    // pre-tombstone journal read, even when a post-journal step (cache
+    // rebuild, index/projection sync) throws (see applyCogSecTombstones).
+    await this.withPostRewriteTailFence(channelId, `turn_tombstone_${action}`, (markRewritten) => this.withLockedChannelWrite(
       channelId,
       {
         timestamp,
@@ -1285,6 +1761,7 @@ export class SessionStore implements TranscriptSearchPort {
           cache.nextId = previousNextId;
           throw error;
         }
+        markRewritten();
 
         const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
         if (full) {
@@ -1296,21 +1773,21 @@ export class SessionStore implements TranscriptSearchPort {
           this.syncTranscriptProjectionForChannel(channelId, full.entries);
         }
       },
-    );
+    ));
   }
-  redactTurn(
+  async redactTurn(
     channelId: string,
     turnId: string,
     options: { actor?: string; reason?: string; timestamp?: number } = {},
-  ): void {
-    this.appendTurnTombstone(channelId, turnId, 'redact', options);
+  ): Promise<void> {
+    await this.appendTurnTombstone(channelId, turnId, 'redact', options);
   }
-  restoreTurn(
+  async restoreTurn(
     channelId: string,
     turnId: string,
     options: { actor?: string; reason?: string; timestamp?: number } = {},
-  ): void {
-    this.appendTurnTombstone(channelId, turnId, 'restore', options);
+  ): Promise<void> {
+    await this.appendTurnTombstone(channelId, turnId, 'restore', options);
   }
   markGracefulShutdownForActiveChannels(
     timestamp = Date.now(),
@@ -1323,7 +1800,7 @@ export class SessionStore implements TranscriptSearchPort {
         continue;
       }
 
-      withJournalWriteLock(cache.resolvedPath, () => {
+      withSessionJournalWriteLock(cache.archivePaths[0]!, () => {
         const currentCache = this.reconcileWriteCache(cache);
         if (!currentCache.lastJournalEntry || isGracefulShutdownEntry(currentCache.lastJournalEntry)) {
           return;
@@ -1336,6 +1813,9 @@ export class SessionStore implements TranscriptSearchPort {
         try {
           this.writeJournalEntry(currentCache, journal);
           marked.push(channelId);
+          // Shutdown markers consume an entry id: keep the tail's contiguity
+          // invariant with an explicit placeholder.
+          this.writeSessionTailGapThrough(channelId, id);
         } catch (error) {
           currentCache.nextId = id;
           log.warn('Failed to write graceful shutdown marker for channel; continuing shutdown', {
@@ -1353,10 +1833,10 @@ export class SessionStore implements TranscriptSearchPort {
       sessionsDir: this.sessionsDir,
       channelIndex: this.channelIndex,
       primeChannelIndexFromDisk: () => this.primeChannelIndexFromDisk(),
-      ensureChannelIndexEntry: (channelId, filePath) => {
+      ensureChannelIndexEntry: (channelId, filePaths) => {
         const indexEntry = this.channelIndex.get(channelId);
         const logicalChannelId = indexEntry ? indexedChannelId(channelId, indexEntry) : channelId;
-        return this.ensureChannelIndexEntry(channelId, logicalChannelId, filePath);
+        return this.ensureChannelIndexEntry(channelId, logicalChannelId, filePaths);
       },
       rehydrateLastJournalEntry: (channelId, indexEntry) => (
         this.rehydrateLastJournalEntry(indexedChannelId(channelId, indexEntry), indexEntry)

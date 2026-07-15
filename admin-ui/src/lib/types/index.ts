@@ -120,6 +120,7 @@ export type {
   AdminSessionSearchData,
   AdminSessionSearchHitView,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
   AdminPromptLoomData,
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,

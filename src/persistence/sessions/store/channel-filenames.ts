@@ -7,6 +7,7 @@ import {
   IMPORT_MANIFEST_FILENAME,
   formatDateUTC,
   READABLE_SESSION_FILENAME,
+  ROLLED_SESSION_FILENAME,
   sanitizeChannelId,
   toSlug,
   type SessionFileSeed,
@@ -18,6 +19,36 @@ export function isSessionJournalFilename(filename: string): boolean {
   return filename.endsWith('.jsonl')
     && !filename.startsWith('user_')
     && filename !== IMPORT_MANIFEST_FILENAME;
+}
+
+export function isReadableSessionJournalFilename(filename: string): boolean {
+  return READABLE_SESSION_FILENAME.test(filename) || ROLLED_SESSION_FILENAME.test(filename);
+}
+
+export interface SessionSegmentFilename {
+  rootFilename: string;
+  segmentNumber: number;
+}
+
+export function parseSessionSegmentFilename(filename: string): SessionSegmentFilename {
+  const rolled = ROLLED_SESSION_FILENAME.exec(filename);
+  if (!rolled) {
+    return { rootFilename: filename, segmentNumber: 1 };
+  }
+  return {
+    rootFilename: `${rolled[1]}.jsonl`,
+    segmentNumber: Number.parseInt(rolled[2], 10),
+  };
+}
+
+export function makeRolledFilePath(firstFilePath: string, segmentNumber: number): string {
+  if (!Number.isSafeInteger(segmentNumber) || segmentNumber < 2 || segmentNumber > 9_999) {
+    throw new Error(`Invalid L0 session segment number: ${segmentNumber}`);
+  }
+  const base = firstFilePath.endsWith('.jsonl')
+    ? firstFilePath.slice(0, -'.jsonl'.length)
+    : firstFilePath;
+  return `${base}.segment-${segmentNumber.toString().padStart(4, '0')}.jsonl`;
 }
 
 export function encodedFilePath(sessionsDir: string, channelId: string): string {

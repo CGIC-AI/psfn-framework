@@ -125,9 +125,24 @@ export function resolveAppCacheRuntimeConfigFromEnv(
     return { mode };
   }
 
+  return {
+    mode,
+    redis: resolveRedisConnectionConfigFromEnv(env),
+  };
+}
+
+/**
+ * Resolve the shared Redis connection settings (URL, credentials, TLS
+ * posture) from the process env. Connection secrets stay in `.env`; features
+ * that opt into Redis (app cache mode, the session tail cache) reuse this
+ * resolver so the fail-closed TLS/credential rules apply uniformly.
+ */
+export function resolveRedisConnectionConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): RedisAppCacheConfig {
   const rawUrl = trimOptionalEnv(env[REDIS_URL_ENV]);
   if (!rawUrl) {
-    throw new Error(`${REDIS_URL_ENV} is required when ${APP_CACHE_MODE_ENV}=redis`);
+    throw new Error(`${REDIS_URL_ENV} is required when a Redis-backed feature is enabled`);
   }
 
   let parsedUrl: URL;
@@ -184,15 +199,12 @@ export function resolveAppCacheRuntimeConfigFromEnv(
   });
 
   return {
-    mode,
-    redis: {
-      url: rawUrl,
-      ...(username ? { username } : {}),
-      password: password!,
-      tls: urlUsesTls,
-      tlsRejectUnauthorized,
-      ...(tlsCaCertPath ? { tlsCaCertPath } : {}),
-    },
+    url: rawUrl,
+    ...(username ? { username } : {}),
+    password: password!,
+    tls: urlUsesTls,
+    tlsRejectUnauthorized,
+    ...(tlsCaCertPath ? { tlsCaCertPath } : {}),
   };
 }
 

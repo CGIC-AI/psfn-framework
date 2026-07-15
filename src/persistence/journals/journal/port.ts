@@ -4,6 +4,8 @@ import type { JournalEntry } from '../../../core/session/types.js';
 import { buildMessageJournalEntry } from './entries.js';
 import type {
   JournalFileMetadata,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,
@@ -16,6 +18,7 @@ import {
   quarantineSidecarPath,
   readJournalFile,
   readJournalFirstEntry,
+  readJournalEntriesBefore,
   readJournalTailEntries,
   scanJournalFileMetadata,
   writeJournalFileAtomic,
@@ -23,6 +26,12 @@ import {
 import { makeReadableFilePath } from '../../sessions/store/channel-filenames.js';
 import type { SessionEntryRole } from '../../../core/session/types.js';
 import type { SessionFileSeed } from '../../sessions/store-file-contracts.js';
+import {
+  assertNoPendingJournalChainRewrite,
+  listPendingJournalChainRewriteRoots,
+  recoverJournalChainRewrite,
+  rewriteJournalChainTransaction,
+} from './chain-transaction.js';
 
 export interface SessionJournalPort {
   appendJournalEntry(filePath: string, entry: JournalEntry): void;
@@ -30,6 +39,7 @@ export interface SessionJournalPort {
   quarantineSidecarPath(filePath: string): string;
   readJournalFile(filePath: string, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(filePath: string): JournalEntry | null;
+  readJournalEntriesBefore(filePath: string, options: ReadJournalBeforeOptions): ReadJournalBeforeResult;
   readJournalTailEntries(filePath: string, options: ReadJournalTailOptions): ReadJournalTailResult;
   scanJournalFileMetadata(filePath: string, options?: ScanJournalMetadataOptions): JournalFileMetadata;
 }
@@ -78,10 +88,23 @@ export interface SessionArchivePort {
   resolveArchivePath(handle: SessionArchiveHandle): string;
   appendJournalEntry(handle: SessionArchiveHandle, entry: JournalEntry): void;
   writeJournalFile(handle: SessionArchiveHandle, entries: readonly JournalEntry[]): void;
+  rewriteJournalChain(
+    handles: readonly SessionArchiveHandle[],
+    entriesByHandle: readonly (readonly JournalEntry[])[],
+    renewLease?: () => void,
+  ): void;
+  assertJournalChainReadable(handles: readonly SessionArchiveHandle[]): void;
+  listPendingJournalChainRewriteRoots(sessionsDir: string): string[];
+  recoverJournalChainRewrite(rootPath: string): void;
   quarantineSidecarPath(handle: SessionArchiveHandle): string;
   readJournalFile(handle: SessionArchiveHandle, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(handle: SessionArchiveHandle): JournalEntry | null;
+  readJournalEntriesBefore(
+    handle: SessionArchiveHandle,
+    options: ReadJournalBeforeOptions,
+  ): ReadJournalBeforeResult;
   readJournalTailEntries(handle: SessionArchiveHandle, options: ReadJournalTailOptions): ReadJournalTailResult;
+  archiveByteLength(handle: SessionArchiveHandle): number;
   fingerprintArchive(handle: SessionArchiveHandle): string | null;
   scanJournalFileMetadata(
     handle: SessionArchiveHandle,
@@ -97,6 +120,7 @@ export function createFilesystemSessionJournalPort(): SessionJournalPort {
     quarantineSidecarPath,
     readJournalFile,
     readJournalFirstEntry,
+    readJournalEntriesBefore,
     readJournalTailEntries,
     scanJournalFileMetadata,
   };
@@ -133,6 +157,22 @@ export function createFilesystemSessionArchivePort(
     writeJournalFile: (handle, entries) => (
       journalPort.writeJournalFile(requireFilesystemHandle(handle).filePath, entries)
     ),
+    rewriteJournalChain: (handles, entriesByHandle, renewLease) => {
+      const targetPaths = handles.map(handle => requireFilesystemHandle(handle).filePath);
+      rewriteJournalChainTransaction({
+        targetPaths,
+        entriesByTarget: entriesByHandle,
+        writeEntries: journalPort.writeJournalFile,
+        renewLease,
+      });
+    },
+    assertJournalChainReadable: (handles) => {
+      const rootHandle = handles.at(0);
+      if (!rootHandle) return;
+      assertNoPendingJournalChainRewrite(requireFilesystemHandle(rootHandle).filePath);
+    },
+    listPendingJournalChainRewriteRoots,
+    recoverJournalChainRewrite,
     quarantineSidecarPath: (handle) => (
       journalPort.quarantineSidecarPath(requireFilesystemHandle(handle).filePath)
     ),
@@ -142,9 +182,22 @@ export function createFilesystemSessionArchivePort(
     readJournalFirstEntry: (handle) => (
       journalPort.readJournalFirstEntry(requireFilesystemHandle(handle).filePath)
     ),
+    readJournalEntriesBefore: (handle, options) => (
+      journalPort.readJournalEntriesBefore(requireFilesystemHandle(handle).filePath, options)
+    ),
     readJournalTailEntries: (handle, options) => (
       journalPort.readJournalTailEntries(requireFilesystemHandle(handle).filePath, options)
     ),
+    archiveByteLength: (handle) => {
+      const { filePath } = requireFilesystemHandle(handle);
+      try {
+        return statSync(filePath).size;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return 0;
+        throw error;
+      }
+    },
     fingerprintArchive: (handle) => {
       const { filePath } = requireFilesystemHandle(handle);
       try {

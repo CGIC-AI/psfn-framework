@@ -880,6 +880,45 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     expect(response.content).toBe(quoted);
     expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(quoted);
   });
+
+  it('rejects an image-attachment claim when no attachment exists this turn', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+    });
+    runtime.extractResponseText = vi.fn(
+      () => '*image attached*\nFresh selfie, exactly like you asked for.',
+    );
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-false-image-claim'));
+
+    const correction = 'I could not attach an image because no image tool completed successfully this turn. '
+      + 'I need to call selfie_create or generate_image before saying an image is attached.';
+    expect(response.content).toBe(correction);
+    expect(response.attachments).toBeUndefined();
+    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(correction);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.image_attachment_claim.rejected',
+      expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-false-image-claim',
+      }),
+    );
+  });
 });
 
 describe('handleMessageForTurn generated media delivery', () => {

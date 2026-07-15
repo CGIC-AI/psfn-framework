@@ -1,7 +1,7 @@
 import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
-import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
+import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
@@ -187,6 +187,7 @@ export interface EditableSettings {
   embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;
+  sessionTailCache?: SessionTailCacheSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
   webFetchAllowHttp?: boolean;
@@ -323,6 +324,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'embeddingApiDims',
   'compositionalPolicy',
   'observerEvalSidecar',
+  'sessionTailCache',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
@@ -388,6 +390,7 @@ export type RuntimeSettingValue =
   | GroupMemorySettings
   | EmotionScopingSettings
   | ObserverEvalSidecarSettings
+  | SessionTailCacheSettings
   | ImageWorkflowSettings
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>

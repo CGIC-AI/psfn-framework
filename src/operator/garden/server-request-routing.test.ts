@@ -37,7 +37,7 @@ describe('handleAdminRequest', () => {
     });
 
     expect(route).toHaveBeenCalledWith('GET', '/episodic-memory', req, res);
-    expect(serveGardenPage).toHaveBeenCalledWith('/episodic-memory', res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/episodic-memory', req, res);
     expect(serveGardenBuildAsset).not.toHaveBeenCalled();
     expect(sendNotFound).not.toHaveBeenCalled();
   });
@@ -59,7 +59,7 @@ describe('handleAdminRequest', () => {
       onRequestError: vi.fn(),
     });
 
-    expect(serveGardenPage).toHaveBeenCalledWith('/chat', res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/chat', req, res);
     expect(serveGardenBuildAsset).not.toHaveBeenCalled();
     expect(sendNotFound).not.toHaveBeenCalled();
   });
@@ -82,7 +82,7 @@ describe('handleAdminRequest', () => {
         onRequestError: vi.fn(),
       });
 
-      expect(serveGardenPage).toHaveBeenCalledWith(path, res);
+      expect(serveGardenPage).toHaveBeenCalledWith(path, req, res);
       expect(serveGardenBuildAsset).not.toHaveBeenCalled();
       expect(sendNotFound).not.toHaveBeenCalled();
     }
@@ -104,7 +104,7 @@ describe('handleAdminRequest', () => {
       onRequestError: vi.fn(),
     });
 
-    expect(serveGardenPage).toHaveBeenCalledWith('/', res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/', req, res);
     expect(serveGardenBuildAsset).not.toHaveBeenCalled();
   });
 
@@ -125,7 +125,7 @@ describe('handleAdminRequest', () => {
       onRequestError: vi.fn(),
     });
 
-    expect(serveGardenBuildAsset).toHaveBeenCalledWith('/_app/immutable/entry/start.hash.js', res);
+    expect(serveGardenBuildAsset).toHaveBeenCalledWith('/_app/immutable/entry/start.hash.js', req, res);
     expect(serveGardenPage).not.toHaveBeenCalled();
     expect(sendNotFound).not.toHaveBeenCalled();
   });

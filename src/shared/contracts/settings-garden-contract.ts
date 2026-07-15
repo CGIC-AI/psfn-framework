@@ -70,6 +70,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   episodicProcessingRestWindowTimeZone: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingInactivityThresholdMinutes: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   sessionRestartBehavior: { sectionId: 'sessions', surface: 'advanced' },
+  sessionTailCache: { sectionId: 'sessions', surface: 'advanced' },
   activeTimezone: { sectionId: 'sessions', surface: 'advanced' },
   compositionalPolicy: { sectionId: 'compositional', surface: 'advanced' },
   memoryExtractionMinImportance: { sectionId: 'extraction-tuning', surface: 'advanced' },

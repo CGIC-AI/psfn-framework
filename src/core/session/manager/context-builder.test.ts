@@ -220,6 +220,60 @@ describe('orientation context surface wiring', () => {
     expect(snapshot.sourceEntryCount).toBe(11);
   });
 
+  it('records the raw store window max entry id, including the excluded current entry', async () => {
+    const nowMs = Date.now();
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 41,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'previous turn question',
+        timestamp: nowMs - 120_000,
+      },
+      {
+        id: 42,
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'previous turn reply',
+        timestamp: nowMs - 60_000,
+      },
+      {
+        id: 43,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'current turn question',
+        timestamp: nowMs,
+      },
+    ];
+    const store = {
+      getRecent: () => recentEntries,
+      getCompactionSummaries: () => [],
+    } as never;
+
+    const snapshot = await captureTurnSessionContext({
+      channelId: 'api:main',
+      sourceChannelId: 'api:main',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      config: makeConfig(),
+      store,
+      activityStore: store,
+      crossChannelContinuity: { getMerged: () => [] },
+      focusCompactionRanges: [],
+      focusKnowledgeTexts: [],
+      wakeReturnArtifacts: [],
+      compactionPromptText: 'Summarize history.',
+      promptRegistry: null,
+      excludeSessionEntryId: 43,
+    });
+
+    // The raw window max is captured BEFORE exclusion so a caller that just
+    // recorded entry 43 can verify the store actually served it
+    // (psfn-framework-hgw3.1 stale-window guard).
+    expect(snapshot.storeWindowMaxEntryId).toBe(43);
+    expect(snapshot.recentEntries.map(entry => entry.id)).not.toContain(43);
+  });
+
   it('measures orientation from the latest prior activity after excluding the current turn', async () => {
     const nowMs = Date.now();
     const latestPriorActivityAt = nowMs - (4 * 60 * 60 * 1000);

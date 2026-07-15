@@ -601,8 +601,9 @@ export async function assembleTurnPrompt(input: {
   } = serializePromptPlanForProvider(plan, providerSystemRole.transport);
 
   // ── Provider prompt-cache engagement + prefix-stability telemetry (E2.4) ──
-  // The models.json promptCaching policy is the master switch (default off =
-  // zero wire change). When on, the cachePlan boundaries are projected onto
+  // The models.json promptCaching policy is the master switch (shipped seed
+  // default on; when absent or disabled it is a zero wire change). When on,
+  // the cachePlan boundaries are projected onto
   // the serialized system prompt and registered so the LLM client can place
   // provider cache breakpoints; the static region's byte-stability is checked
   // against the previous turn on the same scope regardless of the flag —

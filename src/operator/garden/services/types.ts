@@ -61,6 +61,7 @@ export type {
 
 export type {
   AdminAdaptiveToolTelemetryEvent,
+  AdminToolInvocationEvent,
   AdminToolFailureEvent,
   AdminToolAvailabilityView,
   AdminToolHealthView,
@@ -165,6 +166,7 @@ export type {
   AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
 export type {

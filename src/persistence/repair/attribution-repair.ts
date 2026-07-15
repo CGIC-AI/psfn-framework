@@ -12,13 +12,14 @@ import type { TurnRecord, TurnRecordMessage } from '../../shared/contracts/runti
 import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
-  readJournalFirstEntry,
   signJournalEntry,
 } from '../journals/journal-utils.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { normalizeSessionEntryAttribution } from '../../core/session/entry-attribution.js';
 import type { JournalEntry } from '../../core/session/types.js';
-import { buildIndexEntry, saveChannelIndex } from '../sessions/store/channel-index.js';
-import { isSessionJournalFilename } from '../sessions/store/channel-filenames.js';
+import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
+import { discoverSessionFileChains } from '../sessions/store/session-file-chains.js';
+import { withSessionJournalWriteLock } from '../sessions/store/session-journal-write-lock.js';
 import { CHANNEL_INDEX_FILENAME } from '../sessions/store-primitives.js';
 
 const INTENTION_AUTHOR_ID = 'system:intention';
@@ -238,47 +239,78 @@ function writeTextAtomic(filePath: string, content: string): void {
   renameSync(tempPath, filePath);
 }
 
-function rewriteJournalFile(
-  filePath: string,
+function rewriteJournalChainUnderLock(
+  filePaths: readonly string[],
   keyring: SessionHmacKeyring | null,
   backupDir: string,
   repoRoot: string,
-): number {
-  const raw = readFileSync(filePath, 'utf-8');
-  const parsed = parseJournalText(raw);
-  if (parsed.quarantined.length > 0) {
-    throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
-  }
-
-  const originalEntries = parsed.entries;
-  const hasIntegrity = originalEntries.some(entry => typeof entry._hmac === 'string' || typeof entry._hmacKeyVersion === 'string');
+  archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
+  renewLease: () => void,
+): { modifiedEntries: number; modifiedFiles: number } {
+  const originalEntriesByFile = filePaths.map((filePath) => {
+    const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
+    renewLease();
+    if (parsed.quarantined.length > 0) {
+      throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
+    }
+    return parsed.entries;
+  });
+  const hasIntegrity = originalEntriesByFile.some(entries => entries.some(entry => (
+    typeof entry._hmac === 'string' || typeof entry._hmacKeyVersion === 'string'
+  )));
   if (hasIntegrity && !keyring) {
-    throw new Error(`Cannot rewrite signed journal without HMAC keyring: ${filePath}`);
+    throw new Error(`Cannot rewrite signed journal chain without HMAC keyring: ${filePaths[0]}`);
   }
 
   let modifiedEntries = 0;
-  const repairedEntries = originalEntries.map((entry) => {
+  const repairedEntriesByFile = originalEntriesByFile.map(entries => entries.map((entry) => {
+    renewLease();
     const repaired = repairJournalEntry(entry);
     if (repaired.modified) modifiedEntries += 1;
     return repaired.entry;
-  });
-  if (modifiedEntries === 0) return 0;
+  }));
+  if (modifiedEntries === 0) return { modifiedEntries: 0, modifiedFiles: 0 };
 
-  ensureBackup(filePath, backupDir, repoRoot);
+  for (const filePath of filePaths) {
+    ensureBackup(filePath, backupDir, repoRoot);
+    renewLease();
+  }
 
   let previousHmac: string | null = null;
-  const rewritten = repairedEntries.map((entry) => {
-    const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
-    if (!hasIntegrity) {
-      return unsigned;
-    }
-    const signed = signJournalEntry(unsigned, keyring!, previousHmac);
-    previousHmac = signed._hmac ?? null;
-    return signed;
-  });
+  const rewrittenByFile = repairedEntriesByFile.map(entries => entries.map((entry) => {
+      renewLease();
+      const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
+      if (!hasIntegrity) return unsigned;
+      const signed = signJournalEntry(unsigned, keyring!, previousHmac);
+      previousHmac = signed._hmac ?? null;
+      return signed;
+    }));
+  const firstEntry = originalEntriesByFile.find(entries => entries.length > 0)?.[0];
+  const archives = filePaths.map(filePath => archivePort.openArchive(firstEntry?.channelId ?? 'unknown', filePath));
+  archivePort.rewriteJournalChain(archives, rewrittenByFile, renewLease);
+  return { modifiedEntries, modifiedFiles: filePaths.length };
+}
 
-  writeTextAtomic(filePath, `${rewritten.map(item => JSON.stringify(item)).join('\n')}\n`);
-  return modifiedEntries;
+function rewriteJournalChain(
+  filePaths: readonly string[],
+  keyring: SessionHmacKeyring | null,
+  backupDir: string,
+  repoRoot: string,
+): { modifiedEntries: number; modifiedFiles: number } {
+  const rootPath = filePaths[0];
+  if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0 };
+  const archivePort = createFilesystemSessionArchivePort();
+  return withSessionJournalWriteLock(rootPath, (renewLease) => {
+    archivePort.recoverJournalChainRewrite(rootPath);
+    return rewriteJournalChainUnderLock(
+      filePaths,
+      keyring,
+      backupDir,
+      repoRoot,
+      archivePort,
+      renewLease,
+    );
+  });
 }
 
 function rewriteTurnRecordFile(filePath: string, backupDir: string, repoRoot: string): number {
@@ -320,19 +352,12 @@ function rewriteTurnRecordFile(filePath: string, backupDir: string, repoRoot: st
 }
 
 function rebuildSessionChannelIndex(sessionsDir: string): void {
-  const channelIndex = new Map<string, ReturnType<typeof buildIndexEntry>>();
-  const warnAboutQuarantinedEntries = () => {};
-
-  for (const filename of readdirSync(sessionsDir)) {
-    if (!isSessionJournalFilename(filename)) continue;
-    const filePath = join(sessionsDir, filename);
-    const channelId = readJournalFirstEntry(filePath)?.channelId;
-    if (!channelId) continue;
-    const entry = buildIndexEntry(channelId, filePath, warnAboutQuarantinedEntries);
-    channelIndex.set(channelId, entry);
-  }
-
-  saveChannelIndex(join(sessionsDir, CHANNEL_INDEX_FILENAME), channelIndex);
+  primeChannelIndexFromDisk({
+    sessionsDir,
+    channelIndexPath: join(sessionsDir, CHANNEL_INDEX_FILENAME),
+    channelIndex: new Map(),
+    warnAboutQuarantinedEntries: () => {},
+  });
 }
 
 function collectJsonlFiles(
@@ -359,11 +384,18 @@ export function runAttributionRepair(
 ): AttributionRepairReport {
   mkdirSync(params.backupDir, { recursive: true });
 
-  const journalFiles = [
-    ...collectJsonlFiles(params.sessionsDir, { excludeSubdirs: [TURN_RECORDS_DIR] }),
-    ...collectJsonlFiles(params.continuityDir),
-    ...collectJsonlFiles(params.reflectionsDir, { excludeFiles: ['journal.jsonl'] }),
+  const discoveredSessions = discoverSessionFileChains(params.sessionsDir);
+  if (discoveredSessions.incompleteChains.length > 0) {
+    throw new Error(
+      `Refusing attribution repair with incomplete L0 chains: ${JSON.stringify(discoveredSessions.incompleteChains)}`,
+    );
+  }
+  const journalChains = [
+    ...discoveredSessions.chains.map(chain => chain.filePaths),
+    ...collectJsonlFiles(params.continuityDir).map(filePath => [filePath]),
+    ...collectJsonlFiles(params.reflectionsDir, { excludeFiles: ['journal.jsonl'] }).map(filePath => [filePath]),
   ];
+  const journalFiles = journalChains.flat();
   const turnRecordFiles = collectJsonlFiles(join(params.sessionsDir, TURN_RECORDS_DIR));
 
   const journalReport: AttributionRepairCounts = {
@@ -371,11 +403,10 @@ export function runAttributionRepair(
     modifiedFiles: 0,
     modifiedEntries: 0,
   };
-  for (const filePath of journalFiles) {
-    const modifiedEntries = rewriteJournalFile(filePath, params.keyring, params.backupDir, params.repoRoot);
-    if (modifiedEntries <= 0) continue;
-    journalReport.modifiedFiles += 1;
-    journalReport.modifiedEntries += modifiedEntries;
+  for (const filePaths of journalChains) {
+    const modified = rewriteJournalChain(filePaths, params.keyring, params.backupDir, params.repoRoot);
+    journalReport.modifiedFiles += modified.modifiedFiles;
+    journalReport.modifiedEntries += modified.modifiedEntries;
   }
 
   const turnRecordReport: AttributionRepairCounts = {

@@ -22,9 +22,12 @@ export interface ScanJournalMetadataOptions {
 
 export interface JournalFileMetadata {
   entryCount: number;
+  minId: number;
   maxId: number;
   messageCount: number;
+  compactionCount: number;
   activeTurnTombstoneCount: number;
+  activeTurnTombstoneIds: string[];
   lastTimestamp: number;
   lastHmac: string | null;
   lastEntry: JournalEntry | null;
@@ -38,6 +41,30 @@ export interface ReadJournalTailOptions {
 }
 
 export interface ReadJournalTailResult {
+  entries: JournalEntry[];
+  quarantined: QuarantinedJournalEntry[];
+  truncated: boolean;
+}
+
+export interface JournalBoundedReadStats {
+  bytesRead: number;
+  readCalls: number;
+  filesRead: number;
+}
+
+export interface ReadJournalBeforeOptions {
+  beforeId: number;
+  messageLimit: number;
+  includeBoundaryEntry?: boolean;
+  scanChunkBytes?: number;
+  stats?: JournalBoundedReadStats;
+  /** A sampled id may exclude bytes only when its HMAC boundary is trusted. */
+  trustSeekEntry?: (entry: JournalEntry, previousHmac: string | null) => boolean;
+  /** HMAC immediately preceding this physical file in the logical chain. */
+  previousFileHmac?: string | null;
+}
+
+export interface ReadJournalBeforeResult {
   entries: JournalEntry[];
   quarantined: QuarantinedJournalEntry[];
   truncated: boolean;

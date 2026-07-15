@@ -6,8 +6,9 @@ import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
-import type { TurnObservabilityRecord } from '../../turns/observability.js';
+import type { TurnObservabilityRecord, TurnSnapshotRecord } from '../../turns/observability.js';
 import { cloneTurnObservabilityRecord, cloneUnknownValue } from '../../turns/observability.js';
+import { deriveProviderWireMessagesForTurnSnapshot } from './turn-execution/prompt-invocation-history.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
@@ -457,7 +458,59 @@ function cloneTurnObservabilityForRecord(
       delete cloned.snapshot.promptContext.response.reasoning;
     }
   }
+  if (cloned.snapshot) {
+    stripDerivableTurnSnapshotDuplicates(cloned.snapshot);
+  }
   return cloned;
+}
+
+/**
+ * Turn-record slimming (bead hgw3.3): the PERSISTED snapshot drops duplicated
+ * data that is byte-derivable from the canonical PromptPlan at read time. The
+ * LIVE snapshot on the event bus is untouched — this runs only on the cloned
+ * record inside buildTurnRecord.
+ *
+ * - promptContext.providerObservability.providerWireMessages is removed only
+ *   when byte-equal to the read-side derivation
+ *   (deriveProviderWireMessagesForTurnSnapshot — the same function the Garden
+ *   Loom uses). Turn shapes where the shipped current message diverges from
+ *   currentTurnInput (group-attribution wrapping, system-speaker notes, MoA
+ *   collapsed prompts, vision content blocks) fail the comparison and keep the
+ *   embedded capture verbatim.
+ * - toolContext.activeTools is removed only when byte-identical to
+ *   plan.toolDefinitions (bound from the same array at write time); readers
+ *   fall back to the plan.
+ *
+ * Absence is the signal ("derive from the plan") — fields are deleted, never
+ * coerced to [].
+ */
+function stripDerivableTurnSnapshotDuplicates(snapshot: TurnSnapshotRecord): void {
+  const plan = snapshot.plan;
+  if (!plan) return;
+
+  const promptContext = snapshot.promptContext;
+  const providerObservability = promptContext?.providerObservability;
+  if (promptContext && providerObservability?.providerWireMessages) {
+    const derived = deriveProviderWireMessagesForTurnSnapshot({
+      plan,
+      transport: providerObservability.systemRole.transport,
+      currentTurnInput: promptContext.currentTurnInput,
+    });
+    if (JSON.stringify(derived) === JSON.stringify(providerObservability.providerWireMessages)) {
+      delete providerObservability.providerWireMessages;
+    }
+  }
+
+  const toolContext = snapshot.toolContext;
+  if (
+    toolContext?.activeTools
+    && JSON.stringify(toolContext.activeTools) === JSON.stringify(plan.toolDefinitions)
+  ) {
+    delete toolContext.activeTools;
+    if (!toolContext.adaptiveSnapshot) {
+      delete snapshot.toolContext;
+    }
+  }
 }
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {

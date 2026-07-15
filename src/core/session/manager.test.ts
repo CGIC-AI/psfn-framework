@@ -811,6 +811,41 @@ describe('SessionManager', () => {
     expect(ctx.messages.map(message => message.content).join('\n')).not.toContain('[Tool result: search_logs]');
   });
 
+  it('renders bounded image-tool success provenance without replaying the tool payload', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const turnId = createTurnId();
+    const turnMetadata = {
+      turnId,
+      requestId: 'req-selfie-context',
+      sourceMessageId: 'msg-selfie-context',
+    };
+    mgr.recordUserMessage('ch1', 'Send me a fresh selfie', 'u1', 'User', undefined, undefined, turnMetadata);
+    mgr.recordToolObservation('ch1', {
+      toolName: 'selfie_create',
+      toolCallId: 'selfie-1',
+      isError: false,
+      content: JSON.stringify({
+        status: 'image_generated',
+        attachmentPending: true,
+        imageCount: 1,
+        prompt: 'private appearance prompt that must not re-enter history',
+        images: [{ url: 'https://private.example.test/signed-selfie.jpg?secret=do-not-leak' }],
+      }),
+    }, undefined, turnMetadata);
+    mgr.recordAssistantMessage('ch1', '*image attached* Fresh one for you.', undefined, undefined, undefined, turnMetadata);
+
+    const context = await mgr.buildContext('ch1', 'System prompt', '');
+    const rendered = context.messages.map(message => message.content).join('\n');
+
+    expect(rendered).toContain('[Prior image tool success] selfie_create');
+    expect(rendered).toContain('produced a pending image attachment in that turn');
+    expect(rendered).toContain('call selfie_create again for a new selfie');
+    expect(rendered).not.toContain('private appearance prompt');
+    expect(rendered).not.toContain('signed-selfie.jpg');
+    expect(rendered).not.toContain('do-not-leak');
+  });
+
   it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
     const config = makeConfig();
     const searchableStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });

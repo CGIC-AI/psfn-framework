@@ -1943,7 +1943,7 @@ describe('MemoryRetriever basic behavior', () => {
       discordUserId: 'alice-1',
       trustLevel: 'trusted',
       relationshipType: 'family',
-    });
+    }, { actor: 'operator:test-setup' });
     const unrelated = contactStore.upsert({
       displayName: 'Mallory',
       discordUserId: 'mallory-1',
@@ -2021,7 +2021,7 @@ describe('MemoryRetriever basic behavior', () => {
       discordUserId: 'alice-1',
       trustLevel: 'trusted',
       relationshipType: 'family',
-    });
+    }, { actor: 'operator:test-setup' });
     contactStore.upsertSocialRelationshipEdge({
       sourceEntityId: contactStore.getSocialGraphEntityByContactId(primary.id)!.id,
       targetEntityId: contactStore.getSocialGraphEntityByContactId(sibling.id)!.id,

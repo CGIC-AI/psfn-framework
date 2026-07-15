@@ -278,7 +278,13 @@ export class AdminSchedulerService {
 
   constructor(
     private readonly scheduler: Scheduler,
-    private readonly dataDir: string,
+    /**
+     * Companion data root. Both the heartbeat policy and the reflection-
+     * metacognition journal are per-companion state and must resolve under
+     * companionDataDir so they match the runtime and never collide across a
+     * multi-companion fleet (psfn-framework-dnll.4).
+     */
+    private readonly companionDataDir: string,
     /**
      * Live habit wake-window snapshot provider (E7.2). Recomputes the effective
      * morning wake slot + data sufficiency on demand so the Garden read surface
@@ -287,9 +293,9 @@ export class AdminSchedulerService {
      */
     private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
-    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
+    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(companionDataDir));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
-      resolveReflectionMetacognitionJournalPath(dataDir),
+      resolveReflectionMetacognitionJournalPath(companionDataDir),
     );
   }
 

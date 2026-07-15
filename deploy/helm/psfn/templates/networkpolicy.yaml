@@ -57,6 +57,16 @@ spec:
       ports:
         - port: {{ .Values.ports.gatewayRpc }}
           protocol: TCP
+    {{- /* The Garden operator process resolves operator-only confirmations on a
+         direct operator → gateway API path (x5rt.10); the agent no longer
+         reaches the gateway API. */}}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
   egress:
     - to:
         - namespaceSelector:
@@ -95,6 +105,16 @@ spec:
               {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.satelliteHubControl }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.kubeSelfManagement.enabled }}
+    - to:
+        {{- range .Values.kubeSelfManagement.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 443
           protocol: TCP
     {{- end }}
     {{- if .Values.networkPolicy.gateway.allowExternalEgress }}
@@ -149,6 +169,9 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- /* Agent egress to the gateway is RPC only. The operator-confirmation
+         relay was removed (x5rt.10), so the agent no longer reaches the gateway
+         API. */}}
     - to:
         - podSelector:
             matchLabels:
@@ -237,6 +260,17 @@ spec:
               {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.agentAdmin }}
+          protocol: TCP
+    {{- /* Operator → gateway confirmation resolution: the Garden operator
+         process resolves operator-only confirmations directly against the
+         gateway API, carrying ADMIN_TOKEN so it never traverses the agent
+         (x5rt.10). */}}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
           protocol: TCP
 {{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
 ---

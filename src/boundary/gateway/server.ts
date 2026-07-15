@@ -99,6 +99,7 @@ import {
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
+import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -230,6 +231,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
+  kubeSelfManagement?: KubeSelfManagementController;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
@@ -519,11 +521,17 @@ export class GatewayServer {
       personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
+      ...(this.options.kubeSelfManagement
+        ? { kubeSelfManagement: this.options.kubeSelfManagement }
+        : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
-      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params),
+      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params, {
+        kind: 'companion',
+        id: this.authenticatedCompanionId(conn) ?? 'unidentified-agent-rpc',
+      }),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
@@ -718,7 +726,21 @@ export class GatewayServer {
     id: string;
     decision: 'approve' | 'deny';
   }): Promise<ConfirmationResolveResult> {
-    return this.approvalBoundary.resolveConfirmation(params);
+    return this.approvalBoundary.resolveConfirmation(params, {
+      kind: 'companion',
+      id: 'companion-relay',
+    });
+  }
+
+  resolveOperatorApproval(params: {
+    id: string;
+    decision: 'approve' | 'deny' | 'modify';
+    modifiedParams?: Record<string, unknown>;
+  }): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmation(params, {
+      kind: 'operator',
+      id: 'garden-admin',
+    });
   }
 
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {

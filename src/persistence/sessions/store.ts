@@ -1921,6 +1921,17 @@ export class SessionStore implements TranscriptSearchPort {
       compactionArchivePaths,
     );
   }
+  /**
+   * Longest prefix that a scalar compaction boundary may safely cover.
+   * Read projections override this when they can temporarily hide a row that
+   * may become visible later; the raw journal has no such projection gaps.
+   */
+  getCompactionBoundarySafePrefix(
+    _channelId: string,
+    proposedEntries: readonly SessionEntry[],
+  ): SessionEntry[] {
+    return [...proposedEntries];
+  }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;

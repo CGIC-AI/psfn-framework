@@ -1251,7 +1251,7 @@ export class SessionManager {
       turnBudgetCharacteristics: input.turnBudgetCharacteristics,
       config: this.config,
       store: tailReadStore
-        ? createCompactionBoundaryStore(tailReadStore)
+        ? createCompactionBoundaryStore(createIcpDeliveryProjectionStore(tailReadStore))
         : this.compactionBoundaryStore,
       activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,

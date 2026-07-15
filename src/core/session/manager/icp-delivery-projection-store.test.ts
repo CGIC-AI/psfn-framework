@@ -290,4 +290,79 @@ describe('ICP delivery projection store', () => {
       expect.objectContaining({ id: 1, content: 'Completed reply' }),
     ]));
   });
+
+  it('rechecks delivery truth before advancing a scalar compaction boundary', () => {
+    const channelId = 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const sourceMessageId = 'companion-source-status-race';
+    const entries: SessionEntry[] = [{
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'safe prefix',
+      timestamp: 1,
+    }, {
+      id: 2,
+      channelId,
+      role: 'assistant',
+      content: 'delivery-gated output',
+      timestamp: 2,
+      metadata: JSON.stringify({
+        icpDelivery: { schemaVersion: 1, status: 'pending' },
+        turn: { sourceMessageId },
+      }),
+    }, {
+      id: 3,
+      channelId,
+      role: 'system',
+      content: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'icp_delivery',
+        channelId,
+        sourceMessageId,
+        status: 'delivered',
+        gatewayMessageId: 'companion:status-race',
+        recoveryResponse: buildRecoveryResponse(channelId, sourceMessageId),
+      }),
+      timestamp: 3,
+    }];
+    const rawStore = {
+      getEntriesInRange: (_requestedChannelId: string, startId: number, endId: number) => (
+        entries.filter(entry => entry.id >= startId && entry.id <= endId)
+      ),
+      getCompactionSummaries: () => [],
+      getCompactionBoundarySafePrefix: (
+        _requestedChannelId: string,
+        proposedEntries: readonly SessionEntry[],
+      ) => [...proposedEntries],
+      findLatestEntries: (
+        _requestedChannelId: string,
+        predicate: (entry: SessionEntry) => boolean,
+        limit: number,
+      ) => entries.filter(predicate).slice(-limit).reverse(),
+    } as SessionStore;
+    const projectedStore = createIcpDeliveryProjectionStore(rawStore);
+    const initiallyProjected = projectedStore.getEntriesInRange(channelId, 1, 2);
+    expect(initiallyProjected.map(entry => entry.id)).toEqual([1, 2]);
+
+    entries.push({
+      id: 4,
+      channelId,
+      role: 'system',
+      content: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'icp_delivery',
+        channelId,
+        sourceMessageId,
+        status: 'failed',
+        error: 'delivery was revoked before compaction',
+        recoveryResponse: buildRecoveryResponse(channelId, sourceMessageId),
+      }),
+      timestamp: 4,
+    });
+
+    expect(projectedStore.getCompactionBoundarySafePrefix(
+      channelId,
+      initiallyProjected,
+    ).map(entry => entry.id)).toEqual([1]);
+  });
 });

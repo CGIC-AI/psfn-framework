@@ -551,15 +551,19 @@ describe('executePostTurnBackgroundWork', () => {
       memoryRetrievalLimit: 15,
       extractionInterval: 5,
       maintenanceIntervalMs: 300_000,
-      defaultContextWindow: 512,
+      defaultContextWindow: 4_096,
       extractionThresholdPct: 30,
       compactionThresholdPct: 1,
       modelRoster: {
-        chat: { provider: 'test', model: 'test', contextWindow: 512, maxTokens: 128 },
+        chat: { provider: 'test', model: 'test', contextWindow: 4_096, maxTokens: 128 },
       },
     } as SubstrateConfig;
     const sessionManager = new SessionManager(store, config);
     const failedContent = 'FAILED ICP A PRIVATE OUTPUT MUST NEVER ENTER A DURABLE EFFECT';
+    const safeOlderContext = [
+      `successful B safe older context 0 ${'O'.repeat(160)}`,
+      `successful B safe older context 1 ${'O'.repeat(160)}`,
+    ];
     const successfulContext = Array.from(
       { length: 4 },
       (_, index) => `successful B bounded context ${index} ${'C'.repeat(160)}`,
@@ -583,6 +587,20 @@ describe('executePostTurnBackgroundWork', () => {
     });
 
     try {
+      for (const content of safeOlderContext) {
+        sessionManager.recordUserMessage(
+          ICP_CHANNEL,
+          content,
+          'human-b',
+          'Human B',
+          true,
+          undefined,
+          {
+            turnId: successfulRecord.turnId,
+            requestId: successfulRecord.requestId,
+          },
+        );
+      }
       const failedEntryId = sessionManager.recordAssistantMessage(
         ICP_CHANNEL,
         failedContent,
@@ -764,6 +782,7 @@ describe('executePostTurnBackgroundWork', () => {
 
       for (const entries of [memoryEntries, emotionEntries]) {
         expect(entries.map(entry => entry.content)).toEqual([
+          ...safeOlderContext,
           ...successfulContext,
           successfulInput,
           successfulOutput,

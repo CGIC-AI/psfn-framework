@@ -303,8 +303,19 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
 
   // Compact oldest 50% of messages
   const splitPoint = Math.ceil(params.recent.length / 2);
-  const toCompact = params.recent.slice(0, splitPoint);
-  const toKeep = params.recent.slice(splitPoint);
+  const proposedToCompact = params.recent.slice(0, splitPoint);
+  const toCompact = params.store.getCompactionBoundarySafePrefix(
+    params.channelId,
+    proposedToCompact,
+  );
+  if (toCompact.length === 0) {
+    return { recent: params.recent, compacted: false };
+  }
+  if (toCompact.length > proposedToCompact.length
+    || toCompact.some((entry, index) => entry.id !== proposedToCompact[index]?.id)) {
+    throw new Error('Compaction boundary authority returned a non-prefix entry set');
+  }
+  const toKeep = params.recent.slice(toCompact.length);
   const compactText = buildCompactionSourceBlock(toCompact);
   const sourceHashTag = buildCompactionSourceHashTag(toCompact);
   const emotionalSalienceThreshold = resolveEmotionalSalienceThreshold(params.config);

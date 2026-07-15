@@ -86,6 +86,40 @@ function filterUndeliveredIcpAssistantEntries(
   });
 }
 
+function deliveryContiguousCompactionPrefix(
+  store: SessionStore,
+  channelId: string,
+  proposedEntries: readonly SessionEntry[],
+): SessionEntry[] {
+  if (proposedEntries.length === 0) return [];
+  const coveredUpTo = store.getCompactionSummaries(channelId).reduce(
+    (maximum, summary) => Math.max(maximum, summary.coveredUpTo),
+    0,
+  );
+  const proposedIds = new Set(proposedEntries.map(entry => entry.id));
+  const proposedEndId = proposedEntries[proposedEntries.length - 1]!.id;
+  let cursor = coveredUpTo + 1;
+
+  while (cursor <= proposedEndId) {
+    const pageEnd = Math.min(
+      proposedEndId,
+      cursor + DELIVERY_PROJECTION_PAGE_SIZE - 1,
+    );
+    const page = store.getEntriesInRange(channelId, cursor, pageEnd);
+    for (const entry of page) {
+      const sourceMessageId = pendingIcpSourceMessageId(entry);
+      if (sourceMessageId !== null
+        && (!proposedIds.has(entry.id)
+          || findDeliveryStatus(store, channelId, sourceMessageId) !== 'delivered')) {
+        return proposedEntries.filter(candidate => candidate.id < entry.id);
+      }
+    }
+    cursor = pageEnd + 1;
+  }
+
+  return [...proposedEntries];
+}
+
 /**
  * Read projection that keeps pending/failed/suppressed sender output out of
  * every ordinary context, extraction, and compaction consumer. Raw journal
@@ -98,7 +132,9 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
         return (channelId: string, limit: number): SessionEntry[] => {
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          const lastEntry = target.getLastEntry(channelId);
+          // Use the wrapped read surface rather than getLastEntry so composed
+          // hot-tail views can contribute rows newer than the local journal.
+          const lastEntry = target.getRecent(channelId, 1).at(-1);
           if (!lastEntry) return [];
           let cursor = lastEntry.id;
           let projected: SessionEntry[] = [];
@@ -147,8 +183,8 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
               DELIVERY_PROJECTION_PAGE_SIZE,
             );
             if (page.length === 0) break;
-            const earliestEntry = page[0];
-            if (!earliestEntry || earliestEntry.id >= cursor) {
+            const earliestEntry = page[0]!;
+            if (earliestEntry.id >= cursor) {
               throw new Error('SessionStore getEntriesBefore returned a non-decreasing page');
             }
             projected = [
@@ -160,6 +196,17 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
           }
           return projected;
         };
+      }
+
+      if (property === 'getCompactionBoundarySafePrefix') {
+        return (
+          channelId: string,
+          proposedEntries: readonly SessionEntry[],
+        ): SessionEntry[] => deliveryContiguousCompactionPrefix(
+          target,
+          channelId,
+          target.getCompactionBoundarySafePrefix(channelId, proposedEntries),
+        );
       }
 
       const value = Reflect.get(target, property, receiver);

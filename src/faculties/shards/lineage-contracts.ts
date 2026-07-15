@@ -1,5 +1,9 @@
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type {
+  CompanionId,
+  ShardCompanionId,
+} from '../../shared/routing/companion-id.js';
 
 export interface ShardSourceContext {
   channelId: string;
@@ -28,15 +32,15 @@ export interface ShardResultLineageSatelliteRouting {
 }
 
 export interface ShardCompanionProvenance {
-  parentCompanionId: string;
-  shardCompanionId: string;
+  parentCompanionId: CompanionId;
+  shardCompanionId: ShardCompanionId;
 }
 
 export interface ShardResultLineageEnvelope {
   schemaVersion: 2;
   kind: 'spawn' | 'wyoming';
-  coreCompanionId: string;
-  shardCompanionId: string;
+  coreCompanionId: CompanionId;
+  shardCompanionId: ShardCompanionId;
   shardId: string;
   shardChannelId: string;
   companionProvenance: ShardCompanionProvenance;

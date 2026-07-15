@@ -891,11 +891,11 @@ Rules:
   installations add one isolated personal workspace per companion alongside the
   shared workspace
 
-Current multi-companion wiring does not yet provide a separate `WORKSPACE_PATH`
-per fleet entry. Until that implementation lands, documentation and operations
-must not claim that personal journals, personal wikis, skills, or workspace
-files are tenant-isolated merely because companion data and PostgreSQL schemas
-are isolated.
+Multi-companion wiring derives a separate canonical `WORKSPACE_PATH` per fleet
+entry and binds gateway filesystem-adjacent surfaces to the authenticated
+companion. The Shared Companion Workspace remains a separately governed,
+reviewed publication surface and is never a substitute for personal journals,
+personal wikis, skills, identities, credentials, or runtime state.
 
 The word **journal** is reserved for companion-authored personal Markdown
 writing. Other durable append-only records use their specific names:

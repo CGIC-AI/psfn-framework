@@ -78,19 +78,21 @@ export async function retryCompletionOnCorruptEmptyToolArgs<T>(input: {
   candidate: RoutingCandidate;
   correlation: ResolvedCorrelationMetadata | undefined;
   purpose: string;
+  maxRetries?: number;
   onRetriesResolved: (retries: number) => void;
 }): Promise<T> {
+  const maxRetries = input.maxRetries ?? MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES;
   let result = await input.attempt(0);
   let retries = 0;
   for (;;) {
     const corrupt = findCorruptEmptyToolCalls(input.extractToolCalls(result), input.tools);
     if (corrupt.length === 0) break;
-    if (retries >= MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES) break;
+    if (retries >= maxRetries) break;
     retries += 1;
     log.warn('Retrying completion: tool call arguments empty against a required-property schema', {
       toolNames: corrupt.map((call) => call.name),
       attempt: retries,
-      maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+      maxRetries,
       provider: input.candidate.provider,
       model: input.candidate.model,
       purpose: input.purpose,
@@ -104,7 +106,7 @@ export async function retryCompletionOnCorruptEmptyToolArgs<T>(input: {
     log.warn('Empty-args completion retry resolved', {
       outcome: stillCorrupt.length > 0 ? 'exhausted_returned_corrupt' : 'recovered',
       retries,
-      maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+      maxRetries,
       ...(stillCorrupt.length > 0 ? { corruptToolNames: stillCorrupt.map((call) => call.name) } : {}),
       provider: input.candidate.provider,
       model: input.candidate.model,

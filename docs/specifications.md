@@ -37,6 +37,17 @@ Supported until beta:
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These paths are read/migration support only, not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
+- One-time legacy Personal Workspace assignment during the multi-companion alpha
+  cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its
+  deterministic tree digest. An operator must select exactly one configured
+  companion with `PSFN_LEGACY_WORKSPACE_COMPANION_ID` and approve the exact
+  digest with `PSFN_LEGACY_WORKSPACE_SHA256`; migration copies without merging
+  or overwriting and retains the source. Validation is the immutable migration
+  receipt plus exact source-tree integrity and verification that every migrated
+  source entry remains unchanged at the destination; later provisioned Personal
+  Workspace files are allowed. Remove this startup migration
+  and both env inputs before beta after every live installation has a verified
+  receipt.
 
 Out of boundary:
 
@@ -105,23 +116,27 @@ documents, journal, personal knowledge base, authored skills, modules,
 experiments, downloads, images, and other personal durable files. It is not a
 runtime-state root and not a general shared-files root.
 
-The target multi-companion layout has one validated Personal Workspace per
+The multi-companion layout has one validated Personal Workspace per
 companion plus an installation-owned **Shared Companion Workspace** for
 explicitly published collaboration artifacts and common reference material. The
 shared-world wiki remains a narrower, site-scoped operator-owned knowledge
 surface—not a general shared filesystem.
 
-Current fleet wiring has no per-entry workspace path and forwards one inherited
-`WORKSPACE_PATH` to all fleet agents. This means personal workspace isolation is
-not shipped under multi-companion yet. Do not add a `SHARED_WORKSPACE_PATH` env
-setting, derive paths ad hoc, or claim workspace tenancy until the owner-file,
-path-containment, gateway-policy, backup, and tests contracts land together.
+Fleet wiring deterministically derives personal roots from the runtime root and
+companion UUID, provisions them before process startup, and injects exactly one
+resolved Personal Workspace into each agent and Garden. The authenticated
+gateway connection selects the same root for filesystem, shell, image, beads,
+and channel attachment surfaces. There is no `SHARED_WORKSPACE_PATH` env setting
+or manifest override.
 
-When implemented, personal and shared workspace roots must be canonicalized,
+Personal and shared workspace roots are canonicalized,
 non-overlapping with each other and with system/companion/runtime roots, and
-contained beneath the configured runtime root. Shared writes require explicit
-actor and provenance records, review policy, atomic writes, containment checks,
-and CogSec screening before shared material can reach prompts, wikis, or memory.
+contained beneath the configured runtime root. Garden-mediated shared writes
+derive proposer, reviewer, and CogSec principals from three distinct
+credentials; body identity claims are rejected. Publication requires provenance,
+a revision-bound CogSec artifact, independent review, a crash-recoverable
+transaction, and containment checks. Shared material does not automatically reach prompts,
+wikis, memory, skills, or modules.
 
 ## Artifact Ownership
 

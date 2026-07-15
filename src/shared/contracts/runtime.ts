@@ -16,6 +16,7 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type { PlacePrivacy } from './places-registry.js';
 import type {
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
@@ -31,6 +32,17 @@ export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
+export type RuntimeFallbackStrategy =
+  | 'runtime_nonfabricating_notice'
+  | 'runtime_datetime_contradiction_refusal';
+
+export interface RuntimeFallbackProvenance {
+  schemaVersion: 1;
+  authoredBy: 'runtime';
+  model: 'runtime-fallback';
+  strategy: RuntimeFallbackStrategy;
+}
+
 export interface TurnRecordMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -39,6 +51,9 @@ export interface TurnRecordMessage {
   sourceMessageId?: string;
   authorId?: string;
   authorName?: string;
+  /** Gateway-authoritative parent message for direct reply lineage. */
+  replyToMessageId?: string;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }
 
 export interface TurnRecordToolCall {
@@ -68,11 +83,9 @@ export interface TurnRecordVersionPointers {
 }
 
 /**
- * Durable satellite/place origin recorded on a turn for long-lived history.
- * Sourced from the message's satellite routing metadata (`placeId` is the
- * static foreign key into `places.json` established by the satellite→place
- * binding). Fail-closed: the field is absent unless the turn actually carried a
- * bound `placeId`; nothing is fabricated for non-satellite turns.
+ * Durable room/satellite place origin recorded on a turn for long-lived
+ * history. Fail-closed: the field is absent unless authoritative routing
+ * carried a non-empty placeId.
  */
 export interface TurnRecordLocation {
   /** Static place binding carried onto the turn (`SatelliteConfig.placeId`). */
@@ -90,8 +103,10 @@ export interface TurnRecord {
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
-  /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
+  /** Durable room/satellite place origin; absent on unbound turns. */
   location?: TurnRecordLocation;
+  /** Gateway/session disclosure classification captured for this turn. */
+  channelPrivacy?: ChannelPrivacy;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
@@ -148,6 +163,15 @@ export interface LLMModelHint extends ModelControlKnobs {
   pin?: boolean;
 }
 
+export interface LLMCallAccountingContext {
+  /** Stable identity shared by every physical attempt of one caller operation. */
+  logicalCallId: string;
+  /** One-based physical attempt number within the logical call. */
+  attempt: number;
+  /** The upstream caller owns retry/fallback sequencing for this operation. */
+  retryOwner?: 'caller';
+}
+
 export interface MessageModelOverride extends ModelControlKnobs {
   provider: string;
   model: string;
@@ -191,13 +215,31 @@ export type ObservabilityCallType =
   | 'scheduled';
 
 export interface LLMRequestMetadata {
+  companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   toolName?: string;
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  /** Exact immutable charge event that bought this provider work, when one is active. */
+  chargeEventId?: string;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
 }
 
 /**
@@ -270,6 +312,11 @@ export interface MessageRoutingMetadata {
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
+  /** Gateway-authoritative location-room classification for companion turns. */
+  room?: {
+    placeId: string;
+    privacy: PlacePrivacy;
+  };
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
   modelOverride?: MessageModelOverride;
@@ -329,6 +376,8 @@ export interface SubstrateMessage {
   timestamp: Date;
   /** True for direct/private messages (e.g. Discord DMs). Adapters set this explicitly. */
   isDirectMessage?: boolean;
+  /** Gateway-authoritative parent message id when this message is a reply. */
+  replyToMessageId?: string;
   /** Optional transport/runtime routing hints (e.g. Wyoming session policy decisions). */
   routing?: MessageRoutingMetadata;
 }
@@ -527,6 +576,7 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
@@ -706,6 +756,7 @@ export interface LLMContext {
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;
+  accounting?: LLMCallAccountingContext;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];
@@ -733,6 +784,7 @@ export interface LLMUsageDetails {
   cacheWrite: number;
   totalTokens: number;
   cost?: LLMUsageCostDetails;
+  costEvidenceConflict?: { fields: string[] };
   raw?: Record<string, unknown>;
 }
 
@@ -963,6 +1015,8 @@ export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
 export interface ModelRegistryCostMetadata {
   inputPer1MUsd?: number;
   outputPer1MUsd?: number;
+  cacheReadPer1MUsd?: number;
+  cacheWritePer1MUsd?: number;
   currency?: string;
   [key: string]: unknown;
 }
@@ -1044,22 +1098,6 @@ export interface CanonicalModelRegistry {
   promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
-export interface ModelUsageLedgerRecord {
-  id: string;
-  timestampMs: number;
-  dayKey: string;
-  monthKey: string;
-  provider: string;
-  model: string;
-  slotKey?: string;
-  purpose: string;
-  service: string;
-  process: string;
-  inputTokens: number;
-  outputTokens: number;
-  estimatedCostUsd: number;
-}
-
 export interface ModelBudgetWindowSnapshot {
   dayKey: string;
   monthKey: string;
@@ -1067,12 +1105,16 @@ export interface ModelBudgetWindowSnapshot {
   dailyLimitUsd: number;
   monthlySpentUsd: number;
   monthlyLimitUsd: number;
+  dailyUnknownCostAttempts: number;
+  monthlyUnknownCostAttempts: number;
 }
 
 export type ModelBudgetBlockReason =
   | 'daily_budget_exceeded'
   | 'monthly_budget_exceeded'
-  | 'missing_cost_metadata';
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable'
+  | 'unknown_historical_cost';
 
 export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   timestampMs: number;

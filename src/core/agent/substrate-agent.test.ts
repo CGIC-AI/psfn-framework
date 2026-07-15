@@ -2751,14 +2751,21 @@ describe('SubstrateAgent.handleMessage', () => {
     );
     agent.memoryExtractor = mockExtractor;
 
-    await agent.handleMessage(makeMessage());
+    await agent.handleMessage(makeMessage({
+      routing: {
+        source: 'companion',
+        channelPrivacy: 'private',
+        room: { placeId: 'den', privacy: 'private' },
+      },
+    }));
 
     // Fire-and-forget, but should have been called
     expect(mockExtractor.maybeExtract).toHaveBeenCalledTimes(1);
-    const [channelId, canonicalContactId, turnId] = (mockExtractor.maybeExtract as any).mock.calls[0];
+    const [channelId, canonicalContactId, turnId, placeId] = (mockExtractor.maybeExtract as any).mock.calls[0];
     expect(channelId).toBe('test-channel');
     expect(canonicalContactId).toBeUndefined();
     expect(isTurnId(turnId)).toBe(true);
+    expect(placeId).toBe('den');
   });
 
   it('returns AgentResponse with content and metadata', async () => {

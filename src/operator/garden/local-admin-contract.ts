@@ -80,6 +80,7 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminChargeCostReconciliationDataService } from './services/charge-cost-reconciliation-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
@@ -119,6 +120,10 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import {
+  AdminSharedWorkspaceService,
+  type SharedWorkspaceCredentials,
+} from './services/shared-workspace-service.js';
 
 export interface InProcessGardenAdminContractOptions {
   apiBaseUrl?: string;
@@ -163,6 +168,8 @@ export interface InProcessGardenAdminContractOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
+  /** Distinct authenticated principals for governed shared-workspace writes. */
+  sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
 }
 
 export function createInProcessGardenAdminContract(
@@ -193,6 +200,9 @@ export function createInProcessGardenAdminContract(
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const modelUsage = modelUsageStore
+    ? new AdminModelUsageDataService(modelUsageStore)
+    : null;
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
@@ -309,6 +319,7 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      modelUsageService: modelUsage,
       adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
     }),
@@ -322,7 +333,14 @@ export function createInProcessGardenAdminContract(
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
-    modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
+    chargeCosts: modelUsageStore && options.config.companionId
+      ? new AdminChargeCostReconciliationDataService(
+          chargeLedger,
+          modelUsageStore,
+          options.config.companionId,
+        )
+      : null,
+    modelUsage,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,
       runtime: options.observerEvalSidecar ?? null,
@@ -427,6 +445,14 @@ export function createInProcessGardenAdminContract(
       ? new AdminConcernDataService(options.concernStore)
       : null,
     settings: settingsService,
+    sharedWorkspace: options.config.sharedWorkspacePath
+      ? new AdminSharedWorkspaceService(
+        options.config.sharedWorkspacePath,
+        options.sharedWorkspaceCredentials ?? (() => {
+          throw new Error('Shared workspace is configured without authenticated principal credentials');
+        })(),
+      )
+      : null,
     intakeQuarantine,
     driftReviews,
     identity: new AdminIdentityDataService({

@@ -8,6 +8,7 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { MULTI_COMPANION_ENV_VAR } from '../../system/config/companions-config.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 
 /** Gateway-facing channel surfaces that can be routed to a companion. */
 export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api'] as const;
@@ -16,19 +17,29 @@ export type GatewayChannelSurface = (typeof GATEWAY_CHANNEL_SURFACES)[number];
 export interface GatewayMultiCompanionConfig {
   enabled: boolean;
   /** companions.json-owned identities accepted at the RPC authentication boundary. */
-  fleetCompanionIds: readonly string[];
+  fleetCompanionIds: readonly CompanionId[];
   /** channels.json-owned surface→companionId routing table. */
-  channelRouting: Partial<Record<GatewayChannelSurface, string>>;
+  channelRouting: Partial<Record<GatewayChannelSurface, CompanionId>>;
   /**
    * Multi-account discord routing (W1-P2): accountId → companionId, one bot
    * identity per companion. Mutually exclusive with `channelRouting.discord`
    * (enforced by the channels.json parser).
    */
-  discordAccounts: Record<string, string>;
+  discordAccounts: Record<string, CompanionId>;
+  /** Canonical Personal Workspace root for every fleet companion. */
+  personalWorkspaceByCompanionId: Readonly<Record<string, string>>;
+  /** Governed installation-shared workspace; never used as a personal root. */
+  sharedWorkspacePath?: string;
 }
 
 export function disabledGatewayMultiCompanionConfig(): GatewayMultiCompanionConfig {
-  return { enabled: false, fleetCompanionIds: [], channelRouting: {}, discordAccounts: {} };
+  return {
+    enabled: false,
+    fleetCompanionIds: [],
+    channelRouting: {},
+    discordAccounts: {},
+    personalWorkspaceByCompanionId: {},
+  };
 }
 
 /**
@@ -69,15 +80,21 @@ export function resolveGatewayMultiCompanionConfig(
   if (enabled && fleetCompanionIds.length === 0) {
     throw new Error('Multi-companion gateway routing requires a non-empty resolved companions.json fleet');
   }
-  const fleetIds = new Set(fleetCompanionIds);
+  const fleetIds = new Set<CompanionId>(fleetCompanionIds);
+  const personalWorkspaceByCompanionId = Object.fromEntries(
+    (config.companionFleet?.companions ?? []).map(entry => [
+      entry.companionId,
+      entry.personalWorkspacePath,
+    ]),
+  );
 
-  const channelRouting: Partial<Record<GatewayChannelSurface, string>> = {
+  const channelRouting: Partial<Record<GatewayChannelSurface, CompanionId>> = {
     ...(channelsConfig.discord.companionId ? { discord: channelsConfig.discord.companionId } : {}),
     ...(channelsConfig.telegram.companionId ? { telegram: channelsConfig.telegram.companionId } : {}),
     ...(channelsConfig.api.companionId ? { api: channelsConfig.api.companionId } : {}),
   };
 
-  const discordAccounts: Record<string, string> = {};
+  const discordAccounts: Record<string, CompanionId> = {};
   for (const account of channelsConfig.discord.accounts ?? []) {
     discordAccounts[account.accountId] = account.companionId;
   }
@@ -118,5 +135,14 @@ export function resolveGatewayMultiCompanionConfig(
     }
   }
 
-  return { enabled, fleetCompanionIds, channelRouting, discordAccounts };
+  return {
+    enabled,
+    fleetCompanionIds,
+    channelRouting,
+    discordAccounts,
+    personalWorkspaceByCompanionId,
+    ...(config.companionFleet?.sharedWorkspacePath
+      ? { sharedWorkspacePath: config.companionFleet.sharedWorkspacePath }
+      : {}),
+  };
 }

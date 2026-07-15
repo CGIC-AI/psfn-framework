@@ -1,5 +1,4 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
-import { resolveConfiguredCompanionDataDir } from '../../../../persistence/layout.js';
 import { collectGeneratedImageAttachments } from '../../../../primitives/images/generated-media.js';
 import { emitCompanionArtifactCreatedEvents } from '../../../../channels/backplane/companion-relay/artifact-emission.js';
 import type {
@@ -33,6 +32,7 @@ import {
   resolveRuntimeLaneBudgetProfile,
 } from '../../worker-lanes.js';
 import type { TurnExecutionObservability } from './observability.js';
+import { resolveMessagePlaceId } from '../message-location.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
@@ -58,7 +58,7 @@ export async function collectTurnResponseAttachments(input: {
 }): Promise<NonNullable<AgentResponse['attachments']>> {
   const attachments = await collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
-    companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
+    personalFilesDir: input.runtime.config.workspacePath,
     paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
   });
@@ -398,10 +398,10 @@ export async function schedulePostTurnWork(input: {
         message.channelId,
         canonicalContactKey,
         turnId,
-        // Location tagging (S10): the static satellite place bound to this turn,
-        // threaded into memory formation so memories gain a `location:<placeId>`
-        // tag. Absent (non-satellite turn) → no location tag (fail-closed).
-        message.routing?.satellite?.placeId,
+        // Location tagging (S10): gateway-authoritative companion-room place
+        // first, then the static satellite binding. Absent means no location
+        // tag (fail-closed).
+        resolveMessagePlaceId(message),
       ),
       onError: (error) => {
         log.error('Memory extraction error', { error: String(error) });

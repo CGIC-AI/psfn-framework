@@ -12,6 +12,7 @@ import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths } from '../policy.js';
 import {
   normalizeWorkspaceRelativeGlob,
+  resolveCanonicalPath,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from '../filesystem-paths.js';
@@ -84,6 +85,25 @@ async function pathExists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+function assertPersonalWorkspacePath(
+  resolvedPath: string,
+  runtime: GatewayMethodRuntime,
+  missingPathBehavior: 'returnNormalized' | 'resolveParent',
+): void {
+  if (!runtime.personalWorkspaceIsolation) return;
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const canonical = resolveCanonicalPath(resolvedPath, {
+    missingPathBehavior,
+    errorBehavior: 'deny',
+  });
+  if (!canonical || !isInsideAllowedPaths(canonical, [workspaceRoot])) {
+    throw new JSONRPCErrorException(
+      'Fleet filesystem access must stay inside the authenticated companion Personal Workspace',
+      GatewayErrors.POLICY_DENIED,
+    );
   }
 }
 
@@ -176,6 +196,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'fs.read',
     handler: async (params: FsReadParams, runtime) => {
       const resolvedPath = await resolveReadPath(params.path, runtime);
+      assertPersonalWorkspacePath(resolvedPath, runtime, 'returnNormalized');
       return await readTextFile(resolvedPath, params.maxBytes);
     },
     summary: (p: FsReadParams) => ({ path: p.path, maxBytes: p.maxBytes }),
@@ -187,6 +208,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: FsWriteParams, runtime) => {
       const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
       const resolvedPath = resolveWorkspaceFsPathFromRoot(params.path, workspaceRoot);
+      assertPersonalWorkspacePath(resolvedPath, runtime, 'resolveParent');
       try {
         await writeFile(resolvedPath, params.content, 'utf-8');
       } catch (error) {

@@ -27,11 +27,6 @@ import {
 } from '../../../core/session/cross-channel-continuity-port.js';
 import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
 import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
-import {
-  createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
-  createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
-  type EmbeddingRuntimeProvider,
-} from '../../../faculties/memory/embedding.js';
 import { MemoryJournal } from '../../../faculties/memory/journal.js';
 import { createPostgresMemoryStore } from '../../../faculties/memory/postgres-store.js';
 import {
@@ -74,6 +69,7 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
+import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
@@ -237,16 +233,8 @@ export async function composeMemoryStoreAsync(
   });
 }
 
-export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
-  return createEmbeddingProviderFromMemoryEnv(process.env);
-}
-
-export function createEmbeddingProviderFromConfig(config: SubstrateConfig): EmbeddingRuntimeProvider {
-  return createEmbeddingProviderFromMemoryConfig(config, process.env);
-}
-
 export interface IdentityComposition {
-  companionId: string;
+  companionId: RuntimeCompanionId;
   card: CharacterCardV2;
   systemPrompt: string;
 }

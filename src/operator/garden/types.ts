@@ -3,16 +3,43 @@
 export type DashboardCostWindow = 'today' | 'week' | 'month';
 
 export interface DashboardCostWindowUsage {
-  turns: number;
-  llmCalls: number;
-  toolCalls: number;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  providerCostUsd: number;
   estimatedCostUsd: number;
+  effectiveCostUsd: number;
 }
 
-export interface DashboardCostWindowTotals {
-  today: DashboardCostWindowUsage;
-  week: DashboardCostWindowUsage;
-  month: DashboardCostWindowUsage;
+export type DashboardModelUsageState = 'fresh' | 'stale' | 'unavailable';
+
+export interface DashboardModelUsageFreshness {
+  state: DashboardModelUsageState;
+  source: 'postgres_model_usage';
+  refreshedAtMs: number | null;
+  dataThroughMs: number | null;
+  latestEventAtMs: number | null;
+  refreshIntervalMs: number;
+  message?: string;
+}
+
+export interface DashboardModelUsageProjection {
+  selected: DashboardCostWindow;
+  usage: DashboardCostWindowUsage | null;
+  freshness: DashboardModelUsageFreshness;
+}
+
+export interface DashboardTransientSessionTelemetry {
+  source: 'live_event_bus';
+  turnsSinceOperatorStart: number;
+  lastTtftMs: number | null;
+  averageTtftMs: number | null;
+  activeSessionContextPressure: DashboardSessionContextPressure;
 }
 
 export interface DashboardSessionContextPressure {
@@ -34,22 +61,8 @@ export interface DashboardStats {
   sessionCount: number;
   schedulerTasks: number;
   activeShards: number;
-  sessionUsage: {
-    turns: number;
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-    llmCalls: number;
-    toolCalls: number;
-    lastTtftMs: number | null;
-    averageTtftMs: number | null;
-    activeSessionContextPressure: DashboardSessionContextPressure;
-    estimatedCostUsd: number;
-    costWindows: {
-      selected: DashboardCostWindow;
-      byWindow: DashboardCostWindowTotals;
-    };
-  };
+  modelUsage: DashboardModelUsageProjection;
+  transientSessionTelemetry: DashboardTransientSessionTelemetry;
   toolStatus: DashboardToolStatus[];
   recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }

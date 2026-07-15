@@ -492,6 +492,7 @@ export class SessionManager {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
         sourceMessageId: options.sourceMessageId,
+        replyToMessageId: options.replyToMessageId,
         role: 'user',
       })
       : options.metadata;

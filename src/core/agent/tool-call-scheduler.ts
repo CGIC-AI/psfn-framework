@@ -83,7 +83,21 @@ function normalizeToolParametersForPiAiValidation(parameters: unknown): unknown 
   return normalized;
 }
 
-function normalizeToolForPiAiValidation(tool: AgentTool<any>): AgentTool<any> {
+function hasNonStringDiscordFollowUpChannelId(tool: AgentTool<any>, toolCall: any): boolean {
+  if (tool.name !== 'schedule') return false;
+  const args = toolCall?.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+  return args.action === 'create_follow_up'
+    && args.channel_type === 'discord'
+    && Object.prototype.hasOwnProperty.call(args, 'channel_id')
+    && typeof args.channel_id !== 'string';
+}
+
+function normalizeToolForPiAiValidation(tool: AgentTool<any>, toolCall: any): AgentTool<any> {
+  // Discord snowflakes exceed Number.MAX_SAFE_INTEGER. Preserve the original
+  // TypeBox string check for this one destination boundary so pi-ai cannot
+  // stringify an already precision-damaged JavaScript number.
+  if (hasNonStringDiscordFollowUpChannelId(tool, toolCall)) return tool;
   const parameters = normalizeToolParametersForPiAiValidation(tool.parameters);
   return parameters === tool.parameters
     ? tool
@@ -329,7 +343,10 @@ async function executeSingleToolCall(
     if (!tool) {
       throw new Error(`Tool ${toolCall.name} not found`);
     }
-    const validatedArgs = validateToolArguments(normalizeToolForPiAiValidation(tool), toolCall);
+    const validatedArgs = validateToolArguments(
+      normalizeToolForPiAiValidation(tool, toolCall),
+      toolCall,
+    );
     result = await tool.execute(toolCall.id, validatedArgs, context.signal, (partialResult) => {
       context.stream.push({
         type: 'tool_execution_update',

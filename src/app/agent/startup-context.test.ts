@@ -177,7 +177,14 @@ describe('prepareAgentStartupContext', () => {
     process.env.WORKSPACE_PATH = workspaceDir;
     process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
     process.env.COMPANION_ID = 'test-companion';
-    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
+    const postgresCredentialPath = join(rootDir, 'postgres-database-url');
+    writeFileSync(
+      postgresCredentialPath,
+      'postgresql://test:file-secret@127.0.0.1:5432/test\n',
+      'utf8',
+    );
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.POSTGRES_DATABASE_URL_FILE = postgresCredentialPath;
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
     process.env.LITELLM_API_KEY = 'test-litellm-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
@@ -198,6 +205,12 @@ describe('prepareAgentStartupContext', () => {
       expect(context.coreConfig.primaryModel).toBe('openrouter/z-ai/glm-5.1');
       expect(context.coreConfig.modelRoster.vision?.model).toBe('openrouter/google/gemini-3.1-flash-lite-preview');
       expect(context.coreConfig.modelRoster.chat?.provider).toBe('litellm');
+      expect(process.env.POSTGRES_DATABASE_URL).toBeUndefined();
+      expect(Object.values(process.env).join('\n')).not.toContain('file-secret');
+      expect(context.config.postgresDatabaseUrl)
+        .toBe('postgresql://test:file-secret@127.0.0.1:5432/test');
+      expect(context.coreConfig.postgresDatabaseUrl).toBeUndefined();
+      expect(JSON.stringify(context.coreConfig)).not.toContain('file-secret');
       expect(context.gatewayRpcEndpoint).toEqual({
         kind: 'unix',
         socketPath: '/run/psfn/gateway.sock',

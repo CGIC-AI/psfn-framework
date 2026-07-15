@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeRuntimeFallbackProvenance } from '../../shared/runtime-fallback-provenance.js';
 import { join } from 'node:path';
 import {
   closeSync,
@@ -207,6 +208,7 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   const sourceMessageId = value.sourceMessageId;
   const authorId = value.authorId;
   const authorName = value.authorName;
+  const runtimeFallbackProvenance = value.runtimeFallbackProvenance;
 
   return {
     role,
@@ -223,6 +225,14 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
       : {}),
     ...(typeof authorName === 'string' && authorName.trim().length > 0
       ? { authorName: authorName.trim() }
+      : {}),
+    ...(runtimeFallbackProvenance !== undefined
+      ? {
+        runtimeFallbackProvenance: normalizeRuntimeFallbackProvenance(
+          runtimeFallbackProvenance,
+          `${fieldName}.runtimeFallbackProvenance`,
+        ),
+      }
       : {}),
   };
 }

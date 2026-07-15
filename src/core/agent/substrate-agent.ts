@@ -23,7 +23,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -221,7 +221,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
-  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked' | 'transport'>;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'transport'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -497,16 +497,6 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    const emitBudgetBlocked = (event: ModelBudgetBlockedEvent) => {
-      this.eventBus.emit('model.budget.blocked', event).catch((error) => {
-        log.error('Failed to emit stream budget blocked telemetry', {
-          error: toErrorMessage(error),
-          provider: event.provider,
-          model: event.model,
-          reason: event.reason,
-        });
-      });
-    };
     const defaultStreamTransport = options?.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
@@ -515,7 +505,6 @@ export class SubstrateAgent {
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
         ...(options?.streamRuntimeOptions ?? {}),
         transport: defaultStreamTransport,
-        onBudgetBlocked: emitBudgetBlocked,
       }),
       convertToLlm,
     });

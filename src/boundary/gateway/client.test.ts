@@ -2,7 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
+import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+
+const TEST_COMPANION_ID = createCompanionId('companion');
+const TEST_GATEWAY_ROUTING = {
+  gateway: { schemaVersion: 1 as const, companionId: TEST_COMPANION_ID },
+};
 
 /** Create a mock NdjsonConnection that captures sent messages */
 function createMockConnection() {
@@ -239,6 +247,30 @@ describe('GatewayClient streaming', () => {
     });
   });
 
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+    void client.stream(
+      {
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        accounting: {
+          logicalCallId: 'llm:caller-operation',
+          attempt: 3,
+          retryOwner: 'caller',
+        },
+      },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { params: Record<string, unknown> };
+    expect(req.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 3,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 
@@ -268,6 +300,97 @@ describe('GatewayClient streaming', () => {
     // After error, handler should be cleaned up
     conn._emit({ method: 'llm.chunk', params: { requestId, text: 'after-error' } });
     expect(chunks).toEqual(['before-error']);
+  });
+
+  it('bridges gateway budget-block telemetry before rejecting the model call', async () => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: {
+        dayKey: '2025-07-14',
+        monthKey: '2025-07',
+        dailySpentUsd: 1,
+        dailyLimitUsd: 1,
+        monthlySpentUsd: 2,
+        monthlyLimitUsd: 10,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
+  });
+
+  it.each([
+    ['empty budget', { budget: {} }],
+    ['bogus reason', { reason: 'invented_budget_reason' }],
+    ['non-finite value', { estimatedRequestCostUsd: Number.POSITIVE_INFINITY }],
+    ['unknown field', { shadowBudget: true }],
+  ])('does not bridge malformed gateway budget telemetry with %s', async (_label, override) => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const validBudget = {
+      dayKey: '2025-07-14',
+      monthKey: '2025-07',
+      dailySpentUsd: 1,
+      dailyLimitUsd: 1,
+      monthlySpentUsd: 2,
+      monthlyLimitUsd: 10,
+      dailyUnknownCostAttempts: 0,
+      monthlyUnknownCostAttempts: 0,
+    };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: validBudget,
+      ...override,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).not.toHaveBeenCalled();
   });
 
   it('routes model discovery calls through gateway RPC', async () => {
@@ -352,6 +475,56 @@ describe('GatewayClient streaming', () => {
       Array.from(value).every((entry, index) => Math.abs(entry - [0.7, 0.8, 0.9][index]!) < 1e-5)
     ));
   });
+
+  it('self-stamps tenant and request attribution on gateway embedding calls', async () => {
+    const attributedClient = new GatewayClient(conn.conn, 1024, { companionId: 'companion-a' });
+    const batchPromise = runWithRequestContext({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      callType: 'memory',
+      purpose: 'embedding',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeEventId: 'charge-event-1',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    }, async () => await attributedClient.embedBatch(['alpha']));
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'llm.embed',
+      params: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        requestId: 'request-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeEventId: 'charge-event-1',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+        texts: ['alpha'],
+      },
+    });
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      result: { embeddings: [[0.1, 0.2]] },
+    });
+    await expect(batchPromise).resolves.toHaveLength(1);
+  });
 });
 
 describe('GatewayClient authenticated identification', () => {
@@ -415,6 +588,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'TestUser',
           content: 'hello voice',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -436,6 +610,186 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.content).toBe('voice response');
     expect(response.result.model).toBe('test-model');
     expect(response.result.durationMs).toBe(500);
+  });
+
+  it('fails closed when voice.handleMessage omits validated gateway routing', async () => {
+    const handler = vi.fn();
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 43,
+      method: 'voice.handleMessage',
+      params: {
+        message: {
+          id: 'voice-unrouted',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'TestUser',
+          content: 'hello voice',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: {},
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+    expect(handler).not.toHaveBeenCalled();
+    expect(conn.sent).toContainEqual(expect.objectContaining({
+      id: 43,
+      error: expect.objectContaining({
+        message: expect.stringContaining('routing.gateway'),
+      }),
+    }));
+  });
+
+  it('fails closed when reverse-message routing targets another companion', async () => {
+    const boundConn = createMockConnection();
+    const boundClient = new GatewayClient(boundConn.conn, 1024, {
+      companionId: createCompanionId('companion-alpha'),
+    });
+    const handler = vi.fn();
+    boundClient.onHandleMessage(handler);
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 44,
+      method: 'voice.handleMessage',
+      params: {
+        message: {
+          id: 'voice-misrouted',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'TestUser',
+          content: 'hello voice',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: {
+            gateway: { schemaVersion: 1, companionId: 'companion-beta' },
+          },
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+    expect(handler).not.toHaveBeenCalled();
+    expect(boundConn.sent).toContainEqual(expect.objectContaining({
+      id: 44,
+      error: expect.objectContaining({
+        message: expect.stringContaining('does not match this gateway client binding'),
+      }),
+    }));
+    boundClient.destroy();
+  });
+
+  it('rejects an unrouted voice.stream.start before ACK or stream-state creation', async () => {
+    client.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-unrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 45,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: {} },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 45)).toMatchObject({
+      error: { message: expect.stringContaining('routing.gateway') },
+    });
+
+    // Reusing the same key succeeds once the envelope is valid, proving the
+    // rejected frame was never ACKed or inserted into voiceStreams.
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 46,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: TEST_GATEWAY_ROUTING },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 46)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+  });
+
+  it('rejects a cross-companion voice.stream.start before ACK or stream-state creation', async () => {
+    const boundConn = createMockConnection();
+    const boundClient = new GatewayClient(boundConn.conn, 1024, {
+      companionId: createCompanionId('companion-alpha'),
+    });
+    boundClient.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-misrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 47,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: { gateway: { schemaVersion: 1, companionId: 'companion-beta' } },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 47)).toMatchObject({
+      error: { message: expect.stringContaining('does not match this gateway client binding') },
+    });
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 48,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: {
+            gateway: { schemaVersion: 1, companionId: 'companion-alpha' },
+          },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 48)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+    boundClient.destroy();
   });
 
   it('handles voice.stream.start/chunk/end reverse RPC flow', async () => {
@@ -463,6 +817,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -535,6 +890,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -598,6 +954,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });

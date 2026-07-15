@@ -13,6 +13,11 @@ export interface TurnStageTelemetryParams {
   payload: Record<string, unknown>;
 }
 
+export interface TurnConversationAttributionContext {
+  sessionId: string;
+  rootInitiationId: string;
+}
+
 export function resolveTurnCallType(
   message: SubstrateMessage,
   taskKind: string | undefined,
@@ -34,15 +39,35 @@ export function buildTurnCorrelation(
   callType: ObservabilityCallType,
   turnId: TurnID,
   requestId: string,
+  conversation: TurnConversationAttributionContext,
 ): CorrelationMetadata {
+  const sessionId = conversation.sessionId.trim();
+  const rootInitiationId = conversation.rootInitiationId.trim();
+  if (!sessionId || !rootInitiationId) {
+    throw new Error('Turn correlation requires a logical session and root initiation');
+  }
+  const shardId = message.channelId.startsWith('shard:')
+    ? message.channelId.slice('shard:'.length).trim() || undefined
+    : undefined;
+  const subagentId = message.channelId.startsWith('subagent:')
+    ? message.channelId.slice('subagent:'.length).trim() || undefined
+    : undefined;
   return {
+    sessionId,
     turnId,
     requestId,
     channelId: message.channelId,
+    channelType: message.channelType,
     callType,
     purpose: 'agent.turn',
     originType: callType,
     originStage: 'agent.turn',
+    service: 'agent',
+    process: 'substrate-agent',
+    conversationId: sessionId,
+    rootInitiationId,
+    ...(shardId ? { shardId, workloadType: 'shard', workloadId: shardId } : {}),
+    ...(subagentId ? { subagentId, workloadType: 'subagent', workloadId: subagentId } : {}),
   };
 }
 

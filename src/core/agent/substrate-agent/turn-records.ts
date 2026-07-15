@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -11,9 +11,11 @@ import { cloneTurnObservabilityRecord, cloneUnknownValue } from '../../turns/obs
 import { deriveProviderWireMessagesForTurnSnapshot } from './turn-execution/prompt-invocation-history.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
+import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session/runtime-fallback-provenance.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+import { resolveMessagePlaceId } from './message-location.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -57,6 +59,9 @@ export function recordUserMessage(input: {
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
+    ...(input.message.replyToMessageId
+      ? { replyToMessageId: input.message.replyToMessageId }
+      : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
@@ -92,10 +97,17 @@ export function recordAssistantMessage(input: {
   trustLevel: TrustLevel;
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }): number | null {
-  const metadata = input.emotionSnapshot
+  const emotionMetadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
+  const metadata = input.runtimeFallbackProvenance
+    ? buildSessionMetadataWithRuntimeFallbackProvenance(
+      emotionMetadata,
+      input.runtimeFallbackProvenance,
+    )
+    : emotionMetadata;
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
@@ -205,11 +217,11 @@ export function buildTurnRecord(input: {
 
   const observability = cloneTurnObservabilityForRecord(input.turnObservability);
 
-  // Durable satellite/place origin. Fail-closed: only recorded when the turn
-  // actually carried a bound placeId (see satellite→place binding). Nothing is
-  // fabricated for non-satellite or unbound turns.
+  // Durable room/satellite place origin. Fail-closed: only recorded when the
+  // authoritative routing envelope carried a non-empty placeId.
   const satelliteRouting = input.message.routing?.satellite;
-  const boundPlaceId = satelliteRouting?.placeId?.trim();
+  const boundPlaceId = resolveMessagePlaceId(input.message);
+  const channelPrivacy = normalizeChannelPrivacy(input.message.routing?.channelPrivacy);
   const location = boundPlaceId
     ? {
       placeId: boundPlaceId,
@@ -229,6 +241,7 @@ export function buildTurnRecord(input: {
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
     ...(location ? { location } : {}),
+    ...(channelPrivacy ? { channelPrivacy } : {}),
     userMessage: {
       role: input.speakerRole,
       content: input.persistedUserMessageContent ?? input.message.content,
@@ -236,6 +249,9 @@ export function buildTurnRecord(input: {
       sourceMessageId: input.message.id,
       authorId: input.message.authorId,
       authorName: input.message.authorName,
+      ...(input.message.replyToMessageId
+        ? { replyToMessageId: input.message.replyToMessageId }
+        : {}),
       ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
     },
     ...(assistantMessageContent
@@ -246,6 +262,9 @@ export function buildTurnRecord(input: {
           timestamp: Math.max(input.startedAt, input.completedAt),
           sourceMessageId: input.message.id,
           ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
+          ...(input.response?.metadata.runtimeFallbackProvenance
+            ? { runtimeFallbackProvenance: input.response.metadata.runtimeFallbackProvenance }
+            : {}),
         },
       }
       : {}),

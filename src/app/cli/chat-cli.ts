@@ -9,7 +9,6 @@ import { loadConfig } from '../../system/config/load-config.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
-import { LLMClient } from '../../primitives/llm/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import {
@@ -25,11 +24,11 @@ import {
   composeIdentity,
   composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
-  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -49,12 +48,9 @@ async function main(): Promise<void> {
   console.log(`[CLI] Loaded character: ${companionName}`);
 
   // Core components
-  const llmClient = new LLMClient(config);
+  const { llmClient, embeddingProvider } = createProviderRuntimeServices({ config });
   const sessionComposition = await composeSessionRuntimeAsync({ config });
   const { sessionStore, sessionManager } = sessionComposition;
-
-  // Embeddings
-  const embeddingProvider = createEmbeddingProviderFromConfig(config);
 
   const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 

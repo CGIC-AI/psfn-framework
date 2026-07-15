@@ -34,6 +34,8 @@ export interface RunChargeLineageProvenance {
 export interface RunChargeSnapshot {
   lineage: RunChargeLineage;
   lane: ChargePolicyRuntimeLane;
+  surface?: ChargePolicySurface;
+  chargeEventId?: string;
   spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
@@ -99,6 +101,10 @@ export interface ChargeSurfaceInspection {
 }
 
 const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
+const activeChargeSurfaceStorage = new AsyncLocalStorage<{
+  surface: ChargePolicySurface;
+  chargeEventId: string;
+}>();
 export const RUN_CHARGE_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 
 interface RollingChargeWindowEntry {
@@ -433,9 +439,13 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
   if (!context) {
     return undefined;
   }
+  const activeCharge = activeChargeSurfaceStorage.getStore();
   return {
     lineage: { ...context.lineage },
     lane: context.lane,
+    ...(activeCharge
+      ? { surface: activeCharge.surface, chargeEventId: activeCharge.chargeEventId }
+      : {}),
     spentByLane: cloneSpentByLane(context.account.spentByLane),
     directSpentByLane: cloneSpentByLane(context.account.directSpentByLane),
     foldedSpentByLane: cloneSpentByLane(context.account.foldedSpentByLane),
@@ -443,6 +453,20 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
     orphanedChildren: context.account.orphanedChildren.map(cloneLineageProvenance),
     quotaSpentByLane: cloneSpentByLane(context.quotaAccount.spentByLane),
   };
+}
+
+/** Charge one surface and keep its attribution active for the provider work it buys. */
+export function runWithChargedSurface<T>(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const event = chargeSurface(surface, input);
+  if (!event) return fn();
+  return activeChargeSurfaceStorage.run({
+    surface: event.surface,
+    chargeEventId: event.eventId,
+  }, fn);
 }
 
 export function runWithChargeContext<T>(

@@ -52,6 +52,7 @@ import {
   slimTurnRecordSessionEntriesForAppend,
   resolveTurnRecordSessionEntries,
 } from './turn-record-session-refs.js';
+import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -1077,10 +1078,17 @@ export class SessionStore implements TranscriptSearchPort {
     );
   }
   appendTurnRecord(record: TurnRecord): void {
-    // Replace the verbatim raw session-entry arrays with L0 id references (bead
-    // psfn-framework-9ree) before the record is persisted. Pure projection; the
-    // journal stays the durable source and redaction can never be resurrected.
-    this.turnRecordStore.appendTurnRecord(slimTurnRecordSessionEntriesForAppend(record));
+    // Diet the record before it is persisted (all pure projections):
+    // - session-entry arrays → L0 id references (bead psfn-framework-9ree); the
+    //   journal stays the durable source and redaction can never be resurrected.
+    // - retrieved-memory candidate arrays → memory id references (bead
+    //   psfn-framework-jsi9); the memory store stays the durable source and a
+    //   deleted/redacted memory can never be resurrected. Memory refs are
+    //   resolved at the Garden read boundary (the only reader of these arrays),
+    //   NOT at the store read boundary — see turn-record-memory-refs.ts.
+    this.turnRecordStore.appendTurnRecord(
+      slimTurnRecordMemoryCandidatesForAppend(slimTurnRecordSessionEntriesForAppend(record)),
+    );
   }
   /**
    * Reconstruct L0-referenced session entries and redaction-gate the rendered

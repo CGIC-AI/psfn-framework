@@ -217,7 +217,7 @@ describe('AdminSessionDataService', () => {
     expect(JSON.stringify(detail)).not.toContain('privacyLevel');
   });
 
-  it('returns newest message page by default and older pages by beforeId cursor', () => {
+  it('returns newest message page by default and older pages by beforeId cursor', async () => {
     const channelId = 'api:paginated-session';
     for (let index = 1; index <= 250; index += 1) {
       store.append({
@@ -236,7 +236,7 @@ describe('AdminSessionDataService', () => {
     const beforeSpy = vi.spyOn(store, 'getEntriesBefore');
     const rangeSpy = vi.spyOn(store, 'getEntriesInRange');
 
-    const firstPage = service.getSessionMessages(channelId);
+    const firstPage = await service.getSessionMessages(channelId);
     expect(firstPage.messages).toHaveLength(100);
     expect(firstPage.messages[0]?.content).toBe('Message 151');
     expect(firstPage.messages[99]?.content).toBe('Message 250');
@@ -249,7 +249,7 @@ describe('AdminSessionDataService', () => {
       returnedMessages: 100,
     });
 
-    const secondPage = service.getSessionMessages(channelId, {
+    const secondPage = await service.getSessionMessages(channelId, {
       limit: 100,
       beforeId: firstPage.pagination.nextBeforeId,
     });
@@ -271,7 +271,7 @@ describe('AdminSessionDataService', () => {
     );
     expect(rangeSpy).not.toHaveBeenCalled();
 
-    const terminalPage = service.getSessionMessages(channelId, {
+    const terminalPage = await service.getSessionMessages(channelId, {
       limit: 100,
       beforeId: secondPage.pagination.nextBeforeId,
     });
@@ -290,7 +290,7 @@ describe('AdminSessionDataService', () => {
     expect(rangeSpy).not.toHaveBeenCalled();
   });
 
-  it('serves messages-only older pages through bounded archive reads without full replay', () => {
+  it('serves messages-only older pages through bounded archive reads without full replay', async () => {
     const channelId = 'api:bounded-older-page';
     for (let index = 1; index <= 250; index += 1) {
       store.append({
@@ -315,7 +315,7 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const page = service.getSessionMessages(channelId, {
+    const page = await service.getSessionMessages(channelId, {
       limit: 100,
       beforeId: 151,
       messagesOnly: true,
@@ -388,7 +388,7 @@ describe('AdminSessionDataService', () => {
     }
   });
 
-  it('skips turn snapshots, compaction audits, and role-envelope previews in messagesOnly mode', () => {
+  it('skips turn snapshots, compaction audits, and role-envelope previews in messagesOnly mode', async () => {
     const channelId = 'api:messages-only';
     const firstMessageId = store.append({
       channelId,
@@ -410,10 +410,10 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const full = service.getSessionMessages(channelId);
+    const full = await service.getSessionMessages(channelId);
     expect(full.compactionAuditViews.length).toBeGreaterThan(0);
 
-    const light = service.getSessionMessages(channelId, { messagesOnly: true });
+    const light = await service.getSessionMessages(channelId, { messagesOnly: true });
     expect(light.messages).toHaveLength(2);
     expect(light.pagination.totalMessages).toBe(2);
     expect(light.turns).toEqual([]);
@@ -421,7 +421,7 @@ describe('AdminSessionDataService', () => {
     expect(light.roleEnvelopePreviews).toEqual([]);
   });
 
-  it('drops turns and previews but keeps compaction audits when includeTurns is false', () => {
+  it('drops turns and previews but keeps compaction audits when includeTurns is false', async () => {
     const channelId = 'api:include-turns';
     const firstMessageId = store.append({
       channelId,
@@ -444,11 +444,11 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const full = service.getSessionMessages(channelId);
+    const full = await service.getSessionMessages(channelId);
     expect(full.turns.length).toBeGreaterThan(0);
     expect(full.compactionAuditViews.length).toBeGreaterThan(0);
 
-    const lean = service.getSessionMessages(channelId, { includeTurns: false });
+    const lean = await service.getSessionMessages(channelId, { includeTurns: false });
     expect(lean.messages).toHaveLength(2);
     expect(lean.turns).toEqual([]);
     expect(lean.roleEnvelopePreviews).toEqual([]);
@@ -456,7 +456,7 @@ describe('AdminSessionDataService', () => {
     expect(lean.compactionAuditViews.length).toBeGreaterThan(0);
   });
 
-  it('serves a single turn via getSessionTurnDetail and fails closed for unknown turns', () => {
+  it('serves a single turn via getSessionTurnDetail and fails closed for unknown turns', async () => {
     const channelId = 'api:turn-detail';
     store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
     store.append({ channelId, role: 'assistant', content: 'hello', timestamp: 1_700_000_000_002 });
@@ -471,15 +471,15 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const detail = service.getSessionTurnDetail(channelId, turnId);
+    const detail = await service.getSessionTurnDetail(channelId, turnId);
     expect(detail.sessionId).toBe(channelId);
     expect(detail.channelId).toBe(channelId);
     expect(detail.turn.record.turnId).toBe(turnId);
 
-    expect(() => service.getSessionTurnDetail(channelId, 'turn-does-not-exist'))
-      .toThrow(AdminSessionTurnNotFoundError);
-    expect(() => service.getSessionTurnDetail(channelId, '   '))
-      .toThrow(AdminSessionTurnNotFoundError);
+    await expect(service.getSessionTurnDetail(channelId, 'turn-does-not-exist'))
+      .rejects.toThrow(AdminSessionTurnNotFoundError);
+    await expect(service.getSessionTurnDetail(channelId, '   '))
+      .rejects.toThrow(AdminSessionTurnNotFoundError);
   });
 
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {
@@ -631,7 +631,7 @@ describe('AdminSessionDataService', () => {
     expect(JSON.stringify(preview)).not.toContain('DIRTY_OLD_LOGICAL_SESSION_TEXT');
   });
 
-  it('returns persisted turn observability without requiring live event-bus state', () => {
+  it('returns persisted turn observability without requiring live event-bus state', async () => {
     const channelId = 'api:observability';
     const requestId = 'persisted-turn-1';
     const turnId = createTurnId();
@@ -864,13 +864,56 @@ describe('AdminSessionDataService', () => {
       provenanceRefs: [`turn:${turnId}`],
     });
 
+    const byId = new Map<string, PurrMemory>([
+      [
+        'mem-1',
+        {
+          id: 'mem-1',
+          text: 'Observed memory',
+          type: 'semantic',
+          importance: 0.7,
+          confidence: 0.8,
+          emotionalValence: 0.1,
+          salience: 0.9,
+          sourceRef: 'source:api:observability',
+          extractedAt: 1_700_000_000_001,
+          lastAccessed: 1_700_000_000_002,
+          accessCount: 1,
+          tags: ['api'],
+          sensitivity: 'personal',
+        } as PurrMemory,
+      ],
+      [
+        'mem-2',
+        {
+          id: 'mem-2',
+          text: 'Allowed candidate',
+          type: 'semantic',
+          importance: 0.8,
+          confidence: 0.8,
+          emotionalValence: 0.05,
+          salience: 0.7,
+          sourceRef: 'source:api:observability',
+          extractedAt: 1_700_000_000_003,
+          lastAccessed: 1_700_000_000_004,
+          accessCount: 1,
+          tags: ['api'],
+          sensitivity: 'public',
+        } as PurrMemory,
+      ],
+    ]);
+    const memoryStore = {
+      getById: async (id: string) => byId.get(id),
+    } as unknown as MemoryStorePort;
+
     const service = new AdminSessionDataService({
       sessionStore: store,
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
       eventBus: new EventBus(),
+      memoryStore,
     });
 
-    const result = service.getSessionMessages(channelId);
+    const result = await service.getSessionMessages(channelId);
     expect(result.turns).toHaveLength(1);
     expect(result.turns[0]?.stages).toEqual([
       expect.objectContaining({
@@ -1025,7 +1068,7 @@ describe('AdminSessionDataService', () => {
     })).toEqual([]);
   });
 
-  it('surfaces continuity provenance for cross-channel inspection', () => {
+  it('surfaces continuity provenance for cross-channel inspection', async () => {
     const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
     continuityStore.append('canonical-contact-1', {
       channelId: 'discord:dm',
@@ -1105,7 +1148,7 @@ describe('AdminSessionDataService', () => {
 
     const continuityEntryId = continuityEntry!.id;
     expect(continuityEntryId).toBeDefined();
-    const result = service.getSessionMessages('api:session-1');
+    const result = await service.getSessionMessages('api:session-1');
     expect(result.turns).toHaveLength(1);
     expect(result.turns[0]?.continuityProvenance).toEqual([
       expect.objectContaining({
@@ -1121,7 +1164,7 @@ describe('AdminSessionDataService', () => {
     ]);
   });
 
-  it('surfaces role-envelope previews and promoted refs without exposing raw bodies', () => {
+  it('surfaces role-envelope previews and promoted refs without exposing raw bodies', async () => {
     const channelId = 'api:role-envelope-session';
     const requestId = 'role-envelope-turn-1';
     const turnId = createTurnId();
@@ -1208,7 +1251,7 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const result = service.getSessionMessages(channelId);
+    const result = await service.getSessionMessages(channelId);
     expect(result.roleEnvelopePreviews).toEqual([
       {
         sessionEntryId: assistantSessionEntryId,
@@ -1228,7 +1271,7 @@ describe('AdminSessionDataService', () => {
     expect(JSON.stringify(result)).not.toContain(hiddenBody);
   });
 
-  it('returns explicit message ontology views for operator inspection', () => {
+  it('returns explicit message ontology views for operator inspection', async () => {
     const channelId = 'api:ontology-session';
     const systemNoteId = store.append({
       channelId,
@@ -1279,7 +1322,7 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const result = service.getSessionMessages(channelId);
+    const result = await service.getSessionMessages(channelId);
 
     expect(result.messageOntologyViews).toEqual([
       {
@@ -1330,7 +1373,7 @@ describe('AdminSessionDataService', () => {
     ]);
   });
 
-  it('classifies reflection musings with the canonical musing message class', () => {
+  it('classifies reflection musings with the canonical musing message class', async () => {
     const channelId = 'internal:reflection:musing';
     const assistantId = store.append({
       channelId,
@@ -1345,7 +1388,7 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const result = service.getSessionMessages(channelId);
+    const result = await service.getSessionMessages(channelId);
     expect(result.messageOntologyViews).toContainEqual({
       sessionEntryId: assistantId,
       transportRole: 'assistant',
@@ -1394,15 +1437,17 @@ describe('AdminSessionDataService', () => {
     expect(new Set(listed.map(channel => channel.sessionId)).size).toBe(2);
 
     const contentBySessionId = new Map(
-      listed.map(channel => [
-        channel.sessionId,
-        service.getSessionMessages(channel.sessionId).messages[0]?.content ?? '',
-      ]),
+      await Promise.all(
+        listed.map(async channel => [
+          channel.sessionId,
+          (await service.getSessionMessages(channel.sessionId)).messages[0]?.content ?? '',
+        ] as const),
+      ),
     );
     expect(new Set(contentBySessionId.values())).toEqual(new Set(['older session', 'newer session']));
 
     for (const channel of listed) {
-      const details = service.getSessionMessages(channel.sessionId);
+      const details = await service.getSessionMessages(channel.sessionId);
       expect(details.sessionId).toBe(channel.sessionId);
       expect(details.channelId).toBe(channelId);
     }

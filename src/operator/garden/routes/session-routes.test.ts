@@ -123,7 +123,7 @@ describe('admin session turn-detail route', () => {
   }
 
   it('routes turn detail ahead of the generic messages route and forwards channelId + turnId', async () => {
-    const getSessionTurnDetail = vi.fn().mockReturnValue({
+    const getSessionTurnDetail = vi.fn().mockResolvedValue({
       sessionId: 'api:target',
       channelId: 'api:target',
       turn: { record: { turnId: 'turn-123' } },
@@ -148,7 +148,7 @@ describe('admin session turn-detail route', () => {
   });
 
   it('answers 404 when the turn is outside the recent window', async () => {
-    const getSessionTurnDetail = vi.fn(() => {
+    const getSessionTurnDetail = vi.fn(async () => {
       throw new AdminSessionTurnNotFoundError('api:target', 'turn-missing');
     });
     const path = '/api/admin/sessions/api%3Atarget/turns/turn-missing';

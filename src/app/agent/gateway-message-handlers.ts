@@ -1,4 +1,5 @@
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
@@ -194,6 +195,7 @@ export interface GatewayMessageAgentLoop {
       sourceAlreadyPersisted?: true;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
+    turnControl?: MessageHandlerOptions,
   ): Promise<AgentResponse>;
   observeMessage(message: SubstrateMessage): Promise<void>;
   /** Resolves when the agent has finished all in-flight work (prompt + steering + follow-ups). */
@@ -501,7 +503,7 @@ export function registerGatewayMessageHandlers(
     }
   };
 
-  gateway.onHandleMessage(async (message: SubstrateMessage) => {
+  gateway.onHandleMessage(async (message: SubstrateMessage, turnControl?: MessageHandlerOptions) => {
     const dedupeKey = buildMessageDedupKey('handle', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
@@ -635,7 +637,9 @@ export function registerGatewayMessageHandlers(
         });
       }
 
-      return agentLoop.handleMessage(message);
+      // mmo9.6.1: forward the voice turn's cancellation identity + AbortSignal
+      // so a barge-in `voice.stream.cancel` aborts this specific in-flight turn.
+      return agentLoop.handleMessage(message, undefined, turnControl);
     };
 
     const execution = processMessage();

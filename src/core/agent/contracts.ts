@@ -23,7 +23,13 @@ import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-e
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
-  stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
+  /**
+   * mmo9.6.1: `signal` cancels the in-flight provider request mid-generation
+   * (tears down the upstream HTTP stream, mirroring the existing `complete`
+   * cancellation channel). Optional and additive; a transport that ignores it
+   * only stops local consumption.
+   */
+  stream(context: LLMContext, callbacks?: StreamCallbacks, signal?: AbortSignal): Promise<LLMResponse>;
   complete(context: LLMContext, purpose: CompletionPurpose, options?: LLMProviderCompletionOptions): Promise<LLMResponse>;
 }
 
@@ -35,7 +41,7 @@ export interface LLMProviderCompletionOptions {
 
 export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {
   return {
-    stream: (context, callbacks) => provider.stream(context, callbacks),
+    stream: (context, callbacks, signal) => provider.stream(context, callbacks, signal),
     complete: (context, purpose, options) => provider.complete(context, purpose, options),
   };
 }

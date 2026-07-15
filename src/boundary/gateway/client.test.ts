@@ -1573,6 +1573,118 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(handler).toHaveBeenCalledTimes(0);
   });
 
+  it('aborts the in-flight model turn when voice.stream.cancel lands AFTER dispatch (mmo9.6.1)', async () => {
+    // Regression: before mmo9.6.1, handleVoiceStreamCancel only flipped
+    // state.cancelled/deleted state, so a barge-in that arrived once the model
+    // turn was already dispatched (via handleVoiceStreamEnd) never reached the
+    // running turn. This asserts the cancel now aborts the in-flight dispatch's
+    // AbortSignal (agent turn) AND clears transport state (gateway state).
+    let capturedOptions: { signal?: AbortSignal; cancellationId?: string } | undefined;
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+    let sawAbort = false;
+    const handler = vi.fn(async (_message: unknown, options?: { signal?: AbortSignal; cancellationId?: string }) => {
+      capturedOptions = options;
+      options?.signal?.addEventListener('abort', () => { sawAbort = true; });
+      await handlerGate;
+      return {
+        content: 'late-and-unused',
+        channelId: 'discord-voice:123',
+        metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      };
+    });
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 300,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-late',
+        streamId: 'stream-late',
+        sequence: 0,
+        message: {
+          id: 'voice-late',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'Voice User',
+          content: '',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: { ...TEST_GATEWAY_ROUTING, cancellationId: 'cancel-voice-late' },
+        },
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 301,
+      method: 'voice.stream.chunk',
+      params: {
+        correlationId: 'corr-late',
+        streamId: 'stream-late',
+        sequence: 1,
+        text: 'hello there',
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 302,
+      method: 'voice.stream.end',
+      params: {
+        correlationId: 'corr-late',
+        streamId: 'stream-late',
+        sequence: 2,
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+
+    // The model turn was dispatched, carrying the transport identity + signal.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(capturedOptions?.cancellationId).toBe('cancel-voice-late');
+    expect(capturedOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(capturedOptions?.signal?.aborted).toBe(false);
+
+    // Barge-in AFTER dispatch.
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 303,
+      method: 'voice.stream.cancel',
+      params: {
+        correlationId: 'corr-late',
+        streamId: 'stream-late',
+        sequence: 3,
+        reason: 'barge-in',
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    // Agent turn: the in-flight dispatch's signal is aborted (pre-fix: never).
+    expect(sawAbort).toBe(true);
+    expect(capturedOptions?.signal?.aborted).toBe(true);
+    // Gateway state: cancel acknowledged and stream state cleared.
+    expect(getRpcResponse(conn.sent, 303).result.cancelled).toBe(true);
+
+    releaseHandler();
+    await new Promise(r => setTimeout(r, 10));
+
+    // A repeat cancel for the now-cleared stream is a safe no-op (stale-safe).
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 304,
+      method: 'voice.stream.cancel',
+      params: {
+        correlationId: 'corr-late',
+        streamId: 'stream-late',
+        sequence: 4,
+        reason: 'barge-in',
+      },
+    });
+    await new Promise(r => setTimeout(r, 10));
+    expect(getRpcResponse(conn.sent, 304).result.cancelled).toBe(false);
+  });
+
   it('applies drop_newest queue policy for voice chunks', async () => {
     const localConn = createMockConnection();
     const localClient = new GatewayClient(localConn.conn, 1024, {

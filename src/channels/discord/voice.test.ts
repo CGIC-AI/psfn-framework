@@ -780,6 +780,14 @@ describe('DiscordVoiceRuntime', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     const voiceMessage = handler.mock.calls[0]?.[0];
     expect(voiceMessage.id).toMatch(/^voice-turn-/);
+    // mmo9.6.1: the Discord voice ingress mints a transport-agnostic
+    // cancellation identity on routing and threads it plus the per-turn abort
+    // signal into the handler, so aborting the turn's controller cancels the
+    // in-flight model turn (pre-fix the handler was called with (message) only).
+    expect(voiceMessage.routing?.cancellationId).toBe(voiceMessage.id);
+    const handlerOptions = handler.mock.calls[0]?.[1] as { signal?: AbortSignal; cancellationId?: string } | undefined;
+    expect(handlerOptions?.cancellationId).toBe(voiceMessage.id);
+    expect(handlerOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(new Set(performanceEvents.map(event => event.traceId))).toEqual(new Set([voiceMessage.id]));
     expect(performanceEvents.map(event => event.stage)).toEqual(expect.arrayContaining([
       'speech_end',

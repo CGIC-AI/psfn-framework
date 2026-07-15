@@ -80,10 +80,19 @@ export async function requestAgentVoiceStream({
   const requestCounter = nextRequestCounter();
   const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${requestCounter}`;
   const streamId = options.streamId ?? `voice-stream-${Date.now()}-${requestCounter}`;
+  // mmo9.6.1: every voice turn carries a transport-agnostic cancellation
+  // identity. A transport that already minted one (to correlate its own
+  // barge-in controller) keeps it; otherwise mint here so the streamed message
+  // routing — and thus the agent's turn — is always addressable by cancelTurn.
+  const cancellationId = (typeof message.routing?.cancellationId === 'string'
+    && message.routing.cancellationId.trim())
+    ? message.routing.cancellationId
+    : `voice-cancel-${Date.now()}-${requestCounter}`;
   const gatewayAddressedMessage: SubstrateMessage = {
     ...message,
     routing: {
       ...(message.routing ?? {}),
+      cancellationId,
       gateway: createGatewayRoutingEnvelope({
         companionId,
         ...(message.routing?.gateway?.shard

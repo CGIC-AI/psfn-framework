@@ -503,6 +503,16 @@ export interface MessageRoutingMetadata {
    * gates and prompt assembly.
    */
   intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
+  /**
+   * mmo9.6.1: transport-agnostic turn-cancellation identity. Minted once at
+   * voice transport ingress and threaded transport->gateway->agent so a late
+   * barge-in can abort the specific in-flight model turn it names. Survives
+   * serializeMessage (it is a plain string on routing). The agent registers it
+   * as the active turn's id and `SubstrateAgent.cancelTurn(id)` aborts IFF the
+   * active turn's id matches — a stale/mismatched id must never abort a newer
+   * turn. Reused by preemptive voice control frames (mmo9.6.2/mmo9.8).
+   */
+  cancellationId?: string;
 }
 
 export interface SubstrateMessage {

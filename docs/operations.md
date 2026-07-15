@@ -269,8 +269,44 @@ failed rollout. Its decision honours the x5rt.7 review contract exactly:
    declare the rollout healthy. When the failed revision is the first-ever revision
    (no previous revision to target), the rollback is a recorded no-op escalation.
 
-Live k3d end-to-end coverage of both paths is x5rt.9; the modules are fully
-testable off-cluster through the injected Helm rollback API port.
+### Composed operator job (x5rt.9)
+
+The deploy pipeline, the post-rollout validation gate, and the automatic rollback
+surface ship as library seams; **`src/system/lifecycle/kube-self-update-job.ts`
+(`runKubeSelfUpdateJob`) is the composition that wires them into one live flow**,
+and `src/app/operator/kube-self-update-job-main.ts` (`npm run
+operator:kube-self-update`) is the credential-bearing operator entrypoint that
+constructs the real docker/helm/kubectl transports
+(`src/app/operator/kube-self-update-transport.ts`,
+`kube-self-update-validation-transport.ts`). The agent process never imports
+these transports, preserving the x5rt.10 credential separation.
+
+The composition enforces the cross-bead contracts at the wiring boundary:
+
+- **Persist is required when auto-rollback is enabled.** The job always wires the
+  pipeline's post-rollout persist callback to `writePostRolloutValidationVerdict`
+  (and refuses to run auto-rollback without a validation runner), so the safety
+  net always has a bound verdict to read — never a stale one.
+- **The caller serializes `executeAutoRollback`.** The ledger read-modify-write
+  has no lock, so the job funnels every auto-rollback evaluation through a
+  process-wide single-flight guard; overlapping jobs never race the act-once
+  ledger.
+- **Auto-rollback only after the live mutation.** A deploy that fails before the
+  Helm upgrade left live untouched, so the job skips rollback entirely.
+- **The rollback target comes from `helm history`.** `createLiveRollbackTargetResolver`
+  picks the highest `deployed`/`superseded` revision strictly earlier than the
+  failed one (never a `failed`/`pending-*` revision); the auto-rollback surface
+  additionally rejects any non-strictly-earlier target.
+
+The deterministic wiring is unit-tested off-cluster with fakes
+(`src/system/lifecycle/kube-self-update-job.test.ts`,
+`src/app/operator/kube-self-update-transport.test.ts`) — this is the mandatory
+gate proving the seams are driven, not dead code. Live k3d end-to-end coverage of
+the full self-update → validate → auto/manual rollback flow is
+`src/app/e2e/kube-self-update-e2e.test.ts`, gated behind `PSFN_K3D_E2E` (`npm run
+e2e:kube-self-update`) so normal unit runs need no cluster or docker daemon; it
+provisions and tears down its own disposable k3d cluster and never touches
+psfn-shard, live namespaces, or any real PVC.
 
 ## Host-Specific Storage Validation
 

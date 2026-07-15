@@ -363,7 +363,7 @@ describe('runSessionIntegrityRepair', () => {
     const index = JSON.parse(
       readFileSync(join(harness.sessionsDir, '_channel_index.json'), 'utf8'),
     ) as { version: number; channels: Record<string, { filenames: string[] }> };
-    expect(index.version).toBe(4);
+    expect(index.version).toBe(5);
     expect(index.channels[channelId].filenames).toEqual([
       basename(rootPath),
       basename(segmentPath),

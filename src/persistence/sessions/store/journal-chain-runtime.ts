@@ -81,6 +81,7 @@ function loadJournalArchiveChainAttempt(
     channelId: activeArchive.channelId,
     entries: [],
     compactions: [],
+    compactionArchivePaths: new Set(),
     turnTombstones: new Set(),
     activeTurnTombstoneCount: 0,
     nextId: 1,
@@ -113,6 +114,7 @@ function loadJournalArchiveChainAttempt(
   let maxId = 0;
   for (const archive of archives) {
     const result = context.archivePort.readJournalFile(archive);
+    let archiveContainsCompaction = false;
     maxId = Math.max(maxId, result.maxId);
     if (result.quarantined.length > 0) {
       context.warnAboutQuarantinedEntries(
@@ -132,8 +134,14 @@ function loadJournalArchiveChainAttempt(
         cache.messageCount += 1;
       } else {
         const compaction = journalToCompactionSummary(normalized.entry);
-        if (compaction) cache.compactions.push(compaction);
+        if (compaction) {
+          cache.compactions.push(compaction);
+          archiveContainsCompaction = true;
+        }
       }
+    }
+    if (archiveContainsCompaction) {
+      cache.compactionArchivePaths.add(context.archivePort.resolveArchivePath(archive));
     }
   }
 
@@ -169,6 +177,170 @@ export function loadJournalArchiveChain(
   archives: readonly SessionArchiveHandle[],
 ): ChannelCache {
   return loadJournalArchiveChainAttempt(context, archives, 1);
+}
+
+function previousArchiveHmac(
+  context: JournalChainContext,
+  archives: readonly SessionArchiveHandle[],
+  archiveIndex: number,
+): string | null {
+  if (archiveIndex <= 0) return null;
+  const tail = context.archivePort.readJournalTailEntries(archives[archiveIndex - 1]!, {
+    messageLimit: 1,
+    includeBoundaryEntry: false,
+  });
+  return tail.entries.at(-1)?._hmac ?? null;
+}
+
+function readEntriesInRangeFromJournalArchiveChainAttempt(
+  context: JournalChainContext,
+  archives: readonly SessionArchiveHandle[],
+  startId: number,
+  endId: number,
+  tombstones: ReadonlySet<string>,
+  retriesRemaining: number,
+): SessionEntry[] {
+  if (archives.length === 0 || endId < startId) return [];
+  const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
+  const firstEntries = new Map<number, JournalEntry>();
+
+  const probeFirstEntry = (archiveIndex: number): JournalEntry | null => {
+    const cached = firstEntries.get(archiveIndex);
+    if (cached) return cached;
+    const first = context.archivePort.readJournalFirstEntry(archives[archiveIndex]!);
+    if (!first) return null;
+    const normalized = context.normalizeEntry(
+      first,
+      [previousArchiveHmac(context, archives, archiveIndex)],
+    );
+    if (!normalized.verified) return null;
+    firstEntries.set(archiveIndex, first);
+    return first;
+  };
+
+  let lastNonEmptyIndex = archives.length - 1;
+  while (lastNonEmptyIndex >= 0 && !probeFirstEntry(lastNonEmptyIndex)) {
+    lastNonEmptyIndex -= 1;
+  }
+  if (lastNonEmptyIndex < 0) return [];
+
+  let candidateIndex = -1;
+  let low = 0;
+  let high = lastNonEmptyIndex;
+  let segmentSeekTrusted = true;
+  while (low <= high) {
+    const midpoint = low + Math.floor((high - low) / 2);
+    const first = probeFirstEntry(midpoint);
+    if (!first) {
+      segmentSeekTrusted = false;
+      break;
+    }
+    if (first.id <= endId) {
+      candidateIndex = midpoint;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  if (!segmentSeekTrusted) {
+    const loaded = loadJournalArchiveChain(context, archives);
+    return loaded.entries.filter(entry => entry.id >= startId && entry.id <= endId);
+  }
+  if (candidateIndex < 0) return [];
+
+  const messageLimit = Math.max(1, endId - startId + 1);
+  const messages: SessionEntry[] = [];
+  let verificationFailed = false;
+  for (let archiveIndex = candidateIndex; archiveIndex >= 0; archiveIndex -= 1) {
+    const previousHmac = previousArchiveHmac(context, archives, archiveIndex);
+    const archive = archives[archiveIndex]!;
+    const window = context.archivePort.readJournalEntriesBefore(archive, {
+      beforeId: endId + 1,
+      messageLimit,
+      includeBoundaryEntry: true,
+      previousFileHmac: previousHmac,
+      trustSeekEntry: (entry, candidateHmac) => (
+        context.normalizeEntry(entry, [candidateHmac]).verified
+      ),
+    });
+    if (window.quarantined.length > 0) {
+      context.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        window.quarantined.length,
+        window.entries.length,
+      );
+    }
+
+    const messageIndexes = window.entries
+      .map((entry, index) => entry.type === 'message' ? index : -1)
+      .filter(index => index >= 0);
+    if (messageIndexes.length > 0) {
+      // `includeBoundaryEntry` may prepend a message solely to establish the
+      // HMAC immediately before the requested window. Do not verify that
+      // boundary row against the physical-file boundary; start at the oldest
+      // requested message and use the prepended row as its chain anchor.
+      const oldestMessageIndex = messageIndexes[
+        Math.max(0, messageIndexes.length - messageLimit)
+      ]!;
+      let previousHmacCandidates: Array<string | null> = oldestMessageIndex > 0
+        ? [window.entries[oldestMessageIndex - 1]!._hmac ?? null]
+        : [previousHmac];
+      const segmentMessages: SessionEntry[] = [];
+      for (let index = oldestMessageIndex; index < window.entries.length; index += 1) {
+        const normalized = context.normalizeEntry(window.entries[index]!, previousHmacCandidates);
+        previousHmacCandidates = normalized.nextHmacCandidates;
+        verificationFailed ||= !normalized.verified;
+        const message = journalToSessionEntry(normalized.entry);
+        if (message && message.id >= startId && message.id <= endId) {
+          segmentMessages.push(message);
+        }
+      }
+      messages.unshift(...segmentMessages);
+    }
+
+    const first = firstEntries.get(archiveIndex) ?? probeFirstEntry(archiveIndex);
+    if (first && first.id <= startId) break;
+  }
+
+  const afterFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
+  if (beforeFingerprint !== afterFingerprint) {
+    if (retriesRemaining > 0) {
+      return readEntriesInRangeFromJournalArchiveChainAttempt(
+        context,
+        archives,
+        startId,
+        endId,
+        tombstones,
+        retriesRemaining - 1,
+      );
+    }
+    throw new Error(
+      `L0 session ${archives.at(-1)!.channelId} changed repeatedly while reading an id range`,
+    );
+  }
+  if (verificationFailed) {
+    const loaded = loadJournalArchiveChain(context, archives);
+    return loaded.entries.filter(entry => entry.id >= startId && entry.id <= endId);
+  }
+  return applyTurnTombstones(messages, tombstones);
+}
+
+export function readEntriesInRangeFromJournalArchiveChain(
+  context: JournalChainContext,
+  archives: readonly SessionArchiveHandle[],
+  startId: number,
+  endId: number,
+  tombstones: ReadonlySet<string> = new Set(),
+): SessionEntry[] {
+  return readEntriesInRangeFromJournalArchiveChainAttempt(
+    context,
+    archives,
+    startId,
+    endId,
+    tombstones,
+    1,
+  );
 }
 
 export function rewriteJournalArchiveChain(
@@ -212,40 +384,27 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
   const beforeFingerprint = fingerprintJournalArchiveChain(context.archivePort, archives);
   const blocks: JournalEntry[][] = [];
   let earliestArchiveIndex = archives.length;
+  let earliestTailTruncated = true;
   let remainingMessages = limit;
   for (let archiveIndex = archives.length - 1; archiveIndex >= 0; archiveIndex -= 1) {
     const archive = archives[archiveIndex]!;
-    const metadata = context.archivePort.scanJournalFileMetadata(archive);
-    let entries: JournalEntry[];
-    if (metadata.messageCount === 0) {
-      const result = context.archivePort.readJournalFile(archive);
-      entries = result.entries;
-      if (result.quarantined.length > 0) {
-        context.warnAboutQuarantinedEntries(
-          archive.channelId,
-          archive,
-          result.quarantined.length,
-          entries.length,
-        );
-      }
-    } else {
-      const tail = context.archivePort.readJournalTailEntries(archive, {
-        messageLimit: remainingMessages,
-        includeBoundaryEntry: true,
-      });
-      entries = tail.entries;
-      if (tail.quarantined.length > 0) {
-        context.warnAboutQuarantinedEntries(
-          archive.channelId,
-          archive,
-          tail.quarantined.length,
-          entries.length,
-        );
-      }
-      remainingMessages -= entries.filter(entry => entry.type === 'message').length;
+    const tail = context.archivePort.readJournalTailEntries(archive, {
+      messageLimit: remainingMessages,
+      includeBoundaryEntry: true,
+    });
+    const entries = tail.entries;
+    if (tail.quarantined.length > 0) {
+      context.warnAboutQuarantinedEntries(
+        archive.channelId,
+        archive,
+        tail.quarantined.length,
+        entries.length,
+      );
     }
+    remainingMessages -= entries.filter(entry => entry.type === 'message').length;
     blocks.unshift(entries);
     earliestArchiveIndex = archiveIndex;
+    earliestTailTruncated = tail.truncated;
     if (remainingMessages <= 0) break;
   }
 
@@ -276,9 +435,10 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     const boundaryEntry = rawEntries[oldestMessageIndex - 1]!;
     previousHmacCandidates = typeof boundaryEntry._hmac === 'string' ? [boundaryEntry._hmac] : [null];
   } else if (earliestArchiveIndex > 0) {
-    previousHmacCandidates = [
-      context.archivePort.scanJournalFileMetadata(archives[earliestArchiveIndex - 1]!).lastHmac,
-    ];
+    previousHmacCandidates = [context.archivePort.readJournalTailEntries(
+      archives[earliestArchiveIndex - 1]!,
+      { messageLimit: 1, includeBoundaryEntry: false },
+    ).entries.at(-1)?._hmac ?? null];
   }
 
   const messages: SessionEntry[] = [];
@@ -305,6 +465,13 @@ function readRecentEntriesFromJournalArchiveChainAttempt(
     );
   }
   if (verificationFailed) {
+    // When the bounded scan reached the physical beginning of the logical
+    // archive, this is already the canonical verification pass. Replaying the
+    // same rows would only duplicate integrity-provider work and cannot add a
+    // stronger chain anchor.
+    if (earliestArchiveIndex === 0 && !earliestTailTruncated) {
+      return messages.length <= limit ? messages : messages.slice(-limit);
+    }
     const loaded = loadJournalArchiveChain(context, archives);
     return loaded.entries.length <= limit ? [...loaded.entries] : loaded.entries.slice(-limit);
   }
@@ -315,6 +482,18 @@ export function readRecentEntriesFromJournalArchiveChain(
   context: JournalChainContext,
   archives: readonly SessionArchiveHandle[],
   limit: number,
+  tombstones: ReadonlySet<string> = new Set(),
 ): SessionEntry[] {
-  return readRecentEntriesFromJournalArchiveChainAttempt(context, archives, limit, 1);
+  if (tombstones.size === 0) {
+    return readRecentEntriesFromJournalArchiveChainAttempt(context, archives, limit, 1);
+  }
+  let requested = Math.max(limit * 4, limit + tombstones.size * 4);
+  for (;;) {
+    const messages = readRecentEntriesFromJournalArchiveChainAttempt(context, archives, requested, 1);
+    const visible = applyTurnTombstones(messages, tombstones);
+    if (visible.length >= limit || messages.length < requested) {
+      return visible.length <= limit ? visible : visible.slice(-limit);
+    }
+    requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
+  }
 }

@@ -25,6 +25,8 @@ export interface ChannelCache {
   channelId: string;
   entries: import('../../core/session/types.js').SessionEntry[];
   compactions: import('../../core/session/types.js').CompactionSummary[];
+  /** Physical archives known to contain at least one compaction entry. */
+  compactionArchivePaths: Set<string>;
   turnTombstones: Set<string>;
   activeTurnTombstoneCount: number;
   nextId: number;
@@ -43,14 +45,6 @@ export interface ChannelCache {
   lastMessageAuthorName?: string;
   lastMessagePreview: string;
   fullyLoaded: boolean;
-  /**
-   * Archive file fingerprint (dev/ino/size/mtime/ctime) captured when a
-   * fullyLoaded cache last read or wrote the journal file. Multiple processes
-   * mount the same sessions dir, so every read served from a fullyLoaded cache
-   * must verify this against the file on disk and reload when it moved
-   * (fail closed: `null` on a non-empty archive never matches).
-   */
-  archiveFingerprint: string | null;
   recentEntriesByLimit: Map<number, CachedRecentEntries>;
 }
 
@@ -68,6 +62,9 @@ export interface ChannelIndexEntry {
   filenames: string[];
   messageCount?: number;
   activeTurnTombstoneCount?: number;
+  activeTurnTombstoneIds?: string[];
+  archiveFingerprint?: string;
+  compactionFilenames?: string[];
   lastTimestamp?: number;
   lastMessageTimestamp?: number;
   lastMessageRole?: SessionEntryRole | null;
@@ -164,7 +161,7 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 4;
+export const CHANNEL_INDEX_VERSION = 5;
 /**
  * L0 journals roll at a fixed byte threshold. This is deliberately not a
  * mutable runtime setting: the storage contract and its verification costs
@@ -315,6 +312,9 @@ export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, rig
     && left.filenames.every((filename, index) => filename === right.filenames[index])
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
+    && JSON.stringify(left.activeTurnTombstoneIds ?? []) === JSON.stringify(right.activeTurnTombstoneIds ?? [])
+    && left.archiveFingerprint === right.archiveFingerprint
+    && JSON.stringify(left.compactionFilenames ?? []) === JSON.stringify(right.compactionFilenames ?? [])
     && left.lastTimestamp === right.lastTimestamp
     && left.lastMessageTimestamp === right.lastMessageTimestamp
     && left.lastMessageRole === right.lastMessageRole

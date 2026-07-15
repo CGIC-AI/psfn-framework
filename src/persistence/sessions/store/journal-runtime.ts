@@ -3,23 +3,23 @@ import { join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
+  journalToCompactionSummary,
   type JournalIntegrityVerificationResult,
   resolveJournalIntegrityChainCandidates,
   wrapUnverifiedHistory,
 } from '../../journals/journal-utils.js';
-import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
+import type { CompactionSummary, JournalEntry, SessionEntry } from '../../../core/session/types.js';
 import { isCogSecTombstoneSessionEntry } from '../../../core/cogsec/tombstones.js';
 import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
 import type {
   ChannelCache,
-  ChannelIndexEntry,
   SessionIntegrityProvider,
 } from '../store-primitives.js';
 import { applyJournalState } from './crash-recovery.js';
-import { snapshotIndexEntry } from './channel-index.js';
 import {
   fingerprintJournalArchiveChain,
   loadJournalArchiveChain,
+  readEntriesInRangeFromJournalArchiveChain,
   readRecentEntriesFromJournalArchiveChain,
   rewriteJournalArchiveChain,
 } from './journal-chain-runtime.js';
@@ -45,7 +45,6 @@ export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
   private archivePort: SessionArchivePort;
   private transcriptProjectionFailureLogged = false;
-  private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(
@@ -331,7 +330,6 @@ export class SessionJournalRuntime {
     cache: ChannelCache;
     archive: SessionArchiveHandle;
     journal: JournalEntry;
-    upsertChannelIndex: (channelId: string, entry: ChannelIndexEntry) => void;
   }): void {
     this.archivePort.assertJournalChainReadable(
       params.cache.archivePaths.map(filePath => this.openArchive(params.cache.channelId, filePath)),
@@ -352,37 +350,90 @@ export class SessionJournalRuntime {
 
     this.archivePort.appendJournalEntry(params.archive, signed);
     applyJournalState(params.cache, signed);
-    params.cache.lastHmac = nextHmac;
-    // Every caller holds the cross-process journal write lock here, so the
-    // refreshed fingerprint cannot absorb a concurrent foreign append.
-    params.cache.archiveFingerprint = this.fingerprintArchiveChain(
-      params.cache.archivePaths.map(filePath => this.openArchive(params.cache.channelId, filePath)),
-    );
-    try {
-      params.upsertChannelIndex(params.journal.channelId, snapshotIndexEntry(params.cache));
-    } catch (error) {
-      if (!this.channelIndexFailureLogged) {
-        this.channelIndexFailureLogged = true;
-        log.warn('Session channel index write failed after journal append; continuing without interruption', {
-          channelId: params.journal.channelId,
-          error: toErrorMessage(error),
-        });
-      }
+    if (signed.type === 'compaction') {
+      params.cache.compactionArchivePaths.add(this.archivePort.resolveArchivePath(params.archive));
     }
+    params.cache.lastHmac = nextHmac;
   }
 
-  readRecentEntriesFromTail(archive: SessionArchiveHandle, limit: number): SessionEntry[] {
-    return this.readRecentEntriesFromTailChain([archive], limit);
+  readRecentEntriesFromTail(
+    archive: SessionArchiveHandle,
+    limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return this.readRecentEntriesFromTailChain([archive], limit, tombstones);
   }
 
   readRecentEntriesFromTailChain(
     archives: readonly SessionArchiveHandle[],
     limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
     return readRecentEntriesFromJournalArchiveChain({
       archivePort: this.archivePort,
       normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
       warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
-    }, archives, limit);
+    }, archives, limit, tombstones);
+  }
+
+  readEntriesInRangeFromChain(
+    archives: readonly SessionArchiveHandle[],
+    startId: number,
+    endId: number,
+    tombstones: ReadonlySet<string> = new Set(),
+  ): SessionEntry[] {
+    return readEntriesInRangeFromJournalArchiveChain({
+      archivePort: this.archivePort,
+      normalizeEntry: (entry, candidates) => this.verifyAndNormalizeEntry(entry, candidates),
+      warnAboutQuarantinedEntries: (...args) => this.warnAboutQuarantinedEntries(...args),
+    }, archives, startId, endId, tombstones);
+  }
+
+  readCompactionSummariesFromChain(
+    archives: readonly SessionArchiveHandle[],
+    compactionArchivePaths: ReadonlySet<string>,
+  ): CompactionSummary[] {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const beforeFingerprint = this.fingerprintArchiveChain(archives);
+      const summaries: CompactionSummary[] = [];
+      let verificationFailed = false;
+      for (let archiveIndex = 0; archiveIndex < archives.length; archiveIndex += 1) {
+        const archive = archives[archiveIndex]!;
+        if (!compactionArchivePaths.has(this.archivePort.resolveArchivePath(archive))) continue;
+        const result = this.archivePort.readJournalFile(archive);
+        if (result.quarantined.length > 0) {
+          this.warnAboutQuarantinedEntries(
+            archive.channelId,
+            archive,
+            result.quarantined.length,
+            result.entries.length,
+          );
+        }
+        const previousHmac = archiveIndex > 0
+          ? this.archivePort.readJournalTailEntries(archives[archiveIndex - 1]!, {
+            messageLimit: 1,
+            includeBoundaryEntry: false,
+          }).entries.at(-1)?._hmac ?? null
+          : null;
+        let previousHmacCandidates: Array<string | null> = [previousHmac];
+        for (const rawEntry of result.entries) {
+          const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+          previousHmacCandidates = normalized.nextHmacCandidates;
+          verificationFailed ||= !normalized.verified;
+          const summary = journalToCompactionSummary(normalized.entry);
+          if (summary) summaries.push(summary);
+        }
+      }
+      const afterFingerprint = this.fingerprintArchiveChain(archives);
+      if (beforeFingerprint !== afterFingerprint) {
+        if (attempt === 0) continue;
+        throw new Error(
+          `L0 session ${archives.at(-1)?.channelId ?? 'unknown'} changed repeatedly while reading compactions`,
+        );
+      }
+      if (verificationFailed) return this.loadChannelChain(archives).compactions;
+      return summaries;
+    }
+    return [];
   }
 }

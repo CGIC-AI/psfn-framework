@@ -49,6 +49,22 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
   if (messageCount !== undefined) entry.messageCount = messageCount;
   const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(row.activeTurnTombstoneCount);
   if (activeTurnTombstoneCount !== undefined) entry.activeTurnTombstoneCount = activeTurnTombstoneCount;
+  if (Array.isArray(row.activeTurnTombstoneIds)) {
+    entry.activeTurnTombstoneIds = [...new Set(row.activeTurnTombstoneIds
+      .filter((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)
+      .map(candidate => candidate.trim()))].sort();
+  }
+  const archiveFingerprint = normalizeOptionalString(row.archiveFingerprint);
+  if (archiveFingerprint !== undefined) entry.archiveFingerprint = archiveFingerprint;
+  if (Array.isArray(row.compactionFilenames)) {
+    const compactionFilenames = row.compactionFilenames
+      .filter((candidate): candidate is string => typeof candidate === 'string');
+    if (
+      compactionFilenames.length !== row.compactionFilenames.length
+      || compactionFilenames.some(filename => !filenames.includes(filename))
+    ) return null;
+    entry.compactionFilenames = [...new Set(compactionFilenames)];
+  }
   const lastTimestamp = normalizeOptionalNonNegativeNumber(row.lastTimestamp);
   if (lastTimestamp !== undefined) entry.lastTimestamp = lastTimestamp;
   const lastMessageTimestamp = normalizeOptionalNonNegativeNumber(row.lastMessageTimestamp);
@@ -84,7 +100,7 @@ export function loadChannelIndex(
     const parsed = JSON.parse(readFileSync(channelIndexPath, 'utf-8')) as ChannelIndexFile;
     const version = (parsed as { version?: unknown }).version;
     if (
-      (version !== 1 && version !== 2 && version !== 3 && version !== CHANNEL_INDEX_VERSION)
+      (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== CHANNEL_INDEX_VERSION)
       || typeof parsed.channels !== 'object'
     ) {
       log.warn('Ignoring invalid channel index payload', { path: channelIndexPath, version });

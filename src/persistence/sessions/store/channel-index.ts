@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, renameSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
+  journalToSessionEntry,
   journalToTurnTombstoneEntry,
   journalToMarkerEntry,
   readJournalFile,
@@ -9,6 +10,8 @@ import {
   readJournalTailEntries,
   scanJournalFileMetadata,
 } from '../../journals/journal-utils.js';
+import { backfillLegacyTurnId } from '../../../core/turns/id.js';
+import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import type { JournalEntry } from '../../../core/session/types.js';
 import {
   CHANNEL_INDEX_FILENAME,
@@ -63,6 +66,11 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (entry.filenames.length === 0 || entry.filenames.at(-1) !== entry.filename) return false;
   if (normalizeOptionalNonNegativeNumber(entry.messageCount) === undefined) return false;
   if (normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) === undefined) return false;
+  const activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(entry.activeTurnTombstoneCount) ?? 0;
+  if ((entry.activeTurnTombstoneIds?.length ?? 0) !== activeTurnTombstoneCount) return false;
+  if (!normalizeOptionalString(entry.archiveFingerprint)) return false;
+  if (!Array.isArray(entry.compactionFilenames)) return false;
+  if (entry.compactionFilenames.some(filename => !entry.filenames.includes(filename))) return false;
   if (normalizeOptionalNonNegativeNumber(entry.lastTimestamp) === undefined) return false;
 
   const maxId = normalizeOptionalNonNegativeNumber(entry.maxId);
@@ -84,6 +92,26 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (type === 'marker' && !normalizeOptionalMarker(entry.lastMarker)) return false;
 
   return true;
+}
+
+export function fingerprintArchivePaths(filePaths: readonly string[]): string | null {
+  const fingerprints: string[] = [];
+  for (const filePath of filePaths) {
+    try {
+      const stats = statSync(filePath);
+      fingerprints.push(`${filePath}=${[
+        stats.dev,
+        stats.ino,
+        stats.size,
+        stats.mtimeMs,
+        stats.ctimeMs,
+      ].join(':')}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  return fingerprints.length > 0 ? fingerprints.join('|') : null;
 }
 
 function readLastMessageEntry(filePath: string): JournalEntry | null {
@@ -153,6 +181,9 @@ export function buildIndexEntry(
     filenames: [filename],
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
+    activeTurnTombstoneIds: metadata.activeTurnTombstoneIds,
+    archiveFingerprint: fingerprintArchivePaths([filePath]) ?? undefined,
+    compactionFilenames: metadata.compactionCount > 0 ? [filename] : [],
     lastTimestamp: metadata.lastTimestamp,
     lastMessageTimestamp: lastMessageEntry?.timestamp,
     lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry?.role) ?? null,
@@ -187,10 +218,24 @@ export function buildIndexEntryChain(
   const lastNonEmpty = [...perFile].reverse().find(entry => (entry.maxId ?? 0) > 0);
   const lastWithMessage = [...perFile].reverse().find(entry => (entry.messageCount ?? 0) > 0);
   const activeTurnTombstones = new Set<string>();
+  let tombstoneAwareMessageCount: number | null = null;
   if (perFile.some(entry => (entry.activeTurnTombstoneCount ?? 0) > 0)) {
+    const messageCountsByTurn = new Map<string, number>();
     for (const filePath of filePaths) {
       const { entries } = readJournalFile(filePath, { persistQuarantine: false });
       for (const rawEntry of entries) {
+        const message = journalToSessionEntry(rawEntry);
+        if (message) {
+          let turnId: string;
+          try {
+            turnId = resolveSessionEntryTurnContext(message).turnId;
+          } catch {
+            turnId = backfillLegacyTurnId(
+              `legacy-turn:${message.channelId}:${message.id}:${message.timestamp}:${message.role}`,
+            );
+          }
+          messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+        }
         const tombstone = journalToTurnTombstoneEntry(rawEntry);
         if (!tombstone) continue;
         if (tombstone.action === 'redact') {
@@ -200,14 +245,24 @@ export function buildIndexEntryChain(
         }
       }
     }
+    tombstoneAwareMessageCount = 0;
+    for (const [turnId, count] of messageCountsByTurn.entries()) {
+      if (!activeTurnTombstones.has(turnId)) tombstoneAwareMessageCount += count;
+    }
   }
 
   return {
     channelId,
     filename: basename(filePaths.at(-1)!),
     filenames: filePaths.map(filePath => basename(filePath)),
-    messageCount: perFile.reduce((sum, entry) => sum + (entry.messageCount ?? 0), 0),
+    messageCount: tombstoneAwareMessageCount
+      ?? perFile.reduce((sum, entry) => sum + (entry.messageCount ?? 0), 0),
     activeTurnTombstoneCount: activeTurnTombstones.size,
+    activeTurnTombstoneIds: [...activeTurnTombstones].sort(),
+    archiveFingerprint: fingerprintArchivePaths(filePaths) ?? undefined,
+    compactionFilenames: perFile
+      .filter(entry => (entry.compactionFilenames?.length ?? 0) > 0)
+      .map(entry => entry.filename),
     lastTimestamp: lastNonEmpty?.lastTimestamp ?? 0,
     lastMessageTimestamp: lastWithMessage?.lastMessageTimestamp ?? 0,
     lastMessageRole: lastWithMessage?.lastMessageRole ?? null,
@@ -251,12 +306,18 @@ export function ensureChannelIndexEntry(params: {
     && existing.filenames.every((candidate, index) => candidate === filenames[index])
     && indexedChannelId(params.sessionId, existing) === params.channelId
   ) {
-    if (isIndexEntryComplete(existing)) {
+    if (
+      isIndexEntryComplete(existing)
+      && existing.archiveFingerprint === fingerprintArchivePaths(params.filePaths)
+    ) {
       return existing;
     }
 
     const enriched = enrichIndexEntryWithLastMessage(existing, params.filePaths.at(-1)!);
-    if (isIndexEntryComplete(enriched)) {
+    if (
+      isIndexEntryComplete(enriched)
+      && enriched.archiveFingerprint === fingerprintArchivePaths(params.filePaths)
+    ) {
       upsertChannelIndex(
         params.sessionId,
         enriched,
@@ -290,6 +351,11 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
     filenames: cache.archivePaths.map(filePath => basename(filePath)),
     messageCount: cache.messageCount,
     activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
+    activeTurnTombstoneIds: [...cache.turnTombstones].sort(),
+    archiveFingerprint: cache.archiveFingerprint ?? undefined,
+    compactionFilenames: cache.archivePaths
+      .filter(filePath => cache.compactionArchivePaths.has(filePath))
+      .map(filePath => basename(filePath)),
     lastTimestamp: cache.lastTimestamp,
     lastMessageTimestamp: cache.lastMessageTimestamp,
     lastMessageRole: cache.lastMessageRole,
@@ -424,7 +490,10 @@ export function createLightweightCache(
     channelId,
     entries: [],
     compactions: [],
-    turnTombstones: new Set(),
+    compactionArchivePaths: new Set(
+      (indexEntry.compactionFilenames ?? []).map(filename => join(dirname(filePath), filename)),
+    ),
+    turnTombstones: new Set(indexEntry.activeTurnTombstoneIds ?? []),
     activeTurnTombstoneCount: normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0,
     nextId: maxId + 1,
     lastHmac: normalizeOptionalHmac(indexEntry.lastHmac) ?? null,
@@ -432,7 +501,6 @@ export function createLightweightCache(
     lastJournalEntry: rehydrateLastJournalEntry(channelId, indexEntry),
     archivePaths: [...filePaths],
     resolvedPath: filePath,
-    archiveFingerprint: null,
     messageCount,
     lastTimestamp,
     lastMessageTimestamp,
@@ -440,7 +508,7 @@ export function createLightweightCache(
     lastMessageAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
     lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     fullyLoaded: false,
-    archiveFingerprint: null,
+    archiveFingerprint: indexEntry.archiveFingerprint ?? null,
     recentEntriesByLimit: new Map(),
   };
 }

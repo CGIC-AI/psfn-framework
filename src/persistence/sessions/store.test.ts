@@ -1173,7 +1173,7 @@ describe('SessionStore', () => {
         lastTimestamp?: number;
       }>;
     };
-    expect(index.version).toBe(4);
+    expect(index.version).toBe(5);
     expect(index.channels['api:e2e-internal'].filename).toBe(sessionFiles[0]);
     expect(index.channels['api:e2e-internal'].filenames).toEqual([sessionFiles[0]]);
     expect(index.channels['api:e2e-internal'].messageCount).toBe(1);
@@ -1567,6 +1567,7 @@ describe('SessionStore', () => {
 
     const staleArchivePort = createFilesystemSessionArchivePort();
     const staleScanSpy = vi.spyOn(staleArchivePort, 'scanJournalFileMetadata');
+    const staleFullReadSpy = vi.spyOn(staleArchivePort, 'readJournalFile');
     const staleWriter = new SessionStore(dir, {
       integrityKeyring: keyring,
       sessionArchivePort: staleArchivePort,
@@ -1578,8 +1579,10 @@ describe('SessionStore', () => {
 
     expect(writer.append({ channelId, role: 'assistant', content: 'second', timestamp: 2_000 })).toBe(2);
     staleScanSpy.mockClear();
+    staleFullReadSpy.mockClear();
     expect(staleWriter.append({ channelId, role: 'user', content: 'third', timestamp: 3_000 })).toBe(3);
-    expect(staleScanSpy).toHaveBeenCalledTimes(1);
+    expect(staleScanSpy).not.toHaveBeenCalled();
+    expect(staleFullReadSpy).toHaveBeenCalledTimes(1);
 
     const file = readdirSync(dir)
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('user_'))

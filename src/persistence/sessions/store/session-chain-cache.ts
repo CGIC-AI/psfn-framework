@@ -29,6 +29,7 @@ export function buildRecentEntriesFingerprint(cache: ChannelCache): string {
     cache.resolvedPath,
     cache.messageCount,
     cache.activeTurnTombstoneCount,
+    [...cache.turnTombstones].sort().join(','),
     cache.nextId,
     cache.lastTimestamp,
     cache.lastExtractionCoveredUpTo,
@@ -52,6 +53,10 @@ export function syncLightweightSessionCacheFromIndex(params: {
   params.cache.activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(
     params.indexEntry.activeTurnTombstoneCount,
   ) ?? 0;
+  params.cache.turnTombstones = new Set(params.indexEntry.activeTurnTombstoneIds ?? []);
+  params.cache.compactionArchivePaths = new Set(
+    (params.indexEntry.compactionFilenames ?? []).map(filename => join(params.sessionsDir, filename)),
+  );
   params.cache.nextId = (normalizeOptionalNonNegativeNumber(params.indexEntry.maxId) ?? 0) + 1;
   params.cache.lastHmac = params.indexEntry.lastHmac ?? null;
   params.cache.lastExtractionCoveredUpTo = normalizeOptionalNonNegativeNumber(
@@ -66,6 +71,7 @@ export function syncLightweightSessionCacheFromIndex(params: {
   params.cache.lastMessageRole = normalizeOptionalSessionEntryRole(params.indexEntry.lastMessageRole) ?? null;
   params.cache.lastMessageAuthorName = normalizeOptionalString(params.indexEntry.lastMessageAuthorName);
   params.cache.lastMessagePreview = normalizeOptionalString(params.indexEntry.lastMessagePreview) ?? '';
+  params.cache.archiveFingerprint = params.indexEntry.archiveFingerprint ?? null;
   if (buildRecentEntriesFingerprint(params.cache) !== previousFingerprint) {
     params.cache.recentEntriesByLimit.clear();
   }
@@ -132,6 +138,9 @@ export function reconcileSessionWriteChain(params: {
   }
 
   const diskFingerprint = fingerprintSessionJournalChain(params.runtime, params.cache);
+  if (params.cache.archiveFingerprint && params.cache.archiveFingerprint === diskFingerprint) {
+    return { cache: params.cache, refreshIndex: false };
+  }
   if (params.cache.archiveFingerprint && params.cache.archiveFingerprint !== diskFingerprint) {
     return {
       cache: loadSessionJournalChain(params.runtime, params.cache),

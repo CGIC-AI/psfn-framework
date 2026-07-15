@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { CogSecEventStore, CogSecAction } from '../../core/cogsec/events.js';
@@ -109,13 +109,6 @@ import {
 } from './store/cogsec-journal-helpers.js';
 const log = createComponentLogger('SessionStore');
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
-/**
- * Total records the tombstone-filtering turn-record read is allowed to scan.
- * One active tombstone must never turn a bounded tail read into a full-history
- * scan of a multi-GiB archive; hitting this cap warns loudly and serves a
- * partial window instead.
- */
-const TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS = 2_048;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
 const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
@@ -224,11 +217,13 @@ export class SessionStore implements TranscriptSearchPort {
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
+  private channelIndexFingerprint: string | null = null;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
   private journalRuntime: SessionJournalRuntime;
+  private channelIndexFailureLogged = false;
   /** Optional shared hot tail (psfn-framework-hgw3.5); null = file-only behavior. */
   private tailCache: SessionTailCachePort | null;
   /** Serializes fire-and-forget tail writes so per-channel ops keep call order. */
@@ -271,6 +266,29 @@ export class SessionStore implements TranscriptSearchPort {
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
     this.backfillTranscriptProjectionFromDisk();
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
+  }
+  private fingerprintChannelIndex(): string | null {
+    try {
+      const stats = statSync(this.channelIndexPath);
+      return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(':');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  private refreshChannelIndexFromDisk(): void {
+    const observed = this.fingerprintChannelIndex();
+    if (observed === this.channelIndexFingerprint) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refreshed = new Map<string, ChannelIndexEntry>();
+      loadChannelIndex(this.channelIndexPath, refreshed);
+      const afterRead = this.fingerprintChannelIndex();
+      if (afterRead !== observed && attempt === 0) continue;
+      this.channelIndex = refreshed;
+      this.channelIndexFingerprint = afterRead;
+      return;
+    }
   }
   private ensureChannelIndexEntry(
     sessionId: string,
@@ -295,6 +313,7 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
     upsertChannelIndex(channelId, entry, this.channelIndexPath, this.channelIndex);
+    this.channelIndexFingerprint = this.fingerprintChannelIndex();
   }
   private resolveSessionId(lookupKey: string): string | null {
     return resolvePrimarySessionId(lookupKey, this.channelIndex);
@@ -405,6 +424,10 @@ export class SessionStore implements TranscriptSearchPort {
     this.journalRuntime.indexSessionEntry(entry, this.transcriptProjection);
   }
   private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {
+    // A sibling process may have rolled this logical session since this store
+    // was constructed. Refresh the index before resolving the write chain so
+    // a stale writer cannot append to the retired root segment or reuse an id.
+    this.refreshChannelIndexFromDisk();
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
     const existing = this.channels.get(resolvedSessionId);
     if (existing) return existing;
@@ -421,6 +444,7 @@ export class SessionStore implements TranscriptSearchPort {
       channelId,
       entries: [],
       compactions: [],
+      compactionArchivePaths: new Set(),
       turnTombstones: new Set(),
       activeTurnTombstoneCount: 0,
       nextId: 1,
@@ -437,7 +461,6 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessageAuthorName: undefined,
       lastMessagePreview: '',
       fullyLoaded: true,
-      archiveFingerprint: this.journalRuntime.fingerprintArchiveChain([archive]),
       recentEntriesByLimit: new Map(),
     };
     this.channels.set(channelId, cache);
@@ -446,17 +469,21 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
     cache.recentEntriesByLimit.clear();
-    const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+    const archives = cache.archivePaths.map(filePath => (
+      this.journalRuntime.openArchive(cache.channelId, filePath)
+    ));
+    const archive = archives.at(-1)!;
     const sessionId = this.resolveCacheSessionKey(cache);
     this.journalRuntime.writeJournalEntry({
       cache,
       archive,
       journal,
-      upsertChannelIndex: (_channelId, entry) => this.upsertChannelIndex(sessionId, entry),
     });
     let archiveFingerprint: string | null;
     try {
-      archiveFingerprint = this.journalRuntime.fingerprintArchive(archive);
+      // Every caller holds the cross-process journal write lock here, so the
+      // refreshed chain fingerprint cannot absorb a concurrent foreign append.
+      archiveFingerprint = this.journalRuntime.fingerprintArchiveChain(archives);
     } catch (error) {
       cache.archiveFingerprint = null;
       log.warn('Session archive fingerprint refresh failed after journal append; write cache invalidated', {
@@ -470,6 +497,17 @@ export class SessionStore implements TranscriptSearchPort {
       throw new Error(`Session archive is missing after journal append for ${cache.channelId}`);
     }
     cache.archiveFingerprint = archiveFingerprint;
+    try {
+      this.upsertChannelIndex(sessionId, snapshotIndexEntry(cache));
+    } catch (error) {
+      if (!this.channelIndexFailureLogged) {
+        this.channelIndexFailureLogged = true;
+        log.warn('Session channel index write failed after journal append; continuing without interruption', {
+          channelId: cache.channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
   }
   private readJournalChain(cache: ChannelCache) {
     return readSessionJournalChain(this.journalRuntime, cache);
@@ -524,10 +562,12 @@ export class SessionStore implements TranscriptSearchPort {
     channelId: string,
     filePaths: readonly string[],
     limit: number,
+    tombstones: ReadonlySet<string> = new Set(),
   ): SessionEntry[] {
     return this.journalRuntime.readRecentEntriesFromTailChain(
       filePaths.map(filePath => this.journalRuntime.openArchive(channelId, filePath)),
       limit,
+      tombstones,
     );
   }
   private fingerprintArchive(cache: ChannelCache): string | null {
@@ -921,36 +961,45 @@ export class SessionStore implements TranscriptSearchPort {
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
+    this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    let cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
-    // Fingerprint gate (same guarantee as fullyLoadedCacheIsCurrent for entry
-    // reads, psfn-framework-hgw3.1): cached tombstone state — INCLUDING a
-    // cached count of zero — is only trustworthy while the journal on disk is
-    // the file this process last saw. Another process's tombstone-adding
-    // journal rewrite replaces the archive, so reload before trusting it.
-    if (cached && !this.fullyLoadedCacheIsCurrent(cached)) {
-      cached = this.ensureChannelFullyLoaded(channelId) ?? cached;
-    }
-    const tombstones = cached?.fullyLoaded ? cached.turnTombstones : null;
-    if (!tombstones || tombstones.size === 0) {
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+      }
+      : null);
+    if (!resolved) {
       return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
     }
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    const tombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
+    if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
     return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
   }
   /**
    * Bounded iterative overscan for tombstone-filtered turn-record reads:
    * request a small multiple of the limit, filter tombstoned turns, and only
    * widen (doubling) while the segment files still have older records to
-   * offer. Capped at TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS so one active
-   * tombstone can never force a full-history scan of a large archive.
+   * offer. Exactness wins when an unusually dense tombstone window requires
+   * reading farther back: returning a partial logical window would violate
+   * the public limit contract.
    */
   private readTombstoneFilteredTurnRecords(
     sessionId: string,
     limit: number,
     tombstones: ReadonlySet<string>,
   ): TurnRecord[] {
-    const scanCap = Math.max(TURN_RECORD_TOMBSTONE_OVERSCAN_MAX_RECORDS, limit);
-    let requested = Math.min(limit * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR, scanCap);
+    let requested = Math.max(limit, limit * TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR);
     for (;;) {
       const records = this.turnRecordStore.readRecentTurnRecords(sessionId, requested);
       const filtered = records.filter(record => !tombstones.has(record.turnId));
@@ -959,17 +1008,7 @@ export class SessionStore implements TranscriptSearchPort {
       if (filtered.length >= limit || exhaustedHistory) {
         return filtered.length > limit ? filtered.slice(-limit) : filtered;
       }
-      if (requested >= scanCap) {
-        log.warn('Turn-record tombstone overscan hit its scan cap; serving a partial window', {
-          sessionId,
-          limit,
-          scannedRecords: records.length,
-          scanCap,
-          survivingRecords: filtered.length,
-        });
-        return filtered;
-      }
-      requested = Math.min(requested * 2, scanCap);
+      requested = Math.min(Number.MAX_SAFE_INTEGER, requested * 2);
     }
   }
   async searchByKeywords(
@@ -993,30 +1032,23 @@ export class SessionStore implements TranscriptSearchPort {
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
     if (limit <= 0) return [];
+    this.refreshChannelIndexFromDisk();
     const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     if (cached?.fullyLoaded) {
-      const current = this.fullyLoadedCacheIsCurrent(cached)
-        ? cached
-        : this.ensureChannelFullyLoaded(channelId);
-      if (!current) return [];
-      if (current.entries.length <= limit) return [...current.entries];
-      return current.entries.slice(-limit);
+      if (this.fullyLoadedCacheIsCurrent(cached)) {
+        if (cached.entries.length <= limit) return [...cached.entries];
+        return cached.entries.slice(-limit);
+      }
     }
-    if (cached && cached.activeTurnTombstoneCount > 0) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
-    const resolved = cached
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
       ? {
         sessionId,
         channelId: cached.channelId,
         filePaths: cached.archivePaths,
         filePath: cached.resolvedPath,
       }
-      : this.resolveExistingSession(channelId);
+      : null);
     if (!resolved) return [];
     const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePaths);
     if (cached) {
@@ -1024,24 +1056,18 @@ export class SessionStore implements TranscriptSearchPort {
     }
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
-    if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
-    if (messageCount <= limit) {
-      const full = this.ensureChannelFullyLoaded(channelId);
-      if (!full) return [];
-      if (full.entries.length <= limit) return [...full.entries];
-      return full.entries.slice(-limit);
-    }
+    const tombstones = new Set(indexEntry.activeTurnTombstoneIds ?? []);
     const recentCacheHit = cached ? this.readCachedRecentEntries(cached, limit) : null;
     if (recentCacheHit) {
       return recentCacheHit;
     }
     const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
-    const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePaths, limit);
+    const recentEntries = this.readRecentEntriesFromTail(
+      resolved.channelId,
+      resolved.filePaths,
+      limit,
+      tombstones,
+    );
     if (cached) {
       this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
@@ -1076,13 +1102,38 @@ export class SessionStore implements TranscriptSearchPort {
     return entries[entries.length - 1];
   }
   getEntriesInRange(channelId: string, startId: number, endId: number): SessionEntry[] {
+    this.refreshChannelIndexFromDisk();
     if (!Number.isFinite(startId) || !Number.isFinite(endId)) return [];
     const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));
     const normalizedEnd = Math.max(0, Math.floor(Math.max(startId, endId)));
     if (normalizedEnd < normalizedStart) return [];
-    const cache = this.ensureChannelFullyLoaded(channelId);
-    if (!cache) return [];
-    return cache.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
+      return cached.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+    }
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePaths: cached.archivePaths,
+      }
+      : null);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached && !cached.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    return this.journalRuntime.readEntriesInRangeFromChain(
+      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
+      normalizedStart,
+      normalizedEnd,
+      new Set(indexEntry.activeTurnTombstoneIds ?? []),
+    );
   }
   async applyCogSecTombstones(options: CogSecL0TombstoneOptions): Promise<CogSecL0TombstoneResult> {
     const caseId = normalizeCogSecCaseId(options.caseId);
@@ -1401,8 +1452,31 @@ export class SessionStore implements TranscriptSearchPort {
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
-    const cache = this.ensureChannelFullyLoaded(channelId);
-    return cache ? [...cache.compactions] : [];
+    this.refreshChannelIndexFromDisk();
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded && this.fullyLoadedCacheIsCurrent(cached)) {
+      return [...cached.compactions];
+    }
+    const resolved = this.resolveExistingSession(channelId) ?? (cached
+      ? { sessionId, channelId: cached.channelId, filePaths: cached.archivePaths }
+      : null);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(
+      resolved.sessionId,
+      resolved.channelId,
+      resolved.filePaths,
+    );
+    if (cached && !cached.fullyLoaded) {
+      syncLightweightSessionCacheFromIndex({ cache: cached, indexEntry, sessionsDir: this.sessionsDir });
+    }
+    const compactionArchivePaths = new Set(
+      (indexEntry.compactionFilenames ?? []).map(filename => join(this.sessionsDir, filename)),
+    );
+    return this.journalRuntime.readCompactionSummariesFromChain(
+      resolved.filePaths.map(filePath => this.journalRuntime.openArchive(resolved.channelId, filePath)),
+      compactionArchivePaths,
+    );
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
@@ -1448,7 +1522,9 @@ export class SessionStore implements TranscriptSearchPort {
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
-    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+    // Ensuring a stale entry may atomically replace the backing Map. Iterate a
+    // stable snapshot so that replacement cannot revisit already-seen rows.
+    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
       const logicalChannelId = indexedChannelId(sessionId, indexEntry);
       const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
       if (filePaths.some(filePath => !existsSync(filePath))) continue;
@@ -1484,7 +1560,9 @@ export class SessionStore implements TranscriptSearchPort {
   listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
     this.primeChannelIndexFromDisk();
     const channels: Array<{ sessionId: string; channelId: string; messageCount: number }> = [];
-    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+    // `ensureChannelIndexEntry` can replace the local Map after an index
+    // repair; snapshot iteration prevents duplicate rows in this one listing.
+    for (const [sessionId, indexEntry] of [...this.channelIndex.entries()]) {
       const logicalChannelId = indexedChannelId(sessionId, indexEntry);
       const filePaths = indexEntry.filenames.map(filename => join(this.sessionsDir, filename));
       if (filePaths.some(filePath => !existsSync(filePath))) continue;

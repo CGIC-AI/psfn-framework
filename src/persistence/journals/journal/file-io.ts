@@ -7,6 +7,7 @@ import {
   readFileSync,
   readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -17,15 +18,24 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../../core/turns/id.js';
 import type {
   JournalFileMetadata,
+  JournalBoundedReadStats,
   QuarantinedJournalEntry,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,
   ReadJournalTailResult,
   ScanJournalMetadataOptions,
 } from './types.js';
+import {
+  readJsonlLineAtOrAfter,
+  readJsonlLineBefore,
+  scanJsonlFileBackward,
+} from '../../jsonl-segments.js';
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
+const JOURNAL_BOUNDED_READ_RETRIES = 3;
 
 function resolveJournalMessageTurnId(entry: JournalEntry): string {
   if (entry.type !== 'message') {
@@ -307,9 +317,12 @@ export function scanJournalFileMetadata(
   if (!existsSync(filePath)) {
     return {
       entryCount: 0,
+      minId: 0,
       maxId: 0,
       messageCount: 0,
+      compactionCount: 0,
       activeTurnTombstoneCount: 0,
+      activeTurnTombstoneIds: [],
       lastTimestamp: 0,
       lastHmac: null,
       lastEntry: null,
@@ -319,7 +332,9 @@ export function scanJournalFileMetadata(
   }
 
   let entryCount = 0;
+  let minId = Number.POSITIVE_INFINITY;
   let maxId = 0;
+  let compactionCount = 0;
   const messageCountsByTurn = new Map<string, number>();
   const activeTurnTombstones = new Set<string>();
   let lastTimestamp = 0;
@@ -334,10 +349,13 @@ export function scanJournalFileMetadata(
     try {
       const entry = parseJournalLine(line);
       entryCount += 1;
+      minId = Math.min(minId, entry.id);
       maxId = Math.max(maxId, entry.id);
       if (entry.type === 'message') {
         const turnId = resolveJournalMessageTurnId(entry);
         messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+      } else if (entry.type === 'compaction') {
+        compactionCount += 1;
       } else if (entry.type === 'tombstone' && entry.tombstoneTargetType === 'turn') {
         const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
         if (turnId) {
@@ -386,9 +404,12 @@ export function scanJournalFileMetadata(
 
   return {
     entryCount,
+    minId: Number.isFinite(minId) ? minId : 0,
     maxId,
     messageCount,
+    compactionCount,
     activeTurnTombstoneCount: activeTurnTombstones.size,
+    activeTurnTombstoneIds: [...activeTurnTombstones].sort(),
     lastTimestamp,
     lastHmac,
     lastEntry,
@@ -450,6 +471,187 @@ export function readJournalTailEntries(
     quarantined,
     truncated,
   };
+}
+
+function appendQuarantinedLine(
+  target: QuarantinedJournalEntry[],
+  line: string,
+  error: unknown,
+): void {
+  const quarantined = {
+    lineNumber: -1,
+    error: toErrorMessage(error),
+    raw: line,
+  } satisfies QuarantinedJournalEntry;
+  if (!target.some(existing => existing.raw === quarantined.raw && existing.error === quarantined.error)) {
+    target.push(quarantined);
+  }
+}
+
+function readJournalEntriesBeforeOnce(
+  filePath: string,
+  options: ReadJournalBeforeOptions,
+  beforeId: number,
+  messageLimit: number,
+  chunkBytes: number,
+): ReadJournalBeforeResult {
+  const parsedDescending: JournalEntry[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  const seekFileIdentities = new Set<string>();
+  const scannedFileIdentities = new Set<string>();
+  const seekChunkBytes = Math.max(chunkBytes, 1_024);
+  let messageCount = 0;
+  let needBoundaryEntry = false;
+
+  const readSeekEntry = (offset: number): {
+    entry: JournalEntry;
+    startOffset: number;
+    endOffset: number;
+  } | null => {
+    const row = readJsonlLineAtOrAfter(filePath, offset, {
+      chunkBytes: seekChunkBytes,
+      stats: options.stats,
+      scannedFileIdentities: seekFileIdentities,
+    });
+    if (!row || row.line.trim().length === 0) return null;
+
+    let entry: JournalEntry;
+    try {
+      entry = parseJournalLine(row.line);
+    } catch (error) {
+      appendQuarantinedLine(quarantined, row.line, error);
+      return null;
+    }
+    if (!options.trustSeekEntry) {
+      return { entry, startOffset: row.startOffset, endOffset: row.endOffset };
+    }
+
+    const previousRow = row.startOffset > 0
+      ? readJsonlLineBefore(filePath, row.startOffset, {
+        chunkBytes: seekChunkBytes,
+        stats: options.stats,
+        scannedFileIdentities: seekFileIdentities,
+      })
+      : null;
+    let previousHmac = options.previousFileHmac ?? null;
+    if (previousRow?.line.trim()) {
+      try {
+        const previousEntry = parseJournalLine(previousRow.line);
+        previousHmac = typeof previousEntry._hmac === 'string' ? previousEntry._hmac : null;
+      } catch (error) {
+        appendQuarantinedLine(quarantined, previousRow.line, error);
+        return null;
+      }
+    }
+    try {
+      return options.trustSeekEntry(entry, previousHmac)
+        ? { entry, startOffset: row.startOffset, endOffset: row.endOffset }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const fileSize = statSync(filePath).size;
+  let low = 0;
+  let high = fileSize;
+  let seekTrusted = true;
+  while (high - low > seekChunkBytes) {
+    const midpoint = low + Math.floor((high - low) / 2);
+    const sampled = readSeekEntry(midpoint);
+    if (!sampled) {
+      seekTrusted = false;
+      break;
+    }
+    if (sampled.entry.id < beforeId) {
+      low = Math.max(low + 1, sampled.endOffset);
+    } else {
+      high = midpoint;
+    }
+  }
+
+  let cursorOffset = fileSize;
+  if (seekTrusted) {
+    let offset = low;
+    while (offset < fileSize) {
+      const candidate = readSeekEntry(offset);
+      if (!candidate) {
+        seekTrusted = false;
+        break;
+      }
+      if (candidate.entry.id >= beforeId) {
+        cursorOffset = candidate.startOffset;
+        break;
+      }
+      if (candidate.endOffset <= offset) {
+        seekTrusted = false;
+        break;
+      }
+      offset = candidate.endOffset;
+    }
+  }
+  if (!seekTrusted) cursorOffset = fileSize;
+
+  const truncated = scanJsonlFileBackward(filePath, {
+    chunkBytes,
+    endOffset: cursorOffset,
+    stats: options.stats,
+    scannedFileIdentities,
+  }, (line) => {
+    if (line.trim().length === 0) return false;
+    let entry: JournalEntry;
+    try {
+      entry = parseJournalLine(line);
+    } catch (error) {
+      appendQuarantinedLine(quarantined, line, error);
+      return false;
+    }
+    if (entry.id >= beforeId) return false;
+    parsedDescending.push(entry);
+    if (needBoundaryEntry) return true;
+    if (entry.type !== 'message') return false;
+    messageCount += 1;
+    if (messageCount < messageLimit) return false;
+    if (options.includeBoundaryEntry === false) return true;
+    needBoundaryEntry = true;
+    return false;
+  });
+
+  return {
+    entries: parsedDescending.reverse(),
+    quarantined,
+    truncated,
+  };
+}
+
+/** Read a message window before an id with byte I/O proportional to the window. */
+export function readJournalEntriesBefore(
+  filePath: string,
+  options: ReadJournalBeforeOptions,
+): ReadJournalBeforeResult {
+  const beforeId = Number.isFinite(options.beforeId)
+    ? Math.max(0, Math.floor(options.beforeId))
+    : 0;
+  const messageLimit = Number.isFinite(options.messageLimit)
+    ? Math.max(0, Math.floor(options.messageLimit))
+    : 0;
+  if (!existsSync(filePath) || beforeId <= 0 || messageLimit <= 0) {
+    return { entries: [], quarantined: [], truncated: false };
+  }
+  const requestedChunkBytes = options.scanChunkBytes ?? DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+  const chunkBytes = Number.isFinite(requestedChunkBytes)
+    ? Math.max(1, Math.floor(requestedChunkBytes))
+    : DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return readJournalEntriesBeforeOnce(filePath, options, beforeId, messageLimit, chunkBytes);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_BOUNDED_READ_RETRIES) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {

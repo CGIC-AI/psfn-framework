@@ -32,6 +32,7 @@ describe('SessionJournalRuntime', () => {
       channelId: 'ch1',
       entries: [],
       compactions: [],
+      compactionArchivePaths: new Set(),
       turnTombstones: new Set<string>(),
       activeTurnTombstoneCount: 0,
       nextId: 1,
@@ -40,7 +41,6 @@ describe('SessionJournalRuntime', () => {
       lastJournalEntry: null,
       archivePaths: [filePath],
       resolvedPath: filePath,
-      archiveFingerprint: null,
       messageCount: 0,
       lastTimestamp: 0,
       lastMessageTimestamp: 0,
@@ -51,7 +51,6 @@ describe('SessionJournalRuntime', () => {
       archiveFingerprint: null,
       recentEntriesByLimit: new Map(),
     } satisfies ChannelCache;
-    const upsertChannelIndex = vi.fn();
     const entry: Omit<SessionEntry, 'id'> = {
       channelId: 'ch1',
       role: 'user',
@@ -63,7 +62,6 @@ describe('SessionJournalRuntime', () => {
       cache,
       archive,
       journal: buildMessageJournalEntry(1, entry),
-      upsertChannelIndex,
     });
 
     expect(appendSpy).toHaveBeenCalledWith(archive, expect.objectContaining({
@@ -71,8 +69,6 @@ describe('SessionJournalRuntime', () => {
       channelId: 'ch1',
       type: 'message',
     }));
-    expect(upsertChannelIndex).toHaveBeenCalledTimes(1);
-
     const recent = runtime.readRecentEntriesFromTail(archive, 1);
     expect(tailSpy).toHaveBeenCalledWith(archive, {
       messageLimit: 1,
@@ -97,6 +93,7 @@ describe('SessionJournalRuntime', () => {
       channelId: 'ch-projection',
       entries: [],
       compactions: [],
+      compactionArchivePaths: new Set(),
       turnTombstones: new Set<string>(),
       activeTurnTombstoneCount: 0,
       nextId: 1,
@@ -105,7 +102,6 @@ describe('SessionJournalRuntime', () => {
       lastJournalEntry: null,
       archivePaths: [filePath],
       resolvedPath: filePath,
-      archiveFingerprint: null,
       messageCount: 0,
       lastTimestamp: 0,
       lastMessageTimestamp: 0,
@@ -126,7 +122,6 @@ describe('SessionJournalRuntime', () => {
         content: 'projection replay source of truth',
         timestamp: 1_000,
       }),
-      upsertChannelIndex: vi.fn(),
     });
 
     const projection: TranscriptProjectionPort = {

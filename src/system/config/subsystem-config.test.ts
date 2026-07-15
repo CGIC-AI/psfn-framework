@@ -916,4 +916,64 @@ describe('subsystem config round-trip', () => {
     expect(loaded.openRouterApiBaseUrl).toBe('https://openrouter.ai/api/v1');
     expect(loaded.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
   });
+
+  it('round-trips provider model-call gate capacity and reserved foreground slots (mmo9.5.1)', () => {
+    const dataDir = makeDataDir('psfn-providers-config-capacity-');
+    const expected = {
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          enabled: true,
+          label: 'LiteLLM Proxy',
+          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          capacity: 2,
+          reservedForegroundSlots: 1,
+        },
+      ],
+    };
+    const saved = saveProvidersConfig(dataDir, expected);
+    expect(saved.registry).toEqual(expected);
+    expect(loadProvidersConfig(dataDir).registry.providers[0]).toMatchObject({
+      capacity: 2,
+      reservedForegroundSlots: 1,
+    });
+  });
+
+  it('rejects a provider capacity below 1 (fail closed, mmo9.5.1)', () => {
+    const dataDir = makeDataDir('psfn-providers-config-bad-capacity-');
+    writeFileSync(join(dataDir, PROVIDERS_FILE_NAME), JSON.stringify({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          capacity: 0,
+        },
+      ],
+    }));
+    expect(() => loadProvidersConfig(dataDir)).toThrow(/capacity/);
+  });
+
+  it('rejects reserving every slot away from background work (mmo9.5.1)', () => {
+    const dataDir = makeDataDir('psfn-providers-config-bad-reserve-');
+    writeFileSync(join(dataDir, PROVIDERS_FILE_NAME), JSON.stringify({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+          capacity: 2,
+          reservedForegroundSlots: 2,
+        },
+      ],
+    }));
+    expect(() => loadProvidersConfig(dataDir)).toThrow(/reservedForegroundSlots/);
+  });
 });

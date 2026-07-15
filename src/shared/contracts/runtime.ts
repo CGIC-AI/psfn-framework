@@ -1256,6 +1256,20 @@ export interface ProviderRegistryEntry {
   apiBaseUrl?: string;
   modelsApiUrl?: string;
   apiKeyRef?: CredentialReference;
+  /**
+   * Concurrent in-flight model-call capacity the model-call gate admits for this
+   * provider's shared/local endpoint. Defaults to 1 (fail-closed single slot).
+   * This is admission mechanism only (Law 12.4): it bounds concurrency and
+   * enables higher-priority preemption; it is not a budget or fairness system.
+   */
+  capacity?: number;
+  /**
+   * Slots (of `capacity`) reserved for foreground/interactive lanes so a
+   * background model call never occupies the last slot a foreground acquire
+   * would need. Defaults to 0. Clamped below `capacity` so background work is
+   * never fully starved.
+   */
+  reservedForegroundSlots?: number;
   metadata?: Record<string, unknown>;
 }
 

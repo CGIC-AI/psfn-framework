@@ -8,6 +8,7 @@ import type {
   BackgroundWorkStorePort,
 } from './store-port.js';
 import {
+  BackgroundWorkDeferredError,
   BackgroundWorkPermanentError,
   BackgroundWorkSupervisor,
 } from './supervisor.js';
@@ -661,6 +662,104 @@ describe('BackgroundWorkSupervisor', () => {
     expect(await store.get(input.jobId)).toMatchObject({
       idempotencyKey: input.idempotencyKey,
       state: 'succeeded',
+    });
+  });
+
+  it('defers without consuming an attempt and resumes exactly once when a pre-boundary model call is preempted (mmo9.5.1)', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    let attempts = 0;
+    let writes = 0;
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async ({ effects }) => {
+        attempts += 1;
+        await effects.run('durable-sink', async (crossBoundary) => {
+          if (attempts === 1) {
+            // The pre-commitEffectBoundary model call was preempted for a
+            // foreground acquire; the handler maps it to a defer. The boundary
+            // is never crossed, so the pending receipt is abandoned and the job
+            // requeues cleanly with no durable write.
+            throw new BackgroundWorkDeferredError('foreground_active', 1_000);
+          }
+          await crossBoundary();
+          writes += 1;
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    expect(writes).toBe(0);
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'deferred',
+      reasonCode: 'foreground_active',
+      attemptCount: 0,
+    });
+
+    now = 2_000;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    // The job resumes from a fresh pending receipt and writes exactly once — no
+    // duplicate, and the preemption never counted as a failed attempt.
+    expect(writes).toBe(1);
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'succeeded',
+      attemptCount: 0,
+    });
+  });
+
+  it('fails closed via outcome_unknown when a preemption defer arrives AFTER the effect boundary (mmo9.5.1)', async () => {
+    let now = 1_000;
+    const store = new MemoryBackgroundWorkStore();
+    let attempts = 0;
+    let writes = 0;
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      executor: async ({ effects }) => {
+        attempts += 1;
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          writes += 1;
+          if (attempts === 1) {
+            // Defense in depth: a preemption defer arriving AFTER the durable
+            // write must NOT trigger a clean requeue-and-replay. The started
+            // receipt fences the retry to outcome_unknown.
+            throw new BackgroundWorkDeferredError('foreground_active', 1_000);
+          }
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    expect(writes).toBe(1);
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'deferred',
+      reasonCode: 'foreground_active',
+    });
+
+    now = 2_000;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    // The re-claim observes a `started` receipt it does not own -> outcome_unknown
+    // -> fail closed. The durable write is never replayed.
+    expect(writes).toBe(1);
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'effect_outcome_unknown',
     });
   });
 

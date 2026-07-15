@@ -17,6 +17,7 @@ import {
   envCredential,
 } from '../../boundary/custody/credential-vault.js';
 import { FallbackRunner } from './fallback.js';
+import { ModelCallPreemptedError } from './model-call-gate.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../../system/capabilities/eligibility.js';
 
 const mocks = vi.hoisted(() => ({
@@ -4529,7 +4530,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'background',
-      {},
+      { signal: expect.any(AbortSignal) },
     );
     expect(response).toMatchObject({
       content: 'gateway-result',
@@ -4607,7 +4608,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'vision',
-      {},
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -4659,6 +4660,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         },
       }),
       callbacks,
+      { signal: expect.any(AbortSignal) },
     );
     expect(callbacks.onDone).toHaveBeenCalledWith(expect.objectContaining({
       content: 'gateway-stream-result',
@@ -4827,17 +4829,14 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(transitionSpy).not.toHaveBeenCalled();
   });
 
-  it('prioritizes queued foreground chat ahead of queued background work on constrained routes', async () => {
+  it('preempts an in-flight background completion for a foreground stream on a constrained route (mmo9.5.1)', async () => {
+    // mmo9.5.1: a foreground chat acquire on a constrained (shared) route now
+    // PREEMPTS an in-flight preemptable background completion rather than
+    // queueing behind it, and the preempt reaches the transport via a composed
+    // abort signal (the streaming path carries the same gate-owned signal).
     const config = makeConfig();
     const order: string[] = [];
-    const firstBackground = createDeferred<{
-      content: string;
-      model: string;
-      inputTokens: number;
-      outputTokens: number;
-      stopReason: string;
-      toolCalls: [];
-    }>();
+    const backgroundStarted = createDeferred<void>();
     const foregroundRelease = createDeferred<{
       content: string;
       model: string;
@@ -4846,18 +4845,33 @@ describe('LLMClient model budget gates and usage metering', () => {
       stopReason: string;
       toolCalls: [];
     }>();
+    let backgroundSignal: AbortSignal | undefined;
+    let foregroundSignal: AbortSignal | undefined;
     const transport = {
-      stream: vi.fn(async (context: { correlation?: { requestId?: string } }) => {
+      stream: vi.fn(async (
+        context: { correlation?: { requestId?: string } },
+        _callbacks: unknown,
+        options?: { signal?: AbortSignal },
+      ) => {
+        foregroundSignal = options?.signal;
         order.push(`stream:${context.correlation?.requestId ?? 'unknown'}`);
         return await foregroundRelease.promise;
       }),
       complete: vi.fn(async (
         context: { correlation?: { requestId?: string } },
         purpose: string,
+        options?: { signal?: AbortSignal },
       ) => {
         order.push(`complete:${purpose}:${context.correlation?.requestId ?? 'unknown'}`);
         if (context.correlation?.requestId === 'bg-1') {
-          return await firstBackground.promise;
+          backgroundSignal = options?.signal;
+          backgroundStarted.resolve();
+          // Honor the gate preempt signal exactly like a real transport.
+          return await new Promise((_resolve, reject) => {
+            const signal = options?.signal;
+            if (signal?.aborted) { reject(signal.reason); return; }
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
         }
         return {
           content: `${purpose}-result`,
@@ -4886,8 +4900,8 @@ describe('LLMClient model budget gates and usage metering', () => {
         },
       },
       'background',
-    );
-    await vi.waitFor(() => expect(transport.complete).toHaveBeenCalledTimes(1));
+    ).then(() => null).catch((error: unknown) => error);
+    await backgroundStarted.promise;
 
     const backgroundTwoPromise = client.complete(
       {
@@ -4913,21 +4927,17 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(transport.complete).toHaveBeenCalledTimes(1);
-    expect(transport.stream).not.toHaveBeenCalled();
-
-    firstBackground.resolve({
-      content: 'background-1-result',
-      model: 'deepseek/deepseek-v3.2',
-      inputTokens: 6,
-      outputTokens: 2,
-      stopReason: 'stop',
-      toolCalls: [],
-    });
-
+    // Foreground preempts the in-flight background immediately; it does NOT wait
+    // for bg-1 to finish.
     await vi.waitFor(() => expect(transport.stream).toHaveBeenCalledTimes(1));
-    expect(transport.complete).toHaveBeenCalledTimes(1);
+
+    // The preempted background call is aborted through the composed transport
+    // signal and rejects with the typed preemption error.
+    const backgroundOneOutcome = await backgroundOnePromise;
+    expect(backgroundOneOutcome).toBeInstanceOf(ModelCallPreemptedError);
+    expect(backgroundSignal?.aborted).toBe(true);
+    // The streaming path received the gate-owned preempt signal (mmo9.8 needs it).
+    expect(foregroundSignal).toBeInstanceOf(AbortSignal);
 
     foregroundRelease.resolve({
       content: 'foreground-result',
@@ -4942,13 +4952,10 @@ describe('LLMClient model budget gates and usage metering', () => {
       content: 'foreground-result',
       model: 'z-ai/glm-5',
     });
-    await vi.waitFor(() => expect(transport.complete).toHaveBeenCalledTimes(2));
+
+    // The parked bg-2 runs once the foreground releases the slot.
     await expect(backgroundTwoPromise).resolves.toMatchObject({
       content: 'background-result',
-      model: 'deepseek/deepseek-v3.2',
-    });
-    await expect(backgroundOnePromise).resolves.toMatchObject({
-      content: 'background-1-result',
       model: 'deepseek/deepseek-v3.2',
     });
 

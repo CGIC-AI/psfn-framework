@@ -77,7 +77,7 @@ import {
 } from '../../system/config/providers-config.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
-import { ModelCallGate } from './model-call-gate.js';
+import { ModelCallGate, ModelCallPreemptedError, type ModelCallGateCapacity } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type {
   IcpConversationCostAccountingPort,
@@ -643,14 +643,47 @@ export class LLMClient {
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
     correlation: ResolvedCorrelationMetadata | undefined,
-    execute: () => Promise<T>,
+    execute: (preemptSignal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
-    return await this.modelCallGate.run({
-      resourceKey: this.resolveModelCallResourceKey(candidate),
-      runtimeClass: this.resolveModelCallRuntimeClass(purpose, correlation),
-      signal,
-    }, execute);
+    try {
+      return await this.modelCallGate.run({
+        resourceKey: this.resolveModelCallResourceKey(candidate),
+        runtimeClass: this.resolveModelCallRuntimeClass(purpose, correlation),
+        capacity: this.resolveModelCallCapacity(candidate),
+        signal,
+      }, execute);
+    } catch (error) {
+      // A gate preemption is a deliberate yield to higher-priority work, not a
+      // transient provider failure. Stop candidate fallback so the preemption
+      // propagates to the caller (a background handler defers the job); wrapping
+      // in NonRecoverableFallbackError halts fallback while the runner rethrows
+      // the unwrapped ModelCallPreemptedError.
+      if (error instanceof ModelCallPreemptedError) {
+        throw new NonRecoverableFallbackError(error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Per-endpoint admission capacity for the gate. Resolved from the provider
+   * owner-file entry that owns this candidate's shared/local endpoint. Defaults
+   * fail-closed to a single slot with no reservation, preserving the original
+   * single-in-flight behavior for any unconfigured endpoint.
+   */
+  private resolveModelCallCapacity(candidate: RoutingCandidate): ModelCallGateCapacity {
+    const routeKind = this.resolveRouteKind(candidate);
+    const providerId = routeKind === 'configured_litellm_proxy'
+      ? 'litellm'
+      : candidate.provider.trim().toLowerCase();
+    const entry = this.config.providerRegistry?.providers.find(
+      provider => provider.id.trim().toLowerCase() === providerId,
+    );
+    return {
+      capacity: entry?.capacity ?? 1,
+      reservedForegroundSlots: entry?.reservedForegroundSlots ?? 0,
+    };
   }
 
   private async evaluateBudgetPreflight(
@@ -978,7 +1011,11 @@ export class LLMClient {
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
         'chat',
-        async (candidateTarget) => {
+        async (candidateTarget, _attempt, preemptSignal) => {
+          // Streaming has no caller signal today; the gate-owned preempt signal
+          // is the transport signal so a foreground acquire can preempt an
+          // in-flight background stream (mmo9.8 streaming reservation).
+          const transportSignal = composeTransportSignal(undefined, preemptSignal);
           const transport = this.transport;
           if (transport) {
             physicalAttempt += 1;
@@ -995,11 +1032,14 @@ export class LLMClient {
             return await this.runTransportWithCircuitBreaker(
               'llm.stream',
               candidateTarget,
-              async () => await transport.stream(transportContext, callbacks),
+              async () => await transport.stream(transportContext, callbacks, { signal: transportSignal }),
             );
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
-          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, { correlation });
+          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
+            signal: transportSignal,
+            correlation,
+          });
           const promptCaching = applyModelAgnosticPromptCache({
             promptCacheEnabled: candidateTarget.promptCacheEnabled,
             promptCacheStrategy: candidateTarget.promptCacheStrategy,
@@ -1435,7 +1475,8 @@ export class LLMClient {
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
-      async (candidateTarget) => {
+      async (candidateTarget, _attempt, preemptSignal) => {
+        const transportSignal = composeTransportSignal(options.signal, preemptSignal);
         const transport = this.transport;
         if (transport) {
           physicalAttempt += 1;
@@ -1450,7 +1491,7 @@ export class LLMClient {
             },
           );
           const executeTransport = async () => await transport.complete(transportContext, purpose, {
-            ...(options.signal ? { signal: options.signal } : {}),
+            signal: transportSignal,
           });
           const response = options.disableRetry
             ? await executeTransport()
@@ -1464,7 +1505,7 @@ export class LLMClient {
         }
         const { model, apiKey } = this.getModelAndKey(candidateTarget);
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
-          signal: options.signal,
+          signal: transportSignal,
           correlation,
         });
         const promptCaching = applyModelAgnosticPromptCache({
@@ -1538,7 +1579,7 @@ export class LLMClient {
                 metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
               },
             );
-            if (isAbortError(err) || options.signal?.aborted) {
+            if (isAbortError(err) || transportSignal.aborted) {
               markErrorAsNonRetryable(err);
             }
             throw err;
@@ -1819,7 +1860,7 @@ export class LLMClient {
 
   private async runWithFallback<T>(
     purpose: RoutingPurpose,
-    execute: (candidate: RoutingCandidate, attempt: number) => Promise<T>,
+    execute: (candidate: RoutingCandidate, attempt: number, preemptSignal: AbortSignal) => Promise<T>,
     options: {
       modelHint?: LLMCompletionModelHint;
       correlation?: ResolvedCorrelationMetadata;
@@ -1869,7 +1910,7 @@ export class LLMClient {
         purpose,
         effectiveCandidate,
         options.correlation,
-        () => execute(effectiveCandidate, attempt),
+        preemptSignal => execute(effectiveCandidate, attempt, preemptSignal),
         options.signal,
       );
     }, options.correlation);
@@ -1878,6 +1919,21 @@ export class LLMClient {
 
 function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
+}
+
+/**
+ * Compose the caller signal (if any) with the gate-owned preempt signal into a
+ * single transport signal, so a higher-priority acquire preempting this lane
+ * aborts the in-flight transport call exactly like a caller abort. Both the
+ * streaming and non-streaming paths use this so preemption reaches the provider
+ * transport, not just the local promise.
+ */
+function composeTransportSignal(
+  callerSignal: AbortSignal | undefined,
+  preemptSignal: AbortSignal,
+): AbortSignal {
+  if (!callerSignal) return preemptSignal;
+  return AbortSignal.any([callerSignal, preemptSignal]);
 }
 
 function shouldRetryWithinCandidate(error: Error): boolean {

@@ -141,6 +141,12 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
     throw new Error(`Invalid providers config: ${field}.apiKeyEnv is not supported; use ${field}.apiKeyRef`);
   }
   const apiKeyRef = normalizeCredentialReference(raw.apiKeyRef, `${field}.apiKeyRef`);
+  const capacity = normalizeProviderCapacity(raw.capacity, `${field}.capacity`);
+  const reservedForegroundSlots = normalizeProviderReservedForegroundSlots(
+    raw.reservedForegroundSlots,
+    capacity,
+    `${field}.reservedForegroundSlots`,
+  );
 
   if (type === 'litellm_proxy' && !apiBaseUrl) {
     throw new Error(`Invalid providers config: ${field}.apiBaseUrl is required for litellm_proxy`);
@@ -168,8 +174,38 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
     ...(apiBaseUrl ? { apiBaseUrl } : {}),
     ...(modelsApiUrl ? { modelsApiUrl } : {}),
     ...(apiKeyRef ? { apiKeyRef } : {}),
+    ...(capacity !== undefined ? { capacity } : {}),
+    ...(reservedForegroundSlots !== undefined ? { reservedForegroundSlots } : {}),
     ...(isRecord(raw.metadata) ? { metadata: { ...raw.metadata } } : {}),
   };
+}
+
+function normalizeProviderCapacity(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Invalid providers config: ${field} must be an integer >= 1`);
+  }
+  return value;
+}
+
+function normalizeProviderReservedForegroundSlots(
+  value: unknown,
+  capacity: number | undefined,
+  field: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid providers config: ${field} must be an integer >= 0`);
+  }
+  // Never reserve the entire endpoint away from background work: at least one
+  // slot must remain for non-foreground lanes.
+  const effectiveCapacity = capacity ?? 1;
+  if (value > Math.max(0, effectiveCapacity - 1)) {
+    throw new Error(
+      `Invalid providers config: ${field} (${value}) must be < capacity (${effectiveCapacity})`,
+    );
+  }
+  return value;
 }
 
 export function normalizeCanonicalProviderRegistry(

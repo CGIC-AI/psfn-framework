@@ -180,7 +180,43 @@ function requireSourceSessionEntry(
   }
 }
 
+// A preempted background model call defers by this delay: enough for the
+// foreground turn that preempted it to progress before the job is re-claimed.
+// This mirrors the supervisor's own foreground_active defer delay and consumes
+// NO attempt (defer, not failOrRetry).
+const FOREGROUND_PREEMPTION_DEFER_DELAY_MS = 1_000;
+
+/**
+ * Post-turn background executor with model-call-gate preemption mapping.
+ *
+ * A higher-priority (foreground) acquire at the model-call gate aborts an
+ * in-flight PREEMPTABLE background model call. For all four job classes that
+ * abort is structurally PRE-`commitEffectBoundary` (the LLM call precedes every
+ * durable write), so the effect runner has already abandoned the still-`pending`
+ * receipt and the job is safe to requeue with no duplicate write. We therefore
+ * map the preemption to a supervisor defer('foreground_active') — no attempt
+ * consumed, later resumes — rather than a fail/retry. A gate preemption surfaces
+ * as a typed ModelCallPreemptedError (matched by name to avoid a
+ * core -> primitives import); any other error keeps its existing disposition.
+ */
 export async function executePostTurnBackgroundWork(
+  input: BackgroundWorkExecutionInput,
+  dependencies: PostTurnBackgroundRuntimeDependencies,
+): Promise<void> {
+  try {
+    await runPostTurnBackgroundWork(input, dependencies);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
+      throw new BackgroundWorkDeferredError(
+        'foreground_active',
+        FOREGROUND_PREEMPTION_DEFER_DELAY_MS,
+      );
+    }
+    throw error;
+  }
+}
+
+async function runPostTurnBackgroundWork(
   input: BackgroundWorkExecutionInput,
   dependencies: PostTurnBackgroundRuntimeDependencies,
 ): Promise<void> {

@@ -121,6 +121,7 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneBudgetProfile(FOREGROUND_CHAT_RUNTIME_CLASS)).toEqual({
       runtimeClass: 'foreground_chat',
       priority: 0,
+      preemptable: false,
       chargeLane: 'interactive',
       modelPurpose: 'chat',
       maxQueuedActions: 0,
@@ -132,6 +133,7 @@ describe('worker lanes', () => {
     });
     expect(resolveRuntimeLaneBudgetProfile(POST_TURN_APPRAISAL_RUNTIME_CLASS)).toMatchObject({
       priority: 1,
+      preemptable: false,
       chargeLane: 'background',
       maxQueuedActions: 12,
       maxRunsPerSchedulerTick: 2,
@@ -139,6 +141,7 @@ describe('worker lanes', () => {
     });
     expect(resolveRuntimeLaneBudgetProfile(BACKGROUND_CONTINUATION_RUNTIME_CLASS)).toMatchObject({
       priority: 2,
+      preemptable: true,
       chargeLane: 'background',
       maxPendingSessionDeliveries: 2,
       maxDeliveriesPerForegroundTurn: 1,
@@ -146,6 +149,7 @@ describe('worker lanes', () => {
     });
     expect(resolveRuntimeLaneBudgetProfile(MAINTENANCE_REFLECTION_RUNTIME_CLASS)).toMatchObject({
       priority: 3,
+      preemptable: true,
       chargeLane: 'maintenance',
       maxQueuedActions: 3,
       maxRunsPerSchedulerTick: 1,

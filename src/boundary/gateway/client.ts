@@ -534,7 +534,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   // ── LLMProviderPort interface ──
 
-  async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
+  async stream(
+    context: LLMContext,
+    callbacks?: StreamCallbacks,
+    options?: { signal?: AbortSignal },
+  ): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks
     const requestId = context.correlation?.requestId?.trim()
       || context.correlation?.icpCorrelation?.requestId.trim()
@@ -594,7 +598,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       };
       let result: LLMChatResult;
       try {
-        result = await this.rpcInstance.request('llm.chat', requestParams) as LLMChatResult;
+        result = await this.requestWithAbortSignal<LLMChatResult>(
+          'llm.chat',
+          requestParams,
+          options?.signal,
+        );
       } catch (error) {
         if (!this.shouldResendInlineImages(error, referencedMessages.usedHintKeys)) throw error;
         this.inlineImageReferenceHints.invalidate(referencedMessages.usedHintKeys);
@@ -602,10 +610,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
           requestId,
           imageCount: referencedMessages.usedHintKeys.length,
         });
-        result = await this.rpcInstance.request('llm.chat', {
-          ...requestParams,
-          messages: context.messages,
-        }) as LLMChatResult;
+        result = await this.requestWithAbortSignal<LLMChatResult>(
+          'llm.chat',
+          {
+            ...requestParams,
+            messages: context.messages,
+          },
+          options?.signal,
+        );
       }
 
       const response: LLMResponse = {

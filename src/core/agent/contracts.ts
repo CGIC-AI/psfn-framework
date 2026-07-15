@@ -23,8 +23,20 @@ import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-e
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
-  stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
+  stream(
+    context: LLMContext,
+    callbacks?: StreamCallbacks,
+    options?: LLMProviderStreamOptions,
+  ): Promise<LLMResponse>;
   complete(context: LLMContext, purpose: CompletionPurpose, options?: LLMProviderCompletionOptions): Promise<LLMResponse>;
+}
+
+export interface LLMProviderStreamOptions {
+  /**
+   * Aborts the in-flight streaming transport call. Carries the model-call gate's
+   * preempt signal so a higher-priority acquire can preempt a background stream.
+   */
+  signal?: AbortSignal;
 }
 
 export interface LLMProviderCompletionOptions {
@@ -35,7 +47,7 @@ export interface LLMProviderCompletionOptions {
 
 export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {
   return {
-    stream: (context, callbacks) => provider.stream(context, callbacks),
+    stream: (context, callbacks, options) => provider.stream(context, callbacks, options),
     complete: (context, purpose, options) => provider.complete(context, purpose, options),
   };
 }

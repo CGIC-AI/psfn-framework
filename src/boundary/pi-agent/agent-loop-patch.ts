@@ -157,7 +157,7 @@ export function installAgentToolSchedulerPatch(
       const budgetError = continuationFuse.tripWallClock();
       abortController.abort(budgetError);
     }, continuationFuse.limits.maxWallTimeMs);
-    wallClockTimer.unref?.();
+    wallClockTimer.unref();
 
     let partial: any = null;
     let terminalStreamError: Error | null = null;

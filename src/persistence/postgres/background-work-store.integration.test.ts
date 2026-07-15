@@ -1060,6 +1060,85 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   }, 30_000);
 
+  it('keeps a max-attempt pre-boundary claim retryable when the first shutdown requeue fails', async () => {
+    const database = await harness.createDatabase();
+    const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const secondStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const originalRequeue = firstStore.requeuePreBoundaryClaims.bind(firstStore);
+    let requeueAttempts = 0;
+    const requeueSpy = vi.spyOn(firstStore, 'requeuePreBoundaryClaims').mockImplementation(async input => {
+      requeueAttempts += 1;
+      if (requeueAttempts === 1) throw new Error('injected PostgreSQL requeue failure');
+      return originalRequeue(input);
+    });
+    const providerEntered = deferred();
+    const first = new BackgroundWorkSupervisor({
+      store: firstStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'first-replica',
+      leaseDurationMs: 60_000,
+      shutdownTimeoutMs: 1_000,
+      now: () => 1_000,
+      executor: async ({ effects, signal }) => {
+        providerEntered.resolve();
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+        });
+      },
+    });
+    let sinkWrites = 0;
+    const second = new BackgroundWorkSupervisor({
+      store: secondStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'second-replica',
+      now: () => 2_000,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          sinkWrites += 1;
+        });
+      },
+    });
+    const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
+    try {
+      await first.enqueue([input]);
+      await first.tick();
+      await providerEntered.promise;
+      expect(await firstStore.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+      await expect(first.stop()).rejects.toThrow('injected PostgreSQL requeue failure');
+      expect(await firstStore.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+      await first.stop();
+      expect(requeueAttempts).toBe(2);
+      expect(await secondStore.get(input.jobId)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'shutdown',
+        attemptCount: 0,
+      });
+
+      await second.tick();
+      await second.waitForIdle();
+      expect(await secondStore.get(input.jobId)).toMatchObject({
+        state: 'succeeded',
+        attemptCount: 0,
+      });
+      expect(sinkWrites).toBe(1);
+    } finally {
+      requeueSpy.mockRestore();
+      await Promise.allSettled([first.stop(), second.stop()]);
+      await Promise.all([firstStore.close(), secondStore.close()]);
+    }
+  }, 30_000);
+
   it('leaves a drain-deferred durable extraction retryable and applies its exact effect once on retry', async () => {
     // Models the u5bv.11 durable receipt outcome end-to-end on a real store: a
     // queued bounded extraction that finds the extractor draining opens its

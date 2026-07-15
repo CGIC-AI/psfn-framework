@@ -176,7 +176,12 @@ export function buildAgentControlPlane(
         { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
         { step: 'stop debug observer', action: () => stopDebugObserver() },
         { step: 'stop scheduler', action: () => scheduler.stop() },
-        { step: 'stop durable background work supervisor', action: () => agentLoop.stopBackgroundWork() },
+        {
+          step: 'stop durable background work supervisor',
+          action: () => agentLoop.stopBackgroundWork(),
+          maxAttempts: 2,
+          failClosed: true,
+        },
         {
           step: 'drain memory extractor',
           action: async () => {

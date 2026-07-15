@@ -8,6 +8,8 @@ export interface ShutdownSequenceStep {
   step: string;
   action: () => void | Promise<void>;
   maxAttempts?: number;
+  /** Stop the sequence when this step exhausts its bounded attempts. */
+  failClosed?: boolean;
 }
 
 export async function runShutdownStep(
@@ -15,6 +17,7 @@ export async function runShutdownStep(
   action: () => void | Promise<void>,
   logger: ShutdownLogger,
   maxAttempts = 2,
+  failClosed = false,
 ): Promise<void> {
   const attempts = Math.max(1, Math.floor(maxAttempts));
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -38,12 +41,15 @@ export async function runShutdownStep(
         });
         continue;
       }
-      logger.error('Shutdown step failed; continuing shutdown', {
+      logger.error(failClosed
+        ? 'Shutdown step failed; aborting shutdown'
+        : 'Shutdown step failed; continuing shutdown', {
         step,
         attempt,
         maxAttempts: attempts,
         error: String(error),
       });
+      if (failClosed) throw error;
     }
   }
 }
@@ -58,6 +64,7 @@ export async function runShutdownSequence(
       shutdownStep.action,
       logger,
       shutdownStep.maxAttempts,
+      shutdownStep.failClosed,
     );
   }
 }

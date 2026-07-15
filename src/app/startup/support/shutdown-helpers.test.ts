@@ -102,4 +102,37 @@ describe('runShutdownSequence', () => {
       }),
     );
   });
+
+  it('aborts before later shutdown steps when a fail-closed step exhausts its retries', async () => {
+    const logger = createLogger();
+    const calls: string[] = [];
+
+    await expect(runShutdownSequence([
+      {
+        step: 'durable release',
+        action: () => {
+          calls.push('durable release');
+          throw new Error('release unavailable');
+        },
+        maxAttempts: 2,
+        failClosed: true,
+      },
+      {
+        step: 'close database',
+        action: () => {
+          calls.push('close database');
+        },
+      },
+    ], logger)).rejects.toThrow('release unavailable');
+
+    expect(calls).toEqual(['durable release', 'durable release']);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Shutdown step failed; aborting shutdown',
+      expect.objectContaining({
+        step: 'durable release',
+        attempt: 2,
+        maxAttempts: 2,
+      }),
+    );
+  });
 });

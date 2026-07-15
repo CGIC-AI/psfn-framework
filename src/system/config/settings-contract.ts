@@ -53,10 +53,13 @@ export type SettingsFieldType =
  * Owner files whose WHOLE file is rooted per-companion (companionDataDir) rather
  * than cluster-global (systemDataDir). Distinct from settings.overlay.json keys
  * (dnll.1), which override individual settings.json fields: these relocate the
- * entire owner file. capability-tier.json is per-companion (dnll.2).
+ * entire owner file. capability-tier.json is per-companion (dnll.2);
+ * scheduler.json (circadian cadence, rest window, morning wake, freeTime,
+ * sleepConsolidation) is per-companion (dnll.3).
  */
 export const PER_COMPANION_OWNER_FILES: ReadonlySet<string> = new Set<string>([
   CAPABILITY_TIER_FILE_NAME,
+  SCHEDULER_FILE_NAME,
 ]);
 
 /** Ownership scope for a whole owner file, derived from its rooting. */

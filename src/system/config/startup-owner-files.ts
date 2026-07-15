@@ -60,7 +60,8 @@ export interface StartupOwnerFileLoadOptions {
   dataDir: string;
   /**
    * Companion-owned config root (companionDataDir). Roots the per-companion
-   * owner files verified here — currently only capability-tier.json (dnll.2).
+   * owner files verified here — capability-tier.json (dnll.2) and scheduler.json
+   * (dnll.3).
    * When omitted it resolves to {@link StartupOwnerFileLoadOptions.dataDir},
    * matching the legacy shared-root layout. The underlying loader still fails
    * closed on a missing per-companion file; this is a rooting default, not a
@@ -214,8 +215,9 @@ export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
   const seedDir = ownerFileSeedDir(options);
-  // capability-tier.json is a per-companion owner file (dnll.2): verify it at the
-  // companion root. Defaults to dataDir for the legacy shared-root layout.
+  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
+  // owner files: verify them at the companion root. Defaults to dataDir for the
+  // legacy shared-root layout.
   const companionDataDir = options.companionDataDir ?? options.dataDir;
   const checks: Array<{ label: string; dataPath: string; seedPath: string; run: () => unknown }> = [
     {
@@ -251,9 +253,9 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'scheduler',
-      dataPath: join(options.dataDir, SCHEDULER_FILE_NAME),
+      dataPath: join(companionDataDir, SCHEDULER_FILE_NAME),
       seedPath: join(seedDir, 'scheduler.seed.json'),
-      run: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'capability-tier',

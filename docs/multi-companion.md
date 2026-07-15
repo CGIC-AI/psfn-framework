@@ -113,7 +113,17 @@ run side by side under one release. A missing per-companion tier file fails
 startup closed (no fallback to a shared file), the settings contract marks the
 `capabilities` subsystem `perCompanion`, and the file rides the per-companion
 `companion-tree` backup slice, not the cluster-global `system-config` slice.
-`scheduler.json` circadian config is relocated by separate work (dnll.3).
+`scheduler.json` is relocated the same way (dnll.3): each companion's circadian
+configuration — heartbeat/tick cadence, the episodic rest window,
+`temporalWakeup.morningWake.localTime`, `freeTime`, and `sleepConsolidation` — is
+loaded from its own `companionDataDir/scheduler.json`, so two fleet companions
+can hold distinct wake/rest schedules under one release. A missing per-companion
+scheduler file fails startup closed, the settings contract marks the `scheduler`
+subsystem `perCompanion`, and the file rides the `companion-tree` backup slice,
+not the cluster-global `system-config` slice. Both files are enumerated in
+`PER_COMPANION_OWNER_FILES` (`src/system/config/settings-contract.ts`), which the
+owner-file config store and startup verification consult to root them at
+`companionDataDir`.
 
 Separately, the Garden admin surface owns several per-companion state files that
 must resolve under `companionDataDir` to match the runtime and avoid fleet

@@ -37,8 +37,10 @@ export function hydrateJsonBackedRuntimeConfig(
   applySettings(config, modelsConfig);
   applyProvidersRuntimeConfig(config, loadProvidersConfig(dataDir, loadOptions));
 
+  // scheduler.json is a per-companion owner file (dnll.3): root it at the
+  // companion data dir so fleet companions can hold distinct circadian schedules.
   const schedulerConfig = resolveRuntimeSchedulerConfig({
-    dataDir,
+    dataDir: companionDataDir,
     ...(seedDir ? { seedDir } : {}),
   });
   config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;

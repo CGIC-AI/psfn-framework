@@ -102,7 +102,8 @@ export interface OwnerFileConfigStoreOptions {
   dataDir: string;
   /**
    * Companion-owned config root (companionDataDir). Roots the per-companion
-   * owner files — currently only capability-tier.json (bead dnll.2). When
+   * owner files — capability-tier.json (bead dnll.2) and scheduler.json (bead
+   * dnll.3). When
    * omitted it resolves to {@link OwnerFileConfigStoreOptions.dataDir}, matching
    * the legacy shared-root layout where systemDataDir === companionDataDir. This
    * mirrors `resolveConfiguredCompanionDataDir` and is NOT a config fallback:
@@ -121,8 +122,8 @@ export function createOwnerFileConfigStore(
     ...loadOptions,
     defaultContextWindow: options.defaultContextWindow,
   };
-  // capability-tier.json is a per-companion owner file (dnll.2); route it at the
-  // companion root, not the shared system root.
+  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
+  // owner files; route them at the companion root, not the shared system root.
   const companionDataDir = options.companionDataDir ?? options.dataDir;
 
   return {
@@ -132,8 +133,8 @@ export function createOwnerFileConfigStore(
     saveModels: (nextConfig) => saveModelsConfig(options.dataDir, nextConfig, modelLoadOptions),
     loadProviders: () => loadProvidersConfig(options.dataDir, loadOptions),
     saveProviders: (nextConfig) => saveProvidersConfig(options.dataDir, nextConfig),
-    loadScheduler: () => loadSchedulerConfig(options.dataDir, loadOptions),
-    saveScheduler: (nextConfig) => saveSchedulerConfig(options.dataDir, nextConfig),
+    loadScheduler: () => loadSchedulerConfig(companionDataDir, loadOptions),
+    saveScheduler: (nextConfig) => saveSchedulerConfig(companionDataDir, nextConfig),
     loadCapabilityTier: () => loadCapabilityTierConfig(companionDataDir, loadOptions),
     saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(companionDataDir, nextConfig),
     loadChargePolicy: () => loadChargePolicyConfig(options.dataDir, loadOptions),
@@ -167,7 +168,7 @@ export function createOwnerFileConfigStore(
       seedDir: options.seedDir,
     }),
     loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
-    loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+    loadStartupScheduler: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
     loadStartupCapabilityTier: () => loadStartupCapabilityTierOwnerFile(
       companionDataDir,
       options.seedDir,

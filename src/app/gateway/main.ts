@@ -59,6 +59,7 @@ import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
+import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -102,6 +103,19 @@ async function main(): Promise<void> {
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     env,
     logger: log,
+  });
+  const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
+    config: config.fleetAuth,
+    credentialVault: config.credentialVault,
+    ...(config.postgresDatabaseUrl
+      ? { companionDatabaseUrl: config.postgresDatabaseUrl }
+      : {}),
+    protectedRestoreRoots: [
+      startupHydration.pathSnapshot.systemDataDir,
+      startupHydration.pathSnapshot.companionDataDir,
+      startupHydration.pathSnapshot.workspacePath,
+      startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
+    ],
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
@@ -417,6 +431,7 @@ async function main(): Promise<void> {
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
         { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },
         { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
+        { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);

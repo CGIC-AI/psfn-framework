@@ -31,6 +31,7 @@ export const SYSTEM_CONFIG_OWNER_FILES = [
   'trust-policy.json',
   'charge-policy.json',
   'intake-policy.json',
+  'fleet-auth.json',
 ] as const;
 
 export interface CaptureSystemConfigSnapshotOptions {

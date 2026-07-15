@@ -14,6 +14,10 @@ import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
+  FleetAuthConfig,
+  FleetAuthVerifierConfig,
+} from './fleet-auth-config.js';
+import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
   ChannelType,
@@ -174,6 +178,10 @@ export interface SubstrateConfig {
   databasePath: string;
   persistenceBackend?: PersistenceBackend;
   postgresDatabaseUrl?: string;
+  /** Gateway-only full owner-file projection; never present in agent/operator config. */
+  fleetAuth?: FleetAuthConfig;
+  /** Public-key-only projection supplied to operator/agent verifier processes. */
+  fleetAuthVerifier?: FleetAuthVerifierConfig;
   /**
    * Optional per-companion Postgres schema (sprint 10, W2 multi-companion
    * tenancy). When set, the agent's runtime persistence pools pin their
@@ -373,6 +381,7 @@ export const CORE_SECRET_BEARING_CONFIG_KEYS = [
   'gatewayCompanionAuthToken',
   'gatewaySessionIntegrityAuthToken',
   'postgresDatabaseUrl',
+  'fleetAuth',
   'litellmApiKeyRef',
   'openRouterApiKeyRef',
   'deepgramApiKey',
@@ -389,6 +398,7 @@ export interface CoreSubstrateConfig extends SubstrateConfig {
   gatewayCompanionAuthToken?: never;
   gatewaySessionIntegrityAuthToken?: never;
   postgresDatabaseUrl?: never;
+  fleetAuth?: never;
   litellmApiKeyRef?: never;
   openRouterApiKeyRef?: never;
   deepgramApiKey?: never;
@@ -404,6 +414,7 @@ export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstr
     gatewayCompanionAuthToken: _gatewayCompanionAuthToken,
     gatewaySessionIntegrityAuthToken: _gatewaySessionIntegrityAuthToken,
     postgresDatabaseUrl: _postgresDatabaseUrl,
+    fleetAuth: _fleetAuth,
     litellmApiKeyRef: _litellmApiKeyRef,
     openRouterApiKeyRef: _openRouterApiKeyRef,
     deepgramApiKey: _deepgramApiKey,

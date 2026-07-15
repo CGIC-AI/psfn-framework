@@ -47,6 +47,10 @@ import {
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV,
 } from '../../boundary/gateway/companion-auth.js';
 import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
+import {
+  isFleetAuthEnabled,
+  resolveFleetAuthOwnerFile,
+} from './fleet-auth-config.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -285,6 +289,12 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     }
   }
   const dataDir = runtimePathLayout.systemDataDir;
+  const fleetAuthProjection = resolveFleetAuthOwnerFile({
+    dataDir,
+    enabled: isFleetAuthEnabled(env),
+    processMode: mode,
+    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
+  });
   const companionId = requireCompanionId(env);
   const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
   const configuredCharacterCardPath = env.CHARACTER_CARD_PATH
@@ -380,6 +390,11 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     dataDir,
     databasePath,
     persistenceBackend,
+    ...(fleetAuthProjection?.kind === 'gateway'
+      ? { fleetAuth: fleetAuthProjection.config }
+      : fleetAuthProjection
+        ? { fleetAuthVerifier: fleetAuthProjection }
+        : {}),
     ...(postgresDatabaseUrl ? { postgresDatabaseUrl } : {}),
     ...(postgresSchema ? { postgresSchema } : {}),
     sessionMessageLimit: 30,

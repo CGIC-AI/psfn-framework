@@ -1,0 +1,230 @@
+import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
+import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
+import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
+import { resolveGatewayFleetAuthSecrets } from '../../../system/config/fleet-auth-config.js';
+import { createPostgresPool } from '../../postgres.js';
+import {
+  FleetAuthAuthorityFloorStore,
+  type FleetAuthAuthorityFloor,
+} from './authority-floor.js';
+import {
+  FLEET_AUTH_SCHEMA_NAME,
+  assertFleetAuthBackupRestorePrivileges,
+  assertFleetAuthRuntimePrivileges,
+  hasDurableFleetAuthAuthority,
+  migrateFleetAuthSchema,
+} from './schema.js';
+
+export interface GatewayFleetAuthPersistence {
+  pool: Pool;
+  authorityFloors: FleetAuthAuthorityFloorStore;
+  close(): Promise<void>;
+}
+
+interface AuthorityStateRow {
+  authority_generation: string;
+  global_auth_epoch: string;
+  restore_checkpoint: string;
+  activation_generation: string;
+}
+
+function parseStateInteger(value: string, field: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid fleet_auth authority_state.${field}`);
+  }
+  return parsed;
+}
+
+/**
+ * Bring restorable database state up to the non-restored floor before any
+ * listener can accept authentication. The floor is written first by the
+ * trusted-host authority. A database failure therefore leaves authority
+ * over-fenced; the next startup retries this transaction.
+ */
+export async function reconcileFleetAuthAuthorityState(
+  pool: Pool,
+  floor: FleetAuthAuthorityFloor,
+  auditEventId: string,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await reconcileFleetAuthAuthorityStateInTransaction(client, floor, auditEventId);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Transaction-scoped form used by restore so restored rows, quarantine, epoch
+ * advancement, and audit become visible atomically. The caller owns BEGIN,
+ * COMMIT, rollback, and any coordinator advisory lock.
+ */
+export async function reconcileFleetAuthAuthorityStateInTransaction(
+  client: PoolClient,
+  floor: FleetAuthAuthorityFloor,
+  auditEventId: string,
+): Promise<void> {
+  const result = await client.query<AuthorityStateRow>(`
+      SELECT authority_generation, global_auth_epoch, restore_checkpoint, activation_generation
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+      WHERE singleton = TRUE
+      FOR UPDATE
+    `);
+  const row = result.rows.at(0);
+  if (!row) throw new Error('fleet_auth authority_state singleton is missing');
+  const databaseAuthorityGeneration = parseStateInteger(
+    row.authority_generation,
+    'authority_generation',
+  );
+  const databaseAuthEpoch = parseStateInteger(row.global_auth_epoch, 'global_auth_epoch');
+  const databaseRestoreCheckpoint = parseStateInteger(
+    row.restore_checkpoint,
+    'restore_checkpoint',
+  );
+  const databaseActivationGeneration = parseStateInteger(
+    row.activation_generation,
+    'activation_generation',
+  );
+  const trusted = floor.trustedHost;
+  if (databaseAuthorityGeneration > trusted.authorityGeneration
+    || databaseRestoreCheckpoint > trusted.restoreCheckpoint
+    || databaseActivationGeneration > trusted.activationGeneration) {
+    throw new Error('Restorable fleet_auth authority is ahead of its non-restored trusted-host floor');
+  }
+  const floorAdvanced = databaseAuthorityGeneration < trusted.authorityGeneration
+    || databaseRestoreCheckpoint < trusted.restoreCheckpoint
+    || databaseActivationGeneration < trusted.activationGeneration;
+  if (!floorAdvanced) return;
+
+  // Durable account rows become non-authoritative restore candidates. Keep
+  // explicit revocation states intact while quarantining everything else.
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+      SET status = CASE WHEN status = 'revoked' THEN status ELSE 'quarantined' END,
+          restore_state = 'quarantined',
+          updated_at = clock_timestamp()
+    `);
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
+          restore_state = 'quarantined',
+          updated_at = clock_timestamp()
+    `);
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
+          restore_state = 'quarantined',
+          updated_at = clock_timestamp()
+    `);
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+      SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'quarantined' END,
+          restore_state = 'quarantined',
+          updated_at = clock_timestamp()
+    `);
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
+      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
+          restore_state = 'quarantined',
+          updated_at = clock_timestamp()
+    `);
+
+  // Ephemeral rows bind the old epoch and are removed before the epoch is
+  // published. Provider token custody is intentionally never restorable.
+  for (const table of [
+    'jit_authorization_grants',
+    'step_up_challenges',
+    'browser_sessions',
+    'provider_token_custody',
+    'discord_evidence_snapshots',
+    'oauth_transactions',
+    'trusted_host_ceremonies',
+  ]) {
+    await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}."${table}"`);
+  }
+  const nextEpoch = databaseAuthEpoch + 1;
+  await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+      SET authority_generation = $1,
+          global_auth_epoch = $2,
+          restore_checkpoint = $3,
+          activation_generation = $4,
+          updated_at = clock_timestamp()
+      WHERE singleton = TRUE
+    `, [
+      trusted.authorityGeneration,
+      nextEpoch,
+      trusted.restoreCheckpoint,
+      trusted.activationGeneration,
+    ]);
+  await client.query(`
+      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        (event_id, actor_context, action, resource, decision, reason_code,
+         authority_generation, global_auth_epoch)
+      VALUES ($1, '{"kind":"system","id":"fleet-auth-startup"}'::jsonb,
+              'authority.reconcile', 'fleet_auth', 'deny', 'restored_authority_quarantined',
+              $2, $3)
+    `, [auditEventId, trusted.authorityGeneration, nextEpoch]);
+}
+
+export async function initializeGatewayFleetAuthPersistence(options: {
+  config?: FleetAuthConfig;
+  credentialVault?: CredentialVaultPort;
+  protectedRestoreRoots: readonly string[];
+  companionDatabaseUrl?: string;
+}): Promise<GatewayFleetAuthPersistence | undefined> {
+  if (!options.config) return undefined;
+  if (!options.credentialVault) {
+    throw new Error('Fleet auth enabled mode requires the gateway credential vault');
+  }
+  const secrets = resolveGatewayFleetAuthSecrets({
+    config: options.config,
+    credentialVault: options.credentialVault,
+    protectedRestoreRoots: options.protectedRestoreRoots,
+    ...(options.companionDatabaseUrl
+      ? { companionDatabaseUrl: options.companionDatabaseUrl }
+      : {}),
+  });
+  await migrateFleetAuthSchema({
+    databaseUrl: secrets.database.migrationUrl,
+    roles: options.config.databaseRoles,
+  });
+  await assertFleetAuthRuntimePrivileges(
+    secrets.database.runtimeUrl,
+    options.config.databaseRoles,
+  );
+  await assertFleetAuthBackupRestorePrivileges(
+    secrets.database.backupRestoreUrl,
+    options.config.databaseRoles,
+  );
+
+  const pool = createPostgresPool(secrets.database.runtimeUrl, {
+    applicationName: 'psfn-fleet-auth-broker',
+    allowExitOnIdle: true,
+    max: 8,
+  });
+  try {
+    const databaseHasDurableAuthority = await hasDurableFleetAuthAuthority(pool);
+    const authorityFloors = new FleetAuthAuthorityFloorStore(secrets.authorityFloorRoot);
+    const floor = authorityFloors.open({
+      activationGeneration: options.config.activationGeneration,
+      databaseHasDurableAuthority,
+    });
+    await reconcileFleetAuthAuthorityState(pool, floor, randomUUID());
+    return {
+      pool,
+      authorityFloors,
+      close: async () => await pool.end(),
+    };
+  } catch (error) {
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
+}

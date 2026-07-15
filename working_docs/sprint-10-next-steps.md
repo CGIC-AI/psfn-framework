@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** and **fleet-efficiency status added 2026-07-14** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** and **fleet-efficiency status refreshed 2026-07-15** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -98,20 +98,41 @@ The headline fact governing everything below: the multi-companion substrate is *
   focused suites 378/378, real-PostgreSQL store integration 6/6 (new anchor
   column exercised against a live database), lint, and ESM+DTS build passed on
   the integrated branch.
-- Final tracker classification for the original nine-child wave: six closed
-  and three implementation children genuinely open. Three newer scheduler-census
-  children (`2z12.10`-`.12`) were subsequently attached to the epic and are not
-  part of that original-wave ratio. `2z12.1` is closed because its code/config
-  shipped on canonical `origin/main` at `84c0089e`; operational
-  owner-file enablement, one-companion telemetry soak, and provider cache-read
-  pricing proof are separated into top-level validation bead `9hyv`, linked
-  `validates:2z12.1`. `2z12.3` still sends the audited keepalive, correctly
-  scoped as a
-  PostgreSQL audit-write issue rather than SQLite work; `2z12.4` has a candidate
-  implementation at `6c9c7186` on another pushed branch but is not integrated
-  into this feature branch or main; and all eight `2z12.9` small-win checklist
-  items remain open. The original epic therefore stays open; no residual-fixes
-  epic was created.
+- `psfn-framework-2z12.3` is closed on integration merge `215d028b`
+  (implementation `4d8807e1`). Idle keepalive now uses authenticated
+  transport heartbeats instead of an audited `discord.typing` RPC; real typing
+  remains audited and missing acknowledgements still close the connection.
+  Its single two-axis review passed without findings. Worker evidence was 178
+  targeted tests plus lint/build; the combined final gate below supersedes it.
+- `psfn-framework-2z12.9` is closed on integration merge `94234eab`
+  (implementation `642fcbd4`, single remediation `39a36a16`). The narrowed
+  six-item sweep landed recoverable directory caching, coherent archive
+  fingerprints, exact token-count reuse, chain-index boot fingerprints,
+  disk-load-only settings logging, and strict binary voice audio frames.
+  Sampling extraction was explicitly rejected because this branch has no
+  owner/config authority for that decision. The one important review finding
+  was a derived-index channel-id isolation hole; canonical journal identity is
+  now authoritative. Lesser fingerprint/test/voice-order observations remain
+  report-only.
+- `psfn-framework-2z12.4` is closed on merge `7ce11bd8` plus integration repair
+  `0985c297` (implementation `0964f4ad`, single remediation `183e375a`). The
+  validated 16 MiB turn-boundary rotation is integrated and general range,
+  compaction-summary, tombstoned recent, and tombstoned turn-record reads are
+  segment/byte bounded while preserving exact redaction. The one review found
+  two valid blockers: unverified leading rows could be treated as empty, and
+  unsigned index tombstone IDs could weaken partner-data redaction. Canonical
+  fallback and journal-authoritative tombstones now fail closed. Legacy
+  Garden/`t5z7.2` scope was explicitly cut from this lane; no Garden branch was
+  merged or resurrected.
+- Final integrated gate at pushed `feat/fleet-efficiency` head `0985c297`:
+  session/journal/repair 182/182, gateway/small-wins 288/288, lint, ESM+DTS
+  build, and diff check passed. The branch is clean and origin-equal.
+- Final tracker classification for the original nine-child wave: **9/9 closed**.
+  Three newer scheduler-census children (`2z12.10`-`.12`) were subsequently
+  attached and are not part of that original-wave ratio; `.10` is also closed.
+  `2z12.1` operational enablement/soak/pricing proof remains separately owned by
+  top-level validation bead `9hyv`. The parent epic remains open only for real
+  newer children/validation, not for the completed original wave.
 
 ## 0. 2026-07-12 update — decided priority order
 

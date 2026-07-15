@@ -18,6 +18,7 @@ import {
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
+  CERTIFICATION_EMBEDDING_DIMS,
   CERTIFICATION_SCHEMA_A,
   CERTIFICATION_SCHEMA_B,
   CERTIFICATION_SESSION_KEYRING,
@@ -133,6 +134,7 @@ function configureOwnerFiles(
   settings.compactionThresholdPct = 30;
   settings.sessionHistoryBudgetPct = 2;
   settings.memoryRetrievalBudgetPct = 2;
+  settings.embeddingDims = CERTIFICATION_EMBEDDING_DIMS;
   writeJson(settingsPath, settings);
 
   const modelsPath = join(systemDataDir, 'models.json');

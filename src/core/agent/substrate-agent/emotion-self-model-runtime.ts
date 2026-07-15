@@ -1,4 +1,5 @@
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../../emotion/appraisal.js';
+import type { EmotionAppraisalStateSnapshot } from '../../emotion/appraisal-state.js';
 import type { EmotionObserver, EmotionObserverResult } from '../../emotion/observer.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
@@ -445,11 +446,13 @@ export class EmotionSelfModelRuntime {
   async triggerEmotionAppraisal(params: {
     sessionChannelId: string;
     turnId: TurnID;
-    internalState: InternalState;
+    appraisalState: EmotionAppraisalStateSnapshot;
     templateVariables: Record<string, string> | undefined;
     // E1.5: turn ConversationScope, plumbed as an available input for the
     // emotion scoping bead. Appraisal behavior is unchanged here.
     conversationScope?: ConversationScope;
+    maxSessionEntryId?: number;
+    icpCorrelation?: IcpConversationCorrelation;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -467,7 +470,14 @@ export class EmotionSelfModelRuntime {
       return;
     }
 
-    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10)
+    const recentEntries = params.maxSessionEntryId === undefined
+      ? manager.getRecentMessages(params.sessionChannelId, 10)
+      : this.sessionManager.getRecentMessagesAtOrBefore(
+          params.sessionChannelId,
+          params.maxSessionEntryId,
+          10,
+        );
+    const recentMessages = recentEntries
       .filter(entry => !isIntentionAppraisalArtifact(entry))
       // htm9.12: intake-firewall/quarantine notices must contribute ZERO emotion
       // appraisal input. A quarantine notice must never become a stress signal.
@@ -481,7 +491,7 @@ export class EmotionSelfModelRuntime {
     const result = await this.emotionAppraisal.maybeAppraise({
       sessionId: params.sessionChannelId,
       turnId: params.turnId,
-      internalState: params.internalState,
+      appraisalState: params.appraisalState,
       recentMessages,
       personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),

@@ -224,8 +224,12 @@ export function createTurnExecutionRuntimeAdapter(
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
     observerEvalSidecar: options.observerEvalSidecar ?? null,
-    awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input),
-    registerPostTurnBackgroundWork: (input) => options.turnSupportRuntime.registerPostTurnBackgroundWork(input),
+    beginForegroundBackgroundWork: (logicalSessionId) => options.turnSupportRuntime
+      .beginForegroundBackgroundWork(logicalSessionId),
+    endForegroundBackgroundWork: (lease) => options.turnSupportRuntime
+      .endForegroundBackgroundWork(lease),
+    enqueuePostTurnBackgroundWork: (inputs) => options.turnSupportRuntime
+      .enqueuePostTurnBackgroundWork(inputs),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),
     buildTurnBudgetCharacteristics: (message, taskKind) => options.callbacks
       .buildTurnBudgetCharacteristics(message, taskKind),

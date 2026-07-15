@@ -517,6 +517,8 @@ export class ShardManager implements ShardExecutionPort {
         sanitizeCoreSubstrateConfig(runtimeConfig),
         {
           runtimeMode: this.deps.runtimeMode,
+          // Shards are ephemeral and intentionally own no durable post-turn lane.
+          backgroundWorkDisabled: true,
         },
       );
 

@@ -44,6 +44,8 @@ import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
+import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
+import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -65,6 +67,7 @@ export interface AgentPersistenceRuntime {
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
   introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
+  backgroundWorkStore: BackgroundWorkStorePort;
   /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
@@ -164,6 +167,7 @@ export async function createAgentPersistenceRuntime(
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema }),
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema }),
     introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema }),
+    backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
   };

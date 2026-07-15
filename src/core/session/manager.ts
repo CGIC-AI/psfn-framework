@@ -45,6 +45,7 @@ import {
 import {
   resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
+  type AdaptiveContextBudgetProfile,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
@@ -200,14 +201,35 @@ export interface SessionCoreMemoryProvider {
 
 export interface AutoCompactionBetweenTurnsParams {
   channelId: string;
-  systemPrompt: string;
-  memoriesBlock: string;
+  systemPrompt?: string;
+  memoriesBlock?: string;
+  /** Durable jobs persist counts and hashes, never a second prompt/content copy. */
+  systemPromptTokenCount?: number;
+  memoriesTokenCount?: number;
+  adaptiveProfile?: AdaptiveContextBudgetProfile;
   llmProvider: LLMProviderPort;
   userId?: string;
   channelMeta?: ChannelMeta;
   compactionPromptText?: string;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   icpCorrelation?: IcpConversationCorrelation;
+}
+
+function resolveCompactionTokenCount(input: {
+  count?: number;
+  text?: string;
+  field: 'systemPrompt' | 'memoriesBlock';
+}): number {
+  if (input.count !== undefined) {
+    if (!Number.isSafeInteger(input.count) || input.count < 0) {
+      throw new Error(`Auto-compaction ${input.field}TokenCount must be a non-negative safe integer`);
+    }
+    return input.count;
+  }
+  if (input.text === undefined) {
+    throw new Error(`Auto-compaction requires ${input.field} or ${input.field}TokenCount`);
+  }
+  return countTokens(input.text);
 }
 
 export class SessionManager {
@@ -803,7 +825,7 @@ export class SessionManager {
         });
       })
       .then(async () => {
-        const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+        const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
           this.config,
           params.turnBudgetCharacteristics,
         );
@@ -846,9 +868,17 @@ export class SessionManager {
           .trim() ?? '';
         const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
           ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-        const systemTokens = countTokens(params.systemPrompt)
+        const systemTokens = resolveCompactionTokenCount({
+          count: params.systemPromptTokenCount,
+          text: params.systemPrompt,
+          field: 'systemPrompt',
+        })
           + countTokens(coreMemoryBlock)
-          + countTokens(params.memoriesBlock);
+          + resolveCompactionTokenCount({
+            count: params.memoriesTokenCount,
+            text: params.memoriesBlock,
+            field: 'memoriesBlock',
+          });
         await runAutoCompaction({
           channelId: resolvedChannelId,
           recent,
@@ -967,6 +997,19 @@ export class SessionManager {
     // Recovery markers must not age out behind an arbitrary recent-turn cap:
     // an old lost acknowledgement can replay after any number of newer turns.
     return this.store.findTurnRecord(resolvedChannelId, turnId)?.status === 'completed';
+  }
+
+  findRecordedTurn(channelId: string, turnId: string): TurnRecord | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.store.findTurnRecord(resolvedChannelId, turnId);
+  }
+
+  findSourceRecordedTurn(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): TurnRecord | null {
+    return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
@@ -1616,6 +1659,23 @@ export class SessionManager {
       estimatedCount: historyBudget.estimatedCount,
       tokenBudget: historyBudget.tokenBudget,
     }).entries;
+  }
+
+  getRecentMessagesAtOrBefore(
+    channelId: string,
+    maxEntryId: number,
+    limit: number,
+  ): SessionEntry[] {
+    if (!Number.isSafeInteger(maxEntryId) || maxEntryId < 1) {
+      throw new Error('maxEntryId must be a positive safe integer');
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('limit must be a positive safe integer');
+    }
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.deliveryProjectionStore
+      .getEntriesBefore(resolvedChannelId, maxEntryId + 1, limit)
+      .filter(entry => !isNonConversationalSessionEntry(entry));
   }
 
   getMessageCount(channelId: string): number {

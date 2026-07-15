@@ -228,6 +228,7 @@ async function main(): Promise<void> {
     backend: persistenceBackend,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
+    backgroundWorkStore,
     reflectionStore,
     contactStore: persistedContactStore,
     hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
@@ -321,6 +322,7 @@ async function main(): Promise<void> {
     gateway,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
+    backgroundWorkStore,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
@@ -892,6 +894,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
     },
     scheduler,

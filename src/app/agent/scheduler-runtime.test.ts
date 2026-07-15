@@ -7,7 +7,10 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import { registerSalienceDecayOperation } from './scheduler-runtime.js';
+import {
+  BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+  registerSalienceDecayOperation,
+} from './scheduler-runtime.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -18,6 +21,15 @@ describe('agent scheduler runtime wiring', () => {
     expect(source).toContain('registerAmbientPresenceOperation({');
     expect(source).toContain('backgroundMaintenance,');
     expect(source).toContain('restWindow: options.schedulerConfig.episodicProcessing');
+  });
+
+  it('registers the durable background supervisor on the existing scheduler', () => {
+    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+
+    expect(BACKGROUND_WORK_SUPERVISOR_TASK_ID).toBe('background-work-supervisor');
+    expect(source).toContain('if (!options.agentLoop.hasDurableBackgroundWorkSupervisor())');
+    expect(source).toContain('handler: () => options.agentLoop.tickBackgroundWork()');
+    expect(source).not.toContain('setInterval(() => options.agentLoop.tickBackgroundWork()');
   });
 
   it('registers salience decay as an operation on the shared scheduler-owned cadence', () => {

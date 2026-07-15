@@ -61,6 +61,10 @@ async function main(): Promise<void> {
     sessionManager,
     systemPrompt,
     config: sanitizeCoreSubstrateConfig(config),
+    // This standalone developer REPL has no Scheduler owner. Automatic
+    // post-turn cognition is disabled explicitly; memory retrieval and
+    // inspection remain available through the wired memory runtime below.
+    backgroundWorkDisabled: true,
   });
 
   // Memory

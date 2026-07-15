@@ -113,6 +113,8 @@ import type { ConversationScopeSpeaker } from '../../session/conversation-scope.
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
+import type { ForegroundWorkLease } from '../background-work/supervisor.js';
+import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -190,23 +192,11 @@ export interface TurnExecutionRuntime {
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
-  awaitPostTurnDrain: (input: {
-    channelId: string;
-    turnId: TurnID;
-    requestId: string;
-    correlation: CorrelationMetadata;
-  }) => Promise<void | {
-    status: 'idle' | 'drained' | 'timeout';
-    waitMs: number;
-    workCount: number;
-  }>;
-  registerPostTurnBackgroundWork: (input: {
-    channelId: string;
-    turnId: TurnID;
-    requestId: string;
-    work: ReadonlyArray<{ name: string; promise: Promise<unknown> }>;
-    correlation: CorrelationMetadata;
-  }) => void;
+  beginForegroundBackgroundWork: (logicalSessionId: string) => ForegroundWorkLease | null;
+  endForegroundBackgroundWork: (lease: ForegroundWorkLease | null) => void;
+  enqueuePostTurnBackgroundWork: (
+    inputs: readonly EnqueueBackgroundWorkInput[],
+  ) => Promise<void>;
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
   buildTurnBudgetCharacteristics: (
     message: SubstrateMessage,
@@ -732,32 +722,12 @@ export async function handleMessageForTurn(
       error: toErrorMessage(error),
     });
   });
-  const drainWaitStartedAt = monotonicEpochNowMs();
-  const drainResult = await runtime.awaitPostTurnDrain({
-    channelId: message.channelId,
-    turnId,
-    requestId,
-    correlation: turnCorrelationBase,
-  });
-  void emitTurnPerformance(runtime.eventBus, {
-    traceId: requestId,
-    turnId,
-    requestId,
-    channelId: message.channelId,
-    channelType: message.channelType,
-    ...(performanceCompanionId ? { companionId: performanceCompanionId } : {}),
-    stage: 'post_turn_drain_wait',
-    durationMs: Math.max(0, monotonicEpochNowMs() - drainWaitStartedAt),
-    queueDepth: drainResult?.workCount ?? 0,
-    backgroundContention: (drainResult?.workCount ?? 0) > 0,
-  }).catch(error => {
-    log.debug('Turn drain performance telemetry emit failed', {
-      channelId: message.channelId,
-      turnId,
-      requestId,
-      error: toErrorMessage(error),
-    });
-  });
+  const logicalSessionId = turnCorrelationBase.sessionId?.trim();
+  if (!logicalSessionId) {
+    throw new Error('Turn execution requires a logical session id');
+  }
+  const foregroundLease = runtime.beginForegroundBackgroundWork(logicalSessionId);
+  try {
   const startTime = Date.now();
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
   const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
@@ -1749,5 +1719,8 @@ export async function handleMessageForTurn(
     throw err;
   } finally {
     observability.unsubscribe();
+  }
+  } finally {
+    runtime.endForegroundBackgroundWork(foregroundLease);
   }
 }

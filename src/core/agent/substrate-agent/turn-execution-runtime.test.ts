@@ -549,8 +549,9 @@ function createRuntime(params: {
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   resolveAuthorContext?: ReturnType<typeof vi.fn>;
   buildTurnBudgetCharacteristics?: ReturnType<typeof vi.fn>;
-  awaitPostTurnDrain?: ReturnType<typeof vi.fn>;
-  registerPostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
+  beginForegroundBackgroundWork?: ReturnType<typeof vi.fn>;
+  endForegroundBackgroundWork?: ReturnType<typeof vi.fn>;
+  enqueuePostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
   consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
@@ -671,8 +672,10 @@ function createRuntime(params: {
     emotionSelfModelRuntime,
     observerEvalSidecar: params.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
-    awaitPostTurnDrain: params.awaitPostTurnDrain ?? vi.fn(async () => undefined),
-    registerPostTurnBackgroundWork: params.registerPostTurnBackgroundWork ?? vi.fn(),
+    beginForegroundBackgroundWork: params.beginForegroundBackgroundWork
+      ?? vi.fn((logicalSessionId: string) => ({ id: 'foreground-test', logicalSessionId })),
+    endForegroundBackgroundWork: params.endForegroundBackgroundWork ?? vi.fn(),
+    enqueuePostTurnBackgroundWork: params.enqueuePostTurnBackgroundWork ?? vi.fn(async () => undefined),
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
     resolveTurnCallType: vi.fn(() => 'chat'),
@@ -682,6 +685,7 @@ function createRuntime(params: {
       turnId,
       requestId,
       channelId: message.channelId,
+      sessionId: message.channelId,
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
     countResolvableSpeakerContacts: vi.fn(async () => 0),
@@ -783,6 +787,7 @@ function createPersistenceBackedRuntime(dataDir: string, eventBus: EventBus) {
   const turnSupportRuntime = new TurnSupportRuntime({
     eventBus,
     sessionManager,
+    backgroundWorkSupervisor: null,
     hashPromptText: text => `hash:${text.length}`,
     resolveContextWindow: () => 4_096,
   });
@@ -2584,7 +2589,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         icpCorrelation: correlation,
       },
     };
-    const registerPostTurnBackgroundWork = vi.fn();
+    const enqueuePostTurnBackgroundWork = vi.fn(async () => undefined);
     const recordTurn = vi.fn();
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -2594,7 +2599,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
         recordTurn,
       },
     });
-    runtime.registerPostTurnBackgroundWork = registerPostTurnBackgroundWork;
+    runtime.enqueuePostTurnBackgroundWork = enqueuePostTurnBackgroundWork;
     const message = createMessage(sourceMessageId, {
       channelId,
       channelType: 'companion',
@@ -2619,7 +2624,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(response).toEqual(recoveredResponse);
     expect(finalizeDelivery).toHaveBeenCalledOnce();
     expect(runtime.agent.prompt).not.toHaveBeenCalled();
-    expect(registerPostTurnBackgroundWork).not.toHaveBeenCalled();
+    expect(enqueuePostTurnBackgroundWork).not.toHaveBeenCalled();
     expect(recordTurn).not.toHaveBeenCalled();
   });
 
@@ -3407,34 +3412,59 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     await handleMessageForTurn(runtime, message, { finalizeDelivery: async () => undefined });
 
-    expect(maybeExtract).toHaveBeenCalledWith(
-      correlation.channelId,
-      'contact-1',
-      correlation.turnId,
-      undefined,
-      correlation,
-    );
-    expect(runtime.runIntentionPostTurnHooks).toHaveBeenCalledWith(
-      expect.objectContaining({ icpCorrelation: correlation }),
-    );
-    expect(runtime.emotionSelfModelRuntime.triggerEmotionAppraisal).toHaveBeenCalledWith(
-      expect.objectContaining({ icpCorrelation: correlation }),
-    );
-    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(
-      expect.objectContaining({ icpCorrelation: correlation }),
-    );
+    expect(maybeExtract).not.toHaveBeenCalled();
+    expect(runtime.runIntentionPostTurnHooks).not.toHaveBeenCalled();
+    expect(runtime.emotionSelfModelRuntime.triggerEmotionAppraisal).not.toHaveBeenCalled();
+    expect(scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
+    expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'memory_extraction',
+        payload: expect.objectContaining({ kind: 'memory_extraction', icpCorrelation: correlation }),
+      }),
+      expect.objectContaining({
+        kind: 'intention_post_turn_hooks',
+        payload: expect.objectContaining({ kind: 'intention_post_turn_hooks' }),
+      }),
+      expect.objectContaining({
+        kind: 'emotion_appraisal',
+        payload: expect.objectContaining({ kind: 'emotion_appraisal', icpCorrelation: correlation }),
+      }),
+      expect.objectContaining({
+        kind: 'auto_compaction',
+        payload: expect.objectContaining({ kind: 'auto_compaction', icpCorrelation: correlation }),
+      }),
+    ]));
+    const enqueued = (runtime.enqueuePostTurnBackgroundWork as ReturnType<typeof vi.fn>)
+      .mock.calls[0]?.[0] as Array<{ kind: string; payload: Record<string, unknown> }>;
+    expect(enqueued).toHaveLength(4);
+    expect(JSON.stringify(enqueued)).not.toContain(message.content);
+    expect(JSON.stringify(enqueued)).not.toContain('assistant reply');
+    const emotionPayload = enqueued.find(job => job.kind === 'emotion_appraisal')?.payload;
+    expect(emotionPayload).toMatchObject({
+      internalStateSnapshotRef: expect.stringMatching(/^internal-state-v1:/),
+      appraisalState: {
+        schemaVersion: 1,
+        attention: {
+          activeConcernCount: 0,
+          salientEntityCount: 0,
+          conversationTrajectory: 'casual',
+        },
+      },
+    });
+    expect(emotionPayload).not.toHaveProperty('internalState');
+    expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.activeConcerns');
+    expect(emotionPayload?.appraisalState).not.toHaveProperty('attention.salientEntities');
   });
 
-  it('awaits the post-turn drain gate before starting pre-turn identity work', async () => {
+  it('starts foreground identity work without a process-global post-turn drain', async () => {
     const eventBus = new EventBus();
     const performanceEvents: Array<EventMap['agent.turn.performance']> = [];
     eventBus.on('agent.turn.performance', event => performanceEvents.push(event));
-    const postTurnDrain = createDeferred<{
-      status: 'drained';
-      waitMs: number;
-      workCount: number;
-    }>();
-    const awaitPostTurnDrain = vi.fn(() => postTurnDrain.promise);
+    const beginForegroundBackgroundWork = vi.fn((logicalSessionId: string) => ({
+      id: 'foreground-b',
+      logicalSessionId,
+    }));
+    const endForegroundBackgroundWork = vi.fn();
     const resolveAuthorContext = vi.fn(async () => ({
       trustLevel: 'regular',
       speakerRole: 'user',
@@ -3454,7 +3484,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
-      awaitPostTurnDrain,
+      beginForegroundBackgroundWork,
+      endForegroundBackgroundWork,
       resolveAuthorContext,
     });
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
@@ -3472,36 +3503,22 @@ describe('handleMessageForTurn compaction scheduling', () => {
       runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
     });
 
-    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'));
-    await flushAsyncWork();
-
-    expect(awaitPostTurnDrain).toHaveBeenCalledWith(expect.objectContaining({
-      channelId: 'ch1',
-      requestId: 'msg-post-turn-drain-wait',
-      correlation: expect.objectContaining({
-        channelId: 'ch1',
-        requestId: 'msg-post-turn-drain-wait',
-      }),
-    }));
-    expect(resolveAuthorContext).not.toHaveBeenCalled();
-
-    postTurnDrain.resolve({ status: 'drained', waitMs: 25, workCount: 2 });
-    await expect(responsePromise).resolves.toMatchObject({
+    await expect(handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'))).resolves.toMatchObject({
       content: 'assistant reply',
       channelId: 'ch1',
     });
+    expect(beginForegroundBackgroundWork).toHaveBeenCalledWith('ch1');
     expect(resolveAuthorContext).toHaveBeenCalledTimes(1);
+    expect(endForegroundBackgroundWork).toHaveBeenCalledWith({
+      id: 'foreground-b',
+      logicalSessionId: 'ch1',
+    });
+    expect(performanceEvents.some(event => event.stage === 'post_turn_drain_wait')).toBe(false);
     expect(performanceEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         traceId: 'msg-post-turn-drain-wait',
         requestId: 'msg-post-turn-drain-wait',
         stage: 'transport_received',
-      }),
-      expect.objectContaining({
-        traceId: 'msg-post-turn-drain-wait',
-        stage: 'post_turn_drain_wait',
-        queueDepth: 2,
-        backgroundContention: true,
       }),
       expect.objectContaining({ stage: 'compaction_wait', durationMs: expect.any(Number) }),
       expect.objectContaining({ stage: 'context_assembly', durationMs: expect.any(Number) }),
@@ -3516,53 +3533,57 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]));
   });
 
-  it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {
+  it('durably enqueues compaction without executing it on the foreground response path', async () => {
     const eventBus = new EventBus();
-    const deferredCompaction = createDeferred<void>();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
       manifest: undefined,
     }));
-    const scheduleAutoCompactionBetweenTurns = vi.fn(() => deferredCompaction.promise);
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
     const recordUserMessage = vi.fn(() => 1);
     const recordAssistantMessage = vi.fn(() => 2);
+    const recordTurn = vi.fn();
+    const enqueueHandoff = createDeferred<void>();
+    const enqueuePostTurnBackgroundWork = vi.fn(() => enqueueHandoff.promise);
     const runtime = createRuntime({
       eventBus,
-      sessionManager: {} as SessionManager,
+      sessionManager: { recordTurn } as unknown as SessionManager,
       buildContext,
       scheduleAutoCompactionBetweenTurns,
       awaitPendingAutoCompaction,
       recordUserMessage,
       recordAssistantMessage,
+      enqueuePostTurnBackgroundWork,
     });
 
     const responsePromise = handleMessageForTurn(runtime, createMessage('msg-1'));
-    const timeoutSentinel = Symbol('timeout');
-    const response = await Promise.race([
-      responsePromise,
-      new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), 20)),
-    ]);
+    let responseSettled = false;
+    void responsePromise.finally(() => { responseSettled = true; });
+    await vi.waitFor(() => {
+      expect(enqueuePostTurnBackgroundWork).toHaveBeenCalledTimes(1);
+    });
 
-    expect(response).not.toBe(timeoutSentinel);
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(recordTurn).not.toHaveBeenCalled();
+    expect(responseSettled).toBe(false);
+
+    enqueueHandoff.resolve();
+    const response = await responsePromise;
+
     expect(response).toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
     expect(buildContext).toHaveBeenCalledTimes(1);
     expect(buildContext.mock.calls[0][3]).toBeUndefined();
-    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
-    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledTimes(1);
-    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledWith(expect.objectContaining({
-      channelId: 'ch1',
-      requestId: 'msg-1',
-      work: expect.arrayContaining([
-        expect.objectContaining({ name: 'intention_post_turn_hooks' }),
-        expect.objectContaining({ name: 'emotion_appraisal' }),
-        expect.objectContaining({ name: 'auto_compaction' }),
-      ]),
-    }));
-
-    deferredCompaction.resolve();
-    await deferredCompaction.promise;
+    expect(scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
+    expect(enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ kind: 'intention_post_turn_hooks' }),
+      expect.objectContaining({ kind: 'emotion_appraisal' }),
+      expect.objectContaining({ kind: 'auto_compaction' }),
+    ]));
+    expect(enqueuePostTurnBackgroundWork.mock.invocationCallOrder[0]).toBeLessThan(
+      recordTurn.mock.invocationCallOrder[0]!,
+    );
   });
 
   it.each([
@@ -3638,10 +3659,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(buildRuntimeContextMock.mock.calls[0]?.[6]).toBe(DEFAULT_COMPANION_ID);
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
     expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
-    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
-      channelId,
-      userId: DEFAULT_COMPANION_ID,
-    }));
+    expect(scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
+    expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'auto_compaction',
+        payload: expect.objectContaining({
+          kind: 'auto_compaction',
+          userId: DEFAULT_COMPANION_ID,
+        }),
+      }),
+    ]));
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
       role: 'custom',
       type: 'systemNote',
@@ -3780,10 +3807,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
       undefined,
     );
     expect(buildContext.mock.calls[0]?.[4]).toBe('contact-123');
-    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
-      channelId: 'discord:dm:alex',
-      userId: 'contact-123',
-    }));
+    expect(scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
+    expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'auto_compaction',
+        payload: expect.objectContaining({
+          kind: 'auto_compaction',
+          userId: 'contact-123',
+        }),
+      }),
+    ]));
   });
 
   it('captures the full model-facing prompt context in the turn snapshot', async () => {

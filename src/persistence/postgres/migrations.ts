@@ -1072,6 +1072,84 @@ export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
   `,
 ];
 
+/** Companion-private durable queue for optional post-turn work (mmo9.3). */
+export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS agent_background_work_jobs (
+    job_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    logical_session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_schema_version INTEGER NOT NULL,
+    payload JSONB NOT NULL,
+    payload_fingerprint TEXT NOT NULL,
+    source_turn_id TEXT NOT NULL,
+    source_request_id TEXT NOT NULL,
+    source_channel_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL,
+    created_at_ms BIGINT NOT NULL,
+    available_at_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at_ms BIGINT,
+    completed_at_ms BIGINT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    CHECK (kind IN (
+      'memory_extraction',
+      'intention_post_turn_hooks',
+      'emotion_appraisal',
+      'auto_compaction'
+    )),
+    CHECK (payload_schema_version = 1),
+    CHECK (state IN (
+      'queued', 'deferred', 'retry_wait', 'running',
+      'succeeded', 'failed', 'stale_discarded'
+    )),
+    CHECK (reason_code IN (
+      'enqueued', 'deduplicated', 'foreground_active', 'started', 'completed',
+      'handler_failed', 'retry_scheduled', 'retry_exhausted', 'lease_expired',
+      'shutdown', 'source_not_ready', 'source_missing', 'source_mismatch',
+      'superseded', 'malformed_payload', 'unknown_kind'
+    )),
+    CHECK (attempt_count >= 0),
+    CHECK (max_attempts > 0),
+    CHECK (attempt_count <= max_attempts),
+    CHECK (created_at_ms >= 0 AND available_at_ms >= 0 AND updated_at_ms >= 0),
+    CHECK (revision > 0),
+    CHECK (
+      (state = 'running' AND lease_owner IS NOT NULL AND lease_expires_at_ms IS NOT NULL)
+      OR (state <> 'running' AND lease_owner IS NULL AND lease_expires_at_ms IS NULL)
+    ),
+    CHECK (
+      (state IN ('succeeded', 'failed', 'stale_discarded') AND completed_at_ms IS NOT NULL)
+      OR (state NOT IN ('succeeded', 'failed', 'stale_discarded') AND completed_at_ms IS NULL)
+    )
+  );
+  `,
+  `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_background_work_one_running_per_session
+    ON agent_background_work_jobs (logical_session_id)
+    WHERE state = 'running';
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_runnable
+    ON agent_background_work_jobs (available_at_ms ASC, created_at_ms ASC, job_id ASC)
+    WHERE state IN ('queued', 'deferred', 'retry_wait');
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_session_history
+    ON agent_background_work_jobs (logical_session_id, created_at_ms ASC, job_id ASC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_terminal_retention
+    ON agent_background_work_jobs (completed_at_ms ASC, job_id ASC)
+    WHERE state IN ('succeeded', 'failed', 'stale_discarded');
+  `,
+];
+
 export const POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK = [
   1_297_431_347,
   1_431_521_607,

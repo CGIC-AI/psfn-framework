@@ -59,6 +59,7 @@ import {
 } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Agent');
+export const BACKGROUND_WORK_SUPERVISOR_TASK_ID = 'background-work-supervisor';
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
@@ -126,6 +127,18 @@ export function buildAgentSchedulerRuntime(
       eligibilityGate: options.eligibilityGate,
     },
   );
+  if (!options.agentLoop.hasDurableBackgroundWorkSupervisor()) {
+    throw new Error('Agent scheduler requires a durable background work supervisor');
+  }
+  scheduler.register({
+    id: BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+    name: 'Durable Background Work Supervisor',
+    type: 'every',
+    intervalMs: options.schedulerConfig.tickIntervalMs,
+    handler: () => options.agentLoop.tickBackgroundWork(),
+    state: 'idle',
+  });
+
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({
     scheduler,
     eligibilityGate: options.eligibilityGate,

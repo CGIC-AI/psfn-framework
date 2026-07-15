@@ -100,6 +100,28 @@ describe('parseTurnPerformanceEvent', () => {
     });
   });
 
+  it('accepts content-free durable background lifecycle dimensions', () => {
+    expect(parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'background-job-1',
+      stage: 'background_job_state',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      queueDepth: 3,
+      durationMs: 25,
+      backgroundJobAgeMs: 500,
+      backgroundSessionIdHash: 'a'.repeat(64),
+      backgroundJobAttemptCount: 1,
+      backgroundJobKind: 'memory_extraction',
+      backgroundJobState: 'succeeded',
+      backgroundJobReason: 'completed',
+      deferReason: 'succeeded',
+    })).toMatchObject({
+      backgroundSessionIdHash: 'a'.repeat(64),
+      backgroundJobAttemptCount: 1,
+    });
+  });
+
   it('rejects content fields at the gateway-agent boundary', () => {
     expect(() => parseTurnPerformanceEvent({
       schemaVersion: 1,
@@ -109,5 +131,16 @@ describe('parseTurnPerformanceEvent', () => {
       timestampMs: 200,
       transcript: 'must never cross',
     })).toThrow('unsupported field "transcript"');
+  });
+
+  it('rejects a raw session id disguised as a background session hash', () => {
+    expect(() => parseTurnPerformanceEvent({
+      schemaVersion: 1,
+      traceId: 'background-job-1',
+      stage: 'background_job_state',
+      monotonicAtMs: 100,
+      timestampMs: 200,
+      backgroundSessionIdHash: 'discord:private-partner-channel',
+    })).toThrow('must be a SHA-256 hex digest');
   });
 });

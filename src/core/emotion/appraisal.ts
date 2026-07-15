@@ -13,6 +13,11 @@ import {
 } from '../../shared/gating/deterministic-gate.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import {
+  parseEmotionAppraisalStateSnapshot,
+  projectEmotionAppraisalState,
+  type EmotionAppraisalStateSnapshot,
+} from './appraisal-state.js';
 
 const EMOTION_APPRAISAL_GATE_LANE = 'emotion_appraisal';
 
@@ -61,7 +66,10 @@ export interface EmotionAppraisalEntry {
 export interface EmotionAppraisalInput {
   sessionId: string;
   currentEmotion?: EmotionStateSnapshot;
+  /** Existing direct callers may still supply the canonical full state. */
   internalState?: InternalState;
+  /** Minimal content-free state projection used by durable background work. */
+  appraisalState?: EmotionAppraisalStateSnapshot;
   recentMessages: readonly EmotionAppraisalMessage[];
   personalityTraits?: Record<string, string>;
   turnId?: string;
@@ -170,13 +178,14 @@ function normalizeSnapshot(snapshot: EmotionStateSnapshot): EmotionStateSnapshot
   };
 }
 
-function toEmotionSnapshotFromInternalState(state: InternalState): EmotionStateSnapshot {
-  const normalized = cloneInternalState(state);
+function toEmotionSnapshotFromAppraisalState(
+  state: EmotionAppraisalStateSnapshot,
+): EmotionStateSnapshot {
   return normalizeSnapshot({
-    vad: { ...normalized.emotional.vad },
-    mood: { ...normalized.emotional.mood },
-    discrete: { ...normalized.emotional.discreteEmotions },
-    confidence: normalized.emotional.confidence,
+    vad: { ...state.emotional.vad },
+    mood: { ...state.emotional.mood },
+    discrete: { ...state.emotional.discreteEmotions },
+    confidence: state.emotional.confidence,
   });
 }
 
@@ -378,11 +387,16 @@ export class EmotionAppraisal {
 
   async maybeAppraise(input: EmotionAppraisalInput): Promise<EmotionAppraisalResult> {
     const sessionId = normalizeSessionId(input.sessionId);
-    const internalState = input.internalState
-      ? cloneInternalState(input.internalState)
-      : null;
-    const snapshot = internalState
-      ? toEmotionSnapshotFromInternalState(internalState)
+    if (input.internalState && input.appraisalState) {
+      throw new Error('Emotion appraisal accepts internalState or appraisalState, not both');
+    }
+    const appraisalState = input.appraisalState
+      ? parseEmotionAppraisalStateSnapshot(input.appraisalState)
+      : input.internalState
+        ? projectEmotionAppraisalState(cloneInternalState(input.internalState))
+        : null;
+    const snapshot = appraisalState
+      ? toEmotionSnapshotFromAppraisalState(appraisalState)
       : input.currentEmotion
         ? normalizeSnapshot(input.currentEmotion)
         : (() => {
@@ -407,7 +421,8 @@ export class EmotionAppraisal {
     const turnsSinceLast = state.turnsSinceLast + 1;
     state.turnsSinceLast = turnsSinceLast;
 
-    const telemetryTrusted = !internalState || internalState.emotional.telemetry.status === 'trusted';
+    const telemetryTrusted = !appraisalState
+      || appraisalState.emotional.telemetry.status === 'trusted';
     const shouldTriggerVadShift = telemetryTrusted && delta >= this.vadDeltaThreshold;
     // Route the periodic/vad-shift decision through the shared primitive
     // (jpvd.4). Untrusted telemetry can never trigger the vad-shift signal, so
@@ -436,7 +451,7 @@ export class EmotionAppraisal {
           role: 'user',
           content: this.buildPrompt({
             snapshot,
-            internalState,
+            appraisalState,
             recentMessages,
             personalityTraits,
           }),
@@ -531,7 +546,7 @@ export class EmotionAppraisal {
 
   private buildPrompt(input: {
     snapshot: EmotionStateSnapshot;
-    internalState: InternalState | null;
+    appraisalState: EmotionAppraisalStateSnapshot | null;
     recentMessages: readonly EmotionAppraisalMessage[];
     personalityTraits: Record<string, string>;
   }): string {
@@ -551,8 +566,8 @@ export class EmotionAppraisal {
     );
     lines.push(`Top discrete emotions: ${topDiscrete(input.snapshot.discrete, TOP_DISCRETE_COUNT)}`);
     lines.push(`Signal confidence: ${input.snapshot.confidence.toFixed(3)}`);
-    if (input.internalState) {
-      const telemetry = input.internalState.emotional.telemetry;
+    if (input.appraisalState) {
+      const telemetry = input.appraisalState.emotional.telemetry;
       lines.push(
         `Telemetry validation: status=${telemetry.status}; source=${telemetry.source}; `
         + `reasons=${telemetry.reasons.length > 0 ? telemetry.reasons.join(',') : 'none'}; `
@@ -561,19 +576,19 @@ export class EmotionAppraisal {
       lines.push('');
       lines.push('[Internal State Signals]');
       lines.push(
-        `Cognitive: certainty=${input.internalState.cognitive.certaintyLevel.toFixed(3)}, `
-        + `engagement=${input.internalState.cognitive.topicEngagement.toFixed(3)}, `
-        + `processing=${input.internalState.cognitive.processingQuality}`,
+        `Cognitive: certainty=${input.appraisalState.cognitive.certaintyLevel.toFixed(3)}, `
+        + `engagement=${input.appraisalState.cognitive.topicEngagement.toFixed(3)}, `
+        + `processing=${input.appraisalState.cognitive.processingQuality}`,
       );
       lines.push(
-        `Attention: trajectory=${input.internalState.attention.conversationTrajectory}, `
-        + `concerns=${input.internalState.attention.activeConcerns.length}, `
-        + `salient_entities=${input.internalState.attention.salientEntities.length}`,
+        `Attention: trajectory=${input.appraisalState.attention.conversationTrajectory}, `
+        + `concerns=${input.appraisalState.attention.activeConcernCount}, `
+        + `salient_entities=${input.appraisalState.attention.salientEntityCount}`,
       );
       lines.push(
-        `Relationship: trust=${input.internalState.relational.trustLevel}, `
-        + `contact=${input.internalState.relational.contactId ?? 'none'}, `
-        + `mood_drift=${formatSigned(input.internalState.relational.moodDrift)}`,
+        `Relationship: trust=${input.appraisalState.relational.trustLevel}, `
+        + `contact=${input.appraisalState.relational.contactId ?? 'none'}, `
+        + `mood_drift=${formatSigned(input.appraisalState.relational.moodDrift)}`,
       );
     }
     lines.push('');

@@ -1079,6 +1079,21 @@ export class SessionStore implements TranscriptSearchPort {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     return this.turnRecordStore.findTurnRecord(sessionId, turnId);
   }
+  /**
+   * Find one canonical turn by its physical source channel while proving that
+   * it belongs to the expected logical session. Background work uses this
+   * exact scope so a later route reset cannot redirect an old durable job to a
+   * newer logical session on the same transport channel.
+   */
+  findSourceTurnRecord(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): TurnRecord | null {
+    const record = this.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
+    if (!record || record.channelId !== sourceChannelId) return null;
+    return (record.sessionId ?? sourceChannelId) === logicalSessionId ? record : null;
+  }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
     this.refreshChannelIndexFromDisk();

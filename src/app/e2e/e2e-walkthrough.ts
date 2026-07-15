@@ -84,6 +84,7 @@ async function main(): Promise<void> {
       sessionManager,
       systemPrompt,
       config: sanitizeCoreSubstrateConfig(config),
+      backgroundWorkDisabled: true,
     });
     const memoryExtractor = wireMemoryRuntime({
       agentLoop,

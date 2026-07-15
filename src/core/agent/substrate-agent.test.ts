@@ -6,7 +6,7 @@ import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
-import { SubstrateAgent } from './substrate-agent.js';
+import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
@@ -48,6 +48,16 @@ import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js
 import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
+
+class SubstrateAgent extends RuntimeSubstrateAgent {
+  constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
+    const [eventBus, llmProvider, sessionManager, systemPrompt, config, options] = args;
+    super(eventBus, llmProvider, sessionManager, systemPrompt, config, {
+      ...(options ?? {}),
+      ...(options?.backgroundWorkStore ? {} : { backgroundWorkDisabled: true }),
+    });
+  }
+}
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -1788,7 +1798,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(captured[0].contextManifest).toEqual(manifest);
   });
 
-  it('runs registered intention post-turn hooks without blocking turn completion', async () => {
+  it('does not execute registered post-turn hooks when background work is explicitly disabled', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
@@ -1808,13 +1818,8 @@ describe('SubstrateAgent.handleMessage', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(failingHook).toHaveBeenCalledTimes(1);
-    expect(successfulHook).toHaveBeenCalledTimes(1);
-    expect(successfulHook.mock.calls[0]?.[0]).toMatchObject({
-      message: expect.objectContaining({ id: 'turn-intention-hook-1' }),
-      response: expect.objectContaining({ channelId: 'test-channel' }),
-    });
-    expect(isTurnId(successfulHook.mock.calls[0]?.[0]?.turnId)).toBe(true);
+    expect(failingHook).not.toHaveBeenCalled();
+    expect(successfulHook).not.toHaveBeenCalled();
   });
 
 
@@ -2091,9 +2096,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: TEST_ASSISTANT_RESPONSE,
       metadata: expect.objectContaining({ icpCorrelation: correlation }),
     }));
-    expect(finalizeDelivery.mock.invocationCallOrder[0]).toBeLessThan(
-      sessionManager.scheduleAutoCompactionBetweenTurns.mock.invocationCallOrder[0]!,
-    );
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       correlation.channelId,
       TEST_ASSISTANT_RESPONSE,
@@ -2192,7 +2195,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(1);
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
-    expect(sessionManager.scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
     expect(sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
       turnId: correlation.turnId,
       status: 'failed',
@@ -2703,10 +2706,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.scheduleAutoCompactionBetweenTurns as any).mock.calls[0][0]).toMatchObject({
-      channelId,
-      userId: DEFAULT_COMPANION_ID,
-    });
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('<internal_turn_context>');
@@ -2718,7 +2718,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(speakingWith.toLowerCase()).not.toContain(authorName.toLowerCase());
   });
 
-  it('triggers memory extraction after response', async () => {
+  it('does not trigger memory extraction when background work is explicitly disabled', async () => {
     const config = makeConfig();
     const mockExtractor: MemoryExtractor = {
       maybeExtract: vi.fn<any>().mockResolvedValue(undefined),
@@ -2737,13 +2737,7 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     }));
 
-    // Fire-and-forget, but should have been called
-    expect(mockExtractor.maybeExtract).toHaveBeenCalledTimes(1);
-    const [channelId, canonicalContactId, turnId, placeId] = (mockExtractor.maybeExtract as any).mock.calls[0];
-    expect(channelId).toBe('test-channel');
-    expect(canonicalContactId).toBeUndefined();
-    expect(isTurnId(turnId)).toBe(true);
-    expect(placeId).toBe('den');
+    expect(mockExtractor.maybeExtract).not.toHaveBeenCalled();
   });
 
   it('returns AgentResponse with content and metadata', async () => {

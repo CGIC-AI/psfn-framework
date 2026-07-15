@@ -650,6 +650,10 @@ describe('SessionStore', () => {
 
     expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
       .toEqual([logicalSessionId, logicalSessionId]);
+    expect(store.findSourceTurnRecord(sourceChannelId, logicalSessionId, visibleTurnId)?.turnId)
+      .toBe(visibleTurnId);
+    expect(store.findSourceTurnRecord(sourceChannelId, 'session:wrong-owner', visibleTurnId))
+      .toBeNull();
     expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
       .toBe(true);
     await store.redactTurn(logicalSessionId, redactedTurnId, {

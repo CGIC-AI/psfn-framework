@@ -275,6 +275,8 @@ export interface SubstrateAgentCompositionOptions {
   contactTrackingGate?: ContactTrackingGate | null;
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
+  backgroundWorkStore?: SubstrateAgentOptions['backgroundWorkStore'];
+  backgroundWorkDisabled?: boolean;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -302,6 +304,8 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.appCache ? { appCache: options.appCache } : {}),
       ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
       ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
+      ...(options.backgroundWorkStore ? { backgroundWorkStore: options.backgroundWorkStore } : {}),
+      ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
     },
   );
 }

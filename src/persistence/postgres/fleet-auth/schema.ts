@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createPostgresPool } from '../../postgres.js';
 import { FLEET_AUTH_MIGRATIONS } from './migrations.js';
+import {
+  FLEET_AUTH_REAPPROVAL_DDL_SQL,
+  FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
+} from './reapproval-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -171,6 +176,27 @@ async function applyRoleGrants(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
   await client.query(`REVOKE ALL ON ${qualifiedTable('schema_migrations')} FROM ${runtime}, ${backup}`);
+  // The broker runtime alone may invoke the constrained reapproval procedure.
+  // Its SECURITY DEFINER body — not this EXECUTE grant — is what actually
+  // reactivates quarantined authority; the runtime's ordinary UPDATE is fenced
+  // by restore_quarantine_activation_guard. The backup/restore coordinator
+  // never reapproves, so it receives no EXECUTE.
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+}
+
+/**
+ * Idempotently (re)assert the trusted-host reapproval boundary: the
+ * quarantine-activation guard triggers and the SECURITY DEFINER reapproval
+ * procedure. Applied on every migration run, like applyRoleGrants, so the
+ * boundary can never drift or be left half-applied. Requires the transaction's
+ * search_path to already include fleet_auth (set by migrateFleetAuthSchema).
+ */
+async function applyFleetAuthReapprovalBoundary(
+  client: import('pg').PoolClient,
+): Promise<void> {
+  await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {
@@ -236,6 +262,7 @@ export async function migrateFleetAuthSchema(options: {
           [migration.version, migration.name, checksum],
         );
       }
+      await applyFleetAuthReapprovalBoundary(client);
       await applyRoleGrants(client, options.roles);
       await client.query('COMMIT');
     } catch (error) {

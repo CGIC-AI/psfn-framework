@@ -10,12 +10,25 @@ import {
   createKubeDiagnosticsExecutor,
   type KubeReadApiPort,
 } from '../../system/lifecycle/kube-diagnostics.js';
+import {
+  combineKubeSelfManagementExecutors,
+  createKubeDeployPipelineExecutor,
+  type KubeDeployPipelineExecutorOptions,
+} from '../../system/lifecycle/kube-deploy-pipeline.js';
 import { createInClusterKubernetesReadApi } from './kubernetes-read-api.js';
 
 export interface ResolveKubeSelfManagementControllerOptions {
   env: NodeJS.ProcessEnv;
   audit(entry: AuditSummaryEntry): Promise<unknown>;
   createApi?: (env: NodeJS.ProcessEnv) => KubeReadApiPort;
+  /**
+   * Operator-job composition seam for the guarded build/deploy pipeline. When
+   * supplied, the controller additionally dispatches `rebuild`/`deploy` through
+   * the pipeline. This carries the operator-job's own build-host transport;
+   * the agent runtime never supplies it, keeping the credential separation
+   * from x5rt.10 intact (the agent path stays diagnose-only).
+   */
+  deployPipeline?: KubeDeployPipelineExecutorOptions;
 }
 
 function parseEnabled(raw: string | undefined): boolean {
@@ -83,18 +96,25 @@ export function resolveKubeSelfManagementController(
   }
   const helmRevision = requirePositiveRevision(options.env.PSFN_HELM_REVISION);
   const api = (options.createApi ?? createInClusterKubernetesReadApi)(options.env);
+  const diagnosticsExecutor = createKubeDiagnosticsExecutor({
+    namespace,
+    release,
+    resourcePrefix,
+    helmRevision,
+    sourceRevision,
+    targetImage,
+    api,
+  });
+  const executor = options.deployPipeline
+    ? combineKubeSelfManagementExecutors([
+      diagnosticsExecutor,
+      createKubeDeployPipelineExecutor(options.deployPipeline),
+    ])
+    : diagnosticsExecutor;
   return new KubeSelfManagementController({
     namespace,
     release,
-    executor: createKubeDiagnosticsExecutor({
-      namespace,
-      release,
-      resourcePrefix,
-      helmRevision,
-      sourceRevision,
-      targetImage,
-      api,
-    }),
+    executor,
     audit: async event => {
       await options.audit(auditSummary(event));
     },

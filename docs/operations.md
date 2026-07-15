@@ -132,6 +132,55 @@ What it does:
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
+## Guarded Kubernetes Deploy Pipeline
+
+The live k3s companion updates through a repo-owned, auditable pipeline that
+generalizes the manual `scripts/ops/ship-kube-update.sh` flow into a system
+action (`src/system/lifecycle/kube-deploy-pipeline.ts`). It runs strictly
+inside the self-management approval/audit boundary (least-privilege RBAC and
+operator confirmation) and the operator-credential separation: the companion
+may *request* a `rebuild` or `deploy`, an operator approves it, and only then
+does the pipeline execute. No operator credential reaches the agent path — every
+live-touching side effect is delegated to an operator-job runner
+(`DeployPipelineRunner`) supplied by the operator composition, never by the
+agent runtime (which stays diagnose-only).
+
+Ordered stages, fail-closed. Live workloads are untouched until the final
+stage, so any earlier failure yields a record with `liveUntouched === true`:
+
+1. **preconditions** — only committed state ships; a verified backup must exist
+   before any companion-data mutation.
+2. **archive** — source archived at the exact commit; a sha256 checksum is
+   recorded.
+3. **gate** — `npm run lint`, `npm run build`, `npm run verify:helm-chart`, and
+   the change-scoped tests. Skipped only under a documented, justified
+   emergency-recovery run (the justification is recorded).
+4. **build** — one image with the exact, non-floating tag and the
+   `org.opencontainers.image.revision` label set to the source commit.
+5. **import** — imported into the node runtime. `k3s ctr images import` names
+   the image `docker.io/library/<name>:<tag>`, so it is retagged to
+   `localhost/<name>:<tag>` (`deriveLocalImportRetag`) or the Deployments will
+   not find it. Importing does not restart pods; live stays unchanged.
+6. **k3d_validation** — local k3d validation runs, or the record carries an
+   explicit skip reason.
+7. **helm_upgrade** — the single live-mutating stage. Live values are captured
+   and *re-supplied* to `helm upgrade` (never `--reuse-values` against a changed
+   chart); the record stores only a redacted summary plus a digest, never
+   secret material.
+
+`rebuild` stops after the import and produces a validated, imported (deployable)
+artifact with live untouched; `deploy` runs through the Helm upgrade. The record
+captures source branch/commit, archive checksum, image reference and revision
+label, contract hash, gate results, k3d validation, Helm release revision, and
+the redacted live-values summary. Node-side rewrites of PVC files must run as the
+container `uid 999 gid 999` (mode `0664`) — a root-owned rewrite bricks turns
+with `EACCES`.
+
+Sibling surfaces build on the same seams: the post-rollout validation gate and
+manual/automatic Helm rollback consume the pipeline record and the
+`DeployPipelineRunner` interface; k3d end-to-end coverage exercises the runner
+against a throwaway cluster.
+
 ## Host-Specific Storage Validation
 
 Live hostnames, private addresses, device identifiers, mount points, and home

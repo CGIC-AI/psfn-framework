@@ -308,10 +308,20 @@ function verifyPackages(root, errors) {
 
 function verifyRetiredPaths(root, errors) {
   for (const retiredPath of RETIRED_IMPLEMENTATION_PATHS) {
-    if (existsSync(join(root, retiredPath))) {
-      errors.push(`retired implementation path exists: ${retiredPath}`);
-    }
+    const path = join(root, retiredPath);
+    if (!existsSync(path)) continue;
+    const stat = lstatSync(path);
+    if (stat.isDirectory() && !directoryContainsTrackedContent(path)) continue;
+    errors.push(`retired implementation path exists: ${retiredPath}`);
   }
+}
+
+function directoryContainsTrackedContent(path) {
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.isSymbolicLink() || entry.isFile()) return true;
+    if (entry.isDirectory() && directoryContainsTrackedContent(join(path, entry.name))) return true;
+  }
+  return false;
 }
 
 function verifyTextReferences(root, errors) {

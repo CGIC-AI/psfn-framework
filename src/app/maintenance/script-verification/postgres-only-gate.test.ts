@@ -100,4 +100,13 @@ describe('Postgres-only repository gate', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`retired implementation path exists: src/persistence/${RETIRED_MODULE}.ts`);
   });
+
+  it('ignores an untracked empty retired directory left behind by a worktree checkout', () => {
+    const root = makeFixture();
+    mkdirSync(join(root, 'src', 'faculties', 'memory', 'store'), { recursive: true });
+
+    const result = run(root);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
 });

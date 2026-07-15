@@ -103,6 +103,18 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-postgres-only.mjs",
+      "contains": "deploy/helm/psfn/README.md",
+      "reason": "The Postgres-only repository gate scans the project-owned Helm README for retired backend claims.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-postgres-only.mjs",
+      "contains": "scripts/recovery/psfn-ext4-recovery.sh",
+      "reason": "The Postgres-only repository gate classifies the project-owned recovery script's legacy artifact signature.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-agent-docker-isolation.mjs",
       "contains": "psfn",
       "reason": "Docker isolation verification references project-owned service and network names.",

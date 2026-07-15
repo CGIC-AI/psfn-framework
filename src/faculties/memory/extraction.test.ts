@@ -2635,6 +2635,52 @@ describe('MemoryExtractor interval watermark coverage', () => {
     expect(prompts[1]).toContain('detail 8');
     expect(prompts[1]).not.toContain('detail 9');
   });
+
+  it('keeps a delayed lower-gap snapshot triggerable after an out-of-order high snapshot', async () => {
+    const channelId = 'api:watermark-noncontiguous';
+    const { extractor, entries, llmClient, sessionManager } = buildWatermarkHarness(
+      channelId,
+      { entryCount: 20, extractionInterval: 4 },
+    );
+
+    // B durably extracts ids 1-4.
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined,
+      entries.slice(0, 4),
+    );
+    // J runs out of order and durably extracts ids 11-20, advancing coverage
+    // past the still-unprocessed 5-10 gap.
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined,
+      entries.slice(10, 20),
+    );
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+
+    // The delayed C-E snapshot for the 5-10 gap must still trigger: a single
+    // max watermark reported zero uncovered here and dropped the range durably.
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined,
+      entries.slice(4, 10),
+    );
+    expect(llmClient.complete).toHaveBeenCalledTimes(3);
+
+    const prompts = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls
+      .map(([context]) => context.systemPrompt as string);
+    expect(prompts[2]).toContain('detail 5');
+    expect(prompts[2]).toContain('detail 10');
+    expect(prompts[2]).not.toContain('detail 11');
+
+    // Reprocessing the same gap is a no-op: it is now covered exactly once.
+    await extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined,
+      entries.slice(4, 10),
+    );
+    expect(llmClient.complete).toHaveBeenCalledTimes(3);
+
+    // Never fell back to live session state on any bounded call.
+    expect(sessionManager.getMessageCount).not.toHaveBeenCalled();
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+  });
 });
 
 describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {

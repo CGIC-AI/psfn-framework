@@ -13,6 +13,12 @@ import type {
   ExtractionTriggerReason,
   ProfileSynthesisConfig,
 } from './types.js';
+import {
+  addCoveredIds,
+  emptyCoverageRanges,
+  isCoveredId,
+  type CoverageRanges,
+} from './coverage-ranges.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -20,7 +26,11 @@ const log = createComponentLogger('Extraction');
 
 interface ExtractionCoverageState {
   count: number;
-  coveredUpToMessageId: number | null;
+  // Exact set of processed session-entry ids. A single max watermark let an
+  // out-of-order high snapshot (ids 11-20) prove a lower unprocessed gap (ids
+  // 5-10) consumed, silently dropping durable memory; the exact range set makes
+  // gap membership unambiguous regardless of arrival order.
+  covered: CoverageRanges;
 }
 
 const extractionCoverage = new Map<string, ExtractionCoverageState>();
@@ -123,7 +133,10 @@ export function evaluateExtractionTrigger(
 
   extractionCoverage.set(channelId, {
     count: currentCount,
-    coveredUpToMessageId: previous?.coveredUpToMessageId ?? null,
+    // The foreground interval trigger advances the live message count but never
+    // proves specific ids consumed, so the exact covered set is preserved
+    // untouched for later bounded snapshots.
+    covered: previous?.covered ?? emptyCoverageRanges(),
   });
 
   return trigger;
@@ -142,13 +155,13 @@ export function evaluateExtractionTriggerForSnapshot(
 ): ExtractionTriggerResult | null {
   const previous = extractionCoverage.get(channelId);
   const lastCount = previous?.count ?? 0;
-  const coveredUpToMessageId = previous?.coveredUpToMessageId;
+  const covered = previous?.covered ?? emptyCoverageRanges();
+  // Exact uncovered count: a countable entry is uncovered iff its id is not in
+  // the covered set — an out-of-order lower id is never masked by a higher one.
   const uncoveredCount = entries.filter(entry => (
     isCountableExtractionEntry(entry)
     && Number.isSafeInteger(entry.id)
-    && (coveredUpToMessageId === null
-      || coveredUpToMessageId === undefined
-      || entry.id > coveredUpToMessageId)
+    && !isCoveredId(covered, entry.id)
   )).length;
   const currentCount = lastCount + uncoveredCount;
   return evaluateExtractionTriggerInputs({
@@ -171,38 +184,48 @@ export interface ExtractionWatermarkAdvance {
  * Advances interval coverage after any successful extraction that supplied an
  * explicit bounded snapshot, so later triggers do not re-send those entries.
  *
- * Coverage is recorded only from the consumed snapshot: countable entries
- * beyond the prior bounded marker advance the count, and the maximum consumed
- * id advances the marker. This helper never consults live session state.
- * Callers must invoke it only after extraction succeeds so failures remain
- * eligible for crash recovery or a later interval trigger.
+ * Coverage is recorded only from the consumed snapshot: every consumed id is
+ * added to the exact covered set (so contiguous windows collapse and future
+ * out-of-order snapshots see precise gaps), and each newly-covered countable
+ * entry advances the interval count exactly once. This helper never consults
+ * live session state. Callers must invoke it only after extraction succeeds so
+ * failures remain eligible for crash recovery or a later interval trigger.
  */
 export function advanceExtractionWatermarkForCoverage(
   channelId: string,
   consumedEntries: readonly SessionEntry[],
 ): ExtractionWatermarkAdvance | null {
+  const previous = extractionCoverage.get(channelId);
+  const previousCovered = previous?.covered ?? emptyCoverageRanges();
+  const previousCount = previous?.count ?? 0;
+
+  // A countable entry advances the interval count only if it was not already
+  // covered — retried or overlapping snapshots never double-count.
+  const newlyCoveredCount = consumedEntries.filter(entry => (
+    isCountableExtractionEntry(entry)
+    && Number.isSafeInteger(entry.id)
+    && !isCoveredId(previousCovered, entry.id)
+  )).length;
+
+  // Mark every consumed entry id covered — including non-countable ids that
+  // burn an id (markers/compactions/tombstones) — so genuinely contiguous
+  // windows collapse to one interval. The countable filter only governs the
+  // interval count, not covered-set membership.
+  const consumedIds: number[] = [];
   let coveredUpToMessageId: number | null = null;
   for (const entry of consumedEntries) {
-    if (!Number.isFinite(entry.id)) continue;
+    if (!Number.isSafeInteger(entry.id)) continue;
+    consumedIds.push(entry.id);
     if (coveredUpToMessageId === null || entry.id > coveredUpToMessageId) {
       coveredUpToMessageId = entry.id;
     }
   }
   if (coveredUpToMessageId === null) return null;
-  const previous = extractionCoverage.get(channelId);
-  const previousCount = previous?.count ?? 0;
-  const previousCoveredId = previous?.coveredUpToMessageId;
-  const newlyCoveredCount = consumedEntries.filter(entry => (
-    isCountableExtractionEntry(entry)
-    && Number.isSafeInteger(entry.id)
-    && (previousCoveredId === null
-      || previousCoveredId === undefined
-      || entry.id > previousCoveredId)
-  )).length;
+
   const nextCount = previousCount + newlyCoveredCount;
   extractionCoverage.set(channelId, {
     count: nextCount,
-    coveredUpToMessageId: Math.max(previousCoveredId ?? 0, coveredUpToMessageId),
+    covered: addCoveredIds(previousCovered, consumedIds),
   });
   if (nextCount <= previousCount) return null;
 

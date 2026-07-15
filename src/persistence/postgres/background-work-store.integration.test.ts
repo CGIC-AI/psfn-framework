@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,7 @@ import { createTurnId } from '../../core/turns/id.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 import { SessionManager } from '../../core/session/manager.js';
+import { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../core/session/icp-correlation-metadata.js';
 import {
   CHANNEL as ICP_CHANNEL,
@@ -1583,6 +1584,106 @@ describe('PostgresBackgroundWorkStore', () => {
         writerPool.end(),
         inspectionPool.end(),
       ]);
+    }
+  }, 30_000);
+
+  it('runs a delayed lower-gap durable snapshot after a higher out-of-order snapshot advanced coverage', async () => {
+    const database = await harness.createDatabase();
+    const consumerPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-background-noncontiguous-'));
+    const consumerStore = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+        consumerPool,
+        'companion_a',
+      ),
+    });
+    const config = {
+      dataDir: sessionsDir,
+      companionDataDir: sessionsDir,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 4,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 128_000,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 70,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+      },
+    } as SubstrateConfig;
+    const consumer = new SessionManager(consumerStore, config);
+    const channelId = 'api:noncontiguous-durable';
+
+    try {
+      // Record twenty real conversational turns; capture their live entry ids
+      // (which are non-contiguous in a real store — turn/marker rows burn ids).
+      const entryIds: number[] = [];
+      for (let n = 1; n <= 20; n++) {
+        const id = consumer.recordUserMessage(
+          channelId,
+          `I am planning a Kyoto trip detail ${n} for my vacation.`,
+          `human-${n}`,
+          `Human ${n}`,
+          true,
+          undefined,
+          { turnId: createTurnId(), requestId: `req-noncontiguous-${n}` },
+        );
+        expect(id).not.toBeNull();
+        entryIds.push(id!);
+      }
+
+      const llmClient = {
+        complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+      } as never;
+      const memoryStore = {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as never;
+      const embeddingService = {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as never;
+      const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as never;
+      const extractor = new MemoryExtractor(
+        llmClient,
+        consumer,
+        memoryStore,
+        embeddingService,
+        eventBus,
+        { extractionInterval: 4 },
+      );
+
+      // Fenced bounded snapshots exactly as the durable post-turn handler takes
+      // them: getRecentMessagesAtOrBefore(anchor, 10).
+      const snapshotEndingAt = (index: number) =>
+        consumer.getRecentMessagesAtOrBefore(channelId, entryIds[index]!, 10);
+      const runBounded = (index: number) => extractor.maybeExtract(
+        channelId, undefined, undefined, undefined, undefined, undefined,
+        snapshotEndingAt(index),
+      );
+
+      // B durably extracts the first four entries.
+      await runBounded(3);
+      // J runs out of order and durably extracts the last ten, advancing coverage
+      // past the still-unprocessed 5-10 gap.
+      await runBounded(19);
+      expect(llmClient.complete).toHaveBeenCalledTimes(2);
+
+      // The delayed C-E snapshot (ids 5-10, anchored at the tenth entry) must
+      // still produce a real extraction receipt — the single-max watermark
+      // reported zero uncovered here and completed as a durable no-op.
+      await runBounded(9);
+      expect(llmClient.complete).toHaveBeenCalledTimes(3);
+
+      // Exactly once: reprocessing the same gap is now a durable no-op.
+      await runBounded(9);
+      expect(llmClient.complete).toHaveBeenCalledTimes(3);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      await consumerPool.end();
     }
   }, 30_000);
 
